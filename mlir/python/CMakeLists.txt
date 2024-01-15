@@ -35,6 +35,7 @@ declare_mlir_python_sources(MLIRPythonSources.Core.Python.Extras
   SOURCES
     extras/types.py
     extras/meta.py
+    extras/utils.py
 )
 
 declare_mlir_python_sources(MLIRPythonSources.ExecutionEngine
