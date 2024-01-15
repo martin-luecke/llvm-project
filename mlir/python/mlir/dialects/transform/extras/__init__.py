@@ -4,6 +4,7 @@
 
 from typing import Callable, Optional, Sequence, Union
 
+# from .utils import TileLoopKind
 from ....extras.meta import region_op
 from .... import ir
 from ... import transform
@@ -17,8 +18,33 @@ from .. import (
     YieldOp,
     SequenceOp,
     ApplyPatternsOp,
+    any_op_t,
 )
 from .. import structured
+import abc
+from dataclasses import dataclass, fields
+from enum import Enum
+
+
+@dataclass
+class MultiHandleResult(abc.ABC):
+    """Base class for all classes that support returning named handles."""
+
+    def __iter__(self):
+        yield from [getattr(self, field.name) for field in fields(self)]
+
+
+@dataclass
+class TileResult(MultiHandleResult):
+    tiled_op: "OpHandle"
+    loops: Sequence["OpHandle"]
+
+
+class TileLoopKind(Enum):
+    """Kind of loop operation to produce in tiling."""
+
+    FOR = "scf.for"
+    FORALL = "scf.forall"
 
 
 class Handle(ir.Value):
@@ -130,6 +156,120 @@ class OpHandle(Handle):
         """
         transform.PrintOp(target=self, name=name)
         return self
+
+    def _tile_using_for(
+        self,
+        *,
+        tile_sizes: Sequence[Union[int, "ParamHandle"]],
+        interchange: Optional[Sequence[int]] = None,
+    ):
+        op = structured.TileUsingForOp(
+            self,
+            sizes=tile_sizes,
+            interchange=interchange,
+        )
+        # self._mlir_value = op.tiled_linalg_op
+        # TODO: Think about how to point the python object to the new value
+        return TileResult(
+            tiled_op=self,
+            loops=[OpHandle(loop) for loop in op.loops],
+        )
+
+    def _tile_using_forall(
+        self,
+        *,
+        mapping: Optional[
+            Union[str, ir.Attribute, Sequence[Union[str, ir.Attribute]]]
+        ] = None,
+        num_threads: Optional[Sequence[int]] = None,
+        tile_sizes: Optional[Sequence[int]] = None,
+    ) -> TileResult:
+        """Creates a new `structured.TileUsingForallOp` op.
+
+        The func.func payload op surrounding the payload this handle represents
+        will be autonormalized to LoopNormalform if needed.
+
+        This handle will be updated to represent the tiled op.
+        """
+        # TODO(mluecke): Remove string parsing of attributes once builders for GPU
+        #                dialect attributes are available
+        attr_or_parse = lambda x: ir.Attribute.parse(x) if isinstance(x, str) else x
+        if isinstance(mapping, (str, ir.Attribute)):
+            mapping = attr_or_parse(mapping)
+        elif mapping is not None:
+            mapping = ir.ArrayAttr.get([attr_or_parse(attr) for attr in mapping])
+
+        op = structured.TileUsingForallOp(
+            any_op_t(),
+            any_op_t(),
+            self,
+            num_threads=num_threads,
+            tile_sizes=tile_sizes,
+            mapping=mapping,
+        )
+        # self._mlir_value = op.tiled_op
+        return TileResult(
+            loops=[OpHandle(op.forall_op)],
+            tiled_op=self,
+        )
+
+    def tile(
+        self,
+        *,
+        loop: TileLoopKind,
+        tile_sizes: Optional[Sequence[Union[int, "ParamHandle"]]] = None,
+        interchange: Optional[Sequence[int]] = None,
+        num_threads: Optional[Sequence[int]] = None,
+        mapping: Optional[
+            Union[str, ir.Attribute, Sequence[Union[str, ir.Attribute]]]
+        ] = None,
+    ) -> TileResult:
+        """Creates a new structured tiling operation.
+
+        Depending on the `loop` kwarg, creates either a `structured.TileUsingFor` or
+        `structured.TileUsingForall` transform operation. Additional kwargs
+        parameterize the created op:
+
+        `tile_sizes`: tile sizes to use in the loop, mandatory for `for` loops;
+        `num_threads`: the number of iterations in the produced loop, only supported
+                    in `forall` tiling at the moment;
+        `interchange`: interchange of the dimensions, only supported in `for` tiling
+                    at the moment;
+        `mapping`: mapping of the generated loops to parallelism concepts such as
+                GPU threads, only supported in `forall` loops (`for` loops are
+                implicitly sequential).
+
+        This handle will be updated to represent the tiled linalg op.
+        """
+        if loop == TileLoopKind.FOR:
+            if tile_sizes is None:
+                raise ValueError("Tile sizes must be provided.")
+            if num_threads is not None or mapping is not None:
+                raise ValueError(
+                    "Cannot specify num threads or mapping when tiling to scf.for, use"
+                    " scf.forall instead."
+                )
+            return self._tile_using_for(tile_sizes=tile_sizes, interchange=interchange)
+
+        elif loop == TileLoopKind.FORALL:
+            if tile_sizes is None and num_threads is None:
+                raise ValueError("Must specify either tile sizes or num threads.")
+            if interchange is not None:
+                raise ValueError(
+                    "Cannot specify interchange when tiling to scf.forall."
+                )
+            if tile_sizes and any(
+                isinstance(tile_size, ParamHandle) for tile_size in tile_sizes
+            ):
+                raise ValueError(
+                    "Cannot specify dynamic tile sizes when tiling to scf.forall."
+                )
+            # return None
+            return self._tile_using_forall(
+                tile_sizes=tile_sizes, num_threads=num_threads, mapping=mapping
+            )
+
+        raise ValueError(f"Uknown loop kind {loop}")
 
 
 @ir.register_value_caster(AnyParamType.get_static_typeid())
