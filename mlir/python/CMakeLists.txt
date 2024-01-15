@@ -189,7 +189,8 @@ declare_mlir_python_sources(
   ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/mlir"
   GEN_ENUM_BINDINGS
   SOURCES
-    dialects/transform/extras/__init__.py)
+    dialects/transform/extras/__init__.py
+    dialects/transform/extras/utils.py)
 
 declare_mlir_python_sources(
   MLIRPythonSources.Dialects.transform.interpreter

@@ -53,6 +53,9 @@ def test_tiling(module_: Module) -> Module:
             #     loop_unroll(loop, 2)
 
 
+# CHECK{LITERAL}: [11.] * [25.] = [275.]
+
+
 if __name__ == "__main__":
     test_tiling()
 
