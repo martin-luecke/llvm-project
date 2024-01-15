@@ -3,7 +3,7 @@
 #  SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 from functools import partial
-from typing import Optional, List
+from typing import Optional, List, Union
 
 from ..ir import (
     Attribute,
@@ -118,7 +118,9 @@ def vector(
     )
 
 
-def tensor(*shape, element_type: Type = None, encoding: Optional[str] = None):
+def tensor(
+    *shape, element_type: Type = None, encoding: Optional[str] = None
+) -> Union[RankedTensorType, UnrankedTensorType]:
     if encoding is not None:
         encoding = StringAttr.get(encoding)
     if not shape or (len(shape) == 1 and isinstance(shape[-1], Type)):
@@ -135,11 +137,11 @@ def tensor(*shape, element_type: Type = None, encoding: Optional[str] = None):
 
 
 def memref(
-    *shape,
+    *shape: int,
     element_type: Type = None,
     memory_space: Optional[int] = None,
     layout: Optional[StridedLayoutAttr] = None,
-):
+) -> Union[MemRefType, UnrankedMemRefType]:
     if memory_space is not None:
         memory_space = Attribute.parse(str(memory_space))
     if not shape or (len(shape) == 1 and isinstance(shape[-1], Type)):
