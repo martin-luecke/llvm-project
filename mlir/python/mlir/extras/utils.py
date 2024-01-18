@@ -1,11 +1,23 @@
-from ast import Call
+from ast import mod
 from functools import wraps
-from typing import Callable, Optional
-from ..execution_engine import ExecutionEngine
-from ..ir import Module, Context, Location, InsertionPoint
+import os
+from time import sleep
+from typing import Any, Callable, List, Optional, Sequence
+from mlir.runtime.np_to_memref import get_unranked_memref_descriptor
+
+# from sys import devnull
+
+from ..execution_engine import ExecutionEngine, ctypes
+from ..ir import Module, Context, Location, InsertionPoint, UnitAttr
 import numpy as np
 from ..passmanager import PassManager
-from ..runtime import ctypes, get_ranked_memref_descriptor, ranked_memref_to_numpy
+from ..runtime import (
+    get_ranked_memref_descriptor,
+    ranked_memref_to_numpy,
+    make_nd_memref_descriptor,
+)
+from ..dialects import func
+from numpy.typing import NDArray, ArrayLike, DTypeLike
 
 
 def bufferize(module: Module) -> Module:
@@ -13,6 +25,7 @@ def bufferize(module: Module) -> Module:
         r"""builtin.module(
                 one-shot-bufferize{bufferize-function-boundaries}, 
                 expand-realloc, 
+                canonicalize,
                 ownership-based-buffer-deallocation,
                 canonicalize, 
                 buffer-deallocation-simplification, 
@@ -33,9 +46,7 @@ def eraseTransformScript(module: Module) -> Module:
             op.name == "builtin.module"
             and "transform.with_named_sequence" in op.attributes
         ):
-            # print("erasing transform module")
             op.erase()
-            # gc.collect()
     return module
 
 
@@ -46,61 +57,87 @@ def lowerLinalg(module: Module) -> Module:
 
 
 def lowerToLLVM(module: Module) -> Module:
+    # add emit_c_interface attribute to func
+    for op in module.operation.regions[0].blocks[0].operations:
+        if isinstance(op, func.FuncOp):
+            op.attributes["llvm.emit_c_interface"] = UnitAttr.get()
+
     pm = PassManager.parse(
-        "builtin.module(convert-complex-to-llvm,finalize-memref-to-llvm,convert-func-to-llvm,reconcile-unrealized-casts)"
+        "builtin.module(convert-complex-to-llvm,convert-func-to-llvm,finalize-memref-to-llvm,reconcile-unrealized-casts)"
     )
     pm.run(module.operation)
     return module
 
 
+@ctypes.CFUNCTYPE(
+    None,
+    ctypes.POINTER(
+        # get_ranked_memref_descriptor(
+        #     np.array([[11.0, 12.0], [11.0, 12.0]]).astype(np.float32)
+        # ).__class__,
+        make_nd_memref_descriptor(2, np.ctypeslib.as_ctypes_type(np.float32)),
+        # get_unranked_memref_descriptor(
+        #     np.array([[11.0, 12.0], [11.0, 12.0]]).astype(np.float32)
+        # ).__class__,
+    ),
+)
+def callback(any_memref):
+    print("Inside Callback: ")
+    arr = ranked_memref_to_numpy(any_memref)
+    print(arr)
+
+
+def get_util_libaries() -> List[str]:
+    c_runner_utils = os.getenv("MLIR_C_RUNNER_UTILS", "")
+    assert os.path.exists(c_runner_utils), (
+        f"{c_runner_utils} does not exist."
+        f" Please pass a valid value for"
+        f" MLIR_C_RUNNER_UTILS environment variable."
+    )
+    runner_utils = os.getenv("MLIR_RUNNER_UTILS", "")
+    assert os.path.exists(runner_utils), (
+        f"{runner_utils} does not exist."
+        f" Please pass a valid value for MLIR_RUNNER_UTILS"
+        f" environment variable."
+    )
+    return [c_runner_utils, runner_utils]
+
+
 def execute(
-    maybe_f: Optional[Callable[[], Module]] = None, test_arg: Optional[int] = None
-) -> Callable[[Module], Callable[[], Module]]:
+    inputs: Sequence[ArrayLike], dtype: DTypeLike = np.float32
+) -> Callable[[], Callable[[], Module]]:
     def outer(f: Callable[[], Module]) -> Callable[[], Module]:
         def wrapped():
-            if test_arg is not None:
-                print(f"args[0] is not None: {test_arg}")
+            inputs_ = [np.array(input).astype(dtype) for input in inputs]
+            memref_ptrs = [
+                ctypes.pointer(ctypes.pointer(get_ranked_memref_descriptor(arg)))
+                for arg in inputs_
+            ]
             module = f()
             with module.context:
-                arg1 = np.array([11.0]).astype(np.float32)
-                arg2 = np.array([25.0]).astype(np.float32)
-                arg3 = np.array([0.0]).astype(np.float32)
-
-                arg1_memref_ptr = ctypes.pointer(
-                    ctypes.pointer(get_ranked_memref_descriptor(arg1))
-                )
-                arg2_memref_ptr = ctypes.pointer(
-                    ctypes.pointer(get_ranked_memref_descriptor(arg2))
-                )
-                arg3_memref_ptr = ctypes.pointer(
-                    ctypes.pointer(get_ranked_memref_descriptor(arg3))
-                )
-                # print(f"before bufferize\n{module}")
                 bufferize(module)
-                # print(f"after bufferize\n{module}")
                 lowerLinalg(module)
-                # print(f"after lower to linalg\n{module}")
+                lowerToLLVM(module)
 
-                execution_engine = ExecutionEngine(lowerToLLVM(module))
-                execution_engine.invoke(
-                    "matmul_signed_on_buffers",
-                    arg1_memref_ptr,
-                    arg2_memref_ptr,
-                    arg3_memref_ptr,
+                execution_engine = ExecutionEngine(
+                    module, shared_libs=get_util_libaries(), opt_level=2
                 )
 
-                print(f"{arg1} * {arg2} = {arg3}")
+                execution_engine.register_runtime("customCallback", callback)
+                execution_engine.invoke("matmul_signed_on_buffers", *memref_ptrs)
+                print(f"args: \n{[input for input in inputs_]}")
 
             return module
 
         return wrapped
 
     @wraps(outer)
-    def maybe_no_args(f: Optional[Callable[[], Module]] = None) -> Callable[[], Module]:
-        if maybe_f:
-            return outer(maybe_f)()
-        else:
-            return outer(f)
+    def maybe_no_args(f: Callable[[], Module]) -> Callable[[], Module]:
+        """Not strictly necessary anymore as execute always takes args now."""
+        # if maybe_f:
+        #     return outer(maybe_f)()
+        # else:
+        return outer(f)
 
     return maybe_no_args
 
