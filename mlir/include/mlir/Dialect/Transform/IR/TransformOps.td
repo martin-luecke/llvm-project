@@ -128,6 +128,22 @@ def AnnotateOp : TransformDialectOp<"annotate",
     "`:` type($target) (`,` type($param)^)?";
 }
 
+def CommuteOp : TransformDialectOp<"commute",
+    [DeclareOpInterfaceMethods<TransformOpInterface>,
+     DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+  let summary = "Swap the operands of the targeted addf op.";
+  let description = [{
+    This is a transform op implemented to make sure the example in my diss is 
+    valid.
+  }];
+
+  let arguments = (ins TransformHandleTypeInterface:$target);
+  let results = (outs TransformHandleTypeInterface:$result);
+
+  let assemblyFormat =
+    "$target attr-dict `:` type($target) `,` type($result)";
+}
+
 def ApplyCommonSubexpressionEliminationOp : TransformDialectOp<"apply_cse",
     [TransformOpInterface, TransformEachOpTrait,
      DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,

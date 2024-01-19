@@ -11,6 +11,7 @@
 #include "mlir/Conversion/ConvertToLLVM/ToLLVMInterface.h"
 #include "mlir/Conversion/LLVMCommon/ConversionTarget.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Transform/IR/TransformAttrs.h"
 #include "mlir/Dialect/Transform/IR/TransformDialect.h"
 #include "mlir/Dialect/Transform/IR/TransformTypes.h"
@@ -271,6 +272,34 @@ void transform::AnnotateOp::getEffects(
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
   onlyReadsHandle(getTarget(), effects);
   onlyReadsHandle(getParam(), effects);
+  modifiesPayload(effects);
+}
+
+//===----------------------------------------------------------------------===//
+// CommuteOp
+//===----------------------------------------------------------------------===//
+
+DiagnosedSilenceableFailure
+transform::CommuteOp::apply(transform::TransformRewriter &rewriter,
+                            transform::TransformResults &results,
+                            transform::TransformState &state) {
+  SmallVector<Operation *> targets =
+      llvm::to_vector(state.getPayloadOps(getTarget()));
+  auto target = dyn_cast<arith::AddFOp>(targets.front());
+  rewriter.setInsertionPointAfter(target);
+
+  auto newAddf = rewriter.create<arith::AddFOp>(
+      target->getLoc(), target.getRhs(), target.getLhs());
+  rewriter.replaceOp(target, newAddf);
+  results.set(llvm::cast<OpResult>(getResult()), {newAddf});
+
+  return DiagnosedSilenceableFailure::success();
+}
+
+void transform::CommuteOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  consumesHandle(getTarget(), effects);
+  producesHandle(getResult(), effects);
   modifiesPayload(effects);
 }
 
