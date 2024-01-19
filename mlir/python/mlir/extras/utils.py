@@ -153,6 +153,15 @@ def run_transform(f: Callable[[], Module]) -> Callable[[], Module]:
     return wrapped
 
 
+def print_module(f: Callable[[], Module]) -> Callable[[], Module]:
+    def wrapped():
+        module = f()
+        print(module)
+        return module
+
+    return wrapped
+
+
 def construct_module(f: Callable[[Module], None]) -> Callable[[], Module]:
     def wrapped():
         with Context(), Location.unknown():
