@@ -1,10 +1,8 @@
 #  Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 #  See https://llvm.org/LICENSE.txt for license information.
 #  SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+from typing import Callable, Optional, Sequence, Union, Type, TypeVar
 
-from typing import Callable, Optional, Sequence, Union
-
-# from .utils import TileLoopKind
 from ....extras.meta import region_op
 from .... import ir
 from ... import transform
@@ -21,10 +19,9 @@ from .. import (
     any_op_t,
 )
 from .. import structured
-from .utils import MultiHandleResult, TileLoopKind, TileResult
-import abc
-from dataclasses import dataclass, fields
-from enum import Enum
+from .utils import TileLoopKind, TileResult
+
+HandleT = TypeVar("HandleT", bound="Handle")
 
 
 class Handle(ir.Value):
@@ -48,6 +45,36 @@ class Handle(ir.Value):
         super().__init__(v)
         self.parent = parent
         self.children = children if children is not None else []
+        self._normalform = Normalform
+
+    @property
+    def normalform(self) -> Type["Normalform"]:
+        return self._normalform
+
+    @normalform.setter
+    def normalform(self, normalform: Type["Normalform"]):
+        self._normalform = normalform
+        if self._normalform.propagate_up:
+            self.propagate_up_normalform(normalform)
+        if self._normalform.propagate_down:
+            self.propagate_down_normalform(normalform)
+
+    def propagate_up_normalform(self, normalform: Type["Normalform"]):
+        if self.parent:
+            # We set the parent normalform directly to avoid infinite recursion
+            # in case this normalform needs to be propagated up and down.
+            self.parent._normalform = normalform
+            self.parent.propagate_up_normalform(normalform)
+
+    def propagate_down_normalform(self, normalform: Type["Normalform"]):
+        for child in self.children:
+            # We set the child normalform directly to avoid infinite recursion
+            # in case this normalform needs to be propagated up and down.
+            child._normalform = normalform
+            child.propagate_down_normalform(normalform)
+
+    def normalize(self: "HandleT", normalform: Type["Normalform"]) -> "HandleT":
+        return normalform.apply(self)
 
 @ir.register_value_caster(AnyOpType.get_static_typeid())
 @ir.register_value_caster(OperationType.get_static_typeid())
@@ -249,7 +276,7 @@ class OpHandle(Handle):
                 tile_sizes=tile_sizes, num_threads=num_threads, mapping=mapping
             )
 
-        raise ValueError(f"Uknown loop kind {loop}")
+        raise ValueError(f"Unknown loop kind {loop}")
 
 
 @ir.register_value_caster(AnyParamType.get_static_typeid())
@@ -310,6 +337,46 @@ def constant_param(value: Union[ir.Attribute, int]) -> ParamHandle:
         param_type = AnyParamType.get()
     op = transform.ParamConstantOp(param_type, value)
     return op.param
+
+
+class Normalform:
+    """Represents the weakest normalform and is the base class for all normalforms.
+    A normalform is defined as a sequence of transformations to be applied to
+    a handle to reach this normalform.
+
+    `propagate_up`: Propagate this normalform up to parent handles.
+    `propagate_down`: Propagate this normalform down to all child handles
+    """
+
+    propagate_up: bool = True
+    propagate_down: bool = True
+
+    def __init__(self):
+        raise TypeError(
+            "Normalform cannot be instantiated directly. Use Type[Normalform]"
+            "instead."
+        )
+
+    @classmethod
+    def _impl(cls, handle: "HandleT") -> "HandleT":
+        """Defines the transformations required to reach this normalform.
+
+        A normalform may apply arbitrary transforms as long as `handle` is updated
+        to wrap a valid mlir transform handle. This means a normalform might consume
+        the initial MLIR transform handle and update `handle` to represent a
+        different type of operation. Child handles of `handle` should be updated if
+        that makes sense semantically, but may be invalidated in the process of
+        normalization.
+        """
+        return handle
+
+    @classmethod
+    def apply(cls, handle: "HandleT") -> "HandleT":
+        """Apply transformations to a handle to bring it into this normalform."""
+        new_handle = cls._impl(handle)
+        # Setting this property propagates the normalform accordingly
+        handle.normalform = cls
+        return new_handle
 
 
 def insert_transform_script(
