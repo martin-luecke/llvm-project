@@ -175,21 +175,19 @@ class OpHandle(Handle):
             sizes=tile_sizes,
             interchange=interchange,
         )
-        # self._mlir_value = op.tiled_linalg_op
-        # TODO: Think about how to point the python object to the new value
         return TileResult(
-            tiled_op=self,
-            loops=[OpHandle(loop) for loop in op.loops],
+            tiled_op=op.tiled_linalg_op,
+            loops=[loop for loop in op.loops],
         )
 
     def _tile_using_forall(
-        self,
-        *,
-        mapping: Optional[
-            Union[str, ir.Attribute, Sequence[Union[str, ir.Attribute]]]
-        ] = None,
-        num_threads: Optional[Sequence[int]] = None,
-        tile_sizes: Optional[Sequence[int]] = None,
+            self,
+            *,
+            mapping: Optional[
+                Union[str, ir.Attribute, Sequence[Union[str, ir.Attribute]]]
+            ] = None,
+            num_threads: Optional[Sequence[int]] = None,
+            tile_sizes: Optional[Sequence[int]] = None,
     ) -> TileResult:
         """Creates a new `structured.TileUsingForallOp` op.
 
@@ -216,8 +214,8 @@ class OpHandle(Handle):
         )
         # self._mlir_value = op.tiled_op
         return TileResult(
-            loops=[OpHandle(op.forall_op)],
-            tiled_op=self,
+            loops=[op.forall_op],
+            tiled_op=op.tiled_op,
         )
 
     def tile(
@@ -359,14 +357,10 @@ class Normalform:
 
     @classmethod
     def _impl(cls, handle: "HandleT") -> "HandleT":
-        """Defines the transformations required to reach this normalform.
-
-        A normalform may apply arbitrary transforms as long as `handle` is updated
-        to wrap a valid mlir transform handle. This means a normalform might consume
-        the initial MLIR transform handle and update `handle` to represent a
-        different type of operation. Child handles of `handle` should be updated if
-        that makes sense semantically, but may be invalidated in the process of
-        normalization.
+        """
+        Defines the transformations required to reach this normalform.
+        A normalform may apply arbitrary transforms and thus possibly
+        invalidate `handle`.
         """
         return handle
 
@@ -374,8 +368,10 @@ class Normalform:
     def apply(cls, handle: "HandleT") -> "HandleT":
         """Apply transformations to a handle to bring it into this normalform."""
         new_handle = cls._impl(handle)
+        new_handle.children.extend(handle.children)
+        new_handle.parent = handle.parent
         # Setting this property propagates the normalform accordingly
-        handle.normalform = cls
+        new_handle.normalform = cls
         return new_handle
 
 
