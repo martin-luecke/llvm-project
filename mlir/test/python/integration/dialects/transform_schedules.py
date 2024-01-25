@@ -11,8 +11,6 @@ from mlir.dialects.transform import (
     any_op_t,
 )
 from mlir.dialects.transform.structured import *
-from mlir.dialects.transform.loop import loop_unroll
-from mlir.dialects.transform.extras import named_sequence, apply_patterns
 from mlir.dialects.builtin import module, ModuleOp
 from mlir.dialects.transform.extras import *
 from mlir.execution_engine import ExecutionEngine
@@ -32,7 +30,7 @@ def test_tiling(module_: Module):
     test_callback = func.FuncOp(
         "customCallback", ([T.memref(T.f32())], []), visibility="private"
     )
-    print = func.FuncOp(
+    print_fun = func.FuncOp(
         "printMemrefF32", ([T.memref(T.f32())], []), visibility="private"
     )
 
