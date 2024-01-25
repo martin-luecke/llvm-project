@@ -6,7 +6,7 @@ from .._transform_enum_gen import *
 from .._transform_ops_gen import *
 from .._transform_ops_gen import _Dialect
 from ..._mlir_libs._mlirDialectsTransform import *
-from ..._mlir_libs._mlirDialectsTransform import AnyOpType, OperationType
+from ..._mlir_libs._mlirDialectsTransform import AnyOpType, AnyValueType, OperationType
 
 try:
     from ...ir import *
@@ -215,7 +215,12 @@ class YieldOp(YieldOp):
 
 
 AnyOpTypeT = NewType("AnyOpType", AnyOpType)
+AnyValueTypeT = NewType("AnyValueType", AnyValueType)
 
 
 def any_op_t() -> AnyOpTypeT:
     return AnyOpTypeT(AnyOpType.get())
+
+
+def any_val_t() -> AnyValueTypeT:
+    return AnyValueTypeT(AnyValueType.get())
