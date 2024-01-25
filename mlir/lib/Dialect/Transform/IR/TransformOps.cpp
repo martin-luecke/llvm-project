@@ -286,6 +286,9 @@ transform::CommuteOp::apply(transform::TransformRewriter &rewriter,
   SmallVector<Operation *> targets =
       llvm::to_vector(state.getPayloadOps(getTarget()));
   auto target = dyn_cast<arith::AddFOp>(targets.front());
+  if (!target)
+    return emitSilenceableFailure(targets.front())
+           << "target is not an arith.addf operation";
   rewriter.setInsertionPointAfter(target);
 
   auto newAddf = rewriter.create<arith::AddFOp>(
