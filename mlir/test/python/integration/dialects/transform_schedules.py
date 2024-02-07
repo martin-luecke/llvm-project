@@ -27,7 +27,10 @@ from mlir.extras.utils import (
 )
 
 
-@execute(inputs=[[11.0, 12.0], [[25.0], [12.0]], [[0.0, 0.0], [0.0, 0.0]]])
+@execute(
+    inputs=[[11.0, 12.0], [[25.0], [12.0]], [[0.0, 0.0], [0.0, 0.0]]],
+    print_results=True,
+)
 @lower
 @run_transform
 @construct_module
@@ -44,7 +47,7 @@ def test_tiling(module_: Module):
         T.memref(1, 2, T.f32()),
         T.memref(2, 2, T.f32()),
     )
-    def matmul_signed_on_buffers(lhs: Value, rhs: Value, out: Value):
+    def entry(lhs: Value, rhs: Value, out: Value):
         linalg.matmul(lhs, rhs, outs=[out])
         # func.CallOp(print, [memref.CastOp(T.memref(T.f32()), out)])
 
