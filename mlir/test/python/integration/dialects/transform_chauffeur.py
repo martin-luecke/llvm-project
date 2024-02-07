@@ -5,7 +5,7 @@
 from typing import Callable
 from mlir.passmanager import PassManager
 from mlir.ir import Context, Location, Module, InsertionPoint, UnitAttr
-from mlir.dialects import scf, pdl, func, arith, linalg, memref, tensor
+from mlir.dialects import scf, pdl, func, arith, linalg, memref, tensor, llvm
 from mlir.dialects.transform import (
     get_parent_op,
     apply_patterns_canonicalization,
@@ -26,7 +26,10 @@ from mlir.extras.utils import (
 )
 
 
-@execute(inputs=[[11.0, 12.0], [[25.0], [12.0]], [[0.0, 0.0], [0.0, 0.0]]])
+@execute(
+    inputs=[[11.0, 12.0], [[25.0], [12.0]], [[0.0, 0.0], [0.0, 0.0]]],
+    print_results=True,
+)
 @run_transform
 @construct_module
 def test_tiling(module_: Module):
@@ -44,12 +47,10 @@ def test_tiling(module_: Module):
             T.memref(1, 2, T.f32()),
             T.memref(2, 2, T.f32()),
         )
-        def matmul_signed_on_buffers(lhs: Value, rhs: Value, out: Value):
+        def entry(lhs: Value, rhs: Value, out: Value):
             linalg.matmul(lhs, rhs, outs=[out])
 
-        matmul_signed_on_buffers.func_op.attributes[
-            "llvm.emit_c_interface"
-        ] = UnitAttr.get()
+        entry.func_op.attributes["llvm.emit_c_interface"] = UnitAttr.get()
         test_callback.attributes["llvm.emit_c_interface"] = UnitAttr.get()
         print_fun.attributes["llvm.emit_c_interface"] = UnitAttr.get()
 
@@ -73,10 +74,46 @@ def test_tiling(module_: Module):
             ir_module = ir_module.apply_pass("reconcile-unrealized-casts")
 
 
+# CHECK-LABEL: TEST: test_tiling
 # CHECK: 275.
 # CHECK-SAME: 132
 # CHECK-NEXT: 300
 # CHECK-SAME: 144
 
+
+@execute()
+@print_module
+@run_transform
+@construct_module
+def test_llvm(module_: Module):
+    @module
+    def payload():
+        print_fun = func.FuncOp("printF32", ([T.f32()], []), visibility="private")
+
+        @func.func()
+        def entry():
+            a = llvm.ConstantOp(T.f32(), ir.FloatAttr.get(T.f32(), 2))
+            b = llvm.ConstantOp(T.f32(), ir.FloatAttr.get(T.f32(), 20))
+            res = llvm.fadd(a, b)
+            func.CallOp(print_fun, [res])
+            return res
+
+        entry.func_op.attributes["llvm.emit_c_interface"] = UnitAttr.get()
+
+    @module(attrs={"transform.with_named_sequence": UnitAttr.get()})
+    def mod():
+        @named_sequence("__transform_main", [any_op_t()], [])
+        def basic(module: any_op_t()):
+            matmul = module.match_ops("func.return")
+            func_op = matmul.get_parent("func.func")
+            ir_module = func_op.get_parent("builtin.module")
+
+            ir_module = ir_module.apply_pass("convert-func-to-llvm")
+
+    # CHECK-LABEL: TEST: test_llvm
+    # CHECK: 22
+
+
 if __name__ == "__main__":
     test_tiling()
+    test_llvm()

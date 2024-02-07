@@ -1,8 +1,10 @@
 from ast import mod
+from calendar import c
+from dataclasses import field
 from functools import wraps
 import os
 from time import sleep
-from typing import Any, Callable, List, Optional, Sequence
+from typing import Any, Callable, List, Optional, Sequence, Union
 from mlir.runtime.np_to_memref import get_unranked_memref_descriptor
 
 # from sys import devnull
@@ -131,15 +133,22 @@ def lower(f: Callable[[], Module]) -> Callable[[], Module]:
 
 
 def execute(
-    inputs: Sequence[ArrayLike], dtype: DTypeLike = np.float32
+    inputs: Union[Sequence[ArrayLike], None] = None,
+    dtype: DTypeLike = np.float32,
+    print_results: bool = False,
 ) -> Callable[[], Callable[[], Module]]:
     def outer(f: Callable[[], Module]) -> Callable[[], Module]:
         def wrapped():
-            inputs_ = [np.array(input).astype(dtype) for input in inputs]
-            memref_ptrs = [
-                ctypes.pointer(ctypes.pointer(get_ranked_memref_descriptor(arg)))
-                for arg in inputs_
-            ]
+            nonlocal inputs
+            if inputs is None:
+                inputs = []
+                input_ptrs = [ctypes.pointer(ctypes.pointer(ctypes.c_void_p()))]
+            else:
+                inputs = [np.array(input).astype(dtype) for input in inputs]
+                input_ptrs = [
+                    ctypes.pointer(ctypes.pointer(get_ranked_memref_descriptor(arg)))
+                    for arg in inputs
+                ]
             module = f()
             eraseTransformScript(module)
             flatten_module(module)
@@ -149,8 +158,9 @@ def execute(
                 )
 
                 execution_engine.register_runtime("customCallback", callback)
-                execution_engine.invoke("matmul_signed_on_buffers", *memref_ptrs)
-                print(f"args: \n{[input for input in inputs_]}")
+                execution_engine.invoke("entry", *input_ptrs)
+                if print_results:
+                    print(f"args: \n{[input for input in inputs]}")
 
             return module
 
@@ -187,8 +197,12 @@ def print_module(f: Callable[[], Module]) -> Callable[[], Module]:
     return wrapped
 
 
-def construct_module(f: Callable[[Module], None]) -> Callable[[], Module]:
+def construct_module(
+    f: Callable[[Module], None], print_name: bool = True
+) -> Callable[[], Module]:
     def wrapped():
+        if print_name:
+            print("\nTEST:", f.__name__)
         with Context(), Location.unknown():
             module = Module.create()
             with InsertionPoint(module.body):
