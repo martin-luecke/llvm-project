@@ -3,6 +3,7 @@
 from typing import Callable
 from mlir import ir
 from mlir.dialects import scf, pdl
+from mlir.dialects.linalg.opdsl.lang.affine import D
 from mlir.dialects.transform import (
     structured,
     get_parent_op,
@@ -15,11 +16,14 @@ from mlir.dialects.transform.structured import structured_match
 from mlir.dialects.transform.loop import loop_unroll
 from mlir.dialects.transform.extras import (
     constant_param,
+    Handle,
     OpHandle,
     insert_transform_script,
     sequence,
     apply_patterns,
-    Normalform,
+    transform_abstraction,
+    autonormalize,
+    NormalForm,
 )
 from mlir.extras import types as T
 
@@ -186,14 +190,15 @@ def test_match_ops_mixed(op: OpHandle):
 @build_transform_script
 def test_normalform_base(op: OpHandle):
     # Normalform is the weakest normalform so op should already be in that form.
-    assert op._normalform is Normalform
-    op.normalize(Normalform)
-    assert op._normalform is Normalform
+    # Normalization to Normalform should be a no-op.
+    assert op._normalForm is NormalForm
+    op.normalize(NormalForm)
+    assert op._normalForm is NormalForm
     # CHECK: transform.named_sequence {{.*}}(%[[VAL_0:.*]]: !transform.any_op) {
     # CHECK-NEXT: transform.yield
 
 
-class DummyNormalform(Normalform):
+class DummyNormalForm(NormalForm):
     propagate_up: bool = True
     propagate_down: bool = True
 
@@ -206,20 +211,20 @@ class DummyNormalform(Normalform):
 @run
 def test_normalform_no_instantiation():
     try:
-        DummyNormalform()
+        DummyNormalForm()
     except TypeError as e:
         print(e)
     else:
         print("Exception not produced")
 
-    # CHECK: Normalform cannot be instantiated directly
+    # CHECK: NormalForm cannot be instantiated directly
 
 
 # CHECK-LABEL: TEST: test_normalform_dummyform
 @build_transform_script
 def test_normalform_dummyform(op: OpHandle):
-    op.normalize(DummyNormalform)
-    assert op._normalform is DummyNormalform
+    op.normalize(DummyNormalForm)
+    assert op._normalForm is DummyNormalForm
     # CHECK: transform.named_sequence {{.*}}(%[[VAL_0:.*]]: !transform.any_op) {
     # CHECK-NEXT: transform.print %[[VAL_0]] {name = "dummy normalization"}
 
@@ -228,9 +233,9 @@ def test_normalform_dummyform(op: OpHandle):
 @build_transform_script
 def test_normalform_propagate_up(op: OpHandle):
     nested_handle = op.match_ops("dummy.op")
-    nested_handle.normalize(DummyNormalform)
-    assert nested_handle._normalform is DummyNormalform
-    assert op._normalform is DummyNormalform
+    nested_handle.normalize(DummyNormalForm)
+    assert nested_handle._normalForm is DummyNormalForm
+    assert op._normalForm is DummyNormalForm
     # CHECK: transform.named_sequence {{.*}}(%[[VAL_0:.*]]: !transform.any_op) {
     # CHECK-NEXT: %[[VAL_1:.*]] = transform.structured.match ops{["dummy.op"]}
     # CHECK-NEXT: transform.print %[[VAL_1]] {name = "dummy normalization"}
@@ -240,12 +245,42 @@ def test_normalform_propagate_up(op: OpHandle):
 @build_transform_script
 def test_normalform_propagate_down(op: OpHandle):
     nested_handle = op.match_ops("dummy.op")
-    op.normalize(DummyNormalform)
-    assert nested_handle._normalform is DummyNormalform
-    assert op._normalform is DummyNormalform
+    op.normalize(DummyNormalForm)
+    assert nested_handle._normalForm is DummyNormalForm
+    assert op._normalForm is DummyNormalForm
     # CHECK: transform.named_sequence {{.*}}(%[[VAL_0:.*]]: !transform.any_op) {
     # CHECK-NEXT: %[[VAL_1:.*]] = transform.structured.match ops{["dummy.op"]}
     # CHECK-NEXT: transform.print %[[VAL_0]] {name = "dummy normalization"}
+
+
+# CHECK-LABEL: TEST: test_normalform_propagate_up_and_down
+@build_transform_script
+def test_normalform_propagate_up_and_down(op: OpHandle):
+    nested_handle = op.match_ops("dummy.op1")
+    nested_nested_handle = nested_handle.match_ops("dummy.op2")
+    nested_handle.normalize(DummyNormalForm)
+    assert nested_handle._normalForm is DummyNormalForm
+    assert op._normalForm is DummyNormalForm
+    assert nested_nested_handle._normalForm is DummyNormalForm
+    # CHECK: transform.named_sequence {{.*}}(%[[VAL_0:.*]]: !transform.any_op) {
+    # CHECK-NEXT: %[[VAL_1:.*]] = transform.structured.match ops{["dummy.op1"]}
+    # CHECK-NEXT: %[[VAL_2:.*]] = transform.structured.match ops{["dummy.op2"]}
+    # CHECK-NEXT: transform.print %[[VAL_1]] {name = "dummy normalization"}
+
+
+@transform_abstraction(required_normalform=DummyNormalForm)
+def foo_abstraction_0(handle: Handle) -> Handle:
+    return handle
+
+
+# CHECK-LABEL: TEST: test_auto_apply_normalform
+@build_transform_script
+def test_auto_apply_normalform(op: OpHandle) -> None:
+    with autonormalize():
+        foo_abstraction_0(op)
+    # CHECK: transform.named_sequence {{.*}}(%[[VAL_0:.*]]: !transform.any_op) {
+    # CHECK-NEXT: %[[VAL_1:.*]] = transform.get_parent_op %[[VAL_0]]
+    # CHECK-NEXT: transform.print %[[VAL_1]] {name = "dummy normalization"}
 
 
 # CHECK-LABEL: TEST: test_print_message
@@ -278,6 +313,14 @@ def test_sequence_region():
         m = structured_match(any_op_t(), target, ops=["arith.addi"])
         loop = get_parent_op(pdl.op_t(), m, op_name="scf.for")
         loop_unroll(loop, 4)
+
+
+# CHECK-LABEL: TEST: test_split_handles
+@build_transform_script
+def test_split_handles(op: OpHandle):
+    handles = op.split_handle()
+    # CHECK: transform.named_sequence {{.*}}(%[[VAL_0:.*]]: !transform.any_op) {
+    # CHECK-NEXT:   %[[VAL_1:.*]] = transform.split_handle %[[VAL_0]]
 
 
 # CHECK-LABEL: TEST: test_apply_patterns

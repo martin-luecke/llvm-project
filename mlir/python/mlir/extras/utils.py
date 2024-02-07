@@ -23,12 +23,12 @@ from numpy.typing import NDArray, ArrayLike, DTypeLike
 def bufferize(module: Module) -> Module:
     pm = PassManager.parse(
         r"""builtin.module(
-                one-shot-bufferize{bufferize-function-boundaries}, 
-                expand-realloc, 
+                one-shot-bufferize{bufferize-function-boundaries},
+                expand-realloc,
                 canonicalize,
                 ownership-based-buffer-deallocation,
-                canonicalize, 
-                buffer-deallocation-simplification, 
+                canonicalize,
+                buffer-deallocation-simplification,
                 bufferization-lower-deallocations,
                 cse,
                 canonicalize,
@@ -46,6 +46,21 @@ def eraseTransformScript(module: Module) -> Module:
             op.name == "builtin.module"
             and "transform.with_named_sequence" in op.attributes
         ):
+            op.erase()
+        elif op.name == "builtin.module":
+            eraseTransformScript(op.operation)
+    return module
+
+
+def flatten_module(module: Module) -> Module:
+    for op in module.operation.regions[0].blocks[0].operations:
+        if op.name == "builtin.module":
+            for nested_op in op.operation.regions[0].blocks[0].operations:
+                nested_op.operation.move_after(
+                    module.operation.regions[0].blocks[0].operations[0]
+                )
+
+            # op.operation.regions[0].blocks[0].append_to(module.operation.regions[0])
             op.erase()
     return module
 
@@ -103,6 +118,18 @@ def get_util_libaries() -> List[str]:
     return [c_runner_utils, runner_utils]
 
 
+def lower(f: Callable[[], Module]) -> Callable[[], Module]:
+    def wrapped():
+        module = f()
+        with module.context:
+            bufferize(module)
+            lowerLinalg(module)
+            lowerToLLVM(module)
+        return module
+
+    return wrapped
+
+
 def execute(
     inputs: Sequence[ArrayLike], dtype: DTypeLike = np.float32
 ) -> Callable[[], Callable[[], Module]]:
@@ -114,11 +141,9 @@ def execute(
                 for arg in inputs_
             ]
             module = f()
+            eraseTransformScript(module)
+            flatten_module(module)
             with module.context:
-                bufferize(module)
-                lowerLinalg(module)
-                lowerToLLVM(module)
-
                 execution_engine = ExecutionEngine(
                     module, shared_libs=get_util_libaries(), opt_level=2
                 )
