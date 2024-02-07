@@ -1,7 +1,18 @@
 #  Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 #  See https://llvm.org/LICENSE.txt for license information.
 #  SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-from typing import Callable, Optional, Sequence, Union, Type, TypeVar
+from contextlib import contextmanager
+from typing import (
+    Any,
+    Callable,
+    Optional,
+    Sequence,
+    Union,
+    Type,
+    TypeVar,
+    List,
+    Iterable,
+)
 
 from ....extras.meta import region_op
 from .... import ir
@@ -20,6 +31,8 @@ from .. import (
 )
 from .. import structured
 from .utils import TileLoopKind, TileResult
+
+_TRANSFORM_AUTO_NORMALIZATION = False
 
 HandleT = TypeVar("HandleT", bound="Handle")
 
@@ -45,36 +58,66 @@ class Handle(ir.Value):
         super().__init__(v)
         self.parent = parent
         self.children = children if children is not None else []
-        self._normalform = Normalform
+        self._normalForm = NormalForm
+
+    def __call__(self, *args: Any, **kwds: Any) -> Any:
+        assert isinstance(args[0], str)
+        return self.apply_pass(args[0])
 
     @property
-    def normalform(self) -> Type["Normalform"]:
-        return self._normalform
+    def normalForm(self) -> Type["NormalForm"]:
+        return self._normalForm
 
-    @normalform.setter
-    def normalform(self, normalform: Type["Normalform"]):
-        self._normalform = normalform
-        if self._normalform.propagate_up:
-            self.propagate_up_normalform(normalform)
-        if self._normalform.propagate_down:
-            self.propagate_down_normalform(normalform)
+    @normalForm.setter
+    def normalForm(self, normalForm: Type["NormalForm"]):
+        self._normalForm = normalForm
+        if self._normalForm.propagate_up:
+            self.propagate_up_normalform(normalForm)
+        if self._normalForm.propagate_down:
+            self.propagate_down_normalform(normalForm)
 
-    def propagate_up_normalform(self, normalform: Type["Normalform"]):
+    def propagate_up_normalform(self, normalForm: Type["NormalForm"]):
         if self.parent:
-            # We set the parent normalform directly to avoid infinite recursion
-            # in case this normalform needs to be propagated up and down.
-            self.parent._normalform = normalform
-            self.parent.propagate_up_normalform(normalform)
+            # We set the parent normalForm directly to avoid infinite recursion
+            # in case this normalForm needs to be propagated up and down.
+            self.parent._normalForm = normalForm
+            self.parent.propagate_up_normalform(normalForm)
 
-    def propagate_down_normalform(self, normalform: Type["Normalform"]):
+    def propagate_down_normalform(self, normalForm: Type["NormalForm"]):
         for child in self.children:
-            # We set the child normalform directly to avoid infinite recursion
-            # in case this normalform needs to be propagated up and down.
-            child._normalform = normalform
-            child.propagate_down_normalform(normalform)
+            # We set the child normalForm directly to avoid infinite recursion
+            # in case this normalForm needs to be propagated up and down.
+            child._normalForm = normalForm
+            child.propagate_down_normalform(normalForm)
 
-    def normalize(self: "HandleT", normalform: Type["Normalform"]) -> "HandleT":
-        return normalform.apply(self)
+    def normalize(self: "HandleT", normalForm: Type["NormalForm"]) -> "HandleT":
+        return normalForm.apply(self)
+
+    def apply_pass(self: "HandleT", pass_name: str, options: str = "") -> "HandleT":
+        """Emits a `transform.ApplyRegisteredPassOp`."""
+        op = transform.ApplyRegisteredPassOp(
+            any_op_t(), self, pass_name, options=options
+        )
+        return op.result
+
+    def auto_normalize_parent_func(self, normalForm: Type["NormalForm"]):
+        """Auto normalizes the parent function if needed."""
+        if self.normalForm != normalForm and _TRANSFORM_AUTO_NORMALIZATION:
+            func = self.get_parent(op_name="func.func", deduplicate=True)
+            func.normalize(normalForm)
+
+    def get_parent(self, op_name: str, deduplicate=True) -> "Handle":
+        """Emits a `transform.GetParentOp`."""
+        op = transform.GetParentOp(
+            any_op_t(), self, op_name=op_name, deduplicate=deduplicate
+        )
+        return op.parent
+
+    def split_handle(self: HandleT) -> Sequence[HandleT]:
+        """Emits a `transform.SplitHandlesOp`."""
+        # TODO:
+        op = transform.SplitHandleOp([any_op_t()], self)
+        return op.result
 
 @ir.register_value_caster(AnyOpType.get_static_typeid())
 @ir.register_value_caster(OperationType.get_static_typeid())
@@ -181,18 +224,18 @@ class OpHandle(Handle):
         )
 
     def _tile_using_forall(
-            self,
-            *,
-            mapping: Optional[
-                Union[str, ir.Attribute, Sequence[Union[str, ir.Attribute]]]
-            ] = None,
-            num_threads: Optional[Sequence[int]] = None,
-            tile_sizes: Optional[Sequence[int]] = None,
+        self,
+        *,
+        mapping: Optional[
+            Union[str, ir.Attribute, Sequence[Union[str, ir.Attribute]]]
+        ] = None,
+        num_threads: Optional[Sequence[int]] = None,
+        tile_sizes: Optional[Sequence[int]] = None,
     ) -> TileResult:
         """Creates a new `structured.TileUsingForallOp` op.
 
         The func.func payload op surrounding the payload this handle represents
-        will be autonormalized to LoopNormalform if needed.
+        will be autonormalized to LoopNormalForm if needed.
 
         This handle will be updated to represent the tiled op.
         """
@@ -337,13 +380,13 @@ def constant_param(value: Union[ir.Attribute, int]) -> ParamHandle:
     return op.param
 
 
-class Normalform:
-    """Represents the weakest normalform and is the base class for all normalforms.
-    A normalform is defined as a sequence of transformations to be applied to
-    a handle to reach this normalform.
+class NormalForm:
+    """Represents the weakest normalForm and is the base class for all normalForms.
+    A normalForm is defined as a sequence of transformations to be applied to
+    a handle to reach this normalForm.
 
-    `propagate_up`: Propagate this normalform up to parent handles.
-    `propagate_down`: Propagate this normalform down to all child handles
+    `propagate_up`: Propagate this normalForm up to parent handles.
+    `propagate_down`: Propagate this normalForm down to all child handles
     """
 
     propagate_up: bool = True
@@ -351,28 +394,109 @@ class Normalform:
 
     def __init__(self):
         raise TypeError(
-            "Normalform cannot be instantiated directly. Use Type[Normalform]"
+            "NormalForm cannot be instantiated directly. Use Type[NormalForm]"
             "instead."
         )
 
     @classmethod
     def _impl(cls, handle: "HandleT") -> "HandleT":
         """
-        Defines the transformations required to reach this normalform.
-        A normalform may apply arbitrary transforms and thus possibly
+        Defines the transformations required to reach this normalForm.
+        A normalForm may apply arbitrary transforms and thus possibly
         invalidate `handle`.
         """
         return handle
 
     @classmethod
     def apply(cls, handle: "HandleT") -> "HandleT":
-        """Apply transformations to a handle to bring it into this normalform."""
+        """Apply transformations to a handle to bring it into this normalForm."""
         new_handle = cls._impl(handle)
         new_handle.children.extend(handle.children)
         new_handle.parent = handle.parent
-        # Setting this property propagates the normalform accordingly
-        new_handle.normalform = cls
+        # Setting this property propagates the normalForm accordingly
+        new_handle.normalForm = cls
         return new_handle
+
+
+C = TypeVar("C", bound=Callable[..., Any])
+
+
+def transform_abstraction(
+    enforced_normalform: Optional[Union[Type["NormalForm"], C]] = NormalForm,
+    required_normalform: Optional[Type["NormalForm"]] = NormalForm,
+    no_propagate: Optional[bool] = False,
+) -> C:
+    """
+    Decorator for transform abstractions adding automatic handling of normalization.
+
+    Args:
+      enforced_normalform: The normalform the resulting handles will have.
+      required_normalform: The required normalform to apply this transform.
+      no_propagate: If true, no changes to any normalforms will be done.
+
+    Returns:
+      The decorated function according to the following:
+
+    This enables automatic enforcement of a specific normalform before this
+    transform is executed. Propagates the enforced/retained normalform to the
+    resulting handles.
+    If no explicit normalform is provided the handles are conservatively assumed
+    to now be in AnyForm, i.e. the weakest normalform.
+    """
+
+    def wrapped(f: C) -> C:
+        def decorated(*args, **kwargs):
+            if required_normalform:
+                # TODO(@mluecke): this assumes that the payload op is surrounded by a
+                # func op that will be matched and normalized. This is not always
+                # guaranteed to be the case.
+                args[0].auto_normalize_parent_func(required_normalform)
+            results = f(*args, **kwargs)
+
+            def flatten(results: Any) -> List:
+                """Unpacks all potentially nested iterables into a flat list."""
+                all_results = [results]
+                is_iterable = lambda x: isinstance(x, Iterable)
+                while any(is_iterable(x) for x in all_results):
+                    all_results = list(
+                        itertools.chain.from_iterable(
+                            x if is_iterable(x) else [x] for x in all_results
+                        )
+                    )
+                return all_results
+
+            if not no_propagate:
+                for result in flatten(results):
+                    result.normalform = enforced_normalform
+            return results
+
+        return decorated
+
+    # If the decorator was used without `()` the decorated function will be in
+    # this variable. We remap it and reset it to the default value. This enables
+    # using this decorator in similar fashion to e.g. the `dataclass` decorator.
+    if not isinstance(enforced_normalform, Type):
+        f = enforced_normalform
+        enforced_normalform = NormalForm
+        return wrapped(f)
+    return wrapped
+
+
+@contextmanager
+def autonormalize(activate: bool = True):
+    """Context manager that switches automatic normalization behavior."""
+    autonorm_enabled: bool = _TRANSFORM_AUTO_NORMALIZATION
+    set_auto_normalization(activate)
+    try:
+        yield
+    finally:
+        set_auto_normalization(autonorm_enabled)
+
+
+def set_auto_normalization(activate: bool):
+    """Toggles the automatic normalization mode."""
+    global _TRANSFORM_AUTO_NORMALIZATION
+    _TRANSFORM_AUTO_NORMALIZATION = activate
 
 
 def insert_transform_script(

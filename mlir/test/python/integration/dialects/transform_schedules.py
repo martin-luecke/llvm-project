@@ -1,3 +1,5 @@
+# RUN: export MLIR_RUNNER_UTILS=/Users/martin/development/llvm-project/build/lib/libmlir_runner_utils.dylib &&\
+# RUN: export MLIR_C_RUNNER_UTILS=/Users/martin/development/llvm-project/build/lib/libmlir_c_runner_utils.dylib &&\
 # RUN: %PYTHON %s 2>&1 | FileCheck %s
 
 from typing import Callable
@@ -17,6 +19,8 @@ from mlir.execution_engine import ExecutionEngine
 from mlir.extras import types as T
 from mlir.extras.utils import (
     execute,
+    lower,
+    print_module,
     run_transform,
     construct_module,
     eraseTransformScript,
@@ -24,6 +28,7 @@ from mlir.extras.utils import (
 
 
 @execute(inputs=[[11.0, 12.0], [[25.0], [12.0]], [[0.0, 0.0], [0.0, 0.0]]])
+@lower
 @run_transform
 @construct_module
 def test_tiling(module_: Module):
