@@ -1,0 +1,28 @@
+// This does not emit the affine.apply in `expand_strided_metadata`
+func.func @subview_const_size(%0 : memref<64x64xf32, strided<[1, 1], offset: 0>>, %arg0 : index, %arg1 : index, %arg2 : index) -> memref<4x4xf32, strided<[1, 1], offset: 0>> {
+  %c4 = arith.constant 4 : index
+  %chunk = memref.subview %0[0, 0][4, 4][1, 1] :
+    memref<64x64xf32, strided<[1, 1], offset: 0>>
+    to memref<4x4xf32, strided<[1, 1], offset: 0>>
+  %value = arith.constant 42.0 : f32
+  scf.forall (%i, %j) = (0, 0) to (4, 4) step (1, 1){
+    memref.store %value, %chunk[%i, %j] : memref<4x4xf32, strided<[1, 1], offset: 0>>
+  }
+  return %chunk : memref<4x4xf32, strided<[1, 1], offset: 0>>
+}
+
+// -----
+// This creates an affine.apply
+// run with the following to see the error: --split-input-file --convert-scf-to-cf -convert-func-to-llvm -expand-strided-metadata -lower-affine -finalize-memref-to-llvm -reconcile-unrealized-casts
+func.func @subview_const_size(%0 : memref<64x64xf32, strided<[1, 1], offset: 0>>, %arg0 : index, %arg1 : index, %arg2 : index) -> memref<4x4xf32, strided<[1, 1], offset: ?>> {
+  %chunk = memref.subview %0[%arg0, %arg0][4, 4][1, 1] :
+    memref<64x64xf32, strided<[1, 1], offset: 0>>
+    to memref<4x4xf32, strided<[1, 1], offset: ?>>
+  %value = arith.constant 42.0 : f32
+  scf.forall (%i, %j) = (0, 0) to (4, 4) step (1, 1){
+    memref.store %value, %chunk[%i, %j] : memref<4x4xf32, strided<[1, 1], offset: ?>>
+  }
+  return %chunk : memref<4x4xf32, strided<[1, 1], offset: ?>>
+}
+
+
