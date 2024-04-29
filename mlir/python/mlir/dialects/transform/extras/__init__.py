@@ -1,6 +1,7 @@
 #  Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 #  See https://llvm.org/LICENSE.txt for license information.
 #  SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+from __future__ import annotations
 from contextlib import contextmanager
 from typing import (
     Any,
@@ -58,23 +59,27 @@ class Handle(ir.Value):
         super().__init__(v)
         self.parent = parent
         self.children = children if children is not None else []
-        self._normalForm = NormalForm
+        self._normalForm = set()
 
     def __call__(self, *args: Any, **kwds: Any) -> Any:
         assert isinstance(args[0], str)
         return self.apply_pass(args[0])
 
     @property
-    def normalForm(self) -> Type["NormalForm"]:
+    def normalForm(self) -> set[Type["NormalForm"]]:
         return self._normalForm
 
     @normalForm.setter
     def normalForm(self, normalForm: Type["NormalForm"]):
-        self._normalForm = normalForm
-        if self._normalForm.propagate_up:
-            self.propagate_up_normalform(normalForm)
-        if self._normalForm.propagate_down:
-            self.propagate_down_normalform(normalForm)
+        if isinstance(normalForm, set):
+            self._normalForm |= normalForm
+        else:
+            self._normalForm.add(normalForm)
+        # self._normalForm = normalForm
+        # if self._normalForm.propagate_up:
+        #     self.propagate_up_normalform(normalForm)
+        # if self._normalForm.propagate_down:
+        #     self.propagate_down_normalform(normalForm)
 
     def propagate_up_normalform(self, normalForm: Type["NormalForm"]):
         if self.parent:
@@ -119,6 +124,221 @@ class Handle(ir.Value):
         op = transform.SplitHandleOp([any_op_t()], self)
         return op.result
 
+
+class NormalForm:
+    """Represents the weakest normalForm and is the base class for all normalForms.
+    A normalForm is defined as a sequence of transformations to be applied to
+    a handle to reach this normalForm.
+
+    `propagate_up`: Propagate this normalForm up to parent handles.
+    `propagate_down`: Propagate this normalForm down to all child handles
+    """
+
+    propagate_up: bool = True
+    propagate_down: bool = True
+
+    def __init__(self):
+        raise TypeError(
+            "NormalForm cannot be instantiated directly. Use Type[NormalForm]"
+            "instead."
+        )
+
+    @classmethod
+    def _impl(cls, handle: "HandleT") -> "HandleT":
+        """
+        Defines the transformations required to reach this normalForm.
+        A normalForm may apply arbitrary transforms and thus possibly
+        invalidate `handle`.
+        """
+        return handle
+
+    @classmethod
+    def apply(cls, handle: "HandleT") -> "HandleT":
+        """Apply transformations to a handle to bring it into this normalForm."""
+        new_handle = cls._impl(handle)
+        new_handle.children.extend(handle.children)
+        new_handle.parent = handle.parent
+        # Setting this property propagates the normalForm accordingly
+        new_handle.normalForm = cls
+        return new_handle
+
+
+class affineIR(NormalForm):
+    propagate_up: bool = False
+    propagate_down: bool = False
+
+    @classmethod
+    def _impl(cls, handle: "HandleT") -> "HandleT":
+        """
+        Defines the transformations required to reach this normalForm.
+        A normalForm may apply arbitrary transforms and thus possibly
+        invalidate `handle`.
+        """
+        raise Exception("This normalform can not explicitly be established")
+
+
+class arithIR(NormalForm):
+    propagate_up: bool = False
+    propagate_down: bool = False
+
+    @classmethod
+    def _impl(cls, handle: "HandleT") -> "HandleT":
+        """
+        Defines the transformations required to reach this normalForm.
+        A normalForm may apply arbitrary transforms and thus possibly
+        invalidate `handle`.
+        """
+        raise Exception("This normalform can not explicitly be established")
+
+
+class scfIR(NormalForm):
+    propagate_up: bool = False
+    propagate_down: bool = False
+
+    @classmethod
+    def _impl(cls, handle: "HandleT") -> "HandleT":
+        """
+        Defines the transformations required to reach this normalForm.
+        A normalForm may apply arbitrary transforms and thus possibly
+        invalidate `handle`.
+        """
+        raise Exception("This normalform can not explicitly be established")
+
+
+class cfIR(NormalForm):
+    propagate_up: bool = False
+    propagate_down: bool = False
+
+    @classmethod
+    def _impl(cls, handle: "HandleT") -> "HandleT":
+        """
+        Defines the transformations required to reach this normalForm.
+        A normalForm may apply arbitrary transforms and thus possibly
+        invalidate `handle`.
+        """
+        raise Exception("This normalform can not explicitly be established")
+
+
+class memrefIR(NormalForm):
+    propagate_up: bool = False
+    propagate_down: bool = False
+
+    @classmethod
+    def _impl(cls, handle: "HandleT") -> "HandleT":
+        """
+        Defines the transformations required to reach this normalForm.
+        A normalForm may apply arbitrary transforms and thus possibly
+        invalidate `handle`.
+        """
+        raise Exception("This normalform can not explicitly be established")
+
+
+class memrefComplexIR(NormalForm):
+    propagate_up: bool = False
+    propagate_down: bool = False
+
+    @classmethod
+    def _impl(cls, handle: "HandleT") -> "HandleT":
+        """
+        Defines the transformations required to reach this normalForm.
+        A normalForm may apply arbitrary transforms and thus possibly
+        invalidate `handle`.
+        """
+        raise Exception("This normalform can not explicitly be established")
+
+
+class funcIR(NormalForm):
+    propagate_up: bool = False
+    propagate_down: bool = False
+
+    @classmethod
+    def _impl(cls, handle: "HandleT") -> "HandleT":
+        """
+        Defines the transformations required to reach this normalForm.
+        A normalForm may apply arbitrary transforms and thus possibly
+        invalidate `handle`.
+        """
+        raise Exception("This normalform can not explicitly be established")
+
+
+class llvmIR(NormalForm):
+    propagate_up: bool = False
+    propagate_down: bool = False
+
+    @classmethod
+    def _impl(cls, handle: "HandleT") -> "HandleT":
+        """
+        Defines the transformations required to reach this normalForm.
+        A normalForm may apply arbitrary transforms and thus possibly
+        invalidate `handle`.
+        """
+        raise Exception("This normalform can not explicitly be established")
+
+
+C = TypeVar("C", bound=Callable[..., Any])
+
+
+def transform_abstraction(
+    enforced_normalform: Optional[Union[Type["NormalForm"], C]] = NormalForm,
+    required_normalform: Optional[Type["NormalForm"]] = NormalForm,
+    no_propagate: Optional[bool] = False,
+) -> C:
+    """
+    Decorator for transform abstractions adding automatic handling of normalization.
+
+    Args:
+      enforced_normalform: The normalform the resulting handles will have.
+      required_normalform: The required normalform to apply this transform.
+      no_propagate: If true, no changes to any normalforms will be done.
+
+    Returns:
+      The decorated function according to the following:
+
+    This enables automatic enforcement of a specific normalform before this
+    transform is executed. Propagates the enforced/retained normalform to the
+    resulting handles.
+    If no explicit normalform is provided the handles are conservatively assumed
+    to now be in AnyForm, i.e. the weakest normalform.
+    """
+
+    def wrapped(f: C) -> C:
+        def decorated(*args, **kwargs):
+            if required_normalform:
+                # TODO(@mluecke): this assumes that the payload op is surrounded by a
+                # func op that will be matched and normalized. This is not always
+                # guaranteed to be the case.
+                args[0].auto_normalize_parent_func(required_normalform)
+            results = f(*args, **kwargs)
+
+            def flatten(results: Any) -> List:
+                """Unpacks all potentially nested iterables into a flat list."""
+                all_results = [results]
+                is_iterable = lambda x: isinstance(x, Iterable)
+                while any(is_iterable(x) for x in all_results):
+                    all_results = list(
+                        itertools.chain.from_iterable(
+                            x if is_iterable(x) else [x] for x in all_results
+                        )
+                    )
+                return all_results
+
+            if not no_propagate:
+                for result in flatten(results):
+                    result.normalform = enforced_normalform
+            return results
+
+        return decorated
+
+    # If the decorator was used without `()` the decorated function will be in
+    # this variable. We remap it and reset it to the default value. This enables
+    # using this decorator in similar fashion to e.g. the `dataclass` decorator.
+    if not isinstance(enforced_normalform, Type):
+        f = enforced_normalform
+        enforced_normalform = NormalForm
+        return wrapped(f)
+    return wrapped
+
+
 @ir.register_value_caster(AnyOpType.get_static_typeid())
 @ir.register_value_caster(OperationType.get_static_typeid())
 class OpHandle(Handle):
@@ -135,6 +355,107 @@ class OpHandle(Handle):
         children: Optional[Sequence[Handle]] = None,
     ):
         super().__init__(v, parent=parent, children=children)
+
+    ### Note: The decorator currently does not work completely as expected.
+
+    def convert_arith_to_llvm(self) -> "OpHandle":
+        """Emits a `transform.ApplyPassOp` for the convert-arith-to-llvm pass."""
+        # impl
+        result = self.apply_pass("convert-arith-to-llvm")
+        result.normalForm = self.normalForm  # should be automatic
+
+        # effects
+        result.normalForm.remove(arithIR)
+        result.normalForm.add(llvmIR)
+
+        return result
+
+    def convert_scf_to_cf(self) -> "OpHandle":
+        """Emits a `transform.ApplyPassOp` for the convert-scf-to-cf pass."""
+        # impl
+        result = self.apply_pass("convert-scf-to-cf")
+        result.normalForm = self.normalForm  # should be automatic
+
+        # effects
+        result.normalForm.remove(scfIR)
+        result.normalForm.add(cfIR)
+
+        return result
+
+    def convert_cf_to_llvm(self) -> "OpHandle":
+        """Emits a `transform.ApplyPassOp` for the convert-cf-to-llvm pass."""
+        # impl
+        result = self.apply_pass("convert-cf-to-llvm")
+        result.normalForm = self.normalForm  # should be automatic
+
+        # effects
+        result.normalForm.remove(cfIR)
+        result.normalForm.add(llvmIR)
+
+        return result
+
+    def convert_func_to_llvm(self) -> "OpHandle":
+        """Emits a `transform.ApplyPassOp for the convert-func-to-llvm pass`."""
+        result = self.apply_pass("convert-func-to-llvm")
+        result.normalForm = self.normalForm  # should be automatic
+
+        # effects
+        result.normalForm.remove(funcIR)
+        result.normalForm.add(llvmIR)
+        return result
+
+    def expand_strided_metadata(self) -> "OpHandle":
+        """Emits a `transform.ApplyPassOp for the expand-strided-metadata pass`."""
+        result = self.apply_pass("expand-strided-metadata")
+        result.normalForm = self.normalForm  # should be automatic
+
+        # effects
+        if memrefComplexIR in result.normalForm:
+            result.normalForm.remove(memrefComplexIR)
+            result.normalForm.add(affineIR)
+        return result
+
+    def finalize_memref_to_llvm(self, ignore_errors=False) -> "OpHandle":
+        """Emits a `transform.ApplyPassOp for the finalize-memref-to-llvm pass`."""
+        result = self.apply_pass("finalize-memref-to-llvm")
+        result.normalForm = self.normalForm  # should be automatic
+
+        # effects
+        result.normalForm.remove(memrefIR)
+        if memrefComplexIR in result.normalForm:
+            if not ignore_errors:
+                raise Exception(
+                    "Still unsimplified memrefs in the IR, please run expand-strided-metadata to simplify."
+                )
+        result.normalForm.add(llvmIR)
+        return result
+
+    def finalize_llvm_conversion(self, ignore_errors=False) -> "OpHandle":
+        """Emits a `transform.ApplyPassOp for the reconcile-unrealized-casts pass`."""
+        result = self.apply_pass("reconcile-unrealized-casts")
+        result.normalForm = self.normalForm  # should be automatic
+
+        # effects
+        if len(result.normalForm) > 1 and not ignore_errors:
+            raise Exception(
+                "Unresolved normalForms in the IR, please run the required passes to resolve them:"
+                + str(result.normalForm)
+            )
+        result.normalForm.add(llvmIR)
+        return result
+
+    def lower_affine(self) -> "OpHandle":
+        """Emits a `transform.ApplyPassOp` for the lower-affine pass."""
+        # impl
+        result = self.apply_pass("lower-affine")
+        result.normalForm = self.normalForm  # should be automatic
+
+        # effects
+        result.normalForm.remove(affineIR)
+        result.normalForm.add(scfIR)
+        result.normalForm.add(arithIR)
+
+        return result
 
     def get_result(self, indices: Sequence[int] = [0]) -> "ValueHandle":
         """
@@ -378,108 +699,6 @@ def constant_param(value: Union[ir.Attribute, int]) -> ParamHandle:
         param_type = AnyParamType.get()
     op = transform.ParamConstantOp(param_type, value)
     return op.param
-
-
-class NormalForm:
-    """Represents the weakest normalForm and is the base class for all normalForms.
-    A normalForm is defined as a sequence of transformations to be applied to
-    a handle to reach this normalForm.
-
-    `propagate_up`: Propagate this normalForm up to parent handles.
-    `propagate_down`: Propagate this normalForm down to all child handles
-    """
-
-    propagate_up: bool = True
-    propagate_down: bool = True
-
-    def __init__(self):
-        raise TypeError(
-            "NormalForm cannot be instantiated directly. Use Type[NormalForm]"
-            "instead."
-        )
-
-    @classmethod
-    def _impl(cls, handle: "HandleT") -> "HandleT":
-        """
-        Defines the transformations required to reach this normalForm.
-        A normalForm may apply arbitrary transforms and thus possibly
-        invalidate `handle`.
-        """
-        return handle
-
-    @classmethod
-    def apply(cls, handle: "HandleT") -> "HandleT":
-        """Apply transformations to a handle to bring it into this normalForm."""
-        new_handle = cls._impl(handle)
-        new_handle.children.extend(handle.children)
-        new_handle.parent = handle.parent
-        # Setting this property propagates the normalForm accordingly
-        new_handle.normalForm = cls
-        return new_handle
-
-
-C = TypeVar("C", bound=Callable[..., Any])
-
-
-def transform_abstraction(
-    enforced_normalform: Optional[Union[Type["NormalForm"], C]] = NormalForm,
-    required_normalform: Optional[Type["NormalForm"]] = NormalForm,
-    no_propagate: Optional[bool] = False,
-) -> C:
-    """
-    Decorator for transform abstractions adding automatic handling of normalization.
-
-    Args:
-      enforced_normalform: The normalform the resulting handles will have.
-      required_normalform: The required normalform to apply this transform.
-      no_propagate: If true, no changes to any normalforms will be done.
-
-    Returns:
-      The decorated function according to the following:
-
-    This enables automatic enforcement of a specific normalform before this
-    transform is executed. Propagates the enforced/retained normalform to the
-    resulting handles.
-    If no explicit normalform is provided the handles are conservatively assumed
-    to now be in AnyForm, i.e. the weakest normalform.
-    """
-
-    def wrapped(f: C) -> C:
-        def decorated(*args, **kwargs):
-            if required_normalform:
-                # TODO(@mluecke): this assumes that the payload op is surrounded by a
-                # func op that will be matched and normalized. This is not always
-                # guaranteed to be the case.
-                args[0].auto_normalize_parent_func(required_normalform)
-            results = f(*args, **kwargs)
-
-            def flatten(results: Any) -> List:
-                """Unpacks all potentially nested iterables into a flat list."""
-                all_results = [results]
-                is_iterable = lambda x: isinstance(x, Iterable)
-                while any(is_iterable(x) for x in all_results):
-                    all_results = list(
-                        itertools.chain.from_iterable(
-                            x if is_iterable(x) else [x] for x in all_results
-                        )
-                    )
-                return all_results
-
-            if not no_propagate:
-                for result in flatten(results):
-                    result.normalform = enforced_normalform
-            return results
-
-        return decorated
-
-    # If the decorator was used without `()` the decorated function will be in
-    # this variable. We remap it and reset it to the default value. This enables
-    # using this decorator in similar fashion to e.g. the `dataclass` decorator.
-    if not isinstance(enforced_normalform, Type):
-        f = enforced_normalform
-        enforced_normalform = NormalForm
-        return wrapped(f)
-    return wrapped
 
 
 @contextmanager
