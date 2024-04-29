@@ -152,6 +152,7 @@ def execute(
             module = f()
             eraseTransformScript(module)
             flatten_module(module)
+            print(module)
             with module.context:
                 execution_engine = ExecutionEngine(
                     module, shared_libs=get_util_libaries(), opt_level=2
@@ -198,7 +199,7 @@ def print_module(f: Callable[[], Module]) -> Callable[[], Module]:
 
 
 def construct_module(
-    f: Callable[[Module], None], print_name: bool = True
+    f: Callable[[Module], None], print_name: bool = False
 ) -> Callable[[], Module]:
     def wrapped():
         if print_name:
