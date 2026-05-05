@@ -26,10 +26,16 @@ namespace COMGR::hotswap {
 struct RaiseResult {
   std::unique_ptr<llvm::LLVMContext> Ctx;
   std::unique_ptr<llvm::Module> Module;
+  int LiftedCount = 0;
   int TotalCount = 0;
+  std::string IrText;
+  std::string DisasmText;
   // Structured failure description. `failure.reason == None` iff `success`.
   RaiseFailure Failure;
   bool Success = false;
+
+  bool UsesScratchPrivateSegment = false;
+  uint32_t SourcePrivateSegmentFixedSize = 0;
 };
 
 // Raise a kernel named `KernelName` from the disassembled `TextBytes` of the
