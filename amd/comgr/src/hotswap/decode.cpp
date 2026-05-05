@@ -425,6 +425,222 @@ void decodeDsSwizzleImm(DecodedInst &Di) {
 // Signed 16-bit PC-relative offset * 4 bytes, relative to the
 // instruction's successor (off + 4, not off + instSize — matches the
 // hardware encoding definition).
+
+void failVopdDecode(const DecodedInst &Di, const Twine &Detail) {
+  std::string Msg;
+  raw_string_ostream Os(Msg);
+  Os << "decodeVopd: " << Detail << " for '" << Di.RawMnemonic
+     << "' (opcode=" << Di.Inst.getOpcode()
+     << ", numOps=" << Di.Inst.getNumOperands() << ")";
+  report_fatal_error(Os.str().c_str());
+}
+
+int findRegIndexInClass(const MCRegisterClass &RC, MCRegister Reg) {
+  int Idx = 0;
+  for (MCRegister R : RC) {
+    if (R == Reg)
+      return Idx;
+    ++Idx;
+  }
+  return -1;
+}
+
+unsigned computeRegWidthDwords(const MCRegisterInfo &MRI, MCRegister Reg) {
+  if (!Reg)
+    return 1;
+  unsigned Width = 1;
+  for (unsigned Sub = AMDGPU::sub1; Sub < MRI.getNumSubRegIndices(); ++Sub) {
+    MCRegister R = MRI.getSubReg(Reg, Sub);
+    if (!R)
+      break;
+    ++Width;
+  }
+  return Width;
+}
+
+void classifyVopdRegSource(DecodedInst &Di, DecodedInst::VopdSource &Src,
+                           const MCRegisterInfo &MRI, MCRegister Reg) {
+  Src.Reg = Reg;
+  Src.Width = computeRegWidthDwords(MRI, Reg);
+  MCRegister Lane = MRI.getSubReg(Reg, AMDGPU::sub0);
+  if (!Lane)
+    Lane = Reg;
+  Lane = AMDGPU::mc2PseudoReg(Lane);
+
+  switch (Lane) {
+  case AMDGPU::VCC_LO:
+  case AMDGPU::VCC_HI:
+    Src.SrcKind = DecodedInst::VopdSource::Kind::VCC;
+    return;
+  case AMDGPU::EXEC_LO:
+  case AMDGPU::EXEC_HI:
+    Src.SrcKind = DecodedInst::VopdSource::Kind::EXEC;
+    Src.BaseIdx = (Lane == AMDGPU::EXEC_HI) ? 1 : 0;
+    return;
+  case AMDGPU::SCC:
+    Src.SrcKind = DecodedInst::VopdSource::Kind::SCC;
+    return;
+  case AMDGPU::M0:
+    Src.SrcKind = DecodedInst::VopdSource::Kind::M0;
+    return;
+  default:
+    break;
+  }
+
+  unsigned Enc = MRI.getEncodingValue(Reg);
+  unsigned HwIdx = Enc & AMDGPU::HWEncoding::REG_IDX_MASK;
+  if (Enc & AMDGPU::HWEncoding::IS_AGPR) {
+    Src.SrcKind = DecodedInst::VopdSource::Kind::AGPR;
+    Src.BaseIdx = HwIdx;
+    return;
+  }
+  if (Enc & AMDGPU::HWEncoding::IS_VGPR) {
+    Src.SrcKind = DecodedInst::VopdSource::Kind::VGPR;
+    Src.BaseIdx = HwIdx;
+    return;
+  }
+
+  const MCRegisterClass &TTMP32 =
+      MRI.getRegClass(AMDGPU::TTMP_32RegClassID);
+  if (int Idx = findRegIndexInClass(TTMP32, Lane); Idx >= 0) {
+    Src.SrcKind = DecodedInst::VopdSource::Kind::TTMP;
+    Src.BaseIdx = Idx;
+    return;
+  }
+
+  if (MRI.getRegClass(AMDGPU::SGPR_32RegClassID).contains(Lane)) {
+    Src.SrcKind = DecodedInst::VopdSource::Kind::SGPR;
+    Src.BaseIdx = HwIdx;
+    return;
+  }
+
+  failVopdDecode(Di, Twine("unsupported VOPD register source '") +
+                         MRI.getName(Reg) + "'");
+}
+
+void decodeVopdSource(DecodedInst &Di, DecodedInst::VopdHalf &Half,
+                      const AMDGPU::VOPD::ComponentInfo &Info,
+                      unsigned CompSrcIdx, const MCRegisterInfo &MRI) {
+  const MCInst &Inst = Di.Inst;
+  unsigned McIdx = Info.getIndexOfSrcInMCOperands(CompSrcIdx, Di.IsVopd3);
+  if (McIdx >= Inst.getNumOperands())
+    failVopdDecode(Di, Twine("component source index out of MCInst range: src") +
+                           Twine(CompSrcIdx) + " -> operand " + Twine(McIdx));
+
+  if (static_cast<int>(McIdx) == Info.getBitOp3OperandIdx()) {
+    const MCOperand &Mop = Inst.getOperand(McIdx);
+    if (!Mop.isImm())
+      failVopdDecode(Di, "bitop3 operand is not an immediate");
+    int64_t Raw = Mop.getImm();
+    if (Raw < 0 || Raw > 0xff)
+      failVopdDecode(Di, Twine("bitop3 immediate out of range: ") + Twine(Raw));
+    Half.HasBitOp3 = true;
+    Half.BitOp3 = static_cast<uint8_t>(Raw);
+    return;
+  }
+
+  if (Half.NumSrcs >= 3)
+    failVopdDecode(Di, "component has more than three decoded sources");
+
+  DecodedInst::VopdSource &Src = Half.Src[Half.NumSrcs++];
+  Src.OperandIndex = McIdx;
+  const MCOperand &Mop = Inst.getOperand(McIdx);
+  if (Mop.isReg()) {
+    classifyVopdRegSource(Di, Src, MRI, Mop.getReg());
+  } else if (Mop.isImm()) {
+    Src.SrcKind = DecodedInst::VopdSource::Kind::Imm;
+    Src.Imm = Mop.getImm();
+  } else {
+    failVopdDecode(Di, Twine("component source operand is neither reg nor imm: ") +
+                           Twine(McIdx));
+  }
+
+  if (Di.IsVopd3 && CompSrcIdx < Info.getCompVOPD3ModsNum()) {
+    if (McIdx == 0)
+      failVopdDecode(Di, "VOPD3 modifier cannot precede operand 0");
+    unsigned ModIdx = McIdx - 1;
+    if (ModIdx >= Inst.getNumOperands() || !Inst.getOperand(ModIdx).isImm())
+      failVopdDecode(Di, Twine("VOPD3 modifier missing before source operand ") +
+                             Twine(McIdx));
+    int64_t Mods = Inst.getOperand(ModIdx).getImm();
+    if (Mods < 0 || Mods > 0xff)
+      failVopdDecode(Di, Twine("VOPD3 modifier out of range: ") + Twine(Mods));
+    Src.Modifiers = static_cast<uint8_t>(Mods);
+  }
+}
+
+void decodeVopdHalf(DecodedInst &Di, DecodedInst::VopdHalf &Half,
+                    const AMDGPU::VOPD::ComponentInfo &Info,
+                    unsigned ComponentOpcode, const OpcodeMap &OpcMap,
+                    const MCRegisterInfo &MRI) {
+  const MCInst &Inst = Di.Inst;
+  Half.ComponentOpcode = ComponentOpcode;
+  Half.CanonOp = OpcMap.lookup(ComponentOpcode);
+  if (Half.CanonOp == CanonicalOp::Unknown)
+    failVopdDecode(Di, Twine("unknown VOPD component opcode ") +
+                           Twine(ComponentOpcode));
+  Half.HasSrc2Acc = Info.hasSrc2Acc();
+  Half.IsVoP3 = Info.isVOP3();
+
+  unsigned DstIdx = Info.getIndexOfDstInMCOperands();
+  if (DstIdx >= Inst.getNumOperands() || !Inst.getOperand(DstIdx).isReg())
+    failVopdDecode(Di, Twine("component dst operand missing or not reg at ") +
+                           Twine(DstIdx));
+  Half.DstReg = Inst.getOperand(DstIdx).getReg();
+
+  for (unsigned I = 0; I < Info.getCompParsedSrcOperandsNum(); ++I)
+    decodeVopdSource(Di, Half, Info, I, MRI);
+
+  int BitOpIdx = Info.getBitOp3OperandIdx();
+  if (BitOpIdx < 0 &&
+      (Half.CanonOp == CanonicalOp::V_AND_B32 || Half.CanonOp == CanonicalOp::V_OR_B32 ||
+       Half.CanonOp == CanonicalOp::V_XOR_B32 ||
+       Half.CanonOp == CanonicalOp::V_BITOP3_B32)) {
+    // Some VOPD bitop2 forms expose the bitop3 immediate only on the paired
+    // VOPD instruction, not on the canonical component pseudo (for example
+    // `V_DUAL_LSHLREV_B32_e32_X_BITOP2_B32_e64_e96_gfx1250`). LLVM
+    // canonicalizes the component to a simple bitwise CanonicalOp, but the paired
+    // VOPD opcode name/layout still carries the authoritative BITOP2_B32
+    // truth-table operand. Use the full instruction's generated named operand
+    // rather than inferring anything from printed mnemonics.
+    BitOpIdx = AMDGPU::getNamedOperandIdx(Di.Inst.getOpcode(),
+                                          AMDGPU::OpName::bitop3);
+  }
+  if (!Half.HasBitOp3 && BitOpIdx >= 0) {
+    if (static_cast<unsigned>(BitOpIdx) >= Inst.getNumOperands())
+      failVopdDecode(Di, Twine("bitop3 operand index out of MCInst range: ") +
+                             Twine(BitOpIdx));
+    const MCOperand &Mop = Inst.getOperand(static_cast<unsigned>(BitOpIdx));
+    if (!Mop.isImm())
+      failVopdDecode(Di, "bitop3 operand is not an immediate");
+    int64_t Raw = Mop.getImm();
+    if (Raw < 0 || Raw > 0xff)
+      failVopdDecode(Di, Twine("bitop3 immediate out of range: ") + Twine(Raw));
+    Half.HasBitOp3 = true;
+    Half.BitOp3 = static_cast<uint8_t>(Raw);
+  }
+}
+
+void decodeVopd(DecodedInst &Di, const MCInstrInfo &MCII,
+                const MCRegisterInfo &MRI, const OpcodeMap &OpcMap) {
+  if (!AMDGPU::isVOPD(Di.Inst.getOpcode()))
+    return;
+  Di.HasVopd = true;
+  Di.IsVopd3 = (Di.TsFlags & SIInstrFlags::VOPD3) != 0;
+
+  auto [opX, opY] = AMDGPU::getVOPDComponents(Di.Inst.getOpcode());
+  const MCInstrDesc &OpXDesc = MCII.get(opX);
+  const MCInstrDesc &OpYDesc = MCII.get(opY);
+  AMDGPU::VOPD::ComponentInfo XInfo(
+      OpXDesc, AMDGPU::VOPD::ComponentKind::COMPONENT_X, Di.IsVopd3);
+  AMDGPU::VOPD::ComponentInfo YInfo(OpYDesc, XInfo, Di.IsVopd3);
+
+  decodeVopdHalf(Di, Di.Vopd[AMDGPU::VOPD::ComponentIndex::X], XInfo, opX,
+                 OpcMap, MRI);
+  decodeVopdHalf(Di, Di.Vopd[AMDGPU::VOPD::ComponentIndex::Y], YInfo, opY,
+                 OpcMap, MRI);
+}
+
 void collectBranchTargets(const DecodedInst &Di, uint64_t Off,
                           uint64_t InstSize,
                           std::set<uint64_t> &BlockStarts) {
@@ -478,6 +694,8 @@ DecodeResult decodeKernel(const MCState &Mc,
     Di.Mnemonic = stripEncoding(StringRef(Di.RawMnemonic)).str();
     Di.Inst = Inst;
     Di.CanonOp = OpcMap.lookup(Inst.getOpcode());
+    if (Di.CanonOp == CanonicalOp::V_CMP || Di.CanonOp == CanonicalOp::V_CMPX)
+      Di.Vcmp = OpcMap.lookupVCmp(Inst.getOpcode());
     Di.NumDefs = Desc.getNumDefs();
     Di.IsBranch = Desc.isBranch();
     Di.IsConditionalBranch = Desc.isConditionalBranch();
@@ -489,6 +707,7 @@ DecodeResult decodeKernel(const MCState &Mc,
     decodeScaleOffset(Di);
     decodeDppModifiers(Di);
     decodeDsSwizzleImm(Di);
+    decodeVopd(Di, *Mc.InstrInfo, *Mc.RegInfo, OpcMap);
     buildSrcMap(Di, Desc);
     driftCheckTiedIn(Di, Desc);
     driftCheckSrcN(Di, Desc);
