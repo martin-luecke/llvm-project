@@ -52,6 +52,8 @@ add_library(hotswap-transpiler OBJECT
   user_sgpr_layout.cpp
   wave_projection.cpp
   setpc_analysis.cpp
+  handle_sopp.cpp
+  handle_sopc.cpp
 )
 
 if(NOT TARGET hotswap::transpiler)
