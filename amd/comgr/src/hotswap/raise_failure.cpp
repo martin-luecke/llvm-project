@@ -20,6 +20,8 @@ const char *reasonString(RaiseFailureReason R) {
     return "BadInput";
   case RaiseFailureReason::UnsupportedOpcode:
     return "UnsupportedOpcode";
+  case RaiseFailureReason::UnsupportedShape:
+    return "UnsupportedShape";
   }
   llvm_unreachable("unhandled RaiseFailureReason");
 }
@@ -31,6 +33,18 @@ RaiseFailure RaiseFailure::unsupportedOpcode(const DecodedInst &Di,
   F.Mnemonic = Di.Mnemonic;
   F.Format = Format.str();
   F.Offset = Di.Offset;
+  return F;
+}
+
+RaiseFailure RaiseFailure::unsupportedShape(const DecodedInst &Di,
+                                            llvm::StringRef Format,
+                                            const llvm::Twine &Detail) {
+  RaiseFailure F;
+  F.Reason = RaiseFailureReason::UnsupportedShape;
+  F.Mnemonic = Di.Mnemonic;
+  F.Format = Format.str();
+  F.Offset = Di.Offset;
+  F.Detail = Detail.str();
   return F;
 }
 
