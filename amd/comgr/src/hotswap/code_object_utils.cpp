@@ -16,6 +16,7 @@
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/AMDHSAKernelDescriptor.h"
 #include "llvm/Support/Endian.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -336,7 +337,9 @@ findKernelSymbolOffset(llvm::ArrayRef<uint8_t> ElfData,
   uint64_t TextBase = UINT64_MAX;
   for (const auto &Sec : (*ObjOrErr)->sections()) {
     auto NameOrErr = Sec.getName();
-    if (NameOrErr && *NameOrErr == ".text") {
+    if (!NameOrErr)
+      return NameOrErr.takeError();
+    if (*NameOrErr == ".text") {
       TextBase = Sec.getAddress();
       break;
     }

@@ -76,7 +76,7 @@ std::optional<bool> readVOP3Clamp(const DecodedInst &Di, HandlerResult &Hr,
 //     variants and `di.numDefs == 2` on every co variant (ci or not).
 //
 // Pre-2026-04-22 the six carry-chain handlers in this file hardcoded
-// `ctx.regs.loadVCC` / `ctx.regs.storeVCC` for both endpoints,
+// `ctx.Regs.loadVCC` / `ctx.Regs.storeVCC` for both endpoints,
 // silently ignoring the explicit scalar operand on e64 forms. That
 // matches the VOPD `v_dual_cndmask_b32` SGPR-condition bug that
 // miscompiled `canary_bpermute_scan_fp32` and `corpus_layernorm_fp32`
@@ -598,15 +598,15 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
   // `ssub_sat.i32` on the clamp bit — treating the clamp bit as
   // raise-time-authoritative, not "observably ignorable".
   if (Sop == CanonicalOp::V_MAD_NC_U64_U32 || Sop == CanonicalOp::V_MAD_NC_I64_I32) {
-    const bool isSigned = (Sop == CanonicalOp::V_MAD_NC_I64_I32);
-    const int clampIdx = AMDGPU::getNamedOperandIdx(
+    const bool IsSigned = (Sop == CanonicalOp::V_MAD_NC_I64_I32);
+    const int ClampIdx = AMDGPU::getNamedOperandIdx(
         Di.Inst.getOpcode(), AMDGPU::OpName::clamp);
-    const bool clamped = clampIdx >= 0 && Di.isImm(clampIdx) &&
-                         Di.getImm(clampIdx) != 0;
-    if (clamped) {
+    const bool Clamped = ClampIdx >= 0 && Di.isImm(ClampIdx) &&
+                         Di.getImm(ClampIdx) != 0;
+    if (Clamped) {
       Hr.Failure = RaiseFailure::unsupportedShape(
           Di, "VOP3",
-          isSigned
+          IsSigned
               ? "v_mad_nc_i64_i32 with clamp=1 (signed 64-bit saturating MAD) "
                 "is not yet lifted: no corpus producer exercises this encoding, "
                 "and emitting the plain `add i64` form would silently drop the "
@@ -621,14 +621,14 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
                 "`llvm.uadd.sat.i64`.  See the V_MAD_NC_* block comment.");
       return Hr;
     }
-    Value *A = isSigned
+    Value *A = IsSigned
                    ? Ctx.B.CreateSExt(Op.src(0), Ctx.I64Ty)
                    : Ctx.B.CreateZExt(Op.src(0), Ctx.I64Ty);
-    Value *B = isSigned
+    Value *B = IsSigned
                    ? Ctx.B.CreateSExt(Op.src(1), Ctx.I64Ty)
                    : Ctx.B.CreateZExt(Op.src(1), Ctx.I64Ty);
     Value *Res = Ctx.B.CreateAdd(Ctx.B.CreateMul(A, B), Op.src64(2),
-                                 isSigned ? "vmad_nc_i64" : "vmad_nc_u64");
+                                 IsSigned ? "vmad_nc_i64" : "vmad_nc_u64");
     Ctx.writeReg64(Op.dst(), Res);
     Hr.Handled = true;
     return Hr;

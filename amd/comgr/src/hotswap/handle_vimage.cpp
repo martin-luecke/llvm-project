@@ -102,8 +102,8 @@ namespace COMGR::hotswap {
 
 namespace {
 
-// Marshal `n` consecutive SGPR dwords starting at `base.baseIdx` into
-// an `<n x i32>` vector. `base.kind` MUST be `ParsedReg::SGPR` —
+// Marshal `n` consecutive SGPR dwords starting at `base.BaseIdx` into
+// an `<n x i32>` vector. `base.RegKind` MUST be `ParsedReg::SGPR` —
 // callers that accept the SReg_128_XNULL `null` sentinel must
 // short-circuit to a zero vector before reaching this helper.
 // `n` is hardcoded by the caller from the operand class (4 for
@@ -151,7 +151,7 @@ struct TDMArgs {
 // Marshal the SGPR-bank operand list of a `tensor_{load,store}_*_d{2,4}`
 // pseudo into the six argument values both lowering paths take. On
 // success, populates `out` and returns true. On any operand-shape
-// rejection, populates `hr.failure` and returns false.
+// rejection, populates `hr.Failure` and returns false.
 bool marshalTDMArgs(RaiseContext &Ctx, const DecodedInst &Di, OpResolver &Op,
                     HandlerResult &Hr, TDMArgs &Out) {
   // Recover the operand-shape variant. The pseudo's InOperandList
@@ -161,15 +161,15 @@ bool marshalTDMArgs(RaiseContext &Ctx, const DecodedInst &Di, OpResolver &Op,
   // operand list at MIMGInstructions.td:2087. Anything else means
   // a future encoding variant landed in LLVM that we have not
   // audited — refuse loudly so the drift surfaces immediately.
-  const unsigned nsrcs = Op.nSrcs();
-  if (nsrcs != 4 && nsrcs != 6) {
+  const unsigned Nsrcs = Op.nSrcs();
+  if (Nsrcs != 4 && Nsrcs != 6) {
     Hr.Failure = RaiseFailure::unsupportedShape(
         Di, "VIMAGE",
-        Twine("unexpected source operand count ") + Twine(nsrcs) +
+        Twine("unexpected source operand count ") + Twine(Nsrcs) +
             " for tensor op (expected 4 for _d2 or 6 for _d4)");
     return false;
   }
-  const bool isD2 = (nsrcs == 4);
+  const bool IsD2 = (Nsrcs == 4);
 
   // Vaddr operands are required to be real SGPR ranges. The
   // SReg_128_XNULL/SReg_256_XNULL operand classes nominally
@@ -205,7 +205,7 @@ bool marshalTDMArgs(RaiseContext &Ctx, const DecodedInst &Di, OpResolver &Op,
 
   Out.Grp0 = marshalSgprGroup(Ctx, Vaddr0, 4, "td_grp0");
   Out.Grp1 = marshalSgprGroup(Ctx, Vaddr1, 8, "td_grp1");
-  if (isD2) {
+  if (IsD2) {
     Out.Grp2 = zeroVec(Ctx, 4);
     Out.Grp3 = zeroVec(Ctx, 4);
     Out.Cpol = cpolImm(Ctx, Op, 3);
@@ -281,18 +281,18 @@ HandlerResult handleVIMAGE(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
 
-  const unsigned sourceWaveSize = Ctx.Isa.WaveSize;
-  const unsigned targetWaveSize = Ctx.TargetIsa.WaveSize;
-  const bool supportedWaveShape =
-      sourceWaveSize == targetWaveSize ||
-      (sourceWaveSize == 32 && targetWaveSize == 64);
-  if (!supportedWaveShape) {
+  const unsigned SourceWaveSize = Ctx.Isa.WaveSize;
+  const unsigned TargetWaveSize = Ctx.TargetIsa.WaveSize;
+  const bool SupportedWaveShape =
+      SourceWaveSize == TargetWaveSize ||
+      (SourceWaveSize == 32 && TargetWaveSize == 64);
+  if (!SupportedWaveShape) {
     Hr.Failure = RaiseFailure::unsupportedShape(
         Di, "VIMAGE",
         Twine("TDM emulation supports only source-wave-local same-wave "
               "execution or wave32 source -> wave64 target cross-widening "
               "(got source wave ") +
-            Twine(sourceWaveSize) + ", target wave " + Twine(targetWaveSize) +
+            Twine(SourceWaveSize) + ", target wave " + Twine(TargetWaveSize) +
             ")");
     return Hr;
   }
@@ -311,7 +311,7 @@ HandlerResult handleVIMAGE(RaiseContext &Ctx, const DecodedInst &Di,
   // WaveNativeProjection packs two source wave32s into one target wave64.
   Ctx.emitUnderExec([&] {
     Ctx.B.CreateCall(Helper, {Args.Grp0, Args.Grp1, Args.Grp2, Args.Grp3,
-                              Ctx.B.getInt32(sourceWaveSize)});
+                              Ctx.B.getInt32(SourceWaveSize)});
   });
   Hr.Handled = true;
   return Hr;

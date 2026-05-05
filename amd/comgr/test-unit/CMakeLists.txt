@@ -42,10 +42,32 @@ else()
   endif()
 endif()
 
+# Wire up a test target against the hotswap transpiler OBJECT lib + the
+# comgr-metadata.cpp helpers it calls (`metadata::walkElfMetadataIntoDoc`
+# and `metadata::getElfIsaNameFromBuffer`). Test binaries don't link
+# amd_comgr.so (its export map hides everything except the C entry
+# points), so the metadata helpers must be compiled in directly.
+# `-ffunction-sections -fdata-sections` + `--gc-sections` lets the linker
+# drop unreferenced comgr-metadata.cpp entries (parseTargetIdentifier,
+# the IsaInfos-driven validation, etc.) without dragging in comgr.cpp's
+# transitive dependency closure.
+function(comgr_link_hotswap_transpiler target)
+  target_link_libraries(${target} PRIVATE hotswap::transpiler)
+  target_sources(${target} PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/comgr-metadata.cpp)
+  target_include_directories(${target} PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+    ${CMAKE_CURRENT_BINARY_DIR}/../include)
+  if(NOT MSVC)
+    target_compile_options(${target} PRIVATE -ffunction-sections -fdata-sections)
+    target_link_options(${target} PRIVATE -Wl,--gc-sections)
+  endif()
+endfunction()
+
 # Pin C++17 and mirror LLVM's RTTI setting (avoids type_info link errors
-# against LLVM libs built with RTTI off, including hotswap::transpiler
-# which carries its own non-RTTI / non-exceptions compile flags via
-# llvm_update_compile_flags()).
+# against LLVM libs built with RTTI off, including the hotswap transpiler
+# OBJECT lib which carries its own non-RTTI / non-exceptions compile
+# flags via llvm_update_compile_flags()).
 function(comgr_configure_test_target target)
   set_target_properties(${target} PROPERTIES
     CXX_STANDARD 17
@@ -142,8 +164,8 @@ add_executable(RaiserScaffoldingTests
 
 target_link_libraries(RaiserScaffoldingTests PRIVATE
   ${COMGR_GTEST_LIBS}
-  hotswap::transpiler
   ${LLVM_PTHREAD_LIB})
+comgr_link_hotswap_transpiler(RaiserScaffoldingTests)
 
 target_include_directories(RaiserScaffoldingTests PRIVATE
   ${COMGR_GTEST_INCLUDE_DIRS})
@@ -157,8 +179,8 @@ add_executable(CodeObjectUtilsTests
 
 target_link_libraries(CodeObjectUtilsTests PRIVATE
   ${COMGR_GTEST_LIBS}
-  hotswap::transpiler
   ${LLVM_PTHREAD_LIB})
+comgr_link_hotswap_transpiler(CodeObjectUtilsTests)
 
 target_include_directories(CodeObjectUtilsTests PRIVATE
   ${COMGR_GTEST_INCLUDE_DIRS})
@@ -172,8 +194,8 @@ add_executable(MCContextInlineSrcmgrTests
 
 target_link_libraries(MCContextInlineSrcmgrTests PRIVATE
   ${COMGR_GTEST_LIBS}
-  hotswap::transpiler
   ${LLVM_PTHREAD_LIB})
+comgr_link_hotswap_transpiler(MCContextInlineSrcmgrTests)
 
 target_include_directories(MCContextInlineSrcmgrTests PRIVATE
   ${COMGR_GTEST_INCLUDE_DIRS})
@@ -187,11 +209,17 @@ add_executable(OpcodeMapTests
 
 target_link_libraries(OpcodeMapTests PRIVATE
   ${COMGR_GTEST_LIBS}
-  hotswap::transpiler
   ${LLVM_PTHREAD_LIB})
+comgr_link_hotswap_transpiler(OpcodeMapTests)
 
 target_include_directories(OpcodeMapTests PRIVATE
-  ${COMGR_GTEST_INCLUDE_DIRS})
+  ${COMGR_GTEST_INCLUDE_DIRS}
+  # AMDGPU target-private headers (MCTargetDesc/AMDGPUMCTargetDesc.h,
+  # SIDefines.h, AMDGPUGen*.inc) are not installed by `ninja install`;
+  # the test reaches into them directly to drive opcode-map lookups.
+  "${LLVM_BUILD_MAIN_SRC_DIR}/lib/Target/AMDGPU"
+  "${LLVM_BUILD_MAIN_SRC_DIR}/lib/Target/AMDGPU/Utils"
+  "${LLVM_BINARY_DIR}/lib/Target/AMDGPU")
 
 comgr_configure_test_target(OpcodeMapTests)
 
@@ -202,8 +230,8 @@ add_executable(KernargLayoutTests
 
 target_link_libraries(KernargLayoutTests PRIVATE
   ${COMGR_GTEST_LIBS}
-  hotswap::transpiler
   ${LLVM_PTHREAD_LIB})
+comgr_link_hotswap_transpiler(KernargLayoutTests)
 
 target_include_directories(KernargLayoutTests PRIVATE
   ${COMGR_GTEST_INCLUDE_DIRS})
@@ -217,11 +245,16 @@ add_executable(WaveProjectionTests
 
 target_link_libraries(WaveProjectionTests PRIVATE
   ${COMGR_GTEST_LIBS}
-  hotswap::transpiler
   ${LLVM_PTHREAD_LIB})
+comgr_link_hotswap_transpiler(WaveProjectionTests)
 
 target_include_directories(WaveProjectionTests PRIVATE
-  ${COMGR_GTEST_INCLUDE_DIRS})
+  ${COMGR_GTEST_INCLUDE_DIRS}
+  # WaveProjectionTest pulls in transpiler internals (wave_projection.h ->
+  # amdgpu_formats.h -> SIDefines.h) that need AMDGPU target-private paths.
+  "${LLVM_BUILD_MAIN_SRC_DIR}/lib/Target/AMDGPU"
+  "${LLVM_BUILD_MAIN_SRC_DIR}/lib/Target/AMDGPU/Utils"
+  "${LLVM_BINARY_DIR}/lib/Target/AMDGPU")
 
 comgr_configure_test_target(WaveProjectionTests)
 
@@ -232,8 +265,8 @@ add_executable(TranslationCacheTests
 
 target_link_libraries(TranslationCacheTests PRIVATE
   ${COMGR_GTEST_LIBS}
-  hotswap::transpiler
   ${LLVM_PTHREAD_LIB})
+comgr_link_hotswap_transpiler(TranslationCacheTests)
 
 target_include_directories(TranslationCacheTests PRIVATE
   ${COMGR_GTEST_INCLUDE_DIRS})
@@ -247,13 +280,43 @@ add_executable(MXFP4DequantTests
 
 target_link_libraries(MXFP4DequantTests PRIVATE
   ${COMGR_GTEST_LIBS}
-  hotswap::transpiler
   ${LLVM_PTHREAD_LIB})
+comgr_link_hotswap_transpiler(MXFP4DequantTests)
 
 target_include_directories(MXFP4DequantTests PRIVATE
   ${COMGR_GTEST_INCLUDE_DIRS})
 
 comgr_configure_test_target(MXFP4DequantTests)
+
+# -- C5PredicateChainTests -----------------------------------------------------------------
+
+add_executable(C5PredicateChainTests
+  C5PredicateChainTest.cpp)
+
+target_link_libraries(C5PredicateChainTests PRIVATE
+  ${COMGR_GTEST_LIBS}
+  ${LLVM_PTHREAD_LIB})
+comgr_link_hotswap_transpiler(C5PredicateChainTests)
+
+target_include_directories(C5PredicateChainTests PRIVATE
+  ${COMGR_GTEST_INCLUDE_DIRS})
+
+comgr_configure_test_target(C5PredicateChainTests)
+
+# -- SourceHiddenArgsTests -----------------------------------------------------------------
+
+add_executable(SourceHiddenArgsTests
+  SourceHiddenArgsTest.cpp)
+
+target_link_libraries(SourceHiddenArgsTests PRIVATE
+  ${COMGR_GTEST_LIBS}
+  ${LLVM_PTHREAD_LIB})
+comgr_link_hotswap_transpiler(SourceHiddenArgsTests)
+
+target_include_directories(SourceHiddenArgsTests PRIVATE
+  ${COMGR_GTEST_INCLUDE_DIRS})
+
+comgr_configure_test_target(SourceHiddenArgsTests)
 
 # Register every test binary with the test-unit / check-comgr plumbing.
 add_custom_target(test-unit
@@ -266,6 +329,8 @@ add_custom_target(test-unit
   COMMAND $<TARGET_FILE:WaveProjectionTests>
   COMMAND $<TARGET_FILE:TranslationCacheTests>
   COMMAND $<TARGET_FILE:MXFP4DequantTests>
+  COMMAND $<TARGET_FILE:C5PredicateChainTests>
+  COMMAND $<TARGET_FILE:SourceHiddenArgsTests>
   COMMAND $<TARGET_FILE:RaiserScaffoldingTests>)
 add_dependencies(test-unit HotswapElfTests HotswapMCTests
   RaiserScaffoldingTests
@@ -275,5 +340,7 @@ add_dependencies(test-unit HotswapElfTests HotswapMCTests
   KernargLayoutTests
   WaveProjectionTests
   TranslationCacheTests
-  MXFP4DequantTests)
+  MXFP4DequantTests
+  C5PredicateChainTests
+  SourceHiddenArgsTests)
 add_dependencies(check-comgr test-unit)

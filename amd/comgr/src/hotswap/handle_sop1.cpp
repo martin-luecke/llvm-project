@@ -84,7 +84,7 @@ namespace {
 //   to a direct branch); the cold path does a bounded runtime integer
 //   equality check before reaching the trap BB.
 //
-// `targetInt` must be of `ctx.i64Ty`; we assert this to catch
+// `targetInt` must be of `ctx.I64Ty`; we assert this to catch
 // regressions that forget to unpack the SGPR pair to i64 before
 // calling.
 //
@@ -417,7 +417,7 @@ HandlerResult handleSOP1(RaiseContext &Ctx, const DecodedInst &Di,
     // Materialise the return address marker (the offset of the BB
     // immediately after the swap) into sdst on both DirectA and
     // DispatchSet paths. Phase 1 of setpc_analysis has already
-    // promoted `(di.offset + di.size)` to a leader so subsequent
+    // promoted `(di.Offset + di.size)` to a leader so subsequent
     // linear instructions live in their own BB; we simply write the
     // offset of that BB as a plain i64 constant, and the downstream
     // IndirectB consumer of sdst reads it back and compares it in a

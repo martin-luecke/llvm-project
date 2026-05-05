@@ -13,7 +13,9 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/AMDHSAKernelDescriptor.h"
@@ -36,31 +38,43 @@ namespace COMGR::hotswap {
 
 namespace {
 
-bool writeFile(llvm::StringRef Path, llvm::StringRef Contents) {
-  std::ofstream F(Path.str());
-  if (!F.is_open()) {
-    llvm::errs() << "transpiler: Cannot write file: " << Path << "\n";
+// Read a file into a vector via llvm::MemoryBuffer; returns empty on failure.
+std::vector<uint8_t> readFile(llvm::StringRef path) {
+  auto BufOrErr = llvm::MemoryBuffer::getFile(path, /*IsText=*/false);
+  if (!BufOrErr) {
+    llvm::errs() << "transpiler: Cannot read file: " << path << ": "
+                 << BufOrErr.getError().message() << "\n";
+    return {};
+  }
+  llvm::StringRef Data = (*BufOrErr)->getBuffer();
+  return std::vector<uint8_t>(Data.bytes_begin(), Data.bytes_end());
+}
+
+bool writeFile(llvm::StringRef path, llvm::StringRef contents) {
+  std::ofstream f(path.str());
+  if (!f.is_open()) {
+    llvm::errs() << "transpiler: Cannot write file: " << path << "\n";
     return false;
   }
-  F.write(Contents.data(), Contents.size());
-  F.flush();
-  if (!F) {
-    llvm::errs() << "transpiler: write failed for: " << Path << "\n";
+  f.write(contents.data(), contents.size());
+  f.flush();
+  if (!f) {
+    llvm::errs() << "transpiler: write failed for: " << path << "\n";
     return false;
   }
   return true;
 }
 
-bool writeFile(llvm::StringRef Path, llvm::ArrayRef<uint8_t> Data) {
-  std::ofstream F(Path.str(), std::ios::binary);
-  if (!F.is_open()) {
-    llvm::errs() << "transpiler: Cannot write file: " << Path << "\n";
+bool writeFile(llvm::StringRef path, llvm::ArrayRef<uint8_t> data) {
+  std::ofstream f(path.str(), std::ios::binary);
+  if (!f.is_open()) {
+    llvm::errs() << "transpiler: Cannot write file: " << path << "\n";
     return false;
   }
-  F.write(reinterpret_cast<const char *>(Data.data()), Data.size());
-  F.flush();
-  if (!F) {
-    llvm::errs() << "transpiler: write failed for: " << Path << "\n";
+  f.write(reinterpret_cast<const char *>(data.data()), data.size());
+  f.flush();
+  if (!f) {
+    llvm::errs() << "transpiler: write failed for: " << path << "\n";
     return false;
   }
   return true;
@@ -76,235 +90,267 @@ bool writeFile(llvm::StringRef Path, llvm::ArrayRef<uint8_t> Data) {
 // The returned basename preserves a readable prefix of the original name
 // for debuggability; it's only intended for temp-dir scratch files —
 // symbol names inside the IR itself are unaffected.
-std::string makeSafeBasename(llvm::StringRef KernelName,
-                             size_t ReservedSuffixBytes = 8) {
+std::string makeSafeBasename(llvm::StringRef kernelName,
+                             size_t reservedSuffixBytes = 8) {
   constexpr size_t kMaxComponentBytes = 255;
-  if (KernelName.size() + ReservedSuffixBytes <= kMaxComponentBytes)
-    return KernelName.str();
+  if (kernelName.size() + reservedSuffixBytes <= kMaxComponentBytes)
+    return kernelName.str();
 
   // FNV-1a 64-bit hash — small, deterministic, no libstdc++ dep beyond cstdint.
-  uint64_t H = 0xcbf29ce484222325ull;
-  for (unsigned char C : KernelName) {
-    H ^= C;
-    H *= 0x100000001b3ull;
+  uint64_t h = 0xcbf29ce484222325ull;
+  for (unsigned char c : kernelName) {
+    h ^= c;
+    h *= 0x100000001b3ull;
   }
 
   constexpr size_t kHashHexBytes = 16;   // "%016llx"
   constexpr size_t kSeparatorBytes = 1;  // '_'
-  const size_t prefixBudget = kMaxComponentBytes - ReservedSuffixBytes -
+  const size_t prefixBudget = kMaxComponentBytes - reservedSuffixBytes -
                               kHashHexBytes - kSeparatorBytes;
-  std::string Prefix = KernelName.substr(0, prefixBudget).str();
-  char Buf[32];
-  std::snprintf(Buf, sizeof(Buf), "%016llx",
-                static_cast<unsigned long long>(H));
-  return Prefix + "_" + Buf;
+  std::string prefix = kernelName.substr(0, prefixBudget).str();
+  char buf[32];
+  std::snprintf(buf, sizeof(buf), "%016llx",
+                static_cast<unsigned long long>(h));
+  return prefix + "_" + buf;
 }
 
 int toolTimeoutSeconds() {
   static const int timeout = [] {
     constexpr int kDefaultTimeoutSeconds = 300;
-    const char *Env = std::getenv("HSA_HOTSWAP_TOOL_TIMEOUT_S");
-    if (!Env || !Env[0])
+    const char *env = std::getenv("HSA_HOTSWAP_TOOL_TIMEOUT_S");
+    if (!env || !env[0])
       return kDefaultTimeoutSeconds;
-    char *End = nullptr;
-    long Parsed = std::strtol(Env, &End, 10);
-    if (*End != '\0' || Parsed <= 0) {
+    char *end = nullptr;
+    long parsed = std::strtol(env, &end, 10);
+    if (*end != '\0' || parsed <= 0) {
       llvm::errs() << "transpiler: invalid HSA_HOTSWAP_TOOL_TIMEOUT_S='"
-                   << Env << "'; using default " << kDefaultTimeoutSeconds
+                   << env << "'; using default " << kDefaultTimeoutSeconds
                    << " seconds\n";
       return kDefaultTimeoutSeconds;
     }
-    return static_cast<int>(Parsed);
+    return static_cast<int>(parsed);
   }();
   return timeout;
 }
 
-int runTool(llvm::StringRef Program, llvm::ArrayRef<llvm::StringRef> Args) {
+int runTool(llvm::StringRef program, llvm::ArrayRef<llvm::StringRef> args) {
   LLVM_DEBUG({
     llvm::dbgs() << "transpiler: Running:";
-    for (auto &a : Args) llvm::dbgs() << " " << a;
+    for (auto &a : args) llvm::dbgs() << " " << a;
     llvm::dbgs() << "\n";
   });
 
-  auto ExeOrErr = llvm::sys::findProgramByName(Program);
-  if (!ExeOrErr) {
-    llvm::errs() << "transpiler: tool not found: " << Program << "\n";
+  auto exeOrErr = llvm::sys::findProgramByName(program);
+  if (!exeOrErr) {
+    llvm::errs() << "transpiler: tool not found: " << program << "\n";
     return -1;
   }
 
-  std::string ErrMsg;
-  int Rc = llvm::sys::ExecuteAndWait(*ExeOrErr, Args, /*Env=*/std::nullopt,
+  std::string errMsg;
+  int rc = llvm::sys::ExecuteAndWait(*exeOrErr, args, /*Env=*/std::nullopt,
                                      /*Redirects=*/{},
                                      /*SecondsToWait=*/toolTimeoutSeconds(),
-                                     /*MemoryLimit=*/0, &ErrMsg);
-  if (Rc != 0)
-    llvm::errs() << "transpiler: " << Program << " failed (exit " << Rc << ")"
-                 << (ErrMsg.empty() ? "" : ": " + ErrMsg) << "\n";
-  return Rc;
+                                     /*MemoryLimit=*/0, &errMsg);
+  if (rc != 0)
+    llvm::errs() << "transpiler: " << program << " failed (exit " << rc << ")"
+                 << (errMsg.empty() ? "" : ": " + errMsg) << "\n";
+  return rc;
 }
 
 struct DumpDir {
-  llvm::SmallString<128> Path;
-  bool Valid = false;
-  bool Persistent = false;
+  llvm::SmallString<128> path;
+  bool valid = false;
+  bool persistent = false;
 
   DumpDir() {
-    static const char *EnvDir = std::getenv("HSA_HOTSWAP_DUMP_DIR");
-    if (EnvDir && EnvDir[0]) {
-      Persistent = true;
-      Path = EnvDir;
-      if (auto Ec = llvm::sys::fs::create_directories(Path)) {
+    static const char *envDir = std::getenv("HSA_HOTSWAP_DUMP_DIR");
+    if (envDir && envDir[0]) {
+      persistent = true;
+      path = envDir;
+      if (auto ec = llvm::sys::fs::create_directories(path)) {
         llvm::errs() << "hotswap: failed to create dump dir '"
-                     << Path << "': " << Ec.message() << "\n";
+                     << path << "': " << ec.message() << "\n";
         return;
       }
       // Create a unique subdirectory per invocation so parallel runs
       // don't clobber each other.
-      llvm::SmallString<128> Sub;
-      if (auto Ec = llvm::sys::fs::createUniqueDirectory(
-              Path + "/hotswap", Sub)) {
+      llvm::SmallString<128> sub;
+      if (auto ec = llvm::sys::fs::createUniqueDirectory(
+              path + "/hotswap", sub)) {
         llvm::errs() << "hotswap: failed to create subdir in '"
-                     << Path << "': " << Ec.message() << "\n";
+                     << path << "': " << ec.message() << "\n";
         return;
       }
-      Path = Sub;
-      Valid = true;
+      path = sub;
+      valid = true;
     } else {
-      if (auto Ec =
-              llvm::sys::fs::createUniqueDirectory("transpiler", Path)) {
+      if (auto ec =
+              llvm::sys::fs::createUniqueDirectory("transpiler", path)) {
         llvm::errs() << "hotswap: failed to create temp dir: "
-                     << Ec.message() << "\n";
+                     << ec.message() << "\n";
       } else {
-        Valid = true;
+        valid = true;
       }
     }
   }
 
   ~DumpDir() {
-    if (Valid && !Persistent)
-      llvm::sys::fs::remove_directories(Path);
+    if (valid && !persistent)
+      llvm::sys::fs::remove_directories(path);
   }
 
   DumpDir(const DumpDir &) = delete;
   DumpDir &operator=(const DumpDir &) = delete;
 
-  std::string filePath(llvm::StringRef Name) const {
-    llvm::SmallString<256> P(Path);
-    llvm::sys::path::append(P, Name);
-    return std::string(P);
+  std::string filePath(llvm::StringRef name) const {
+    llvm::SmallString<256> p(path);
+    llvm::sys::path::append(p, name);
+    return std::string(p);
   }
 };
 
 } // anonymous namespace
 
+static thread_local bool StrictModeOverrideActive = false;
+static thread_local bool StrictModeOverrideValue = false;
+
+ScopedStrictMode::ScopedStrictMode(bool Enabled)
+    : PreviousActive(StrictModeOverrideActive),
+      PreviousValue(StrictModeOverrideValue) {
+  StrictModeOverrideActive = true;
+  StrictModeOverrideValue = Enabled;
+}
+
+ScopedStrictMode::~ScopedStrictMode() {
+  StrictModeOverrideActive = PreviousActive;
+  StrictModeOverrideValue = PreviousValue;
+}
+
 bool isStrictMode() {
+  if (StrictModeOverrideActive)
+    return StrictModeOverrideValue;
+
   // Parsed once on first call. The handler implementations call this on
   // every relevant instruction, so going through the OS allocator
   // (`std::getenv`) repeatedly would be wasteful; the result also cannot
   // change inside a process because the env var is read once at the
   // first transpile and reused for the rest of the process lifetime.
   // Treats any non-empty value as enabled to keep the runner side
-  // (`HSA_HOTSWAP_STRICT=1`) and the pipeline side decoupled — a future
+  // (`HSA_HOTSWAP_STRICT=1`) and the pipeline side decoupled; a future
   // shell that writes `HSA_HOTSWAP_STRICT=true` still works.
   static const bool s_strict = []() {
-    const char *V = std::getenv("HSA_HOTSWAP_STRICT");
-    return V && V[0] != '\0';
+    const char *v = std::getenv("HSA_HOTSWAP_STRICT");
+    return v && v[0] != '\0';
   }();
   return s_strict;
 }
 
 // Raise one kernel to IR, compile to a relocatable .o via llc + llvm-mc.
 // On success, writes the .o to objPath and returns true.
-static bool raiseAndCompileKernel(const TextSection &Text,
-                                  llvm::ArrayRef<uint8_t> CodeObjectData,
-                                  llvm::StringRef KernelName,
-                                  llvm::StringRef SourceIsa,
-                                  llvm::StringRef TargetIsa,
-                                  const DumpDir &TmpDir,
-                                  llvm::StringRef ObjPath,
-                                  PipelineResult &Result) {
-  auto Meta = extractKernelMeta(CodeObjectData, KernelName);
-  if (Meta.Args.empty()) {
-    llvm::errs() << "transpiler: WARNING: No metadata found for '" << KernelName
+static bool raiseAndCompileKernel(const TextSection &text,
+                                  llvm::ArrayRef<uint8_t> codeObjectData,
+                                  llvm::StringRef kernelName,
+                                  llvm::StringRef sourceISA,
+                                  llvm::StringRef targetISA,
+                                  const DumpDir &tmpDir,
+                                  llvm::StringRef objPath,
+                                  PipelineResult &result,
+                                  bool enableWritelaneRewrite,
+                                  bool enableWaveNative) {
+  auto meta = extractKernelMeta(codeObjectData, kernelName);
+  if (meta.Args.empty()) {
+    llvm::errs() << "transpiler: WARNING: No metadata found for '" << kernelName
                  << "', using empty metadata\n";
   }
 
-  uint64_t KernelOffset = findKernelSymbolOffset(CodeObjectData, KernelName);
-  LLVM_DEBUG(if (KernelOffset > 0)
-    llvm::dbgs() << "transpiler: Kernel '" << KernelName
-                 << "' at .text offset 0x" << llvm::utohexstr(KernelOffset)
+  auto kernelOffsetOrErr = findKernelSymbolOffset(codeObjectData, kernelName);
+  if (!kernelOffsetOrErr) {
+    std::string err = llvm::toString(kernelOffsetOrErr.takeError());
+    llvm::errs() << "transpiler: " << err << "\n";
+    result.FailKernel = kernelName;
+    result.FailMnemonic = "__kernel_offset__";
+    result.FailReason = "KernelSymbolOffsetLookupFailed";
+    result.FailFormat = "KernelSymbolOffsetLookupFailed";
+    result.FailDetail = err;
+    return false;
+  }
+  uint64_t kernelOffset = *kernelOffsetOrErr;
+  LLVM_DEBUG(if (kernelOffset > 0)
+    llvm::dbgs() << "transpiler: Kernel '" << kernelName
+                 << "' at .text offset 0x" << llvm::utohexstr(kernelOffset)
                  << "\n");
 
-  auto Raised = raiseToIR(Text.Bytes, SourceIsa, KernelName, Meta, KernelOffset,
-                           TargetIsa);
-  if (!Raised.Success) {
-    llvm::errs() << "transpiler: Raising '" << KernelName << "' to LLVM IR failed";
-    Result.FailKernel = KernelName;
-    if (!Raised.Failure.Mnemonic.empty()) {
-      llvm::errs() << " (unsupported: " << Raised.Failure.Mnemonic << ")";
-      Result.FailMnemonic = Raised.Failure.Mnemonic;
+  auto raised = raiseToIR(text.Bytes, sourceISA, kernelName, meta, kernelOffset,
+                           targetISA, enableWritelaneRewrite,
+                           enableWaveNative);
+  if (!raised.Success) {
+    llvm::errs() << "transpiler: Raising '" << kernelName << "' to LLVM IR failed";
+    result.FailKernel = kernelName;
+    if (!raised.Failure.Mnemonic.empty()) {
+      llvm::errs() << " (unsupported: " << raised.Failure.Mnemonic << ")";
+      result.FailMnemonic = raised.Failure.Mnemonic;
     }
-    if (Raised.Failure.hasFailed()) {
-      Result.FailReason = reasonString(Raised.Failure.Reason);
-      Result.FailFormat = Raised.Failure.Format;
-      Result.FailDetail = Raised.Failure.Detail;
-      Result.FailOffset = Raised.Failure.Offset;
+    if (raised.Failure.hasFailed()) {
+      result.FailReason = reasonString(raised.Failure.Reason);
+      result.FailFormat = raised.Failure.Format;
+      result.FailDetail = raised.Failure.Detail;
+      result.FailOffset = raised.Failure.Offset;
     }
     llvm::errs() << "\n";
     return false;
   }
-  Result.LiftedCount += Raised.LiftedCount;
-  Result.TotalCount += Raised.TotalCount;
-  if (Raised.UsesScratchPrivateSegment) {
-    Result.UsesScratchPrivateSegment = true;
-    if (Raised.SourcePrivateSegmentFixedSize >
-        Result.SourcePrivateSegmentFixedSize)
-      Result.SourcePrivateSegmentFixedSize = Raised.SourcePrivateSegmentFixedSize;
+  result.LiftedCount += raised.LiftedCount;
+  result.TotalCount += raised.TotalCount;
+  if (raised.UsesScratchPrivateSegment) {
+    result.UsesScratchPrivateSegment = true;
+    if (raised.SourcePrivateSegmentFixedSize >
+        result.SourcePrivateSegmentFixedSize)
+      result.SourcePrivateSegmentFixedSize = raised.SourcePrivateSegmentFixedSize;
   }
-  if (!Result.IrText.empty())
-    Result.IrText += "\n";
-  Result.IrText += Raised.IrText;
+  if (!result.IrText.empty())
+    result.IrText += "\n";
+  result.IrText += raised.IrText;
 
-  LLVM_DEBUG(llvm::dbgs() << "transpiler: Raised '" << KernelName << "' "
-                           << Raised.LiftedCount << "/"
-                           << Raised.TotalCount << " instructions\n");
+  LLVM_DEBUG(llvm::dbgs() << "transpiler: Raised '" << kernelName << "' "
+                           << raised.LiftedCount << "/"
+                           << raised.TotalCount << " instructions\n");
 
   // Kernel names from Tensile et al. routinely exceed 255 bytes, which is
   // the per-component limit on ext4/xfs/tmpfs.  makeSafeBasename() hashes
   // the tail and truncates the head when the full name would blow the
   // budget; the symbol name inside the IR stays untouched, so debug
   // tooling can still resolve the long name from the LLVM module.
-  std::string FileStem = makeSafeBasename(KernelName, /*reservedSuffixBytes=*/5);
-  std::string IrPath  = TmpDir.filePath(FileStem + ".ll");
-  std::string AsmPath = TmpDir.filePath(FileStem + ".s");
+  std::string fileStem = makeSafeBasename(kernelName, /*reservedSuffixBytes=*/5);
+  std::string irPath  = tmpDir.filePath(fileStem + ".ll");
+  std::string asmPath = tmpDir.filePath(fileStem + ".s");
 
-  if (!writeFile(IrPath, Raised.IrText))
+  if (!writeFile(irPath, raised.IrText))
     return false;
 
-  static const char *SDumpInput = std::getenv("HSA_HOTSWAP_DUMP_INPUT");
-  if (SDumpInput && SDumpInput[0] == '1' && !Raised.DisasmText.empty())
-    writeFile(TmpDir.filePath(FileStem + ".dis"), Raised.DisasmText);
+  static const char *s_dumpInput = std::getenv("HSA_HOTSWAP_DUMP_INPUT");
+  if (s_dumpInput && s_dumpInput[0] == '1' && !raised.DisasmText.empty())
+    writeFile(tmpDir.filePath(fileStem + ".dis"), raised.DisasmText);
 
-  std::string LlcBin = std::string(LLVM_TOOLS_DIR) + "/llc";
-  std::string McpuLlc = ("-mcpu=" + TargetIsa).str();
-  if (runTool(LlcBin, {LlcBin, "-march=amdgcn", McpuLlc, "-filetype=asm", "-o",
-                       AsmPath, IrPath}) != 0) {
-    llvm::errs() << "transpiler: llc failed for '" << KernelName << "'\n";
+  std::string llcBin = std::string(LLVM_TOOLS_DIR) + "/llc";
+  std::string mcpuLlc = ("-mcpu=" + targetISA).str();
+  if (runTool(llcBin, {llcBin, "-march=amdgcn", mcpuLlc, "-filetype=asm", "-o",
+                       asmPath, irPath}) != 0) {
+    llvm::errs() << "transpiler: llc failed for '" << kernelName << "'\n";
     return false;
   }
 
   {
-    auto AsmData = readFile(AsmPath);
-    if (!Result.AsmText.empty())
-      Result.AsmText += "\n";
-    Result.AsmText.append(AsmData.begin(), AsmData.end());
+    auto asmData = readFile(asmPath);
+    if (!result.AsmText.empty())
+      result.AsmText += "\n";
+    result.AsmText.append(asmData.begin(), asmData.end());
   }
 
-  std::string McBin = std::string(LLVM_TOOLS_DIR) + "/llvm-mc";
-  std::string McpuMc = ("-mcpu=" + TargetIsa).str();
-  if (runTool(McBin, {McBin, "-triple=amdgcn-amd-amdhsa", McpuMc,
-                      "-filetype=obj", "-o", ObjPath, AsmPath}) != 0) {
-    llvm::errs() << "transpiler: llvm-mc failed for '" << KernelName << "'\n";
+  std::string mcBin = std::string(LLVM_TOOLS_DIR) + "/llvm-mc";
+  std::string mcpuMc = ("-mcpu=" + targetISA).str();
+  if (runTool(mcBin, {mcBin, "-triple=amdgcn-amd-amdhsa", mcpuMc,
+                      "-filetype=obj", "-o", objPath, asmPath}) != 0) {
+    llvm::errs() << "transpiler: llvm-mc failed for '" << kernelName << "'\n";
     return false;
   }
 
@@ -312,151 +358,157 @@ static bool raiseAndCompileKernel(const TextSection &Text,
 }
 
 // Link one or more relocatable .o files into a shared HSACO.
-static bool linkObjects(llvm::ArrayRef<std::string> ObjPaths,
-                        llvm::StringRef HsacoPath) {
-  std::string LldBin = std::string(LLVM_TOOLS_DIR) + "/ld.lld";
-  llvm::SmallVector<llvm::StringRef, 16> Args;
-  Args.push_back(LldBin);
-  Args.push_back("-shared");
-  Args.push_back("-o");
-  Args.push_back(HsacoPath);
-  for (auto &O : ObjPaths)
-    Args.push_back(O);
-  if (runTool(LldBin, Args) != 0) {
+static bool linkObjects(llvm::ArrayRef<std::string> objPaths,
+                        llvm::StringRef hsacoPath) {
+  std::string lldBin = std::string(LLVM_TOOLS_DIR) + "/ld.lld";
+  llvm::SmallVector<llvm::StringRef, 16> args;
+  args.push_back(lldBin);
+  args.push_back("-shared");
+  args.push_back("-o");
+  args.push_back(hsacoPath);
+  for (auto &o : objPaths)
+    args.push_back(o);
+  if (runTool(lldBin, args) != 0) {
     llvm::errs() << "transpiler: ld.lld failed\n";
     return false;
   }
   return true;
 }
 
-void collectTargetPrivateSegmentMetadata(PipelineResult &Result,
-                                         llvm::ArrayRef<std::string> KernelNames) {
+void collectTargetPrivateSegmentMetadata(PipelineResult &result,
+                                         llvm::ArrayRef<std::string> kernelNames) {
   using namespace llvm::amdhsa;
-  if (Result.Hsaco.empty())
+  if (result.Hsaco.empty())
     return;
-  for (llvm::StringRef KernelName : KernelNames) {
-    KernelMeta Meta = extractKernelMeta(Result.Hsaco, KernelName);
-    if (!Meta.HasKernelDescriptor)
+  for (llvm::StringRef kernelName : kernelNames) {
+    KernelMeta meta = extractKernelMeta(result.Hsaco, kernelName);
+    if (!meta.HasKernelDescriptor)
       continue;
-    Result.TargetPrivateSegmentFixedSize = std::max(
-        Result.TargetPrivateSegmentFixedSize,
-        Meta.PrivateSegmentFixedSize);
+    result.TargetPrivateSegmentFixedSize = std::max(
+        result.TargetPrivateSegmentFixedSize,
+        meta.PrivateSegmentFixedSize);
     const bool enabled =
-        (Meta.ComputePgmRsrc2 &
+        (meta.ComputePgmRsrc2 &
          (1u << COMPUTE_PGM_RSRC2_ENABLE_PRIVATE_SEGMENT_SHIFT)) != 0;
-    Result.TargetEnablePrivateSegment |= enabled;
+    result.TargetEnablePrivateSegment |= enabled;
   }
 }
 
-PipelineResult runPipeline(llvm::ArrayRef<uint8_t> CodeObjectData,
-                           llvm::StringRef SourceIsa,
-                           llvm::StringRef TargetIsa,
-                           llvm::StringRef KernelName) {
-  PipelineResult Result;
+PipelineResult runPipeline(llvm::ArrayRef<uint8_t> codeObjectData,
+                           llvm::StringRef sourceISA,
+                           llvm::StringRef targetISA,
+                           llvm::StringRef kernelName,
+                           bool enableWritelaneRewrite,
+                           bool enableWaveNative) {
+  PipelineResult result;
 
-  auto Text = extractTextSection(CodeObjectData);
-  if (!Text.Valid) {
+  auto text = extractTextSection(codeObjectData);
+  if (!text.Valid) {
     llvm::errs() << "transpiler: Failed to extract .text section\n";
-    return Result;
+    return result;
   }
 
-  DumpDir TmpDir;
-  if (!TmpDir.Valid)
-    return Result;
+  DumpDir tmpDir;
+  if (!tmpDir.valid)
+    return result;
 
   {
-    static const char *SDumpInput = std::getenv("HSA_HOTSWAP_DUMP_INPUT");
-    if (SDumpInput && SDumpInput[0] == '1')
-      writeFile(TmpDir.filePath("input.co"), CodeObjectData);
+    static const char *s_dumpInput = std::getenv("HSA_HOTSWAP_DUMP_INPUT");
+    if (s_dumpInput && s_dumpInput[0] == '1')
+      writeFile(tmpDir.filePath("input.co"), codeObjectData);
   }
 
-  std::string ObjPath   = TmpDir.filePath("kernel.o");
-  std::string HsacoPath = TmpDir.filePath("kernel.hsaco");
+  std::string objPath   = tmpDir.filePath("kernel.o");
+  std::string hsacoPath = tmpDir.filePath("kernel.hsaco");
 
-  if (!raiseAndCompileKernel(Text, CodeObjectData, KernelName,
-                             SourceIsa, TargetIsa, TmpDir, ObjPath, Result))
-    return Result;
+  if (!raiseAndCompileKernel(text, codeObjectData, kernelName,
+                             sourceISA, targetISA, tmpDir, objPath, result,
+                             enableWritelaneRewrite, enableWaveNative))
+    return result;
 
-  if (!linkObjects({ObjPath}, HsacoPath))
-    return Result;
+  if (!linkObjects({objPath}, hsacoPath))
+    return result;
 
-  Result.Hsaco = readFile(HsacoPath);
-  if (Result.Hsaco.empty()) {
+  result.Hsaco = readFile(hsacoPath);
+  if (result.Hsaco.empty()) {
     llvm::errs() << "transpiler: Failed to read HSACO\n";
-    return Result;
+    return result;
   }
-  std::string KernelNameStr = KernelName.str();
-  collectTargetPrivateSegmentMetadata(Result, {KernelNameStr});
+  std::string kernelNameStr = kernelName.str();
+  collectTargetPrivateSegmentMetadata(result, {kernelNameStr});
 
-  LLVM_DEBUG(llvm::dbgs() << "transpiler: HSACO generated: " << Result.Hsaco.size()
+  LLVM_DEBUG(llvm::dbgs() << "transpiler: HSACO generated: " << result.Hsaco.size()
                           << " bytes\n");
-  Result.Success = true;
-  return Result;
+  result.Success = true;
+  return result;
 }
 
-PipelineResult runPipelineAllKernels(llvm::ArrayRef<uint8_t> CodeObjectData,
-                                     llvm::StringRef SourceIsa,
-                                     llvm::StringRef TargetIsa) {
-  PipelineResult Result;
+PipelineResult runPipelineAllKernels(llvm::ArrayRef<uint8_t> codeObjectData,
+                                     llvm::StringRef sourceISA,
+                                     llvm::StringRef targetISA,
+                                     bool enableWritelaneRewrite,
+                                     bool enableWaveNative) {
+  PipelineResult result;
 
-  auto KernelNames = listKernelNames(CodeObjectData);
-  if (KernelNames.empty()) {
+  auto kernelNames = listKernelNames(codeObjectData);
+  if (kernelNames.empty()) {
     llvm::errs() << "transpiler: No kernels found in code object\n";
-    return Result;
+    return result;
   }
 
-  LLVM_DEBUG(llvm::dbgs() << "transpiler: Raising " << KernelNames.size()
-                          << " kernel(s) [" << SourceIsa << " -> " << TargetIsa
+  LLVM_DEBUG(llvm::dbgs() << "transpiler: Raising " << kernelNames.size()
+                          << " kernel(s) [" << sourceISA << " -> " << targetISA
                           << "]\n");
 
-  auto Text = extractTextSection(CodeObjectData);
-  if (!Text.Valid) {
+  auto text = extractTextSection(codeObjectData);
+  if (!text.Valid) {
     llvm::errs() << "transpiler: Failed to extract .text section\n";
-    return Result;
+    return result;
   }
 
-  DumpDir TmpDir;
-  if (!TmpDir.Valid)
-    return Result;
+  DumpDir tmpDir;
+  if (!tmpDir.valid)
+    return result;
 
-  static const char *SDumpInput = std::getenv("HSA_HOTSWAP_DUMP_INPUT");
-  if (SDumpInput && SDumpInput[0] == '1')
-    writeFile(TmpDir.filePath("input.co"), CodeObjectData);
+  static const char *s_dumpInput = std::getenv("HSA_HOTSWAP_DUMP_INPUT");
+  if (s_dumpInput && s_dumpInput[0] == '1')
+    writeFile(tmpDir.filePath("input.co"), codeObjectData);
 
-  std::vector<std::string> ObjPaths;
-  for (size_t I = 0; I < KernelNames.size(); ++I) {
-    const auto &KName = KernelNames[I];
-    std::string ObjPath = TmpDir.filePath("k" + std::to_string(I) + ".o");
+  std::vector<std::string> objPaths;
+  for (size_t i = 0; i < kernelNames.size(); ++i) {
+    const auto &kName = kernelNames[i];
+    std::string objPath = tmpDir.filePath("k" + std::to_string(i) + ".o");
 
-    LLVM_DEBUG(llvm::dbgs() << "transpiler:   [" << (I + 1) << "/"
-                            << KernelNames.size() << "] " << KName << " ... ");
+    LLVM_DEBUG(llvm::dbgs() << "transpiler:   [" << (i + 1) << "/"
+                            << kernelNames.size() << "] " << kName << " ... ");
 
-    if (!raiseAndCompileKernel(Text, CodeObjectData, KName,
-                               SourceIsa, TargetIsa, TmpDir, ObjPath, Result)) {
+    if (!raiseAndCompileKernel(text, codeObjectData, kName,
+                               sourceISA, targetISA, tmpDir, objPath, result,
+                               enableWritelaneRewrite, enableWaveNative)) {
       LLVM_DEBUG(llvm::dbgs() << "FAILED\n");
-      Result.Success = false;
-      return Result;
+      result.Success = false;
+      return result;
     }
     LLVM_DEBUG(llvm::dbgs() << "OK\n");
-    ObjPaths.push_back(std::move(ObjPath));
+    objPaths.push_back(std::move(objPath));
   }
 
-  std::string HsacoPath = TmpDir.filePath("merged.hsaco");
-  if (!linkObjects(ObjPaths, HsacoPath))
-    return Result;
+  std::string hsacoPath = tmpDir.filePath("merged.hsaco");
+  if (!linkObjects(objPaths, hsacoPath))
+    return result;
 
-  Result.Hsaco = readFile(HsacoPath);
-  if (Result.Hsaco.empty()) {
+  result.Hsaco = readFile(hsacoPath);
+  if (result.Hsaco.empty()) {
     llvm::errs() << "transpiler: Failed to read merged HSACO\n";
-    return Result;
+    return result;
   }
-  collectTargetPrivateSegmentMetadata(Result, KernelNames);
+  collectTargetPrivateSegmentMetadata(result, kernelNames);
 
-  LLVM_DEBUG(llvm::dbgs() << "transpiler: Merged HSACO: " << Result.Hsaco.size()
-                          << " bytes, " << KernelNames.size()
+  LLVM_DEBUG(llvm::dbgs() << "transpiler: Merged HSACO: " << result.Hsaco.size()
+                          << " bytes, " << kernelNames.size()
                           << " kernel(s)\n");
-  Result.Success = true;
-  return Result;
+  result.Success = true;
+  return result;
 }
 
 } // namespace COMGR::hotswap

@@ -11,6 +11,7 @@
 
 #include "code_object_utils.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/StringRef.h"
 
 namespace COMGR::hotswap {
 
@@ -32,6 +33,10 @@ struct KernargLayout {
   // separate runtime pointer, so the offset must be rebased to
   // `byteOffset - implicitArgsBase`.
   int ImplicitArgsBase = 0;
+  // Source metadata argument layout, including hidden_* entries. Used to
+  // synthesize source-ABI hidden values without depending on target-runtime
+  // implicit-arg layout.
+  llvm::ArrayRef<KernelArgMeta> Args;
   // Total kernarg segment size in bytes, copied from the kernel
   // descriptor's `.kernarg_segment_size`. Informational; the lifted
   // kernel's `Function` parameter list drives the backend's
@@ -39,19 +44,38 @@ struct KernargLayout {
   int KernargSegmentSize = 0;
 };
 
-enum class PreloadedHiddenKernargDword {
-  NotHidden,
+enum class SourceHiddenArgKind {
+  None,
   HiddenBlockCountX,
   HiddenBlockCountY,
   HiddenBlockCountZ,
+  HiddenGroupSizeX,
+  HiddenGroupSizeY,
+  HiddenGroupSizeZ,
+  HiddenRemainderX,
+  HiddenRemainderY,
+  HiddenRemainderZ,
+  HiddenGridDims,
   UnsupportedHidden,
 };
 
-// Classify a kernarg-preload dword that lands on a hidden metadata slot.
-// Hardware preloads hidden args exactly like user args; treating them as
-// padding would turn runtime-provided values (e.g. Triton's block count for
-// `tl.num_programs`) into undef. Unsupported hidden kinds must refuse loudly.
-PreloadedHiddenKernargDword classifyPreloadedHiddenKernargDword(
+struct SourceHiddenArgByte {
+  SourceHiddenArgKind Kind = SourceHiddenArgKind::None;
+  llvm::StringRef ValueKind;
+  int ArgOffset = 0;
+  int ByteOffset = 0;
+
+  bool matched() const { return Kind != SourceHiddenArgKind::None; }
+  unsigned byteIndexInArg() const {
+    return static_cast<unsigned>(ByteOffset - ArgOffset);
+  }
+};
+
+// Resolve a byte offset in the source ABI's flat kernarg/hidden-arg metadata
+// view.  Known source hidden args are later synthesized from dispatch state;
+// unsupported hidden args must refuse instead of falling back to target
+// implicitarg layout.
+SourceHiddenArgByte classifySourceHiddenArgByte(
     llvm::ArrayRef<KernelArgMeta> Args, int ByteOffset);
 
 } // namespace COMGR::hotswap

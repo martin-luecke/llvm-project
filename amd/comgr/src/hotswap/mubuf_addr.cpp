@@ -214,13 +214,13 @@ Value *buildMubufSRD(RaiseContext &Ctx, const SRSRCDwords &Dw) {
   constexpr uint32_t kGfx942RawBufferFormat32Uint = 0x00024000u;
   constexpr uint32_t kGfx942RawBufferFormat32Float = 0x00027000u;
 
-  const bool crossWidening = Ctx.TargetIsa.WaveSize > Ctx.Isa.WaveSize;
+  const bool CrossWidening = Ctx.TargetIsa.WaveSize > Ctx.Isa.WaveSize;
   Function *Readfirstlane =
-      crossWidening ? nullptr
+      CrossWidening ? nullptr
                     : Intrinsic::getOrInsertDeclaration(
                           &Ctx.M, Intrinsic::amdgcn_readfirstlane, {Ctx.I32Ty});
   auto ScalarizeDescriptorWord = [&](Value *Word, const char *Name) -> Value * {
-    if (crossWidening)
+    if (CrossWidening)
       return Word;
     return Ctx.B.CreateCall(Readfirstlane, {Word}, Name);
   };

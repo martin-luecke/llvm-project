@@ -136,6 +136,7 @@ if(COMGR_ENABLE_HOTSWAP_TRANSPILE)
       "COMGR_HOTSWAP_DIR='${COMGR_HOTSWAP_DIR}'. Point COMGR_HOTSWAP_DIR at "
       "the hotswap source tree or set COMGR_ENABLE_HOTSWAP_TRANSPILE=OFF.")
   endif()
+  list(APPEND SOURCES src/comgr-hotswap-transpile.cpp)
 endif()
 
 # Add Windows resource file for version info

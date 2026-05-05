@@ -30,26 +30,23 @@ struct RaiseResult {
   int TotalCount = 0;
   std::string IrText;
   std::string DisasmText;
-  // Structured failure description. `failure.reason == None` iff `success`.
+  // Structured failure description. `Failure.Reason == None` iff `Success`.
   RaiseFailure Failure;
   bool Success = false;
 
   bool UsesScratchPrivateSegment = false;
   uint32_t SourcePrivateSegmentFixedSize = 0;
+  bool HasDivergentExec = false;
 };
 
-// Raise a kernel named `KernelName` from the disassembled `TextBytes` of the
-// AMDGPU code object whose source ISA is `SourceISA`. `Meta` carries the
-// MsgPack-derived per-kernel metadata. `KernelOffset` is the byte offset of
-// the kernel's code-object entry point inside `TextBytes`.
-// `CompilationTargetISA` (defaults to the source ISA) selects the AMDGPU
-// codegen target the lifted IR will be compiled for.
 RaiseResult raiseToIR(llvm::ArrayRef<uint8_t> TextBytes,
-                      llvm::StringRef SourceISA,
+                      llvm::StringRef SourceIsa,
                       llvm::StringRef KernelName,
                       const KernelMeta &Meta,
                       uint64_t KernelOffset = 0,
-                      llvm::StringRef CompilationTargetISA = "");
+                      llvm::StringRef CompilationTargetIsa = "",
+                      bool EnableWritelaneRewrite = true,
+                      bool EnableWaveNative = true);
 
 } // namespace COMGR::hotswap
 

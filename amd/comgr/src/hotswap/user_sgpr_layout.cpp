@@ -65,9 +65,9 @@ unsigned userSgprCountFieldWidth(const ISAProfile &SourceProfile) {
 unsigned decodeUserSgprCount(uint32_t ComputePgmRsrc2,
                              const ISAProfile &SourceProfile) {
   using namespace llvm::amdhsa;
-  const unsigned width = userSgprCountFieldWidth(SourceProfile);
+  const unsigned Width = userSgprCountFieldWidth(SourceProfile);
   return (ComputePgmRsrc2 >> COMPUTE_PGM_RSRC2_GFX6_GFX120_USER_SGPR_COUNT_SHIFT) &
-         ((1u << width) - 1u);
+         ((1u << Width) - 1u);
 }
 
 std::string formatMetadataMismatch(const KernelMeta &Meta,
@@ -107,20 +107,20 @@ std::string formatMetadataMismatch(const KernelMeta &Meta,
     Os << Name << ":" << Count;
   };
 
-  const uint16_t kcp = Meta.KernelCodeProperties;
-  if (kcp & KERNEL_CODE_PROPERTY_ENABLE_SGPR_PRIVATE_SEGMENT_BUFFER)
+  const uint16_t Kcp = Meta.KernelCodeProperties;
+  if (Kcp & KERNEL_CODE_PROPERTY_ENABLE_SGPR_PRIVATE_SEGMENT_BUFFER)
     Append("private_segment_buffer", 4);
-  if (kcp & KERNEL_CODE_PROPERTY_ENABLE_SGPR_DISPATCH_PTR)
+  if (Kcp & KERNEL_CODE_PROPERTY_ENABLE_SGPR_DISPATCH_PTR)
     Append("dispatch_ptr", 2);
-  if (kcp & KERNEL_CODE_PROPERTY_ENABLE_SGPR_QUEUE_PTR)
+  if (Kcp & KERNEL_CODE_PROPERTY_ENABLE_SGPR_QUEUE_PTR)
     Append("queue_ptr", 2);
-  if (kcp & KERNEL_CODE_PROPERTY_ENABLE_SGPR_KERNARG_SEGMENT_PTR)
+  if (Kcp & KERNEL_CODE_PROPERTY_ENABLE_SGPR_KERNARG_SEGMENT_PTR)
     Append("kernarg_segment_ptr", 2);
-  if (kcp & KERNEL_CODE_PROPERTY_ENABLE_SGPR_DISPATCH_ID)
+  if (Kcp & KERNEL_CODE_PROPERTY_ENABLE_SGPR_DISPATCH_ID)
     Append("dispatch_id", 2);
-  if (kcp & KERNEL_CODE_PROPERTY_ENABLE_SGPR_FLAT_SCRATCH_INIT)
+  if (Kcp & KERNEL_CODE_PROPERTY_ENABLE_SGPR_FLAT_SCRATCH_INIT)
     Append("flat_scratch_init", 2);
-  if (kcp & KERNEL_CODE_PROPERTY_ENABLE_SGPR_PRIVATE_SEGMENT_SIZE)
+  if (Kcp & KERNEL_CODE_PROPERTY_ENABLE_SGPR_PRIVATE_SEGMENT_SIZE)
     Append("private_segment_size", 1);
   if (PreloadLen > 0)
     Append("kernarg_preload", PreloadLen);
@@ -168,27 +168,27 @@ bool UserSgprLayout::tryFromKernelMeta(const KernelMeta &Meta,
 
   using namespace llvm::amdhsa;
 
-  const uint16_t kcp = Meta.KernelCodeProperties;
+  const uint16_t Kcp = Meta.KernelCodeProperties;
 
   // Walk the canonical KERNEL_CODE_PROPERTY bit order.
   // Source: LLVM AMDHSAKernelDescriptor.h (bits 0..6 in ascending order).
-  if (kcp & KERNEL_CODE_PROPERTY_ENABLE_SGPR_PRIVATE_SEGMENT_BUFFER)
+  if (Kcp & KERNEL_CODE_PROPERTY_ENABLE_SGPR_PRIVATE_SEGMENT_BUFFER)
     Layout.PrivateSegmentBufferSgpr =
         appendSource(Layout.Entries, Source::PrivateSegmentBuffer, 4);
-  if (kcp & KERNEL_CODE_PROPERTY_ENABLE_SGPR_DISPATCH_PTR)
+  if (Kcp & KERNEL_CODE_PROPERTY_ENABLE_SGPR_DISPATCH_PTR)
     Layout.DispatchPtrSgpr =
         appendSource(Layout.Entries, Source::DispatchPtr, 2);
-  if (kcp & KERNEL_CODE_PROPERTY_ENABLE_SGPR_QUEUE_PTR)
+  if (Kcp & KERNEL_CODE_PROPERTY_ENABLE_SGPR_QUEUE_PTR)
     Layout.QueuePtrSgpr = appendSource(Layout.Entries, Source::QueuePtr, 2);
-  if (kcp & KERNEL_CODE_PROPERTY_ENABLE_SGPR_KERNARG_SEGMENT_PTR)
+  if (Kcp & KERNEL_CODE_PROPERTY_ENABLE_SGPR_KERNARG_SEGMENT_PTR)
     Layout.KernargSegmentPtrSgpr =
         appendSource(Layout.Entries, Source::KernargSegmentPtr, 2);
-  if (kcp & KERNEL_CODE_PROPERTY_ENABLE_SGPR_DISPATCH_ID)
+  if (Kcp & KERNEL_CODE_PROPERTY_ENABLE_SGPR_DISPATCH_ID)
     Layout.DispatchIdSgpr = appendSource(Layout.Entries, Source::DispatchId, 2);
-  if (kcp & KERNEL_CODE_PROPERTY_ENABLE_SGPR_FLAT_SCRATCH_INIT)
+  if (Kcp & KERNEL_CODE_PROPERTY_ENABLE_SGPR_FLAT_SCRATCH_INIT)
     Layout.FlatScratchInitSgpr =
         appendSource(Layout.Entries, Source::FlatScratchInit, 2);
-  if (kcp & KERNEL_CODE_PROPERTY_ENABLE_SGPR_PRIVATE_SEGMENT_SIZE)
+  if (Kcp & KERNEL_CODE_PROPERTY_ENABLE_SGPR_PRIVATE_SEGMENT_SIZE)
     Layout.PrivateSegmentSizeSgpr =
         appendSource(Layout.Entries, Source::PrivateSegmentSize, 1);
 
@@ -198,18 +198,18 @@ bool UserSgprLayout::tryFromKernelMeta(const KernelMeta &Meta,
   // sequence is little-endian dword-aligned: dword i goes into
   // s[user_sgpr_count_so_far + i] and corresponds to kernarg bytes
   // [(offset+i)*4 .. (offset+i+1)*4 - 1].
-  const uint8_t preloadLen = static_cast<uint8_t>(
+  const uint8_t PreloadLen = static_cast<uint8_t>(
       (Meta.KernargPreload >> KERNARG_PRELOAD_SPEC_LENGTH_SHIFT) &
       ((1 << KERNARG_PRELOAD_SPEC_LENGTH_WIDTH) - 1));
-  const uint16_t preloadOffsetDwords = static_cast<uint16_t>(
+  const uint16_t PreloadOffsetDwords = static_cast<uint16_t>(
       (Meta.KernargPreload >> KERNARG_PRELOAD_SPEC_OFFSET_SHIFT) &
       ((1 << KERNARG_PRELOAD_SPEC_OFFSET_WIDTH) - 1));
-  Layout.PreloadedKernargLength = preloadLen;
+  Layout.PreloadedKernargLength = PreloadLen;
   Layout.PreloadedKernargByteOffset =
-      static_cast<uint16_t>(preloadOffsetDwords * 4);
-  if (preloadLen > 0) {
+      static_cast<uint16_t>(PreloadOffsetDwords * 4);
+  if (PreloadLen > 0) {
     Layout.FirstPreloadedKernargSgpr = static_cast<int>(Layout.Entries.size());
-    for (unsigned I = 0; I < preloadLen; ++I) {
+    for (unsigned I = 0; I < PreloadLen; ++I) {
       Entry E;
       E.SrcKind = Source::PreloadedKernarg;
       // Each preloaded dword is its own independent SGPR (no multi-dword
@@ -218,7 +218,7 @@ bool UserSgprLayout::tryFromKernelMeta(const KernelMeta &Meta,
       // "act on subDword==0 only" loop visits every preload entry.
       E.SubDword = 0;
       E.KernargByteOffset =
-          static_cast<uint16_t>((preloadOffsetDwords + I) * 4);
+          static_cast<uint16_t>((PreloadOffsetDwords + I) * 4);
       Layout.Entries.push_back(E);
     }
   }
@@ -228,14 +228,14 @@ bool UserSgprLayout::tryFromKernelMeta(const KernelMeta &Meta,
   // Sanity-check against compute_pgm_rsrc2.USER_SGPR_COUNT. gfx125 widens
   // this field to 6 bits; using the older 5-bit decode would read a valid
   // count of 32 as zero and falsely reject Triton gfx1250 kernels.
-  const unsigned userSgprCountWidth = userSgprCountFieldWidth(SourceProfile);
-  const unsigned pgmRsrc2UserSgprCount =
+  const unsigned UserSgprCountWidth = userSgprCountFieldWidth(SourceProfile);
+  const unsigned PgmRsrc2UserSgprCount =
       decodeUserSgprCount(Meta.ComputePgmRsrc2, SourceProfile);
-  if (pgmRsrc2UserSgprCount != Layout.UserSgprCount) {
+  if (PgmRsrc2UserSgprCount != Layout.UserSgprCount) {
     FailureDetail =
-        formatMetadataMismatch(Meta, SourceIsa, Layout, pgmRsrc2UserSgprCount,
-                               userSgprCountWidth, preloadLen,
-                               preloadOffsetDwords);
+        formatMetadataMismatch(Meta, SourceIsa, Layout, PgmRsrc2UserSgprCount,
+                               UserSgprCountWidth, PreloadLen,
+                               PreloadOffsetDwords);
     return false;
   }
 

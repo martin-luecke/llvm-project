@@ -14,23 +14,45 @@ using namespace llvm;
 
 namespace COMGR::hotswap {
 
-PreloadedHiddenKernargDword classifyPreloadedHiddenKernargDword(
-    ArrayRef<KernelArgMeta> Args, int ByteOffset) {
+SourceHiddenArgByte classifySourceHiddenArgByte(ArrayRef<KernelArgMeta> Args,
+                                                int ByteOffset) {
   for (const KernelArgMeta &Arg : Args) {
-    if (Arg.Offset != ByteOffset)
+    if (ByteOffset < Arg.Offset || ByteOffset >= Arg.Offset + Arg.Size)
       continue;
+
     StringRef Kind(Arg.ValueKind);
     if (!Kind.starts_with("hidden_"))
-      return PreloadedHiddenKernargDword::NotHidden;
+      return {};
+
+    SourceHiddenArgByte Result;
+    Result.ValueKind = Kind;
+    Result.ArgOffset = Arg.Offset;
+    Result.ByteOffset = ByteOffset;
     if (Kind == "hidden_block_count_x")
-      return PreloadedHiddenKernargDword::HiddenBlockCountX;
-    if (Kind == "hidden_block_count_y")
-      return PreloadedHiddenKernargDword::HiddenBlockCountY;
-    if (Kind == "hidden_block_count_z")
-      return PreloadedHiddenKernargDword::HiddenBlockCountZ;
-    return PreloadedHiddenKernargDword::UnsupportedHidden;
+      Result.Kind = SourceHiddenArgKind::HiddenBlockCountX;
+    else if (Kind == "hidden_block_count_y")
+      Result.Kind = SourceHiddenArgKind::HiddenBlockCountY;
+    else if (Kind == "hidden_block_count_z")
+      Result.Kind = SourceHiddenArgKind::HiddenBlockCountZ;
+    else if (Kind == "hidden_group_size_x")
+      Result.Kind = SourceHiddenArgKind::HiddenGroupSizeX;
+    else if (Kind == "hidden_group_size_y")
+      Result.Kind = SourceHiddenArgKind::HiddenGroupSizeY;
+    else if (Kind == "hidden_group_size_z")
+      Result.Kind = SourceHiddenArgKind::HiddenGroupSizeZ;
+    else if (Kind == "hidden_remainder_x")
+      Result.Kind = SourceHiddenArgKind::HiddenRemainderX;
+    else if (Kind == "hidden_remainder_y")
+      Result.Kind = SourceHiddenArgKind::HiddenRemainderY;
+    else if (Kind == "hidden_remainder_z")
+      Result.Kind = SourceHiddenArgKind::HiddenRemainderZ;
+    else if (Kind == "hidden_grid_dims")
+      Result.Kind = SourceHiddenArgKind::HiddenGridDims;
+    else
+      Result.Kind = SourceHiddenArgKind::UnsupportedHidden;
+    return Result;
   }
-  return PreloadedHiddenKernargDword::NotHidden;
+  return {};
 }
 
 } // namespace COMGR::hotswap
