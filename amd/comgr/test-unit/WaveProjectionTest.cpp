@@ -100,21 +100,21 @@ ISAProfile makeGfx942Profile() { return ISAProfile::forTesting(64); }
 // miscompiling them.
 // ----------------------------------------------------------------------------
 TEST(WaveProjectionContract, ModuloReplicationDoesNotProvideFullWaveExec) {
-  LLVMContext ctx;
-  auto *i32Ty = Type::getInt32Ty(ctx);
-  auto *i64Ty = Type::getInt64Ty(ctx);
+  LLVMContext Ctx;
+  auto *I32Ty = Type::getInt32Ty(Ctx);
+  auto *I64Ty = Type::getInt64Ty(Ctx);
 
-  ISAProfile src = makeGfx1250Profile();
-  ISAProfile tgt = makeGfx942Profile();
+  ISAProfile Src = makeGfx1250Profile();
+  ISAProfile Tgt = makeGfx942Profile();
 
-  ModuloReplicationProjection proj(src, tgt, i32Ty, i64Ty);
-  EXPECT_FALSE(proj.providesFullWaveExecInvariant());
+  ModuloReplicationProjection Proj(Src, Tgt, I32Ty, I64Ty);
+  EXPECT_FALSE(Proj.providesFullWaveExecInvariant());
 
   // Cross-check through a base-class reference to confirm the
   // virtual dispatch resolves to the correct override (or lack
   // thereof — MODREP inherits the base's `false`).
-  const WaveProjection &base = proj;
-  EXPECT_FALSE(base.providesFullWaveExecInvariant());
+  const WaveProjection &Base = Proj;
+  EXPECT_FALSE(Base.providesFullWaveExecInvariant());
 }
 
 // ----------------------------------------------------------------------------
@@ -127,23 +127,23 @@ TEST(WaveProjectionContract, ModuloReplicationDoesNotProvideFullWaveExec) {
 // WaveNative-raised kernels.
 // ----------------------------------------------------------------------------
 TEST(WaveProjectionContract, WaveNativeProvidesFullWaveExec) {
-  LLVMContext ctx;
-  auto *i32Ty = Type::getInt32Ty(ctx);
-  auto *i64Ty = Type::getInt64Ty(ctx);
+  LLVMContext Ctx;
+  auto *I32Ty = Type::getInt32Ty(Ctx);
+  auto *I64Ty = Type::getInt64Ty(Ctx);
 
   // WaveNativeProjection's constructor asserts `src.isWave32() &&
   // !tgt.isWave32()` (per its docstring — this projection is only
   // defined for wave32 → wave64 cross-widening), so we construct
   // with the canonical gfx1250 → gfx942 pair.  Any other direction
   // would fatal-error inside the constructor.
-  ISAProfile src = makeGfx1250Profile();
-  ISAProfile tgt = makeGfx942Profile();
+  ISAProfile Src = makeGfx1250Profile();
+  ISAProfile Tgt = makeGfx942Profile();
 
-  WaveNativeProjection proj(src, tgt, i32Ty, i64Ty);
-  EXPECT_TRUE(proj.providesFullWaveExecInvariant());
+  WaveNativeProjection Proj(Src, Tgt, I32Ty, I64Ty);
+  EXPECT_TRUE(Proj.providesFullWaveExecInvariant());
 
-  const WaveProjection &base = proj;
-  EXPECT_TRUE(base.providesFullWaveExecInvariant());
+  const WaveProjection &Base = Proj;
+  EXPECT_TRUE(Base.providesFullWaveExecInvariant());
 }
 
 // ----------------------------------------------------------------------------
@@ -186,31 +186,31 @@ public:
 } // namespace
 
 TEST(WaveProjectionContract, BaseDefaultIsNotFullWaveExec) {
-  LLVMContext ctx;
-  auto *i32Ty = Type::getInt32Ty(ctx);
-  auto *i64Ty = Type::getInt64Ty(ctx);
+  LLVMContext Ctx;
+  auto *I32Ty = Type::getInt32Ty(Ctx);
+  auto *I64Ty = Type::getInt64Ty(Ctx);
 
-  ISAProfile src = makeGfx1250Profile();
-  ISAProfile tgt = makeGfx942Profile();
+  ISAProfile Src = makeGfx1250Profile();
+  ISAProfile Tgt = makeGfx942Profile();
 
-  DefaultTestProjection proj(src, tgt, i32Ty, i64Ty);
-  EXPECT_FALSE(proj.providesFullWaveExecInvariant());
+  DefaultTestProjection Proj(Src, Tgt, I32Ty, I64Ty);
+  EXPECT_FALSE(Proj.providesFullWaveExecInvariant());
 }
 
 TEST(WaveProjectionContract, ThreadLoopDoesNotProvideFullWaveExec) {
-  LLVMContext ctx;
-  auto *i32Ty = Type::getInt32Ty(ctx);
-  auto *i64Ty = Type::getInt64Ty(ctx);
+  LLVMContext Ctx;
+  auto *I32Ty = Type::getInt32Ty(Ctx);
+  auto *I64Ty = Type::getInt64Ty(Ctx);
 
-  ISAProfile src = makeGfx1250Profile();
-  ISAProfile tgt = makeGfx942Profile();
+  ISAProfile Src = makeGfx1250Profile();
+  ISAProfile Tgt = makeGfx942Profile();
 
-  ThreadLoopProjection proj(src, tgt, i32Ty, i64Ty);
-  EXPECT_FALSE(proj.providesFullWaveExecInvariant());
-  EXPECT_EQ(proj.execStorageTy(), i64Ty);
+  ThreadLoopProjection Proj(Src, Tgt, I32Ty, I64Ty);
+  EXPECT_FALSE(Proj.providesFullWaveExecInvariant());
+  EXPECT_EQ(Proj.execStorageTy(), I64Ty);
 
-  const WaveProjection &base = proj;
-  EXPECT_FALSE(base.providesFullWaveExecInvariant());
+  const WaveProjection &Base = Proj;
+  EXPECT_FALSE(Base.providesFullWaveExecInvariant());
 }
 
 // ----------------------------------------------------------------------------
@@ -224,48 +224,48 @@ TEST(WaveProjectionContract, ThreadLoopDoesNotProvideFullWaveExec) {
 // uncomputed results.
 // ----------------------------------------------------------------------------
 TEST(WaveProjectionContract, ModuloReplicationHasOneSourceWavePerTarget) {
-  LLVMContext ctx;
-  auto *i32Ty = Type::getInt32Ty(ctx);
-  auto *i64Ty = Type::getInt64Ty(ctx);
+  LLVMContext Ctx;
+  auto *I32Ty = Type::getInt32Ty(Ctx);
+  auto *I64Ty = Type::getInt64Ty(Ctx);
 
-  ISAProfile src = makeGfx1250Profile();
-  ISAProfile tgt = makeGfx942Profile();
+  ISAProfile Src = makeGfx1250Profile();
+  ISAProfile Tgt = makeGfx942Profile();
 
-  ModuloReplicationProjection proj(src, tgt, i32Ty, i64Ty);
-  EXPECT_EQ(proj.numSourceWavesPerTarget(), 1u);
+  ModuloReplicationProjection Proj(Src, Tgt, I32Ty, I64Ty);
+  EXPECT_EQ(Proj.numSourceWavesPerTarget(), 1u);
 
-  const WaveProjection &base = proj;
-  EXPECT_EQ(base.numSourceWavesPerTarget(), 1u);
+  const WaveProjection &Base = Proj;
+  EXPECT_EQ(Base.numSourceWavesPerTarget(), 1u);
 }
 
 TEST(WaveProjectionContract, WaveNativeHasTwoSourceWavesPerTarget) {
-  LLVMContext ctx;
-  auto *i32Ty = Type::getInt32Ty(ctx);
-  auto *i64Ty = Type::getInt64Ty(ctx);
+  LLVMContext Ctx;
+  auto *I32Ty = Type::getInt32Ty(Ctx);
+  auto *I64Ty = Type::getInt64Ty(Ctx);
 
-  ISAProfile src = makeGfx1250Profile();
-  ISAProfile tgt = makeGfx942Profile();
+  ISAProfile Src = makeGfx1250Profile();
+  ISAProfile Tgt = makeGfx942Profile();
 
-  WaveNativeProjection proj(src, tgt, i32Ty, i64Ty);
-  EXPECT_EQ(proj.numSourceWavesPerTarget(), 2u);
+  WaveNativeProjection Proj(Src, Tgt, I32Ty, I64Ty);
+  EXPECT_EQ(Proj.numSourceWavesPerTarget(), 2u);
 
-  const WaveProjection &base = proj;
-  EXPECT_EQ(base.numSourceWavesPerTarget(), 2u);
+  const WaveProjection &Base = Proj;
+  EXPECT_EQ(Base.numSourceWavesPerTarget(), 2u);
 }
 
 TEST(WaveProjectionContract, ThreadLoopReportsSourceWavesPerTargetRatio) {
-  LLVMContext ctx;
-  auto *i32Ty = Type::getInt32Ty(ctx);
-  auto *i64Ty = Type::getInt64Ty(ctx);
+  LLVMContext Ctx;
+  auto *I32Ty = Type::getInt32Ty(Ctx);
+  auto *I64Ty = Type::getInt64Ty(Ctx);
 
-  ISAProfile src = makeGfx1250Profile();
-  ISAProfile tgt = makeGfx942Profile();
+  ISAProfile Src = makeGfx1250Profile();
+  ISAProfile Tgt = makeGfx942Profile();
 
-  ThreadLoopProjection proj(src, tgt, i32Ty, i64Ty);
-  EXPECT_EQ(proj.numSourceWavesPerTarget(), 2u);
+  ThreadLoopProjection Proj(Src, Tgt, I32Ty, I64Ty);
+  EXPECT_EQ(Proj.numSourceWavesPerTarget(), 2u);
 
-  const WaveProjection &base = proj;
-  EXPECT_EQ(base.numSourceWavesPerTarget(), 2u);
+  const WaveProjection &Base = Proj;
+  EXPECT_EQ(Base.numSourceWavesPerTarget(), 2u);
 }
 
 // ----------------------------------------------------------------------------
@@ -289,78 +289,78 @@ namespace {
 // The helper is invoked with the argument; the test inspects the
 // returned value and surrounding instructions.
 struct IRScaffold {
-  LLVMContext ctx;
+  LLVMContext Ctx;
   std::unique_ptr<Module> M;
   Function *F;
   BasicBlock *BB;
-  Argument *arg;
+  Argument *Arg;
   IRBuilder<> B;
 
-  IRScaffold() : ctx(), M(std::make_unique<Module>("t", ctx)), B(ctx) {
-    auto *i32Ty = Type::getInt32Ty(ctx);
-    auto *fnTy = FunctionType::get(Type::getVoidTy(ctx), {i32Ty}, false);
-    F = Function::Create(fnTy, Function::ExternalLinkage, "f", M.get());
-    BB = BasicBlock::Create(ctx, "entry", F);
-    arg = F->getArg(0);
+  IRScaffold() : Ctx(), M(std::make_unique<Module>("t", Ctx)), B(Ctx) {
+    auto *I32Ty = Type::getInt32Ty(Ctx);
+    auto *FnTy = FunctionType::get(Type::getVoidTy(Ctx), {I32Ty}, false);
+    F = Function::Create(FnTy, Function::ExternalLinkage, "f", M.get());
+    BB = BasicBlock::Create(Ctx, "entry", F);
+    Arg = F->getArg(0);
     B.SetInsertPoint(BB);
   }
 };
 } // namespace
 
 TEST(WaveProjectionContract, WrapAsWWMValueIsNoOpOnWaveNative) {
-  IRScaffold s;
-  auto *i32Ty = Type::getInt32Ty(s.ctx);
-  auto *i64Ty = Type::getInt64Ty(s.ctx);
+  IRScaffold S;
+  auto *I32Ty = Type::getInt32Ty(S.Ctx);
+  auto *I64Ty = Type::getInt64Ty(S.Ctx);
 
-  ISAProfile src = makeGfx1250Profile();
-  ISAProfile tgt = makeGfx942Profile();
-  WaveNativeProjection proj(src, tgt, i32Ty, i64Ty);
+  ISAProfile Src = makeGfx1250Profile();
+  ISAProfile Tgt = makeGfx942Profile();
+  WaveNativeProjection Proj(Src, Tgt, I32Ty, I64Ty);
 
-  Value *result = proj.wrapAsWWMValue(s.B, s.arg);
+  Value *Result = Proj.wrapAsWWMValue(S.B, S.Arg);
 
   // Identity — returned value IS the input, no new instruction emitted.
-  EXPECT_EQ(result, s.arg);
+  EXPECT_EQ(Result, S.Arg);
   // The entry block has no instructions beyond the (implicit) label.
-  EXPECT_TRUE(s.BB->empty())
+  EXPECT_TRUE(S.BB->empty())
       << "wrapAsWWMValue on WaveNativeProjection must not emit any "
-         "instructions; found " << s.BB->size();
+         "instructions; found " << S.BB->size();
 }
 
 TEST(WaveProjectionContract, WrapAsWWMValueEmitsStrictWWMOnMODREP) {
-  IRScaffold s;
-  auto *i32Ty = Type::getInt32Ty(s.ctx);
-  auto *i64Ty = Type::getInt64Ty(s.ctx);
+  IRScaffold S;
+  auto *I32Ty = Type::getInt32Ty(S.Ctx);
+  auto *I64Ty = Type::getInt64Ty(S.Ctx);
 
-  ISAProfile src = makeGfx1250Profile();
-  ISAProfile tgt = makeGfx942Profile();
-  ModuloReplicationProjection proj(src, tgt, i32Ty, i64Ty);
+  ISAProfile Src = makeGfx1250Profile();
+  ISAProfile Tgt = makeGfx942Profile();
+  ModuloReplicationProjection Proj(Src, Tgt, I32Ty, I64Ty);
 
-  Value *result = proj.wrapAsWWMValue(s.B, s.arg);
+  Value *Result = Proj.wrapAsWWMValue(S.B, S.Arg);
 
   // Result is NOT the input — a strict.wwm call wraps it.
-  EXPECT_NE(result, s.arg);
-  auto *callInst = dyn_cast<CallInst>(result);
-  ASSERT_NE(callInst, nullptr)
+  EXPECT_NE(Result, S.Arg);
+  auto *Cb = dyn_cast<CallInst>(Result);
+  ASSERT_NE(Cb, nullptr)
       << "wrapAsWWMValue on MODREP must return a CallInst wrapping "
          "the input value";
 
-  Function *callee = callInst->getCalledFunction();
-  ASSERT_NE(callee, nullptr);
-  EXPECT_EQ(callee->getIntrinsicID(), Intrinsic::amdgcn_strict_wwm)
+  Function *Callee = Cb->getCalledFunction();
+  ASSERT_NE(Callee, nullptr);
+  EXPECT_EQ(Callee->getIntrinsicID(), Intrinsic::amdgcn_strict_wwm)
       << "wrapAsWWMValue must emit @llvm.amdgcn.strict.wwm, got "
-      << callee->getName().str();
+      << Callee->getName().str();
   // One argument — the wrapped input.
-  ASSERT_EQ(callInst->arg_size(), 1u);
-  EXPECT_EQ(callInst->getArgOperand(0), s.arg);
+  ASSERT_EQ(Cb->arg_size(), 1u);
+  EXPECT_EQ(Cb->getArgOperand(0), S.Arg);
   // The overload resolution picked the i32 variant.
-  EXPECT_EQ(callInst->getType(), i32Ty)
+  EXPECT_EQ(Cb->getType(), I32Ty)
       << "wrapAsWWMValue returned a value of the wrong type for the "
          "i32 input overload";
 
   // The emitted instruction should be the only one in the block.
-  EXPECT_EQ(s.BB->size(), 1u)
+  EXPECT_EQ(S.BB->size(), 1u)
       << "wrapAsWWMValue on MODREP should emit exactly one instruction; "
-         "found " << s.BB->size();
+         "found " << S.BB->size();
 }
 
 // ----------------------------------------------------------------------------
@@ -377,32 +377,32 @@ TEST(WaveProjectionContract, WrapAsWWMValueEmitsStrictWWMOnMODREP) {
 // intrinsic is invoked with the matching overloaded type.
 // ----------------------------------------------------------------------------
 TEST(WaveProjectionContract, WrapAsWWMValueHandlesVectorFloatOverload) {
-  IRScaffold s;
-  auto *i32Ty = Type::getInt32Ty(s.ctx);
-  auto *i64Ty = Type::getInt64Ty(s.ctx);
-  auto *f32Ty = Type::getFloatTy(s.ctx);
-  auto *v4f32Ty = FixedVectorType::get(f32Ty, 4);
+  IRScaffold S;
+  auto *I32Ty = Type::getInt32Ty(S.Ctx);
+  auto *I64Ty = Type::getInt64Ty(S.Ctx);
+  auto *F32Ty = Type::getFloatTy(S.Ctx);
+  auto *V4f32Ty = FixedVectorType::get(F32Ty, 4);
 
-  ISAProfile src = makeGfx1250Profile();
-  ISAProfile tgt = makeGfx942Profile();
-  ModuloReplicationProjection proj(src, tgt, i32Ty, i64Ty);
+  ISAProfile Src = makeGfx1250Profile();
+  ISAProfile Tgt = makeGfx942Profile();
+  ModuloReplicationProjection Proj(Src, Tgt, I32Ty, I64Ty);
 
   // Build a <4 x float> value inside the scaffold's entry block so
   // `wrapAsWWMValue` has a local SSA Value to wrap.  The value itself
   // doesn't matter — we only inspect the emitted intrinsic call.
-  Value *vec = PoisonValue::get(v4f32Ty);
-  Value *result = proj.wrapAsWWMValue(s.B, vec);
+  Value *Vec = PoisonValue::get(V4f32Ty);
+  Value *Result = Proj.wrapAsWWMValue(S.B, Vec);
 
-  auto *callInst = dyn_cast<CallInst>(result);
-  ASSERT_NE(callInst, nullptr);
-  Function *callee = callInst->getCalledFunction();
-  ASSERT_NE(callee, nullptr);
-  EXPECT_EQ(callee->getIntrinsicID(), Intrinsic::amdgcn_strict_wwm);
-  EXPECT_EQ(callInst->getType(), v4f32Ty)
+  auto *Cb = dyn_cast<CallInst>(Result);
+  ASSERT_NE(Cb, nullptr);
+  Function *Callee = Cb->getCalledFunction();
+  ASSERT_NE(Callee, nullptr);
+  EXPECT_EQ(Callee->getIntrinsicID(), Intrinsic::amdgcn_strict_wwm);
+  EXPECT_EQ(Cb->getType(), V4f32Ty)
       << "wrapAsWWMValue with a <4 x float> input must emit the "
          "<4 x float>-overloaded strict.wwm variant";
-  ASSERT_EQ(callInst->arg_size(), 1u);
-  EXPECT_EQ(callInst->getArgOperand(0)->getType(), v4f32Ty)
+  ASSERT_EQ(Cb->arg_size(), 1u);
+  EXPECT_EQ(Cb->getArgOperand(0)->getType(), V4f32Ty)
       << "operand type mismatch — strict.wwm's overload must match "
          "the input type";
 }

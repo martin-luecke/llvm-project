@@ -73,9 +73,9 @@ void RaiseContext::computeVGPRAdjust(const DecodedInst &Di) {
 // terminates even if a future TableGen change introduced a cycle in the
 // sub-reg graph.
 static int computeRegWidth32(const MCRegisterInfo &MRI, MCRegister Reg) {
-  const unsigned maxSubIdx = MRI.getNumSubRegIndices();
+  const unsigned MaxSubIdx = MRI.getNumSubRegIndices();
   int W = 0;
-  for (unsigned SubIdx = AMDGPU::sub0; SubIdx < maxSubIdx; ++SubIdx) {
+  for (unsigned SubIdx = AMDGPU::sub0; SubIdx < MaxSubIdx; ++SubIdx) {
     if (!MRI.getSubReg(Reg, SubIdx))
       break;
     ++W;
@@ -107,7 +107,7 @@ ParsedReg RaiseContext::parseReg(MCRegister Reg, int MciOpIdx) const {
   // Width is computed on the as-decoded register: only the subtarget-
   // specific aliases (TTMPx_gfx9plus, FLAT_SCR_vi, ...) carry the correct
   // sub0/sub1/... chain from the disassembler.
-  const int width = computeRegWidth32(MRI, Reg);
+  const int Width = computeRegWidth32(MRI, Reg);
 
   // Reduce everything to a canonical 32-bit pseudo for class/enum lookups:
   //   * sub0 on the as-decoded register picks the first 32-bit lane out
@@ -140,7 +140,7 @@ ParsedReg RaiseContext::parseReg(MCRegister Reg, int MciOpIdx) const {
     // via `sub0(EXEC) = EXEC_LO`, but `width = 2` tags it distinctly so
     // storeExec partial-write logic can route correctly.
     Pr.BaseIdx = (Lane == AMDGPU::EXEC_HI) ? 1 : 0;
-    Pr.Width = width;
+    Pr.Width = Width;
     return Pr;
   case AMDGPU::SCC:
     Pr.RegKind = ParsedReg::SCC;
@@ -157,7 +157,7 @@ ParsedReg RaiseContext::parseReg(MCRegister Reg, int MciOpIdx) const {
   case AMDGPU::FLAT_SCR_LO:
   case AMDGPU::FLAT_SCR_HI:
     Pr.RegKind = ParsedReg::FLAT_SCR;
-    Pr.Width = width;
+    Pr.Width = Width;
     return Pr;
   // GFX11+ uses SGPR_NULL / SGPR_NULL_HI (and the 64-bit pair SGPR_NULL64)
   // as carry-discard sinks, e.g. `v_mad_co_u64_u32 ..., null, ...`. They
@@ -217,7 +217,7 @@ ParsedReg RaiseContext::parseReg(MCRegister Reg, int MciOpIdx) const {
   case AMDGPU::SRC_FLAT_SCRATCH_BASE_LO:
   case AMDGPU::SRC_FLAT_SCRATCH_BASE_HI:
     Pr.RegKind = ParsedReg::OTHER;
-    Pr.Width = width;
+    Pr.Width = Width;
     return Pr;
   default:
     break;
@@ -234,7 +234,7 @@ ParsedReg RaiseContext::parseReg(MCRegister Reg, int MciOpIdx) const {
   if (Enc & AMDGPU::HWEncoding::IS_AGPR) {
     Pr.RegKind = ParsedReg::AGPR;
     Pr.BaseIdx = HwIdx;
-    Pr.Width = width;
+    Pr.Width = Width;
     if (MciOpIdx >= 0 && static_cast<unsigned>(MciOpIdx) < kMaxOps)
       Pr.BaseIdx += CurrentVgprAdjust[MciOpIdx];
     return Pr;
@@ -242,7 +242,7 @@ ParsedReg RaiseContext::parseReg(MCRegister Reg, int MciOpIdx) const {
   if (Enc & AMDGPU::HWEncoding::IS_VGPR) {
     Pr.RegKind = ParsedReg::VGPR;
     Pr.BaseIdx = HwIdx;
-    Pr.Width = width;
+    Pr.Width = Width;
     if (MciOpIdx >= 0 && static_cast<unsigned>(MciOpIdx) < kMaxOps)
       Pr.BaseIdx += CurrentVgprAdjust[MciOpIdx];
     return Pr;
@@ -257,7 +257,7 @@ ParsedReg RaiseContext::parseReg(MCRegister Reg, int MciOpIdx) const {
   if (int Idx = findIndexInClass(TTMP32, Lane); Idx >= 0) {
     Pr.RegKind = ParsedReg::TTMP;
     Pr.BaseIdx = Idx;
-    Pr.Width = width;
+    Pr.Width = Width;
     return Pr;
   }
 
@@ -267,7 +267,7 @@ ParsedReg RaiseContext::parseReg(MCRegister Reg, int MciOpIdx) const {
   if (MRI.getRegClass(AMDGPU::SGPR_32RegClassID).contains(Lane)) {
     Pr.RegKind = ParsedReg::SGPR;
     Pr.BaseIdx = HwIdx;
-    Pr.Width = width;
+    Pr.Width = Width;
     return Pr;
   }
 
@@ -454,11 +454,11 @@ Value *RaiseContext::emitUpdateDpp(Value *OldVal, Value *Src, uint16_t Ctrl,
   assert(OldVal->getType() == Src->getType() &&
          "emitUpdateDpp: old and src must have matching types");
   Type *OrigTy = Src->getType();
-  const unsigned bits = OrigTy->getPrimitiveSizeInBits();
+  const unsigned Bits = OrigTy->getPrimitiveSizeInBits();
   Type *IntTy = nullptr;
-  if (bits == 32)
+  if (Bits == 32)
     IntTy = I32Ty;
-  else if (bits == 64)
+  else if (Bits == 64)
     IntTy = I64Ty;
   else
     report_fatal_error(

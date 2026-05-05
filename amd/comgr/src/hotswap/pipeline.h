@@ -28,7 +28,7 @@ struct PipelineResult {
   std::string FailFormat;
   std::string FailDetail;
   uint64_t FailOffset = 0;
-  // Successful raises can still carry proof-relevant attribution. Today this
+  // Successful raises can still carry proof-relevant attribution.
   bool UsesScratchPrivateSegment = false;
   uint32_t SourcePrivateSegmentFixedSize = 0;
   bool TargetEnablePrivateSegment = false;
@@ -70,15 +70,23 @@ struct PipelineResult {
 PipelineResult runPipeline(llvm::ArrayRef<uint8_t> CodeObjectData,
                            llvm::StringRef SourceIsa,
                            llvm::StringRef TargetIsa,
-                           llvm::StringRef KernelName);
+                           llvm::StringRef KernelName,
+                           bool EnableWritelaneRewrite = true,
+                           bool EnableWaveNative = true);
 
 /// Raise and lower ALL kernels in a code object, producing a single merged
 /// HSACO containing every kernel.  Returns success only if every kernel was
 /// raised and compiled. On raise failure, the `fail*` fields carry the
 /// structured `RaiseFailure` details for proof logs and corpus summaries.
+///
+/// `enableWritelaneRewrite` / `enableWaveNative` plumb through to the
+/// per-kernel `raiseToIR` calls; see `raiser.h` for the contract and
+/// the in-tree-debug-only caveat.
 PipelineResult runPipelineAllKernels(llvm::ArrayRef<uint8_t> CodeObjectData,
                                      llvm::StringRef SourceIsa,
-                                     llvm::StringRef TargetIsa);
+                                     llvm::StringRef TargetIsa,
+                                     bool EnableWritelaneRewrite = true,
+                                     bool EnableWaveNative = true);
 
 /// Process-global "strict mode" toggle, controlled by the
 /// `HSA_HOTSWAP_STRICT` environment variable. When set to a non-empty
@@ -100,10 +108,23 @@ PipelineResult runPipelineAllKernels(llvm::ArrayRef<uint8_t> CodeObjectData,
 ///
 /// Parsed once on first call (`std::getenv("HSA_HOTSWAP_STRICT")`); the
 /// callers (handler implementations) read the flag without round-tripping
-/// through the OS allocator on every instruction. The runner sets
-/// `HSA_HOTSWAP_STRICT=1` in its hotswap `ModeSpec`; `compare_correctness`
-/// and the gtest binary do not, so existing GPU tests stay passing.
+/// through the OS allocator on every instruction. The GPT-OSS runner sets
+/// `HSA_HOTSWAP_STRICT=1`; `compare_correctness` and the gtest binary do
+/// not, so existing GPU tests stay passing.
 bool isStrictMode();
+
+class ScopedStrictMode {
+public:
+  explicit ScopedStrictMode(bool Enabled);
+  ~ScopedStrictMode();
+
+  ScopedStrictMode(const ScopedStrictMode &) = delete;
+  ScopedStrictMode &operator=(const ScopedStrictMode &) = delete;
+
+private:
+  bool PreviousActive = false;
+  bool PreviousValue = false;
+};
 
 } // namespace COMGR::hotswap
 

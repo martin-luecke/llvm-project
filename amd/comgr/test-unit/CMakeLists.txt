@@ -191,7 +191,13 @@ target_link_libraries(OpcodeMapTests PRIVATE
   ${LLVM_PTHREAD_LIB})
 
 target_include_directories(OpcodeMapTests PRIVATE
-  ${COMGR_GTEST_INCLUDE_DIRS})
+  ${COMGR_GTEST_INCLUDE_DIRS}
+  # AMDGPU target-private headers (MCTargetDesc/AMDGPUMCTargetDesc.h,
+  # SIDefines.h, AMDGPUGen*.inc) are not installed by `ninja install`;
+  # the test reaches into them directly to drive opcode-map lookups.
+  "${LLVM_BUILD_MAIN_SRC_DIR}/lib/Target/AMDGPU"
+  "${LLVM_BUILD_MAIN_SRC_DIR}/lib/Target/AMDGPU/Utils"
+  "${LLVM_BINARY_DIR}/lib/Target/AMDGPU")
 
 comgr_configure_test_target(OpcodeMapTests)
 
@@ -221,7 +227,12 @@ target_link_libraries(WaveProjectionTests PRIVATE
   ${LLVM_PTHREAD_LIB})
 
 target_include_directories(WaveProjectionTests PRIVATE
-  ${COMGR_GTEST_INCLUDE_DIRS})
+  ${COMGR_GTEST_INCLUDE_DIRS}
+  # WaveProjectionTest pulls in transpiler internals (wave_projection.h ->
+  # amdgpu_formats.h -> SIDefines.h) that need AMDGPU target-private paths.
+  "${LLVM_BUILD_MAIN_SRC_DIR}/lib/Target/AMDGPU"
+  "${LLVM_BUILD_MAIN_SRC_DIR}/lib/Target/AMDGPU/Utils"
+  "${LLVM_BINARY_DIR}/lib/Target/AMDGPU")
 
 comgr_configure_test_target(WaveProjectionTests)
 
@@ -255,6 +266,36 @@ target_include_directories(MXFP4DequantTests PRIVATE
 
 comgr_configure_test_target(MXFP4DequantTests)
 
+# -- C5PredicateChainTests -----------------------------------------------------------------
+
+add_executable(C5PredicateChainTests
+  C5PredicateChainTest.cpp)
+
+target_link_libraries(C5PredicateChainTests PRIVATE
+  ${COMGR_GTEST_LIBS}
+  hotswap::transpiler
+  ${LLVM_PTHREAD_LIB})
+
+target_include_directories(C5PredicateChainTests PRIVATE
+  ${COMGR_GTEST_INCLUDE_DIRS})
+
+comgr_configure_test_target(C5PredicateChainTests)
+
+# -- SourceHiddenArgsTests -----------------------------------------------------------------
+
+add_executable(SourceHiddenArgsTests
+  SourceHiddenArgsTest.cpp)
+
+target_link_libraries(SourceHiddenArgsTests PRIVATE
+  ${COMGR_GTEST_LIBS}
+  hotswap::transpiler
+  ${LLVM_PTHREAD_LIB})
+
+target_include_directories(SourceHiddenArgsTests PRIVATE
+  ${COMGR_GTEST_INCLUDE_DIRS})
+
+comgr_configure_test_target(SourceHiddenArgsTests)
+
 # Register every test binary with the test-unit / check-comgr plumbing.
 add_custom_target(test-unit
   COMMAND $<TARGET_FILE:HotswapElfTests>
@@ -266,6 +307,8 @@ add_custom_target(test-unit
   COMMAND $<TARGET_FILE:WaveProjectionTests>
   COMMAND $<TARGET_FILE:TranslationCacheTests>
   COMMAND $<TARGET_FILE:MXFP4DequantTests>
+  COMMAND $<TARGET_FILE:C5PredicateChainTests>
+  COMMAND $<TARGET_FILE:SourceHiddenArgsTests>
   COMMAND $<TARGET_FILE:RaiserScaffoldingTests>)
 add_dependencies(test-unit HotswapElfTests HotswapMCTests
   RaiserScaffoldingTests
@@ -275,5 +318,7 @@ add_dependencies(test-unit HotswapElfTests HotswapMCTests
   KernargLayoutTests
   WaveProjectionTests
   TranslationCacheTests
-  MXFP4DequantTests)
+  MXFP4DequantTests
+  C5PredicateChainTests
+  SourceHiddenArgsTests)
 add_dependencies(check-comgr test-unit)

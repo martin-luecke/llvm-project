@@ -564,8 +564,8 @@ Value *emitWMMAtoMFMA(RaiseContext &Ctx, Value *A, Value *Vb, Value *C,
 
   Value *LaneId = emitLaneId(B, M, Ctx.I32Ty);
 
-  const unsigned numSrcWaves = Ctx.Projection.numSourceWavesPerTarget();
-  if (numSrcWaves != 1 && numSrcWaves != 2)
+  const unsigned NumSrcWaves = Ctx.Projection.numSourceWavesPerTarget();
+  if (NumSrcWaves != 1 && NumSrcWaves != 2)
     report_fatal_error(
         "WMMA→MFMA lowering defined only for wave32 source projections; "
         "numSourceWavesPerTarget() must be 1 (MODREP phantom-lane) or 2 "
@@ -594,7 +594,7 @@ Value *emitWMMAtoMFMA(RaiseContext &Ctx, Value *A, Value *Vb, Value *C,
                InputType, Result0);
 
   Value *FinalDwords[8];
-  if (numSrcWaves == 1) {
+  if (NumSrcWaves == 1) {
     for (unsigned I = 0; I < 8; ++I) FinalDwords[I] = Result0[I];
   } else {
     Value *Result1[8];
@@ -777,8 +777,8 @@ Value *emitWmmAtoMfmaF3216x16x4(RaiseContext &Ctx, Value *A, Value *Vb,
 
   Value *LaneId = emitLaneId(B, M, Ctx.I32Ty);
 
-  const unsigned numSrcWaves = Ctx.Projection.numSourceWavesPerTarget();
-  if (numSrcWaves != 1 && numSrcWaves != 2)
+  const unsigned NumSrcWaves = Ctx.Projection.numSourceWavesPerTarget();
+  if (NumSrcWaves != 1 && NumSrcWaves != 2)
     report_fatal_error(
         "WMMA→MFMA lowering defined only for wave32 source projections; "
         "numSourceWavesPerTarget() must be 1 (MODREP phantom-lane) or 2 "
@@ -795,7 +795,7 @@ Value *emitWmmAtoMfmaF3216x16x4(RaiseContext &Ctx, Value *A, Value *Vb,
                      CDwords, Result0);
 
   Value *FinalDwords[8];
-  if (numSrcWaves == 1) {
+  if (NumSrcWaves == 1) {
     for (unsigned I = 0; I < 8; ++I) FinalDwords[I] = Result0[I];
   } else {
     Value *Result1[8];

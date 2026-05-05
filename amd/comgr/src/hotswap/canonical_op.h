@@ -257,7 +257,7 @@ enum class CanonicalOp : uint16_t {
   // as a tied sdst_in operand on the MCInst (SOP1_32/SOP1_64 just
   // declares `(outs sdst), (ins src0)`), so the handler must
   // explicitly read the prior dst value via
-  // `ctx.regs.readReg{32,64}(op.dst())`. SCC is read but not
+  // `ctx.Regs.readReg{32,64}(op.dst())`. SCC is read but not
   // written.
   S_CMOV_B32, S_CMOV_B64,
 
@@ -971,7 +971,7 @@ enum class CanonicalOp : uint16_t {
   // is the up-to-4D form. Both share the same CanonicalOp here because
   // their semantic intent is identical and their refusal contract is
   // identical too — the handler `handleVIMAGE` discriminates on
-  // `di.mnemonic` only when shape differentiation matters (e.g.,
+  // `di.Mnemonic` only when shape differentiation matters (e.g.,
   // a future native-target intrinsic-emit path that fills the
   // 0-init D# operands for `_d2`).
   //

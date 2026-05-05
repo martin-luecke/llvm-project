@@ -58,9 +58,9 @@ TEST(OpcodeMap, Gfx1250AddMinRealOpcodeMapsToSemOp) {
   ASSERT_TRUE(COMGR::hotswap::initMCState(State, "gfx1250"));
 
   COMGR::hotswap::OpcodeMap Map;
-  Map.build(*State.instrInfo);
+  Map.build(*State.InstrInfo);
 
-  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_ADD_MIN_U32_e64_gfx1250),
+  EXPECT_EQ(Map.lookup(llvm::AMDGPU::V_ADD_MIN_U32_e64_gfx1250),
             COMGR::hotswap::CanonicalOp::V_ADD_MIN_U32);
 }
 
@@ -71,9 +71,9 @@ TEST(OpcodeMap, Gfx1250Min3RealOpcodeMapsToSemOp) {
   ASSERT_TRUE(COMGR::hotswap::initMCState(State, "gfx1250"));
 
   COMGR::hotswap::OpcodeMap Map;
-  Map.build(*State.instrInfo);
+  Map.build(*State.InstrInfo);
 
-  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_MIN3_U32_e64_gfx12),
+  EXPECT_EQ(Map.lookup(llvm::AMDGPU::V_MIN3_U32_e64_gfx12),
             COMGR::hotswap::CanonicalOp::V_MIN3_U32);
 }
 
@@ -84,11 +84,11 @@ TEST(OpcodeMap, Gfx1250Dot4I32IU8RealOpcodeMapsToSemOp) {
   ASSERT_TRUE(COMGR::hotswap::initMCState(State, "gfx1250"));
 
   COMGR::hotswap::OpcodeMap Map;
-  Map.build(*State.instrInfo);
+  Map.build(*State.InstrInfo);
 
-  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_DOT4_I32_IU8),
+  EXPECT_EQ(Map.lookup(llvm::AMDGPU::V_DOT4_I32_IU8),
             COMGR::hotswap::CanonicalOp::V_DOT4_I32_IU8);
-  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_DOT4_I32_IU8_gfx12),
+  EXPECT_EQ(Map.lookup(llvm::AMDGPU::V_DOT4_I32_IU8_gfx12),
             COMGR::hotswap::CanonicalOp::V_DOT4_I32_IU8);
 }
 
@@ -99,9 +99,9 @@ TEST(OpcodeMap, Gfx1250PkFmaF16RealOpcodeMapsToSemOp) {
   ASSERT_TRUE(COMGR::hotswap::initMCState(State, "gfx1250"));
 
   COMGR::hotswap::OpcodeMap Map;
-  Map.build(*State.instrInfo);
+  Map.build(*State.InstrInfo);
 
-  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_PK_FMA_F16_gfx12),
+  EXPECT_EQ(Map.lookup(llvm::AMDGPU::V_PK_FMA_F16_gfx12),
             COMGR::hotswap::CanonicalOp::V_PK_FMA_F16);
 }
 
@@ -112,8 +112,8 @@ TEST(OpcodeMap, Gfx1250MadI32I24RealOpcodeMapsToSemOp) {
   ASSERT_TRUE(COMGR::hotswap::initMCState(State, "gfx1250"));
 
   COMGR::hotswap::OpcodeMap Map;
-  Map.build(*State.instrInfo);
+  Map.build(*State.InstrInfo);
 
-  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_MAD_I32_I24_e64_gfx12),
+  EXPECT_EQ(Map.lookup(llvm::AMDGPU::V_MAD_I32_I24_e64_gfx12),
             COMGR::hotswap::CanonicalOp::V_MAD_I32_I24);
 }

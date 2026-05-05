@@ -13,8 +13,8 @@
 #include <vector>
 
 using COMGR::hotswap::KernelArgMeta;
-using COMGR::hotswap::PreloadedHiddenKernargDword;
-using COMGR::hotswap::classifyPreloadedHiddenKernargDword;
+using COMGR::hotswap::SourceHiddenArgKind;
+using COMGR::hotswap::classifySourceHiddenArgByte;
 
 namespace {
 KernelArgMeta makeArg(const char *Name, int Offset, int Size,
@@ -28,7 +28,7 @@ KernelArgMeta makeArg(const char *Name, int Offset, int Size,
 }
 } // namespace
 
-TEST(KernargLayout, ClassifiesPreloadedHiddenBlockCounts) {
+TEST(KernargLayout, ClassifiesHiddenBlockCountsByByteContainment) {
   std::vector<KernelArgMeta> Args = {
       makeArg("out", 0, 8, "global_buffer"),
       makeArg("grid_x", 48, 4, "hidden_block_count_x"),
@@ -36,21 +36,41 @@ TEST(KernargLayout, ClassifiesPreloadedHiddenBlockCounts) {
       makeArg("grid_z", 56, 4, "hidden_block_count_z"),
   };
 
-  EXPECT_EQ(classifyPreloadedHiddenKernargDword(Args, 48),
-            PreloadedHiddenKernargDword::HiddenBlockCountX);
-  EXPECT_EQ(classifyPreloadedHiddenKernargDword(Args, 52),
-            PreloadedHiddenKernargDword::HiddenBlockCountY);
-  EXPECT_EQ(classifyPreloadedHiddenKernargDword(Args, 56),
-            PreloadedHiddenKernargDword::HiddenBlockCountZ);
+  auto X0 = classifySourceHiddenArgByte(Args, 48);
+  auto X3 = classifySourceHiddenArgByte(Args, 51);
+  auto Y0 = classifySourceHiddenArgByte(Args, 52);
+  auto Z0 = classifySourceHiddenArgByte(Args, 56);
+
+  EXPECT_EQ(X0.Kind, SourceHiddenArgKind::HiddenBlockCountX);
+  EXPECT_EQ(X0.byteIndexInArg(), 0u);
+  EXPECT_EQ(X3.Kind, SourceHiddenArgKind::HiddenBlockCountX);
+  EXPECT_EQ(X3.byteIndexInArg(), 3u);
+  EXPECT_EQ(Y0.Kind, SourceHiddenArgKind::HiddenBlockCountY);
+  EXPECT_EQ(Z0.Kind, SourceHiddenArgKind::HiddenBlockCountZ);
 }
 
-TEST(KernargLayout, ClassifiesUnsupportedPreloadedHiddenKinds) {
+TEST(KernargLayout, ClassifiesGroupSizeRemainderAndGridDims) {
+  std::vector<KernelArgMeta> Args = {
+      makeArg("group_x", 44, 2, "hidden_group_size_x"),
+      makeArg("rem_x", 50, 2, "hidden_remainder_x"),
+      makeArg("grid_dims", 96, 2, "hidden_grid_dims"),
+  };
+
+  EXPECT_EQ(classifySourceHiddenArgByte(Args, 44).Kind,
+            SourceHiddenArgKind::HiddenGroupSizeX);
+  EXPECT_EQ(classifySourceHiddenArgByte(Args, 50).Kind,
+            SourceHiddenArgKind::HiddenRemainderX);
+  EXPECT_EQ(classifySourceHiddenArgByte(Args, 96).Kind,
+            SourceHiddenArgKind::HiddenGridDims);
+}
+
+TEST(KernargLayout, ClassifiesUnsupportedHiddenKinds) {
   std::vector<KernelArgMeta> Args = {
       makeArg("hostcall", 64, 8, "hidden_hostcall_buffer"),
   };
 
-  EXPECT_EQ(classifyPreloadedHiddenKernargDword(Args, 64),
-            PreloadedHiddenKernargDword::UnsupportedHidden);
+  EXPECT_EQ(classifySourceHiddenArgByte(Args, 64).Kind,
+            SourceHiddenArgKind::UnsupportedHidden);
 }
 
 TEST(KernargLayout, NonHiddenAndMissingOffsetsAreNotHidden) {
@@ -58,8 +78,6 @@ TEST(KernargLayout, NonHiddenAndMissingOffsetsAreNotHidden) {
       makeArg("n", 24, 4, "by_value"),
   };
 
-  EXPECT_EQ(classifyPreloadedHiddenKernargDword(Args, 24),
-            PreloadedHiddenKernargDword::NotHidden);
-  EXPECT_EQ(classifyPreloadedHiddenKernargDword(Args, 28),
-            PreloadedHiddenKernargDword::NotHidden);
+  EXPECT_FALSE(classifySourceHiddenArgByte(Args, 24).matched());
+  EXPECT_FALSE(classifySourceHiddenArgByte(Args, 28).matched());
 }

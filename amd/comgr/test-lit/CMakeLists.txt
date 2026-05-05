@@ -8,6 +8,7 @@ endfunction()
 
 canonicalize_cmake_boolean(COMGR_SPIRV_BACKEND_AVAILABLE)
 canonicalize_cmake_boolean(COMGR_SPIRV_TRANSLATOR_AVAILABLE)
+canonicalize_cmake_boolean(COMGR_ENABLE_HOTSWAP_TRANSPILE)
 
 configure_file(lit.site.cfg.py.in lit.site.cfg.py @ONLY)
 
@@ -54,5 +55,19 @@ add_comgr_lit_binary(status-string c)
 add_comgr_lit_binary(data-action c)
 add_comgr_lit_binary(lookup-code-object c)
 add_comgr_lit_binary(hotswap-rewrite c)
+if(COMGR_ENABLE_HOTSWAP_TRANSPILE)
+  add_comgr_lit_binary(hotswap-transpile c)
+
+  # raise_cli is the per-kernel transpile-to-IR driver used by the
+  # hotswap-transpile/ lit fixtures. It links the in-tree hotswap
+  # transpiler library directly (the public amd_comgr API only exposes
+  # the rewriting flow, not raw IR emission), so it doesn't fit the
+  # add_comgr_lit_binary macro that links amd_comgr.
+  add_executable(raise_cli comgr-sources/raise_cli.cpp)
+  llvm_update_compile_flags(raise_cli)
+  target_include_directories(raise_cli PRIVATE ${LLVM_INCLUDE_DIRS})
+  target_link_libraries(raise_cli PRIVATE hotswap-transpiler)
+  add_dependencies(check-comgr raise_cli)
+endif()
 
 add_dependencies(check-comgr test-lit)

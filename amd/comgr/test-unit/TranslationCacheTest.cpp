@@ -107,6 +107,8 @@ COMGR::hotswap::TranslationCacheRequest makeRequest(
   Request.TargetIsa = "amdgcn-amd-amdhsa--" + TargetGfx;
   Request.CodeIsa = "amdgcn-amd-amdhsa--gfx942";
   Request.HotswapRulesPath = RulesPath;
+  Request.CacheDirectory = llvm::sys::path::parent_path(RulesPath).str();
+  Request.CacheDisabled = false;
   Request.OrigMach = 0x49;
   Request.EnableWritelaneRewrite = true;
   Request.EnableWaveNative = true;
@@ -197,6 +199,23 @@ TEST(TranslationCache, ChangedIsaCausesMiss) {
             COMGR::hotswap::TranslationCacheStatus::Miss);
 }
 
+TEST(TranslationCache, OldHotswapCacheDirDoesNotEnableCache) {
+  TempDir Temp("hotswap_cache_test");
+  ASSERT_TRUE(Temp.Valid);
+  ScopedEnv OldCacheDir("HSA_HOTSWAP_CACHE_DIR", Temp.Path.str().str());
+  ScopedEnv CacheDir("HSA_HOTSWAP_CACHE_DIR", "");
+  ScopedEnv NoDisable("HSA_HOTSWAP_CACHE_DISABLE", "0");
+
+  std::string Rules = Temp.file("rules.json");
+  writeTextFile(Rules, "{\"version\":1,\"rules\":[]}\n");
+  auto Source = fakeAmdgpuElf();
+  auto Request = makeRequest(Source, Rules);
+  Request.CacheDirectory = "";
+
+  auto Lookup = COMGR::hotswap::lookupTranslationCache(Request);
+  EXPECT_EQ(Lookup.Status, COMGR::hotswap::TranslationCacheStatus::Disabled);
+}
+
 TEST(TranslationCache, CorruptMetadataIsInvalid) {
   TempDir Temp("hotswap_cache_test");
   ASSERT_TRUE(Temp.Valid);
@@ -237,12 +256,39 @@ TEST(TranslationCache, CorruptObjectIsInvalid) {
   EXPECT_NE(Lookup.Reason.find("cached_object_sha256"), std::string::npos);
 }
 
+TEST(TranslationCache, ReadonlyMissDoesNotWrite) {
+  TempDir Temp("hotswap_cache_test");
+  ASSERT_TRUE(Temp.Valid);
+
+  std::string Rules = Temp.file("rules.json");
+  writeTextFile(Rules, "{\"version\":1,\"rules\":[]}\n");
+  auto Source = fakeAmdgpuElf();
+  auto Request = makeRequest(Source, Rules);
+  Request.CacheReadonly = true;
+
+  auto Lookup = COMGR::hotswap::lookupTranslationCache(Request);
+  EXPECT_EQ(Lookup.Status, COMGR::hotswap::TranslationCacheStatus::Miss);
+
+  auto Write = COMGR::hotswap::writeTranslationCache(Request, makeSuccessfulResult());
+  EXPECT_EQ(Write.Status, COMGR::hotswap::TranslationCacheStatus::Disabled);
+
+  auto Second = COMGR::hotswap::lookupTranslationCache(Request);
+  EXPECT_EQ(Second.Status, COMGR::hotswap::TranslationCacheStatus::Miss);
+}
+
+TEST(TranslationCache, BypassedStatusHasStableString) {
+  EXPECT_STREQ(COMGR::hotswap::translationCacheStatusString(
+                   COMGR::hotswap::TranslationCacheStatus::Bypassed),
+               "bypassed");
+}
+
 TEST(TranslationCache, SkipKernelListMatchesExactKernelName) {
   ScopedEnv Skip("HSA_HOTSWAP_CACHE_SKIP_KERNELS",
                  "other_kernel, target_kernel ,third_kernel");
 
   std::vector<std::string> Kernels = {"first_kernel", "target_kernel"};
-  EXPECT_EQ(COMGR::hotswap::skippedKernelForTranslationCache(Kernels),
+  EXPECT_EQ(COMGR::hotswap::skippedKernelForTranslationCache(
+                Kernels, "other_kernel, target_kernel ,third_kernel"),
             "target_kernel");
 }
 
@@ -250,5 +296,6 @@ TEST(TranslationCache, SkipKernelListDoesNotUseSubstringMatching) {
   ScopedEnv Skip("HSA_HOTSWAP_CACHE_SKIP_KERNELS", "target");
 
   std::vector<std::string> Kernels = {"target_kernel"};
-  EXPECT_TRUE(COMGR::hotswap::skippedKernelForTranslationCache(Kernels).empty());
+  EXPECT_TRUE(
+      COMGR::hotswap::skippedKernelForTranslationCache(Kernels, "target").empty());
 }

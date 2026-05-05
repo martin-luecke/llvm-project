@@ -339,8 +339,8 @@ private:
       Lane = Reg;
     Out.push_back(static_cast<unsigned>(AMDGPU::mc2PseudoReg(Lane)));
 
-    const unsigned maxSubIdx = MRI.getNumSubRegIndices();
-    for (unsigned SubIdx = AMDGPU::sub1; SubIdx < maxSubIdx; ++SubIdx) {
+    const unsigned MaxSubIdx = MRI.getNumSubRegIndices();
+    for (unsigned SubIdx = AMDGPU::sub1; SubIdx < MaxSubIdx; ++SubIdx) {
       MCRegister Sub = MRI.getSubReg(Reg, SubIdx);
       if (!Sub)
         break;
@@ -406,27 +406,27 @@ findLanePredicatedExecSites(ArrayRef<DecodedInst> Insts,
   SmallVector<LanePredicatedExecSite> Sites;
 
   for (const DecodedInst &Di : Insts) {
-    const CanonicalOp sop = Di.CanonOp;
+    const CanonicalOp Sop = Di.CanonOp;
     if (Di.HasVopd) {
       Tracker.updateAfterVopd(Di);
       continue;
     }
-    const bool sourceTainted = Tracker.anySourceTainted(Di);
-    const bool oldExecTainted = Tracker.execTainted();
+    const bool SourceTainted = Tracker.anySourceTainted(Di);
+    const bool OldExecTainted = Tracker.execTainted();
 
-    bool ExplicitDefsTainted = sourceTainted;
-    bool VccTainted = sourceTainted;
-    bool ExecTainted = sourceTainted || oldExecTainted;
-    bool SccTainted = sourceTainted;
+    bool ExplicitDefsTainted = SourceTainted;
+    bool VccTainted = SourceTainted;
+    bool ExecTainted = SourceTainted || OldExecTainted;
+    bool SccTainted = SourceTainted;
 
-    if (sop == CanonicalOp::V_MBCNT_LO_U32_B32 ||
-        sop == CanonicalOp::V_MBCNT_HI_U32_B32) {
+    if (Sop == CanonicalOp::V_MBCNT_LO_U32_B32 ||
+        Sop == CanonicalOp::V_MBCNT_HI_U32_B32) {
       ExplicitDefsTainted = true;
       VccTainted = false;
-      ExecTainted = oldExecTainted;
+      ExecTainted = OldExecTainted;
       SccTainted = false;
-    } else if (sop == CanonicalOp::V_CMPX) {
-      if (sourceTainted) {
+    } else if (Sop == CanonicalOp::V_CMPX) {
+      if (SourceTainted) {
         Sites.push_back(
             {&Di, ObstructionKind::CmpxFromLaneId,
              "v_cmpx operand dataflow is derived from v_mbcnt_*; EXEC would "
@@ -434,19 +434,19 @@ findLanePredicatedExecSites(ArrayRef<DecodedInst> Insts,
       }
       ExplicitDefsTainted = false;
       VccTainted = false;
-      ExecTainted = oldExecTainted || sourceTainted;
+      ExecTainted = OldExecTainted || SourceTainted;
       SccTainted = false;
-    } else if (isSaveExecB32(sop)) {
-      if (sourceTainted) {
+    } else if (isSaveExecB32(Sop)) {
+      if (SourceTainted) {
         Sites.push_back(
             {&Di, ObstructionKind::SaveExecFromLaneId,
              "s_*_saveexec_b32 source mask dataflow is derived from "
              "v_mbcnt_*; EXEC would be gated by absolute target lane "
              "position under cross-widening"});
       }
-      ExplicitDefsTainted = oldExecTainted;
+      ExplicitDefsTainted = OldExecTainted;
       VccTainted = false;
-      ExecTainted = oldExecTainted || sourceTainted;
+      ExecTainted = OldExecTainted || SourceTainted;
       SccTainted = ExecTainted;
     }
 
@@ -497,8 +497,8 @@ bool readsTtmp8Source(const DecodedInst &Di, const MCRegisterInfo &MRI) {
     // Also check sub1..subN in case TTMP8 appears in the upper half of a
     // pair that starts earlier (unusual but possible in tuple-aligned
     // encodings).
-    const unsigned maxSubIdx = MRI.getNumSubRegIndices();
-    for (unsigned SubIdx = AMDGPU::sub1; SubIdx < maxSubIdx; ++SubIdx) {
+    const unsigned MaxSubIdx = MRI.getNumSubRegIndices();
+    for (unsigned SubIdx = AMDGPU::sub1; SubIdx < MaxSubIdx; ++SubIdx) {
       MCRegister S = MRI.getSubReg(Reg, SubIdx);
       if (!S)
         break;
@@ -634,7 +634,7 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
   llvm::SmallVector<const DecodedInst *> CrossLaneScalarSites;
 
   for (const DecodedInst &Di : Insts) {
-    const CanonicalOp sop = Di.CanonOp;
+    const CanonicalOp Sop = Di.CanonOp;
 
     // --- §3 Class 1: wave_id leak via ttmp8 source read --------------
     // Under cross-widening, raiser.cpp seeds the transpiler's ttmp8
@@ -680,7 +680,7 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
     // invoked and the TLP escape hatch is not available — every
     // deferred ttmp8 site in this kernel becomes an unrewritable
     // refusal surface.
-    switch (sop) {
+    switch (Sop) {
     case CanonicalOp::V_WMMA_F32_16x16x32_F16:
     case CanonicalOp::V_WMMA_F32_16x16x32_BF16:
     case CanonicalOp::V_WMMA_F32_16x16x4_F32:
@@ -697,7 +697,7 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
     }
 
     // --- §3 Class 1: absolute lane-ID leaks --------------------------
-    if (sop == CanonicalOp::V_MBCNT_HI_U32_B32) {
+    if (Sop == CanonicalOp::V_MBCNT_HI_U32_B32) {
       ObstructionSite Site;
       Site.Inst = &Di;
       Site.Kind = ObstructionKind::MbcntHiLaneIdLeak;
@@ -708,7 +708,7 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
       Report.Sites.push_back(std::move(Site));
       continue;
     }
-    if (sop == CanonicalOp::V_MBCNT_LO_U32_B32) {
+    if (Sop == CanonicalOp::V_MBCNT_LO_U32_B32) {
       // v_mbcnt_lo alone is not a leak by itself (wave32 sources use
       // it as the canonical lane-id probe and it's lane-position-
       // independent inside its wave). The C4 provenance pre-walk above
@@ -716,7 +716,7 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
       // standalone lane-index probe is not an obstruction.
       continue;
     }
-    if (sop == CanonicalOp::V_READLANE_B32 || sop == CanonicalOp::V_WRITELANE_B32) {
+    if (Sop == CanonicalOp::V_READLANE_B32 || Sop == CanonicalOp::V_WRITELANE_B32) {
       // Track every readlane/writelane — in-bounds or otherwise — for
       // the WaveIdLiftScalarized post-loop check. Out-of-range static
       // lane operands additionally emit an OutOfRangeLaneOperand site
@@ -772,7 +772,7 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
     }
 
     // --- §3 Class 2: wave-width-specific cross-lane shuffles --------
-    if (sop == CanonicalOp::V_PERMLANE64_B32) {
+    if (Sop == CanonicalOp::V_PERMLANE64_B32) {
       ObstructionSite Site;
       Site.Inst = &Di;
       Site.Kind = ObstructionKind::FullWaveRotate;
@@ -782,10 +782,10 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
       Report.Sites.push_back(std::move(Site));
       continue;
     }
-    if (sop == CanonicalOp::V_PERMLANE16_B32 ||
-        sop == CanonicalOp::V_PERMLANEX16_B32 ||
-        sop == CanonicalOp::V_PERMLANE16_SWAP_B32 ||
-        sop == CanonicalOp::V_PERMLANE32_SWAP_B32) {
+    if (Sop == CanonicalOp::V_PERMLANE16_B32 ||
+        Sop == CanonicalOp::V_PERMLANEX16_B32 ||
+        Sop == CanonicalOp::V_PERMLANE16_SWAP_B32 ||
+        Sop == CanonicalOp::V_PERMLANE32_SWAP_B32) {
       ObstructionSite Site;
       Site.Inst = &Di;
       Site.Kind = ObstructionKind::LaneGroupShuffle;
@@ -807,12 +807,12 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
       // source kernel cannot meaningfully encode it. Seeing it in
       // a wave32 source binary indicates either a corrupted
       // disassembly or a wave64 source mis-classified as wave32.
-      if (sop == CanonicalOp::V_PERMLANE32_SWAP_B32) {
+      if (Sop == CanonicalOp::V_PERMLANE32_SWAP_B32) {
         Site.Rewrite = RewriteId::P4_PermLaneSwap;
         Site.RewriteImplemented = false;
         Site.Detail = "v_permlane32_swap_b32: XOR-32 partner spans "
                       "wave64 32-lane halves; no wave32 analogue";
-      } else if (sop == CanonicalOp::V_PERMLANE16_SWAP_B32) {
+      } else if (Sop == CanonicalOp::V_PERMLANE16_SWAP_B32) {
         Site.Rewrite = RewriteId::P4_PermLaneSwap;
         Site.RewriteImplemented = true;
       } else {
@@ -822,7 +822,7 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
       Report.Sites.push_back(std::move(Site));
       continue;
     }
-    if (sop == CanonicalOp::DS_SWIZZLE_B32) {
+    if (Sop == CanonicalOp::DS_SWIZZLE_B32) {
       ObstructionSite Site;
       Site.Inst = &Di;
       Site.Kind = ObstructionKind::DsSwizzle;
@@ -900,7 +900,7 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
       Report.Sites.push_back(std::move(Site));
       continue;
     }
-    if (sop == CanonicalOp::DS_BPERMUTE_B32) {
+    if (Sop == CanonicalOp::DS_BPERMUTE_B32) {
       // P1 is IMPLEMENTED in handle_ds.cpp (see lit_tests/ds_bpermute_b32).
       // Record the site so the trace shows it, but mark as
       // `rewriteImplemented = true` so the decider treats it as
@@ -930,12 +930,12 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
     // non-commutative binops the two possible orderings produce
     // different terminal values, and the source program has no way to
     // restore the intended single-wave ordering.
-    if (sop == CanonicalOp::GLOBAL_ATOMIC_SWAP ||
-        sop == CanonicalOp::GLOBAL_ATOMIC_CMPSWAP ||
-        sop == CanonicalOp::FLAT_ATOMIC_SWAP ||
-        sop == CanonicalOp::FLAT_ATOMIC_CMPSWAP ||
-        sop == CanonicalOp::BUFFER_ATOMIC_SWAP ||
-        sop == CanonicalOp::BUFFER_ATOMIC_CMPSWAP) {
+    if (Sop == CanonicalOp::GLOBAL_ATOMIC_SWAP ||
+        Sop == CanonicalOp::GLOBAL_ATOMIC_CMPSWAP ||
+        Sop == CanonicalOp::FLAT_ATOMIC_SWAP ||
+        Sop == CanonicalOp::FLAT_ATOMIC_CMPSWAP ||
+        Sop == CanonicalOp::BUFFER_ATOMIC_SWAP ||
+        Sop == CanonicalOp::BUFFER_ATOMIC_CMPSWAP) {
       ObstructionSite Site;
       Site.Inst = &Di;
       Site.Kind = ObstructionKind::NonCommutativeAtomic;
@@ -967,7 +967,7 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
     // A genuine rewrite would need to mask the atomic to one of the
     // two sub-waves (EXEC-gated single issuance); we haven't
     // implemented that, so refuse.
-    if (sop == CanonicalOp::S_ATOMIC_SWAP || sop == CanonicalOp::S_ATOMIC_DEC) {
+    if (Sop == CanonicalOp::S_ATOMIC_SWAP || Sop == CanonicalOp::S_ATOMIC_DEC) {
       ObstructionSite Site;
       Site.Inst = &Di;
       Site.Kind = ObstructionKind::NonCommutativeAtomic;

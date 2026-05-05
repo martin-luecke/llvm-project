@@ -42,6 +42,13 @@ enum class RaiseFailureReason : uint16_t {
   // handle_mfma, handle_vopd) all use this category. `detail` carries
   // shape-specific context when available.
   UnsupportedShape,
+  // Phase 1.5 gate: an EXEC-writing instruction whose CanonicalOp does not
+  // have `routesExecThroughStoreExec` set in `canonical_op_attrs.cpp`.
+  SPEUnsafeExecWriter,
+  // Phase 2: `TargetRegistry::createTargetMachine` returned null.
+  TargetMachineCreationFailed,
+  // Phase 7: `verifyModule` rejected the emitted IR.
+  IRVerificationFailed,
   // Phase 1.4.5 wave-size-obstruction classifier (hotswap/docs/
   // wave-size-translation.md §7's three-outcome decision procedure).
   // One reason per refusal *decision* so diagnostics can bucket
@@ -76,6 +83,16 @@ enum class RaiseFailureReason : uint16_t {
   // `implicitarg.ptr` lifts (`handle_smem.cpp`); see
   // the integration-gap investigation for the diagnosis behind each site.
   StrictUnsafeLowering,
+  // Phase 4 init: extractKernelMeta failed to read the kernel descriptor
+  // from .rodata via the `<name>.kd` symbol. Without the KD we cannot
+  // derive UserSgprLayout (which kernel_code_properties bits are set,
+  // how many dwords are preloaded, where workgroup-id SGPRs live), so
+  // every Phase-4 SGPR seed would be a guess. We refuse the lift.
+  MissingKernelDescriptor,
+  // Phase 4 init: the KD was present, but its raw USER_SGPR_COUNT field
+  // disagreed with the layout implied by kernel_code_properties plus
+  // kernarg_preload for the source ISA.
+  UserSgprLayoutMismatch,
 };
 
 // Human-readable name for a `RaiseFailureReason`. Stable enough for
@@ -89,7 +106,7 @@ struct RaiseFailure {
   // Encoding-format category (e.g. `VALU`, `FLAT`, `MUBUF`) — stable
   // bucketing key for the batch / corpus test summaries. For non-
   // decode-level failures (e.g. `TargetMachineCreationFailed`) this
-  // is the `reasonString` of `reason`.
+  // is the `reasonString` of `Reason`.
   std::string Format;
   // Byte offset inside the disassembled text section, in host order.
   // Zero for failures not tied to a specific instruction.
@@ -125,6 +142,18 @@ struct RaiseFailure {
   static RaiseFailure unsupportedOpcode(const DecodedInst &Di,
                                          llvm::StringRef Format);
 
+  // Phase 1.5 gate: an EXEC-writing instruction whose CanonicalOp does not
+  // have `routesExecThroughStoreExec` declared in any handler's
+  // `get*Attrs()` registration.
+  static RaiseFailure speUnsafeExecWriter(const DecodedInst &Di);
+
+  // Phase 2: `TargetRegistry::createTargetMachine` returned null.
+  static RaiseFailure targetMachineCreationFailed();
+
+  // Phase 7: `verifyModule` rejected the emitted IR.
+  // `err` carries the verifier's diagnostic text for the `detail` field.
+  static RaiseFailure irVerificationFailed(const llvm::Twine &Err);
+
   // Phase 1.4.5 wave-size-obstruction classifier (hotswap/docs/
   // wave-size-translation.md §7). `di` supplies the offending
   // mnemonic + offset. `kindDetail` should carry the human-readable
@@ -156,6 +185,25 @@ struct RaiseFailure {
   static RaiseFailure crossWavePredicateChain(llvm::StringRef KernelName,
                                                const llvm::Twine &Detail);
 
+  // Post-raise safety net for the cross-lane writelane/readlane
+  // rewrite path. Fires when the syntactic classifier (Phase 1.4.5)
+  // matched the `WaveIdLiftScalarized` three-way co-occurrence (the
+  // kernel contains the canonical ttmp8 wave_id BFE rescue + a
+  // `v_writelane_b32` / `v_readlane_b32` site + a WMMA intrinsic)
+  // AND the post-mem2reg rewrite pass rewrote zero sites. The
+  // oracle disagreeing with the classifier means either the
+  // classifier is over-approximating (false positive, benign-
+  // looking) or the oracle is under-approximating (false negative,
+  // which would let a silent miscompile through). We cannot
+  // distinguish these two without a precise dataflow check, so we
+  // refuse on the safe side. Uses the `CrossWaveLaneIdLeak` bucket
+  // so corpus-level regression dashboards see it as "Class 1
+  // refusal" alongside the other wave-id-leak kinds. No
+  // `DecodedInst` because this is an IR-level decision, not tied to
+  // one specific MC site.
+  static RaiseFailure crossWaveRewriteOracleDisagreement(
+      llvm::StringRef KernelName, const llvm::Twine &Detail);
+
   // `HSA_HOTSWAP_STRICT=1` refusal. `site` is a short stable label
   // (e.g. `"HWREG_MODE_write"`, `"implicitarg.ptr"`) that callers can
   // bucket on without parsing `detail`; `detail` carries the human-readable
@@ -164,6 +212,16 @@ struct RaiseFailure {
   static RaiseFailure strictUnsafeLowering(const DecodedInst &Di,
                                             llvm::StringRef Site,
                                             const llvm::Twine &Detail);
+
+  // Phase 4 init: kernel descriptor was not parsed from .rodata so
+  // UserSgprLayout cannot be derived. `kernelName` is captured for the
+  // diagnostic; there is no `DecodedInst` because the failure happens
+  // before the disassembly is consumed.
+  static RaiseFailure missingKernelDescriptor(llvm::StringRef KernelName);
+
+  // Phase 4 init: descriptor-derived UserSgprLayout consistency check failed.
+  static RaiseFailure userSgprLayoutMismatch(llvm::StringRef KernelName,
+                                             const llvm::Twine &Detail);
 };
 
 } // namespace COMGR::hotswap
