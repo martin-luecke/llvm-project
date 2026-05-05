@@ -59,6 +59,8 @@ add_library(hotswap-transpiler OBJECT
   handle_sop2.cpp
   pipeline.cpp
   translation_cache.cpp
+  handle_smem.cpp
+  handle_sopk.cpp
 )
 
 if(NOT TARGET hotswap::transpiler)

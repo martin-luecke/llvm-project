@@ -36,6 +36,10 @@ enum class RaiseFailureReason : uint16_t {
   // A handler matched on CanonicalOp but the specific operand shape /
   // encoding variant it saw is not yet modelled.
   UnsupportedShape,
+  // `HSA_HOTSWAP_STRICT=1`-only refusal — a handler recognised the
+  // CanonicalOp and would have lifted under the warn-and-continue policy
+  // but strict mode requires the honest unsupported verdict.
+  StrictUnsafeLowering,
 };
 
 
@@ -66,6 +70,14 @@ struct RaiseFailure {
   static RaiseFailure unsupportedShape(const DecodedInst &Di,
                                        llvm::StringRef Format,
                                        const llvm::Twine &Detail = {});
+
+  // `HSA_HOTSWAP_STRICT=1` refusal. `site` is a short stable label
+  // (e.g. `"HWREG_MODE_write"`, `"implicitarg.ptr"`) and `detail` is
+  // the human-readable explanation of why the lowering would
+  // silently miscompile.
+  static RaiseFailure strictUnsafeLowering(const DecodedInst &Di,
+                                           llvm::StringRef Site,
+                                           const llvm::Twine &Detail);
 };
 
 // Stable string label for a `RaiseFailureReason`, used by the pipeline
