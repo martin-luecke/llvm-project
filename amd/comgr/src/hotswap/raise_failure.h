@@ -32,57 +32,139 @@ enum class RaiseFailureReason : uint16_t {
   // yet supported for subtarget` `report_fatal_error` (process abort).
   // `detail` carries the offending input string.
   BadInput,
+  // Main loop: no handler matched on TSFlags, or every matching handler
+  // returned unhandled without setting a more specific failure. The
+  // `mnemonic` / `format` / `offset` triple locates the instruction.
   UnsupportedOpcode,
   // A handler matched on CanonicalOp but the specific operand shape /
-  // encoding variant it saw is not yet modelled.
+  // encoding variant it saw is not yet modelled. Today's format-
+  // specific failure sites (handle_valu, handle_flat, handle_mubuf,
+  // handle_mfma, handle_vopd) all use this category. `detail` carries
+  // shape-specific context when available.
   UnsupportedShape,
-  // `HSA_HOTSWAP_STRICT=1`-only refusal — a handler recognised the
-  // CanonicalOp and would have lifted under the warn-and-continue policy
-  // but strict mode requires the honest unsupported verdict.
+  // Phase 1.4.5 wave-size-obstruction classifier (hotswap/docs/
+  // wave-size-translation.md §7's three-outcome decision procedure).
+  // One reason per refusal *decision* so diagnostics can bucket
+  // failures without parsing the failure text. See
+  // `wave_size_obstruction.h` for the classifier
+  // taxonomy and the mapping between these reasons and the more
+  // specific `ObstructionKind` values.
+  //
+  // The Class 1..4 grouping from wave-size-translation.md §6 is
+  // preserved as cross-references in the comments below; it is not
+  // part of the enum-value identity.
+  CrossWaveLaneIdLeak,             // Class 1: MbcntHiLaneIdLeak / OutOfRangeLaneOperand.
+  CrossWaveUnrewritableShuffle,    // Class 2: FullWaveRotate (no §7 rewrite available).
+  CrossWaveShuffleRewritePending,  // Class 2: shuffle with a §5.3 P-item whose handler has not landed.
+  CrossWaveReplicaRace,            // Class 3: NonCommutativeAtomic.
+  CrossWaveLanePredicatedExec,     // Class 4: CmpxFromLaneId / SaveExecFromLaneId.
+  CrossWavePredicateChain,         // Class 5: workitem.id.x() feeds a lane-
+                                   // position-scoped icmp (compile-time K
+                                   // ≤ W_s-1) that gates a side effect, and
+                                   // the chain was not AND-masked by W_s-1.
+                                   // Surfaced by the post-mem2reg classifier
+                                   // in `c5_predicate_chain_classifier.{hpp,cpp}`,
+                                   // not by the MC-level
+                                   // `buildObstructionReport` walk. See
+                                   // hotswap/docs/modrep-predicate-chain.md
+                                   // §5 (narrow-O1).
+  // `HSA_HOTSWAP_STRICT=1`-only refusal (see `pipeline.h::isStrictMode`).
+  // A handler recognised the CanonicalOp and *would* have lifted it under the
+  // existing warn-and-continue policy, but strict mode requires the
+  // honest "unsupported, may silently miscompile" verdict instead.
+  // Today this covers MODE-register writes (`handle_sopk.cpp`) and
+  // `implicitarg.ptr` lifts (`handle_smem.cpp`); see
+  // the integration-gap investigation for the diagnosis behind each site.
   StrictUnsafeLowering,
 };
 
+// Human-readable name for a `RaiseFailureReason`. Stable enough for
+// diagnostics and tests to bucket on.
+const char *reasonString(RaiseFailureReason R);
 
 struct RaiseFailure {
   RaiseFailureReason Reason = RaiseFailureReason::None;
   // Offending instruction mnemonic (e.g. `global_store_dwordx4`).
   std::string Mnemonic;
   // Encoding-format category (e.g. `VALU`, `FLAT`, `MUBUF`) — stable
-  // bucketing key for the batch / corpus test summaries.
+  // bucketing key for the batch / corpus test summaries. For non-
+  // decode-level failures (e.g. `TargetMachineCreationFailed`) this
+  // is the `reasonString` of `reason`.
   std::string Format;
   // Byte offset inside the disassembled text section, in host order.
   // Zero for failures not tied to a specific instruction.
   uint64_t Offset = 0;
-  // Optional human-readable context.
+  // Optional human-readable context; may include shape hints,
+  // attempted rewrites, etc.
   std::string Detail;
 
   bool hasFailed() const { return Reason != RaiseFailureReason::None; }
+
+  // Factory constructors. These are the canonical way to build a
+  // `RaiseFailure`: aggregate initialisation was error-prone because
+  // it allowed `reason = None` with non-empty strings, which
+  // `hasFailed()` would then lie about.
+  //
+  // Handler layer.
+
+  // Handler recognised the CanonicalOp but refused the specific operand
+  // shape. `di` supplies the mnemonic and source offset.
+  static RaiseFailure unsupportedShape(const DecodedInst &Di,
+                                        llvm::StringRef Format,
+                                        const llvm::Twine &Detail = {});
+
+  // Raiser main loop / pre-translation gates. These are only built by
+  // `raiser.cpp` — the factories live here so every reason is
+  // constructed consistently, not via aggregate init that could leave
+  // `hasFailed()` disagreeing with the field contents.
 
   // Main loop: no handler claimed the CanonicalOp (either no TSFlags match
   // or every matching handler returned `handled=false` without
   // setting a more specific failure). `di` supplies the mnemonic /
   // offset; `format` is the human-readable encoding label.
   static RaiseFailure unsupportedOpcode(const DecodedInst &Di,
-                                        llvm::StringRef Format);
+                                         llvm::StringRef Format);
 
-  // Handler recognised the CanonicalOp but refused the specific operand
-  // shape. `di` supplies the mnemonic and source offset.
-  static RaiseFailure unsupportedShape(const DecodedInst &Di,
-                                       llvm::StringRef Format,
-                                       const llvm::Twine &Detail = {});
+  // Phase 1.4.5 wave-size-obstruction classifier (hotswap/docs/
+  // wave-size-translation.md §7). `di` supplies the offending
+  // mnemonic + offset. `kindDetail` should carry the human-readable
+  // `ObstructionKind` name (from `obstructionKindName`), the P-item
+  // identifier from the §5.3 rewrite table (where applicable), and
+  // any operand-level context the classifier extracted (e.g.
+  // "operand value N >= W_s=M"). The resulting failure is renderable
+  // by `reasonString` for batch-test bucketing without parsing
+  // `detail`.
+  static RaiseFailure crossWaveLaneIdLeak(const DecodedInst &Di,
+                                           const llvm::Twine &KindDetail);
+  static RaiseFailure crossWaveUnrewritableShuffle(const DecodedInst &Di,
+                                                    const llvm::Twine &KindDetail);
+  static RaiseFailure crossWaveShuffleRewritePending(const DecodedInst &Di,
+                                                      const llvm::Twine &KindDetail);
+  static RaiseFailure crossWaveReplicaRace(const DecodedInst &Di,
+                                            const llvm::Twine &KindDetail);
+  static RaiseFailure crossWaveLanePredicatedExec(const DecodedInst &Di,
+                                                   const llvm::Twine &KindDetail);
+
+  // Phase 6.6 (post-mem2reg) IR-level classifier for the Class-5
+  // predicate-chain refusal. No `DecodedInst` because
+  // `workitem.id.x()` is an IR-level intrinsic call, not an MC
+  // opcode. `kernelName` is captured for bucketing; `detail` names
+  // the first failing call's icmp + constant so callers can surface
+  // attribution without parsing `detail`. See
+  // `c5_predicate_chain_classifier.{hpp,cpp}` and
+  // hotswap/docs/modrep-predicate-chain.md §5 (narrow-O1).
+  static RaiseFailure crossWavePredicateChain(llvm::StringRef KernelName,
+                                               const llvm::Twine &Detail);
 
   // `HSA_HOTSWAP_STRICT=1` refusal. `site` is a short stable label
-  // (e.g. `"HWREG_MODE_write"`, `"implicitarg.ptr"`) and `detail` is
-  // the human-readable explanation of why the lowering would
-  // silently miscompile.
+  // (e.g. `"HWREG_MODE_write"`, `"implicitarg.ptr"`) that callers can
+  // bucket on without parsing `detail`; `detail` carries the human-readable
+  // explanation of *why*
+  // the lowering would silently miscompile.
   static RaiseFailure strictUnsafeLowering(const DecodedInst &Di,
-                                           llvm::StringRef Site,
-                                           const llvm::Twine &Detail);
+                                            llvm::StringRef Site,
+                                            const llvm::Twine &Detail);
 };
-
-// Stable string label for a `RaiseFailureReason`, used by the pipeline
-// driver when surfacing per-kernel failures to its callers.
-const char *reasonString(RaiseFailureReason R);
 
 } // namespace COMGR::hotswap
 
