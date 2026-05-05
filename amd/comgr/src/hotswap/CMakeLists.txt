@@ -15,8 +15,6 @@ if(TARGET LLVMSupport AND DEFINED LLVM_MAIN_SRC_DIR)
   set(LLVM_BUILD_MAIN_SRC_DIR "${LLVM_MAIN_SRC_DIR}")
 else()
   find_package(LLVM REQUIRED CONFIG)
-endif()
-if(NOT COMMAND llvm_update_compile_flags)
   list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
   include(AddLLVM)
 endif()
@@ -42,7 +40,12 @@ add_library(hotswap-transpiler STATIC
   canonical_op.cpp
   opcode_map.cpp
   decode.cpp
-  raise_failure.cpp
+  raise_context.cpp
+  reg_file.cpp
+  kernarg_layout.cpp
+  user_sgpr_layout.cpp
+  wave_projection.cpp
+  setpc_analysis.cpp
 )
 
 if(NOT TARGET hotswap::transpiler)

@@ -10,6 +10,7 @@
 #define HOTSWAP_TRANSPILER_RAISE_FAILURE_H
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/Twine.h"
 
 #include <cstdint>
 #include <string>
@@ -32,6 +33,9 @@ enum class RaiseFailureReason : uint16_t {
   // `detail` carries the offending input string.
   BadInput,
   UnsupportedOpcode,
+  // A handler matched on CanonicalOp but the specific operand shape /
+  // encoding variant it saw is not yet modelled.
+  UnsupportedShape,
 };
 
 
@@ -56,6 +60,12 @@ struct RaiseFailure {
   // offset; `format` is the human-readable encoding label.
   static RaiseFailure unsupportedOpcode(const DecodedInst &Di,
                                         llvm::StringRef Format);
+
+  // Handler recognised the CanonicalOp but refused the specific operand
+  // shape. `di` supplies the mnemonic and source offset.
+  static RaiseFailure unsupportedShape(const DecodedInst &Di,
+                                       llvm::StringRef Format,
+                                       const llvm::Twine &Detail = {});
 };
 
 } // namespace COMGR::hotswap
