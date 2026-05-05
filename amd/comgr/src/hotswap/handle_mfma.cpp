@@ -132,7 +132,7 @@ HandlerResult handleMFMA(RaiseContext &Ctx, const DecodedInst &Di,
     errs() << "transpiler: Unknown MFMA: " << Di.Mnemonic << "\n";
     return Hr;
   }
-  const Intrinsic::ID intrId = It->second;
+  const Intrinsic::ID IntrId = It->second;
 
   // Derive the src / accum IR types from the intrinsic signature.
   //
@@ -150,12 +150,12 @@ HandlerResult handleMFMA(RaiseContext &Ctx, const DecodedInst &Di,
   // via `cbsz` / `blgp`, so we pass `{v8i32, v8i32}` here.
   auto *V8i32Ty = FixedVectorType::get(Ctx.I32Ty, 8);
   SmallVector<Type *, 2> Overloads;
-  if (Intrinsic::isOverloaded(intrId))
+  if (Intrinsic::isOverloaded(IntrId))
     Overloads = {V8i32Ty, V8i32Ty};
 
-  FunctionType *FT = Intrinsic::getType(Ctx.C, intrId, Overloads);
-  const bool isScaled = FT->getNumParams() == 9;
-  if (!isScaled && FT->getNumParams() != 6)
+  FunctionType *FT = Intrinsic::getType(Ctx.C, IntrId, Overloads);
+  const bool IsScaled = FT->getNumParams() == 9;
+  if (!IsScaled && FT->getNumParams() != 6)
     report_fatal_error(Twine("transpiler: unexpected MFMA intrinsic arity ") +
                        Twine(FT->getNumParams()) + " for " + Di.Mnemonic);
 
@@ -184,10 +184,10 @@ HandlerResult handleMFMA(RaiseContext &Ctx, const DecodedInst &Di,
   Value *Cbsz = ConstantInt::get(Ctx.I32Ty, readNamedImm(Di, AMDGPU::OpName::cbsz));
   Value *Blgp = ConstantInt::get(Ctx.I32Ty, readNamedImm(Di, AMDGPU::OpName::blgp));
 
-  Function *MfmaFn = Intrinsic::getOrInsertDeclaration(&Ctx.M, intrId, Overloads);
+  Function *MfmaFn = Intrinsic::getOrInsertDeclaration(&Ctx.M, IntrId, Overloads);
 
   Value *CallRet;
-  if (isScaled) {
+  if (IsScaled) {
     // The scale operand layout mirrors `ScaledMAIInst` in
     // `VOP3PInstructions.td`: the two scale VGPRs come in as
     // `scale_src0` / `scale_src1`, and the op_sel bits are carried in the

@@ -205,7 +205,7 @@ Value *readMixF32Src(RaiseContext &Ctx, OpResolver &Op, unsigned I,
 // Any other immediate surfaces as a structured `unsupportedShape`
 // failure rather than silently miscompiling.
 //
-// On failure the helper populates `hr.failure` and returns nullptr; the
+// On failure the helper populates `hr.Failure` and returns nullptr; the
 // caller must short-circuit.
 llvm::Value *readWMMAAccumC(RaiseContext &Ctx, const DecodedInst &Di,
                              OpResolver &Op, const ParsedReg &Dest,
@@ -490,11 +490,11 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
                       : Ctx.B.CreateZExt(Lo, Ctx.I64Ty, "dot4_zext");
     };
 
-    const bool src0Signed = (Op.srcMod(0) & SISrcMods::NEG) != 0;
-    const bool src1Signed = (Op.srcMod(1) & SISrcMods::NEG) != 0;
+    const bool Src0Signed = (Op.srcMod(0) & SISrcMods::NEG) != 0;
+    const bool Src1Signed = (Op.srcMod(1) & SISrcMods::NEG) != 0;
     for (unsigned I = 0; I < 4; ++I) {
-      Value *A = ExtendByte(Src0, I, src0Signed);
-      Value *B = ExtendByte(Src1, I, src1Signed);
+      Value *A = ExtendByte(Src0, I, Src0Signed);
+      Value *B = ExtendByte(Src1, I, Src1Signed);
       Acc = Ctx.B.CreateAdd(Acc, Ctx.B.CreateMul(A, B, "dot4_mul"),
                             "dot4_acc");
     }
@@ -639,24 +639,24 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
   case CanonicalOp::V_WMMA_F32_16x16x64_BF8_FP8:
   case CanonicalOp::V_WMMA_F32_16x16x64_BF8_BF8:
   case CanonicalOp::V_WMMA_I32_16x16x64_IU8: {
-    const bool isIU8 = (Sop == CanonicalOp::V_WMMA_I32_16x16x64_IU8);
-    const bool isFP8orBF8 =
+    const bool IsIU8 = (Sop == CanonicalOp::V_WMMA_I32_16x16x64_IU8);
+    const bool IsFP8orBF8 =
         (Sop == CanonicalOp::V_WMMA_F32_16x16x64_FP8_FP8) ||
         (Sop == CanonicalOp::V_WMMA_F32_16x16x64_FP8_BF8) ||
         (Sop == CanonicalOp::V_WMMA_F32_16x16x64_BF8_FP8) ||
         (Sop == CanonicalOp::V_WMMA_F32_16x16x64_BF8_BF8);
-    const bool is8bit = isIU8 || isFP8orBF8;
-    const bool isBF16 = (Sop == CanonicalOp::V_WMMA_F32_16x16x32_BF16);
+    const bool Is8bit = IsIU8 || IsFP8orBF8;
+    const bool IsBF16 = (Sop == CanonicalOp::V_WMMA_F32_16x16x32_BF16);
 
     Type *AbIrTy = nullptr;
-    if (is8bit) {
+    if (Is8bit) {
       AbIrTy = FixedVectorType::get(Ctx.I32Ty, 8);
     } else {
-      Type *ElemTy = isBF16 ? Type::getBFloatTy(Ctx.C)
+      Type *ElemTy = IsBF16 ? Type::getBFloatTy(Ctx.C)
                             : Type::getHalfTy(Ctx.C);
       AbIrTy = FixedVectorType::get(ElemTy, 16);
     }
-    Type *CdIrTy = isIU8 ? FixedVectorType::get(Ctx.I32Ty, 8)
+    Type *CdIrTy = IsIU8 ? FixedVectorType::get(Ctx.I32Ty, 8)
                          : FixedVectorType::get(Ctx.F32Ty, 8);
 
     ParsedReg Dest = Op.dst();
@@ -726,7 +726,7 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
       }
       Function *WmmaFn = Intrinsic::getOrInsertDeclaration(
           &Ctx.M, WmmaId, {CdIrTy, AbIrTy});
-      if (isIU8) {
+      if (IsIU8) {
         // AMDGPUWmmaIntrinsicModsABClamp:
         //   (A_mod, A, B_mod, B, C, reuse_a, reuse_b, clamp)
         // A_mod / B_mod carry the IU8 sign-vs-zero-extension knobs in

@@ -432,13 +432,13 @@ Value *ThreadLoopProjection::emitWorkitemIdX(IRBuilder<> &B) const {
       M, Intrinsic::amdgcn_workitem_id_x);
   Value *Tid = B.CreateCall(Fn, {}, "tl_hw_tid");
   Value *LaneId = emitLaneIdx(B);
-  const unsigned srcBits = Src.WaveSize;
-  const unsigned tgtBits = Tgt.WaveSize;
+  const unsigned SrcBits = Src.WaveSize;
+  const unsigned TgtBits = Tgt.WaveSize;
   Value *Iter = B.CreateLoad(B.getInt32Ty(), IterationAlloca, "tl_iter");
-  Value *Base = B.CreateAnd(Tid, B.getInt32(~(tgtBits - 1u)), "tl_tid_base");
-  Value *SourceLane = B.CreateAnd(LaneId, B.getInt32(srcBits - 1u), "tl_source_lane");
+  Value *Base = B.CreateAnd(Tid, B.getInt32(~(TgtBits - 1u)), "tl_tid_base");
+  Value *SourceLane = B.CreateAnd(LaneId, B.getInt32(SrcBits - 1u), "tl_source_lane");
   Value *WaveOffset =
-      B.CreateMul(Iter, B.getInt32(srcBits), "tl_source_wave_off");
+      B.CreateMul(Iter, B.getInt32(SrcBits), "tl_source_wave_off");
   return B.CreateAdd(B.CreateAdd(Base, WaveOffset, "tl_tid_wave_base"),
                      SourceLane, "tl_tid");
 }
@@ -447,10 +447,10 @@ Value *ThreadLoopProjection::emitLaneActiveBit(IRBuilder<> &B,
                                                 Value *ExecVal) const {
   Value *LaneId = emitLaneIdx(B);
   Type *ExecTy = ExecVal->getType();
-  const unsigned sourceBits = sourceWaveMaskTy()->getPrimitiveSizeInBits();
+  const unsigned SourceBits = sourceWaveMaskTy()->getPrimitiveSizeInBits();
   Value *LaneIdInExec = B.CreateZExtOrTrunc(LaneId, ExecTy, "tl_lane_idx");
   Value *LaneMod = B.CreateAnd(
-      LaneIdInExec, ConstantInt::get(ExecTy, sourceBits - 1), "tl_lane_mod");
+      LaneIdInExec, ConstantInt::get(ExecTy, SourceBits - 1), "tl_lane_mod");
   Value *Shifted = B.CreateLShr(ExecVal, LaneMod, "tl_exec_at_lane");
   Value *Bit =
       B.CreateAnd(Shifted, ConstantInt::get(ExecTy, 1), "tl_exec_bit");
@@ -466,13 +466,13 @@ Value *ThreadLoopProjection::ballotI1ToWidth(IRBuilder<> &B, Value *Pred,
   Function *Ballot = Intrinsic::getOrInsertDeclaration(
       M, Intrinsic::amdgcn_ballot, {waveMaskTy()});
   Value *WaveMask = B.CreateCall(Ballot, {Pred}, Name);
-  const unsigned wantedBits = ResultTy->getPrimitiveSizeInBits();
-  const unsigned waveBits = WaveMaskTy->getPrimitiveSizeInBits();
-  if (wantedBits > waveBits)
+  const unsigned WantedBits = ResultTy->getPrimitiveSizeInBits();
+  const unsigned WaveBits = WaveMaskTy->getPrimitiveSizeInBits();
+  if (WantedBits > WaveBits)
     report_fatal_error(
         "ThreadLoopProjection::ballotI1ToWidth requires resultTy <= target "
         "wave mask width");
-  if (wantedBits == waveBits)
+  if (WantedBits == WaveBits)
     return WaveMask;
   return B.CreateTrunc(WaveMask, ResultTy, Name + "_trunc");
 }

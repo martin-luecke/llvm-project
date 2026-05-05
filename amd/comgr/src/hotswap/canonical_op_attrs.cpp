@@ -62,8 +62,8 @@ private:
 };
 
 const AttrTable &theTable() {
-  static const AttrTable t;
-  return t;
+  static const AttrTable T;
+  return T;
 }
 
 static bool descImplicitlyDefinesEXEC(const MCInstrDesc &Desc) {

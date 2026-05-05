@@ -64,8 +64,8 @@ namespace {
 // gtest sharded runner, and the target registration is idempotent
 // anyway.
 void ensureAMDGPURegistered() {
-  static std::once_flag flag;
-  std::call_once(flag, []() {
+  static std::once_flag Flag;
+  std::call_once(Flag, []() {
     LLVMInitializeAMDGPUTargetInfo();
     LLVMInitializeAMDGPUTarget();
     LLVMInitializeAMDGPUTargetMC();
@@ -92,18 +92,18 @@ void ensureAMDGPURegistered() {
 TEST(MCContextInlineSrcMgr, HotswapInitMCStateAttachesInlineSourceManager) {
   ensureAMDGPURegistered();
 
-  COMGR::hotswap::MCState state;
-  ASSERT_TRUE(COMGR::hotswap::initMCState(state, "gfx942"))
+  COMGR::hotswap::MCState State;
+  ASSERT_TRUE(COMGR::hotswap::initMCState(State, "gfx942"))
       << "initMCState('gfx942') must succeed on an AMDGPU-enabled LLVM "
          "build (InitializeAllTargetMCs was just run above)";
 
-  ASSERT_NE(state.Ctx, nullptr)
+  ASSERT_NE(State.Ctx, nullptr)
       << "initMCState must construct an MCContext — the fix we are "
          "pinning lives on that object";
 
-  const llvm::SourceMgr *inline_src_mgr =
-      state.Ctx->getInlineSourceManager();
-  EXPECT_NE(inline_src_mgr, nullptr)
+  const llvm::SourceMgr *InlineSrcMgr =
+      State.Ctx->getInlineSourceManager();
+  EXPECT_NE(InlineSrcMgr, nullptr)
       << "state.ctx->getInlineSourceManager() must return non-null after "
          "initMCState — the post-ctor `initInlineSourceManager()` call "
          "attaches an inline SourceMgr so MC-layer diagnostics "
@@ -132,13 +132,13 @@ TEST(MCContextInlineSrcMgr, HotswapInitMCStateAttachesInlineSourceManager) {
 TEST(MCContextInlineSrcMgr, SecondMCStateAlsoGetsInlineSourceManager) {
   ensureAMDGPURegistered();
 
-  COMGR::hotswap::MCState first;
-  ASSERT_TRUE(COMGR::hotswap::initMCState(first, "gfx942"));
-  EXPECT_NE(first.Ctx->getInlineSourceManager(), nullptr);
+  COMGR::hotswap::MCState First;
+  ASSERT_TRUE(COMGR::hotswap::initMCState(First, "gfx942"));
+  EXPECT_NE(First.Ctx->getInlineSourceManager(), nullptr);
 
-  COMGR::hotswap::MCState second;
-  ASSERT_TRUE(COMGR::hotswap::initMCState(second, "gfx942"));
-  EXPECT_NE(second.Ctx->getInlineSourceManager(), nullptr)
+  COMGR::hotswap::MCState Second;
+  ASSERT_TRUE(COMGR::hotswap::initMCState(Second, "gfx942"));
+  EXPECT_NE(Second.Ctx->getInlineSourceManager(), nullptr)
       << "Second initMCState on the same target must also produce an "
          "MCContext with a non-null InlineSrcMgr — a one-shot init "
          "gate on the shim would silently regress any caller after "

@@ -84,26 +84,26 @@ std::string formatScratchAbiDetail(RaiseContext &Ctx, const Twine &Why) {
   using namespace llvm::amdhsa;
   std::string Detail;
   raw_string_ostream Os(Detail);
-  const bool sourceEnablePrivate =
+  const bool SourceEnablePrivate =
       (Ctx.SourceComputePgmRsrc2 &
        (1u << COMPUTE_PGM_RSRC2_ENABLE_PRIVATE_SEGMENT_SHIFT)) != 0;
-  const bool sourceFlatScratchInit =
+  const bool SourceFlatScratchInit =
       (Ctx.SourceKernelCodeProperties &
        KERNEL_CODE_PROPERTY_ENABLE_SGPR_FLAT_SCRATCH_INIT) != 0;
-  const bool sourcePrivateSegmentSize =
+  const bool SourcePrivateSegmentSize =
       (Ctx.SourceKernelCodeProperties &
        KERNEL_CODE_PROPERTY_ENABLE_SGPR_PRIVATE_SEGMENT_SIZE) != 0;
   Why.print(Os);
   Os << " source_scratch_kd={private_segment_fixed_size="
      << Ctx.SourcePrivateSegmentFixedSize
      << ", compute_pgm_rsrc2=0x" << utohexstr(Ctx.SourceComputePgmRsrc2)
-     << ", enable_private_segment=" << (sourceEnablePrivate ? 1 : 0)
+     << ", enable_private_segment=" << (SourceEnablePrivate ? 1 : 0)
      << ", kernel_code_properties=0x"
      << utohexstr(static_cast<unsigned>(Ctx.SourceKernelCodeProperties))
      << ", enable_sgpr_flat_scratch_init="
-     << (sourceFlatScratchInit ? 1 : 0)
+     << (SourceFlatScratchInit ? 1 : 0)
      << ", enable_sgpr_private_segment_size="
-     << (sourcePrivateSegmentSize ? 1 : 0) << "}.";
+     << (SourcePrivateSegmentSize ? 1 : 0) << "}.";
   Os.flush();
   return Detail;
 }
@@ -386,7 +386,7 @@ HandlerResult handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     // stale-VGPR-slot values that pointed outside any allocated
     // region. See `handle_flat.cpp::FLAT_LOAD_*` block comment below
     // (and the matching audit of sub-dword, dword, and FLAT_LOAD
-    // variants) for the full rationale. `ctx.regs.writeReg32` (the
+    // variants) for the full rationale. `ctx.Regs.writeReg32` (the
     // low-level alloca path) is called inside the body rather than
     // `ctx.writeReg32` (which would wrap the write in a nested
     // `emitUnderExec` — harmless but redundant IR).
@@ -1241,12 +1241,12 @@ HandlerResult handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     // six now route SADDR through the shared decoder.
     Value *Addr = nullptr;
     ParsedReg StData;
-    const bool isSaddr = Op.nSrcs() >= 3 && Op.isSrcReg(0) &&
+    const bool IsSaddr = Op.nSrcs() >= 3 && Op.isSrcReg(0) &&
                          Op.isSrcReg(1) && Op.isSrcReg(2) &&
                          Op.srcReg(0).RegKind == ParsedReg::VGPR &&
                          Op.srcReg(1).RegKind == ParsedReg::VGPR &&
                          Op.srcReg(2).RegKind == ParsedReg::SGPR;
-    if (isSaddr) {
+    if (IsSaddr) {
       FlatAddr Fa = decodeGlobalStoreAddr(Ctx, Di, Op, /*elemBytes=*/4,
                                            "FLAT_ATOMIC (SADDR)");
       Addr = Fa.Ptr;

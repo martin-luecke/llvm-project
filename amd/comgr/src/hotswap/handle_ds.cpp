@@ -250,7 +250,7 @@ HandlerResult handleDS(RaiseContext &Ctx, const DecodedInst &Di,
     //     gate) if it ever surfaced.
     //
     // The `storeVGPR32` destination writes at the end of each
-    // iteration use the low-level `ctx.regs.storeVGPR32` path
+    // iteration use the low-level `ctx.Regs.storeVGPR32` path
     // (not the auto-gating `ctx.storeVGPR32`) so we don't nest a
     // second SPE diamond around each write — harmless but
     // wasteful IR.
@@ -352,7 +352,7 @@ HandlerResult handleDS(RaiseContext &Ctx, const DecodedInst &Di,
     // `CreateLoad(i16Ty, ptrHi, ...)` against ds_bpermute-derived
     // LDS addresses that fall outside the WG's
     // `group_segment_fixed_size` allocation; the stores at the end
-    // of the loop use low-level `ctx.regs.storeVGPR32` instead of
+    // of the loop use low-level `ctx.Regs.storeVGPR32` instead of
     // the auto-gating `ctx.storeVGPR32` to avoid nesting a second
     // SPE diamond around each write.
     ParsedReg Dest = Op.dst();

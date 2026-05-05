@@ -209,9 +209,9 @@ std::optional<unsigned> sgprIdx(const MCRegisterInfo &MRI, MCRegister Reg) {
 // Width of the as-decoded register in 32-bit lanes. A pair (s[X:X+1])
 // reports width 2; a scalar reports width 1.
 unsigned regWidth32(const MCRegisterInfo &MRI, MCRegister Reg) {
-  const unsigned maxSubIdx = MRI.getNumSubRegIndices();
+  const unsigned MaxSubIdx = MRI.getNumSubRegIndices();
   unsigned W = 0;
-  for (unsigned SubIdx = AMDGPU::sub0; SubIdx < maxSubIdx; ++SubIdx) {
+  for (unsigned SubIdx = AMDGPU::sub0; SubIdx < MaxSubIdx; ++SubIdx) {
     if (!MRI.getSubReg(Reg, SubIdx))
       break;
     ++W;
@@ -757,7 +757,7 @@ SetPcAnalysis analyseSetPC(ArrayRef<DecodedInst> Insts,
 
         // Synthetic chain-terminator registration. We always record
         // it when dstLow is known; Phase 5 drops it if no downstream
-        // s_set_pc_i64 reads `sdst`. The key (di.offset) is unique
+        // s_set_pc_i64 reads `sdst`. The key (di.Offset) is unique
         // because LLVM never lays two instructions at the same
         // offset; the value carries (retPair=sdstLow, returnAddr=
         // swap.end). The raiser's S_ADDC_U32 post-hook does not fire

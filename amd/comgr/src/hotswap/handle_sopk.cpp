@@ -359,14 +359,14 @@ HandlerResult handleSOPK(RaiseContext &Ctx, const DecodedInst &Di,
   // rationale behind each entry.
   if (Sop == CanonicalOp::S_GETREG_B32 || Sop == CanonicalOp::S_SETREG_B32 ||
       Sop == CanonicalOp::S_SETREG_IMM32_B32) {
-    const unsigned simm16OpIdx = 1;
-    if (simm16OpIdx >= Di.numOps() || !Di.isImm(simm16OpIdx)) {
+    const unsigned Simm16OpIdx = 1;
+    if (Simm16OpIdx >= Di.numOps() || !Di.isImm(Simm16OpIdx)) {
       errs() << "transpiler: " << Di.Mnemonic
              << " has unexpected operand layout (simm16 not at op 1) — "
                 "refusing to model it silently.\n";
       return Hr;
     }
-    unsigned HwregId = extractHwregId(Di.getImm(simm16OpIdx));
+    unsigned HwregId = extractHwregId(Di.getImm(Simm16OpIdx));
     HwregPolicy Policy = classifyHwreg(HwregId);
 
     if (Sop == CanonicalOp::S_GETREG_B32) {
@@ -403,7 +403,7 @@ HandlerResult handleSOPK(RaiseContext &Ctx, const DecodedInst &Di,
       // immediate at MCInst op 0 (`imm` in the TableGen `ins`
       // ordering); S_SETREG_B32 has the value in a scalar register
       // at MCInst op 0 (`sdst`), which we read through `op.src(0)`.
-      int64_t Simm16 = Di.getImm(simm16OpIdx);
+      int64_t Simm16 = Di.getImm(Simm16OpIdx);
       Value *ValArg = nullptr;
       if (Sop == CanonicalOp::S_SETREG_IMM32_B32) {
         // MCInst operand 0 is the i32 immediate value; the simm16 is

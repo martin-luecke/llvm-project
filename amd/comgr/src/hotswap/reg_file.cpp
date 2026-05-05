@@ -81,9 +81,9 @@ void AllocaRegFile::init(IRBuilder<> &B, Type *I32Ty, Type *I1Ty,
   // read `hasAGPR` from.
   ExecTy = Proj.execStorageTy();
 
-  const unsigned nSGPR = MRI.getRegClass(AMDGPU::SGPR_32RegClassID).getNumRegs();
-  Sgpr.assign(nSGPR, nullptr);
-  for (unsigned I = 0; I < nSGPR; ++I)
+  const unsigned NSgpr = MRI.getRegClass(AMDGPU::SGPR_32RegClassID).getNumRegs();
+  Sgpr.assign(NSgpr, nullptr);
+  for (unsigned I = 0; I < NSgpr; ++I)
     Sgpr[I] = B.CreateAlloca(I32Ty, nullptr, "Sgpr" + std::to_string(I));
 
   // VGPR storage is explicitly oversized relative to TableGen's VGPR_32
@@ -129,9 +129,9 @@ void AllocaRegFile::init(IRBuilder<> &B, Type *I32Ty, Type *I1Ty,
   FlatScr[0] = B.CreateAlloca(I32Ty, nullptr, "flat_scr_lo");
   FlatScr[1] = B.CreateAlloca(I32Ty, nullptr, "flat_scr_hi");
 
-  const unsigned nTTMP = MRI.getRegClass(AMDGPU::TTMP_32RegClassID).getNumRegs();
-  Ttmp.assign(nTTMP, nullptr);
-  for (unsigned I = 0; I < nTTMP; ++I)
+  const unsigned NTtmp = MRI.getRegClass(AMDGPU::TTMP_32RegClassID).getNumRegs();
+  Ttmp.assign(NTtmp, nullptr);
+  for (unsigned I = 0; I < NTtmp; ++I)
     Ttmp[I] = B.CreateAlloca(I32Ty, nullptr, "ttmp" + std::to_string(I));
 }
 

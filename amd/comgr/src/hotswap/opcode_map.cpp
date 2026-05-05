@@ -1158,7 +1158,7 @@ static const Entry kCanonTable[] = {
     // via `buildMcToPseudoMap`. Both the `_d2` (up-to-2D) and `_d4`
     // (up-to-4D) operand-shape variants share a CanonicalOp because their
     // semantic intent and their cross-target refusal contract are
-    // identical; `handleVIMAGE` uses `di.mnemonic` directly when it
+    // identical; `handleVIMAGE` uses `di.Mnemonic` directly when it
     // needs to discriminate (e.g., a future native-target intrinsic
     // lowering that zero-fills D# group 2/3 for the `_d2` form).
     // ---------------------------------------------------------------------
@@ -1355,7 +1355,7 @@ buildPseudoAliasMap(const MCInstrInfo &MCII) {
   // A single pseudo can carry multiple markers (e.g.
   // `V_BITOP3_B16_gfx1250_fake16_e64`), so the outer loop below applies these
   // rules iteratively until the name stops shrinking.
-  static const Rule rules[] = {
+  static const Rule Rules[] = {
       // Subtarget-specific markers. LLVM emits a dedicated pseudo per
       // subtarget (e.g. `_gfx9`, `_gfx1250`, `_vi_gfx9`) with the same
       // TableGen class as the base; collapsing them is sound as long as
@@ -1407,8 +1407,8 @@ buildPseudoAliasMap(const MCInstrInfo &MCII) {
 
   // Returns the index of the firing rule or -1 if no rule applies.
   auto StripOnce = [&](llvm::StringRef Name, std::string &Out) -> int {
-    for (size_t I = 0; I < std::size(rules); ++I) {
-      const Rule &R = rules[I];
+    for (size_t I = 0; I < std::size(Rules); ++I) {
+      const Rule &R = Rules[I];
       if (R.IsSuffix) {
         if (!Name.ends_with(R.Needle))
           continue;
@@ -1437,7 +1437,7 @@ buildPseudoAliasMap(const MCInstrInfo &MCII) {
         break;
       auto It = ByName.find(Next);
       if (It != ByName.end() && It->second != Kv.second) {
-        const Rule &R = rules[RuleIdx];
+        const Rule &R = Rules[RuleIdx];
         if (R.Pred && !R.Pred(MCII.get(CurOpc), MCII.get(It->second))) {
           report_fatal_error(
               Twine("opcode_map: alias rule '") + R.Needle +
@@ -1567,7 +1567,7 @@ std::optional<VCmpMeta> parseVCmpPseudoName(llvm::StringRef Name) {
   if (predTok.empty() || typeTok.size() < 2)
     return std::nullopt;
 
-  const char typeCh = typeTok[0];
+  const char TypeCh = typeTok[0];
   unsigned Bits = 0;
   if (typeTok.drop_front().getAsInteger(10, Bits))
     return std::nullopt;
@@ -1582,14 +1582,14 @@ std::optional<VCmpMeta> parseVCmpPseudoName(llvm::StringRef Name) {
   // ignores `pred`; we leave `pred` as BAD_ICMP_PREDICATE so any accidental
   // FCmp/ICmp use would assert loudly rather than silently miscompile.
   if (predTok == "CLASS") {
-    if (typeCh != 'F')
+    if (TypeCh != 'F')
       return std::nullopt;
     M.IsFloat = true;
     M.IsClass = true;
     return M;
   }
 
-  if (typeCh == 'F') {
+  if (TypeCh == 'F') {
     M.IsFloat = true;
     // Float predicates: ordered variants set the O-prefix predicates;
     // N-prefixed AMDGPU names select the "unordered-or-..." complements.
@@ -1611,17 +1611,17 @@ std::optional<VCmpMeta> parseVCmpPseudoName(llvm::StringRef Name) {
     else if (predTok == "U")    M.Pred = CmpInst::FCMP_UNO;
     else if (predTok == "O")    M.Pred = CmpInst::FCMP_ORD;
     else return std::nullopt;
-  } else if (typeCh == 'U' || typeCh == 'I') {
-    const bool isSigned = typeCh == 'I';
+  } else if (TypeCh == 'U' || TypeCh == 'I') {
+    const bool IsSigned = TypeCh == 'I';
     if (predTok == "EQ")        M.Pred = CmpInst::ICMP_EQ;
     else if (predTok == "NE")   M.Pred = CmpInst::ICMP_NE;
-    else if (predTok == "GT")   M.Pred = isSigned ? CmpInst::ICMP_SGT
+    else if (predTok == "GT")   M.Pred = IsSigned ? CmpInst::ICMP_SGT
                                                    : CmpInst::ICMP_UGT;
-    else if (predTok == "GE")   M.Pred = isSigned ? CmpInst::ICMP_SGE
+    else if (predTok == "GE")   M.Pred = IsSigned ? CmpInst::ICMP_SGE
                                                    : CmpInst::ICMP_UGE;
-    else if (predTok == "LT")   M.Pred = isSigned ? CmpInst::ICMP_SLT
+    else if (predTok == "LT")   M.Pred = IsSigned ? CmpInst::ICMP_SLT
                                                    : CmpInst::ICMP_ULT;
-    else if (predTok == "LE")   M.Pred = isSigned ? CmpInst::ICMP_SLE
+    else if (predTok == "LE")   M.Pred = IsSigned ? CmpInst::ICMP_SLE
                                                    : CmpInst::ICMP_ULE;
     else return std::nullopt;
   } else {
@@ -1699,20 +1699,20 @@ void OpcodeMap::build(const MCInstrInfo &MCII) {
     }
   }
 
-  const unsigned numOpc = MCII.getNumOpcodes();
-  const auto mcToPseudo  = buildMcToPseudoMap(numOpc);
-  const auto pseudoAlias = buildPseudoAliasMap(MCII);
-  const auto dppToBase   = buildDppToBaseMap(numOpc);
+  const unsigned NumOpc = MCII.getNumOpcodes();
+  const auto McToPseudo  = buildMcToPseudoMap(NumOpc);
+  const auto PseudoAlias = buildPseudoAliasMap(MCII);
+  const auto DppToBase   = buildDppToBaseMap(NumOpc);
 
   Map.clear();
   Vcmp.clear();
   // Heuristic: roughly a quarter of MC opcodes carry a CanonicalOp in practice;
   // resizing a few times is fine for a one-shot init.
-  Map.reserve(numOpc / 4);
-  for (unsigned Mc = 0; Mc < numOpc; ++Mc) {
-    const unsigned canon =
-        canonicalize(Mc, MCII, mcToPseudo, pseudoAlias, dppToBase);
-    if (auto It = CanonToSem.find(canon); It != CanonToSem.end()) {
+  Map.reserve(NumOpc / 4);
+  for (unsigned Mc = 0; Mc < NumOpc; ++Mc) {
+    const unsigned Canon =
+        canonicalize(Mc, MCII, McToPseudo, PseudoAlias, DppToBase);
+    if (auto It = CanonToSem.find(Canon); It != CanonToSem.end()) {
       Map[Mc] = It->second;
       continue;
     }
@@ -1721,15 +1721,15 @@ void OpcodeMap::build(const MCInstrInfo &MCII) {
     // side-table rather than per-opcode enumeration). Use the canonical
     // pseudo's name so we don't have to re-canonicalize any DPP/SDWA
     // variants (those have already been folded by `canonicalize`).
-    if (canon >= numOpc)
+    if (Canon >= NumOpc)
       continue;
-    llvm::StringRef CanonName = MCII.getName(canon);
-    const bool isCmp  = CanonName.starts_with("V_CMP_");
-    const bool isCmpX = CanonName.starts_with("V_CMPX_");
-    if (!isCmp && !isCmpX)
+    llvm::StringRef CanonName = MCII.getName(Canon);
+    const bool IsCmp  = CanonName.starts_with("V_CMP_");
+    const bool IsCmpX = CanonName.starts_with("V_CMPX_");
+    if (!IsCmp && !IsCmpX)
       continue;
     if (auto Meta = parseVCmpPseudoName(CanonName)) {
-      Map[Mc] = isCmpX ? CanonicalOp::V_CMPX : CanonicalOp::V_CMP;
+      Map[Mc] = IsCmpX ? CanonicalOp::V_CMPX : CanonicalOp::V_CMP;
       Vcmp.try_emplace(Mc, *Meta);
     }
     // Names that start with V_CMP_ but don't parse (e.g. a hypothetical
