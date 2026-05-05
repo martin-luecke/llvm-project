@@ -240,6 +240,21 @@ target_include_directories(TranslationCacheTests PRIVATE
 
 comgr_configure_test_target(TranslationCacheTests)
 
+# -- MXFP4DequantTests -----------------------------------------------------------------
+
+add_executable(MXFP4DequantTests
+  MXFP4DequantTest.cpp)
+
+target_link_libraries(MXFP4DequantTests PRIVATE
+  ${COMGR_GTEST_LIBS}
+  hotswap::transpiler
+  ${LLVM_PTHREAD_LIB})
+
+target_include_directories(MXFP4DequantTests PRIVATE
+  ${COMGR_GTEST_INCLUDE_DIRS})
+
+comgr_configure_test_target(MXFP4DequantTests)
+
 # Register every test binary with the test-unit / check-comgr plumbing.
 add_custom_target(test-unit
   COMMAND $<TARGET_FILE:HotswapElfTests>
@@ -250,6 +265,7 @@ add_custom_target(test-unit
   COMMAND $<TARGET_FILE:KernargLayoutTests>
   COMMAND $<TARGET_FILE:WaveProjectionTests>
   COMMAND $<TARGET_FILE:TranslationCacheTests>
+  COMMAND $<TARGET_FILE:MXFP4DequantTests>
   COMMAND $<TARGET_FILE:RaiserScaffoldingTests>)
 add_dependencies(test-unit HotswapElfTests HotswapMCTests
   RaiserScaffoldingTests
@@ -258,5 +274,6 @@ add_dependencies(test-unit HotswapElfTests HotswapMCTests
   OpcodeMapTests
   KernargLayoutTests
   WaveProjectionTests
-  TranslationCacheTests)
+  TranslationCacheTests
+  MXFP4DequantTests)
 add_dependencies(check-comgr test-unit)

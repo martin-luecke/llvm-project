@@ -35,6 +35,9 @@ struct DecodedInst {
   uint64_t Size = 0;
 
   uint64_t TsFlags = 0;
+  // Non-null iff `canonOp == V_CMP || canonOp == V_CMPX`. Points into the
+  // OpcodeMap side-table; stable for the lifetime of the map.
+  const VCmpMeta *Vcmp = nullptr;
   bool DefsScc = false;
   bool DefsVcc = false;
   bool DefsExec = false;
@@ -100,6 +103,59 @@ struct DecodedInst {
   // miscompile, so we refuse to populate it instead).
   bool HasDsSwizzleImm = false;
   uint16_t DsSwizzleImm = 0;
+
+  // ── VOPD structural decode ────────────────────────────────────────
+  //
+  // VOPD packets contain two VALU component instructions sharing one
+  // MCInst. The disassembler prints them as
+  //   v_dual_<x> ... :: v_dual_<y> ...
+  // but the raiser must not recover semantics by tokenizing that text.
+  // The decoder populates this sidecar from LLVM's VOPD component tables
+  // and MC operand indices; handle_vopd.cpp consumes only this typed view.
+  struct VopdSource {
+    enum class Kind : uint8_t {
+      None,
+      VGPR,
+      AGPR,
+      SGPR,
+      TTMP,
+      VCC,
+      EXEC,
+      SCC,
+      M0,
+      Imm,
+    };
+    Kind SrcKind = Kind::None;
+    // Original MC operand index. Kept for diagnostics / drift checks.
+    unsigned OperandIndex = 0;
+    // Original MC register id for register-like kinds.
+    unsigned Reg = 0;
+    // Logical register-file index for register-like kinds.
+    int BaseIdx = -1;
+    int Width = 1;
+    // Raw immediate when kind == Imm. The component CanonicalOp determines
+    // whether the bit pattern is interpreted as integer bits or f32 bits.
+    int64_t Imm = 0;
+    // VOPD3 source modifier bits (same low-bit neg / abs contract that
+    // VOP3 source modifiers use). Zero for VOPD1/2 and unmodified sources.
+    uint8_t Modifiers = 0;
+  };
+
+  struct VopdHalf {
+    CanonicalOp CanonOp = CanonicalOp::Unknown;
+    unsigned ComponentOpcode = 0;
+    unsigned DstReg = 0;
+    VopdSource Src[3] = {};
+    unsigned NumSrcs = 0;
+    bool HasSrc2Acc = false;
+    bool IsVoP3 = false;
+    bool HasBitOp3 = false;
+    uint8_t BitOp3 = 0;
+  };
+
+  bool HasVopd = false;
+  bool IsVopd3 = false;
+  VopdHalf Vopd[2] = {};
 
   unsigned FirstSrcIdx = 0;
 
