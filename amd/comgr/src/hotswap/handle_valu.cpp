@@ -962,6 +962,21 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Hr.Handled = true;
     return Hr;
   }
+  if (Sop == CanonicalOp::V_MAX_NUM_F64 || Sop == CanonicalOp::V_MIN_NUM_F64) {
+    Value *S0 = Op.src64(0), *S1 = Op.src64(1);
+    auto *F64Ty = Type::getDoubleTy(Ctx.C);
+    S0 = Ctx.B.CreateBitCast(S0, F64Ty); S1 = Ctx.B.CreateBitCast(S1, F64Ty);
+    Intrinsic::ID Id =
+        Sop == CanonicalOp::V_MAX_NUM_F64 ? Intrinsic::maxnum : Intrinsic::minnum;
+    Function *Fn = Intrinsic::getOrInsertDeclaration(&Ctx.M, Id, {F64Ty});
+    const char *Name =
+        Sop == CanonicalOp::V_MAX_NUM_F64 ? "vmaxnum_f64" : "vminnum_f64";
+    Ctx.writeReg64(Op.dst(),
+                   Ctx.B.CreateBitCast(Ctx.B.CreateCall(Fn, {S0, S1}, Name),
+                                       Ctx.I64Ty));
+    Hr.Handled = true;
+    return Hr;
+  }
   // v_rcp_f64: VOP1 transcendental, single F64 source → F64 result.
   // The hardware op is a ~26-bit accurate reciprocal approximation
   // (TRANS-class, WriteTrans64). Lift to `llvm.amdgcn.rcp.f64` so
