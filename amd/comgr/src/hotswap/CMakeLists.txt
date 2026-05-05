@@ -76,6 +76,8 @@ add_library(hotswap-transpiler OBJECT
   handle_valu_vop3p.cpp
   handle_mfma.cpp
   handle_vopd.cpp
+  tdm_runtime.cpp
+  handle_vimage.cpp
 )
 
 if(NOT TARGET hotswap::transpiler)
