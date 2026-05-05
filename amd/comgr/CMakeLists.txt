@@ -578,6 +578,12 @@ if (NOT WIN32)
       ${CMAKE_DL_LIBS})
 endif()
 
+# Hotswap subproject — IR-level transpiler library + supporting tools.
+# Always added so the static library is available to the test-unit suite;
+# linking into amd_comgr happens in a later patch via the
+# COMGR_ENABLE_HOTSWAP_TRANSPILE option.
+add_subdirectory(hotswap)
+
 include(CTest)
 if(BUILD_TESTING)
   add_custom_target(check-comgr COMMAND ${CMAKE_CTEST_COMMAND} DEPENDS amd_comgr)
