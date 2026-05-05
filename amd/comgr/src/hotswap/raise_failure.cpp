@@ -18,6 +18,12 @@ const char *reasonString(RaiseFailureReason R) {
   case RaiseFailureReason::BadInput:                return "BadInput";
   case RaiseFailureReason::UnsupportedOpcode:       return "UnsupportedOpcode";
   case RaiseFailureReason::UnsupportedShape:        return "UnsupportedShape";
+  case RaiseFailureReason::SPEUnsafeExecWriter:
+    return "SPE-unmodeled-EXEC-writer";
+  case RaiseFailureReason::TargetMachineCreationFailed:
+    return "TargetMachineCreationFailed";
+  case RaiseFailureReason::IRVerificationFailed:
+    return "IRVerificationFailed";
   case RaiseFailureReason::CrossWaveLaneIdLeak:
     return "cross-wave-lane-id-leak";
   case RaiseFailureReason::CrossWaveUnrewritableShuffle:
@@ -32,6 +38,10 @@ const char *reasonString(RaiseFailureReason R) {
     return "cross-wave-predicate-chain";
   case RaiseFailureReason::StrictUnsafeLowering:
     return "strict-unsafe-lowering";
+  case RaiseFailureReason::MissingKernelDescriptor:
+    return "missing-kernel-descriptor";
+  case RaiseFailureReason::UserSgprLayoutMismatch:
+    return "user-sgpr-layout-mismatch";
   }
   llvm_unreachable("unhandled RaiseFailureReason");
 }
@@ -55,6 +65,31 @@ RaiseFailure RaiseFailure::unsupportedOpcode(const DecodedInst &Di,
   F.Mnemonic = Di.Mnemonic;
   F.Format = Format.str();
   F.Offset = Di.Offset;
+  return F;
+}
+
+RaiseFailure RaiseFailure::speUnsafeExecWriter(const DecodedInst &Di) {
+  RaiseFailure F;
+  F.Reason = RaiseFailureReason::SPEUnsafeExecWriter;
+  F.Mnemonic = Di.Mnemonic;
+  F.Format = "SPE-unmodeled-EXEC-writer";
+  F.Offset = Di.Offset;
+  return F;
+}
+
+RaiseFailure RaiseFailure::targetMachineCreationFailed() {
+  RaiseFailure F;
+  F.Reason = RaiseFailureReason::TargetMachineCreationFailed;
+  F.Format = reasonString(RaiseFailureReason::TargetMachineCreationFailed);
+  F.Detail = "createTargetMachine returned null";
+  return F;
+}
+
+RaiseFailure RaiseFailure::irVerificationFailed(const llvm::Twine &Err) {
+  RaiseFailure F;
+  F.Reason = RaiseFailureReason::IRVerificationFailed;
+  F.Format = reasonString(RaiseFailureReason::IRVerificationFailed);
+  F.Detail = Err.str();
   return F;
 }
 
@@ -131,6 +166,38 @@ RaiseFailure RaiseFailure::strictUnsafeLowering(const DecodedInst &Di,
   F.Format = Site.str();
   F.Offset = Di.Offset;
   F.Detail = Detail.str();
+  return F;
+}
+
+RaiseFailure RaiseFailure::missingKernelDescriptor(llvm::StringRef KernelName) {
+  RaiseFailure F;
+  F.Reason = RaiseFailureReason::MissingKernelDescriptor;
+  F.Mnemonic = "<kernel-descriptor>";
+  F.Format = reasonString(RaiseFailureReason::MissingKernelDescriptor);
+  F.Offset = 0;
+  F.Detail = ("kernel '" + KernelName + "': .kd symbol not parsed").str();
+  return F;
+}
+
+RaiseFailure RaiseFailure::userSgprLayoutMismatch(
+    llvm::StringRef KernelName, const llvm::Twine &Detail) {
+  RaiseFailure F;
+  F.Reason = RaiseFailureReason::UserSgprLayoutMismatch;
+  F.Mnemonic = "<user-sgpr-layout>";
+  F.Format = reasonString(RaiseFailureReason::UserSgprLayoutMismatch);
+  F.Offset = 0;
+  F.Detail = ("kernel '" + KernelName + "': " + Detail).str();
+  return F;
+}
+
+RaiseFailure RaiseFailure::crossWaveRewriteOracleDisagreement(
+    llvm::StringRef KernelName, const llvm::Twine &Detail) {
+  RaiseFailure F;
+  F.Reason = RaiseFailureReason::CrossWaveLaneIdLeak;
+  F.Mnemonic = "writelane/readlane-post-raise-safety-net";
+  F.Format = reasonString(RaiseFailureReason::CrossWaveLaneIdLeak);
+  F.Offset = 0;
+  F.Detail = ("kernel '" + KernelName + "': " + Detail).str();
   return F;
 }
 

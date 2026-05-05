@@ -112,7 +112,7 @@ void buildSrcMap(DecodedInst &Di, const MCInstrDesc &Desc) {
 // the disassembler collapses the tied slot and produces only
 // `(sdst, src0)`, so `srcMap` won't contain an entry for the prior-
 // dst read. Handlers in those cases must fetch the prior value
-// directly via `ctx.regs.readReg{32,64}(op.dst())`. For
+// directly via `ctx.Regs.readReg{32,64}(op.dst())`. For
 // `vdata_in` / `addr_in` / `srcTiedDef` (atomics, MAC accumulators)
 // the disassembler does emit a full MCOperand and the handler reads
 // it through the normal `op.src(N)` path.
@@ -341,14 +341,14 @@ void decodeDppModifiers(DecodedInst &Di) {
   if (!(Di.TsFlags & SIInstrFlags::DPP))
     return;
   const MCInst &Inst = Di.Inst;
-  const unsigned opc = Inst.getOpcode();
+  const unsigned Opc = Inst.getOpcode();
   // Detect DPP8 form by presence of the `dpp8` named operand. If this
   // is a DPP8 instruction, leave `hasDpp` false — see the header
   // comment for the classifier-refusal contract.
-  if (AMDGPU::getNamedOperandIdx(opc, AMDGPU::OpName::dpp8) >= 0)
+  if (AMDGPU::getNamedOperandIdx(Opc, AMDGPU::OpName::dpp8) >= 0)
     return;
   auto ImmOpt = [&](AMDGPU::OpName Name) -> std::optional<int64_t> {
-    int Idx = AMDGPU::getNamedOperandIdx(opc, Name);
+    int Idx = AMDGPU::getNamedOperandIdx(Opc, Name);
     if (Idx < 0 || static_cast<unsigned>(Idx) >= Inst.getNumOperands())
       return std::nullopt;
     const MCOperand &Mop = Inst.getOperand(static_cast<unsigned>(Idx));
@@ -370,7 +370,7 @@ void decodeDppModifiers(DecodedInst &Di) {
     std::string Msg;
     raw_string_ostream Os(Msg);
     Os << "decodeDppModifiers: TSFlags::DPP is set for '" << Di.RawMnemonic
-       << "' (opcode=" << opc
+       << "' (opcode=" << Opc
        << ") with no OpName::dpp8 operand, yet at least one of "
           "{dpp_ctrl, row_mask, bank_mask, bound_ctrl} is missing or "
           "not an immediate. LLVM likely added a new DPP variant "
@@ -670,9 +670,9 @@ DecodeResult decodeKernel(const MCState &Mc,
     errs() << "transpiler: Starting disassembly at kernel offset 0x"
            << utohexstr(KernelOffset) << "\n";
 
-  const uint64_t totalSize = TextBytes.size();
+  const uint64_t TotalSize = TextBytes.size();
   uint64_t Off = KernelOffset;
-  while (Off < totalSize) {
+  while (Off < TotalSize) {
     MCInst Inst;
     uint64_t InstSize = 0;
     auto Status = Mc.Disasm->getInstruction(Inst, InstSize,
@@ -723,7 +723,7 @@ DecodeResult decodeKernel(const MCState &Mc,
       // known block starts at later offsets, keep disassembling.
       uint64_t NextOff = Off + InstSize;
       auto It = Out.BlockStarts.upper_bound(Off);
-      if (It != Out.BlockStarts.end() && *It < totalSize) {
+      if (It != Out.BlockStarts.end() && *It < TotalSize) {
         Off = NextOff;
         continue;
       }

@@ -104,9 +104,9 @@ TEST(Mxfp4Dequant, OcpTableBitPatterns) {
   // The LUT exported from mxfp4_dequant.cpp must byte-for-byte match
   // the hand-derived OCP spec table above.  A mismatch here is an
   // immediate, loud regression.
-  for (int nib = 0; nib < 16; ++nib) {
-    EXPECT_EQ(kMxfp4ToBf16Table[nib], kExpectedOcpBf16[nib])
-        << "nibble=0x" << std::hex << nib;
+  for (int Nib = 0; Nib < 16; ++Nib) {
+    EXPECT_EQ(kMxfp4ToBf16Table[Nib], kExpectedOcpBf16[Nib])
+        << "nibble=0x" << std::hex << Nib;
   }
 }
 
@@ -119,40 +119,40 @@ TEST(Mxfp4Dequant, BitAlgebraMatchesLutOnEntireDomain) {
   // emitter mirrors the bit-algebra function structurally; if this
   // test fails, `handle_valu.cpp::emitCvtScalePk8Bf16Fp4CrossTargetExpansion`
   // is also likely wrong (same algorithm, same bug).
-  int divergences = 0;
-  for (uint32_t n = 0; n < 16; ++n) {
-    for (uint32_t s = 0; s < 256; ++s) {
-      uint16_t bit  = mxfp4BitAlgebraBf16Bits(static_cast<uint8_t>(n),
-                                              static_cast<uint8_t>(s));
-      uint16_t lut  = mxfp4LutBf16Bits       (static_cast<uint8_t>(n),
-                                              static_cast<uint8_t>(s));
-      if (bit != lut) {
-        if (++divergences <= 5) {
-          ADD_FAILURE() << "nibble=0x" << std::hex << n
-                        << " scale_byte=0x" << s
-                        << " bit_algebra=0x" << bit
-                        << " lut_double=0x" << lut;
+  int Divergences = 0;
+  for (uint32_t N = 0; N < 16; ++N) {
+    for (uint32_t S = 0; S < 256; ++S) {
+      uint16_t Bit  = mxfp4BitAlgebraBf16Bits(static_cast<uint8_t>(N),
+                                              static_cast<uint8_t>(S));
+      uint16_t Lut  = mxfp4LutBf16Bits       (static_cast<uint8_t>(N),
+                                              static_cast<uint8_t>(S));
+      if (Bit != Lut) {
+        if (++Divergences <= 5) {
+          ADD_FAILURE() << "nibble=0x" << std::hex << N
+                        << " scale_byte=0x" << S
+                        << " bit_algebra=0x" << Bit
+                        << " lut_double=0x" << Lut;
         }
       }
     }
   }
-  EXPECT_EQ(divergences, 0)
+  EXPECT_EQ(Divergences, 0)
       << "bit-algebra and LUT-via-double reference implementations "
          "diverge on "
-      << divergences << " of 4096 (nibble, scale_byte) points";
+      << Divergences << " of 4096 (nibble, scale_byte) points";
 }
 
 TEST(Mxfp4Dequant, IdentityScaleRoundTripsOcpTable) {
   // scale_byte == 0x7F encodes 2^0 = 1.0 (the E8M0 identity scale).
   // Both reference functions must return the FP4 -> BF16 table
   // entry unchanged.
-  for (int nib = 0; nib < 16; ++nib) {
-    uint16_t bit = mxfp4BitAlgebraBf16Bits(static_cast<uint8_t>(nib), 0x7F);
-    uint16_t lut = mxfp4LutBf16Bits       (static_cast<uint8_t>(nib), 0x7F);
-    EXPECT_EQ(bit, kExpectedOcpBf16[nib])
-        << "bit-algebra identity at nibble=0x" << std::hex << nib;
-    EXPECT_EQ(lut, kExpectedOcpBf16[nib])
-        << "LUT identity at nibble=0x" << std::hex << nib;
+  for (int Nib = 0; Nib < 16; ++Nib) {
+    uint16_t Bit = mxfp4BitAlgebraBf16Bits(static_cast<uint8_t>(Nib), 0x7F);
+    uint16_t Lut = mxfp4LutBf16Bits       (static_cast<uint8_t>(Nib), 0x7F);
+    EXPECT_EQ(Bit, kExpectedOcpBf16[Nib])
+        << "bit-algebra identity at nibble=0x" << std::hex << Nib;
+    EXPECT_EQ(Lut, kExpectedOcpBf16[Nib])
+        << "LUT identity at nibble=0x" << std::hex << Nib;
   }
 }
 
@@ -162,15 +162,15 @@ TEST(Mxfp4Dequant, NaNScalePropagates) {
   // = NaN).  This is the corner case the test suite cares about
   // most for corpus behaviour — a handler that swallows NaN would
   // silently produce 0 for ill-formed MXFP inputs.
-  for (int nib = 0; nib < 16; ++nib) {
+  for (int Nib = 0; Nib < 16; ++Nib) {
     EXPECT_EQ(
-        mxfp4BitAlgebraBf16Bits(static_cast<uint8_t>(nib), 0xFF),
+        mxfp4BitAlgebraBf16Bits(static_cast<uint8_t>(Nib), 0xFF),
         0x7FC0u)
-        << "bit-algebra NaN scale with nibble=0x" << std::hex << nib;
+        << "bit-algebra NaN scale with nibble=0x" << std::hex << Nib;
     EXPECT_EQ(
-        mxfp4LutBf16Bits(static_cast<uint8_t>(nib), 0xFF),
+        mxfp4LutBf16Bits(static_cast<uint8_t>(Nib), 0xFF),
         0x7FC0u)
-        << "LUT NaN scale with nibble=0x" << std::hex << nib;
+        << "LUT NaN scale with nibble=0x" << std::hex << Nib;
   }
 }
 
@@ -179,19 +179,19 @@ TEST(Mxfp4Dequant, Fp4ZeroWithFiniteScalePreservesSign) {
   // byte (0x00 through 0xFE) must produce BF16 +0 / -0 respectively.
   // Sign preservation is required — "IEEE 0 * finite = 0" keeps the
   // sign of the zero operand.
-  for (uint32_t s = 0; s < 0xFFu; ++s) {
+  for (uint32_t S = 0; S < 0xFFu; ++S) {
     EXPECT_EQ(
-        mxfp4BitAlgebraBf16Bits(0x0, static_cast<uint8_t>(s)), 0x0000u)
-        << "bit-algebra +0 at scale_byte=0x" << std::hex << s;
+        mxfp4BitAlgebraBf16Bits(0x0, static_cast<uint8_t>(S)), 0x0000u)
+        << "bit-algebra +0 at scale_byte=0x" << std::hex << S;
     EXPECT_EQ(
-        mxfp4BitAlgebraBf16Bits(0x8, static_cast<uint8_t>(s)), 0x8000u)
-        << "bit-algebra -0 at scale_byte=0x" << std::hex << s;
+        mxfp4BitAlgebraBf16Bits(0x8, static_cast<uint8_t>(S)), 0x8000u)
+        << "bit-algebra -0 at scale_byte=0x" << std::hex << S;
     EXPECT_EQ(
-        mxfp4LutBf16Bits(0x0, static_cast<uint8_t>(s)), 0x0000u)
-        << "LUT +0 at scale_byte=0x" << std::hex << s;
+        mxfp4LutBf16Bits(0x0, static_cast<uint8_t>(S)), 0x0000u)
+        << "LUT +0 at scale_byte=0x" << std::hex << S;
     EXPECT_EQ(
-        mxfp4LutBf16Bits(0x8, static_cast<uint8_t>(s)), 0x8000u)
-        << "LUT -0 at scale_byte=0x" << std::hex << s;
+        mxfp4LutBf16Bits(0x8, static_cast<uint8_t>(S)), 0x8000u)
+        << "LUT -0 at scale_byte=0x" << std::hex << S;
   }
 }
 
@@ -274,24 +274,24 @@ TEST(Mxfp4Dequant, MonotonicAcrossScaleBytes) {
   //   * FP4 nibbles 0x0, 0x8 (±0 is scale-invariant)
   //   * scale_bytes where the result saturates to Inf (ordering
   //     holds but comparison against Inf is uninformative)
-  auto bf16AbsMag = [](uint16_t bits) -> uint16_t {
-    return static_cast<uint16_t>(bits & 0x7FFFu);
+  auto Bf16AbsMag = [](uint16_t Bits) -> uint16_t {
+    return static_cast<uint16_t>(Bits & 0x7FFFu);
   };
-  for (uint32_t n = 0; n < 16; ++n) {
-    if ((n & 0x7u) == 0) continue;  // skip ±0
-    uint16_t prev_mag = 0;
-    for (uint32_t s = 1; s <= 0xFEu; ++s) {
-      uint16_t bits = mxfp4BitAlgebraBf16Bits(static_cast<uint8_t>(n),
-                                              static_cast<uint8_t>(s));
-      uint16_t mag = bf16AbsMag(bits);
+  for (uint32_t N = 0; N < 16; ++N) {
+    if ((N & 0x7u) == 0) continue;  // skip ±0
+    uint16_t PrevMag = 0;
+    for (uint32_t S = 1; S <= 0xFEu; ++S) {
+      uint16_t Bits = mxfp4BitAlgebraBf16Bits(static_cast<uint8_t>(N),
+                                              static_cast<uint8_t>(S));
+      uint16_t Mag = Bf16AbsMag(Bits);
       // 0x7F80 is BF16 +Inf magnitude; stop monotonicity check once
       // we've saturated.
-      if (mag == 0x7F80u) break;
-      EXPECT_GT(mag, prev_mag)
-          << "non-monotonic at nibble=0x" << std::hex << n
-          << " scale_byte=0x" << s
-          << " prev=0x" << prev_mag << " cur=0x" << mag;
-      prev_mag = mag;
+      if (Mag == 0x7F80u) break;
+      EXPECT_GT(Mag, PrevMag)
+          << "non-monotonic at nibble=0x" << std::hex << N
+          << " scale_byte=0x" << S
+          << " prev=0x" << PrevMag << " cur=0x" << Mag;
+      PrevMag = Mag;
     }
   }
 }
@@ -302,14 +302,14 @@ TEST(Mxfp4Dequant, NibbleMaskingIgnoresHighBits) {
   // the same result as passing just the low nibble.  This mirrors
   // what the handler's IR emitter does before the LUT lookup / bit
   // algebra.
-  for (int nib = 0; nib < 16; ++nib) {
-    uint8_t low  = static_cast<uint8_t>(nib);
-    uint8_t high = static_cast<uint8_t>(0xF0 | nib);
-    EXPECT_EQ(mxfp4BitAlgebraBf16Bits(low, 0x7F),
-              mxfp4BitAlgebraBf16Bits(high, 0x7F))
-        << "bit-algebra high-bit masking, nibble=0x" << std::hex << nib;
-    EXPECT_EQ(mxfp4LutBf16Bits(low, 0x7F),
-              mxfp4LutBf16Bits(high, 0x7F))
-        << "LUT high-bit masking, nibble=0x" << std::hex << nib;
+  for (int Nib = 0; Nib < 16; ++Nib) {
+    uint8_t Low  = static_cast<uint8_t>(Nib);
+    uint8_t High = static_cast<uint8_t>(0xF0 | Nib);
+    EXPECT_EQ(mxfp4BitAlgebraBf16Bits(Low, 0x7F),
+              mxfp4BitAlgebraBf16Bits(High, 0x7F))
+        << "bit-algebra high-bit masking, nibble=0x" << std::hex << Nib;
+    EXPECT_EQ(mxfp4LutBf16Bits(Low, 0x7F),
+              mxfp4LutBf16Bits(High, 0x7F))
+        << "LUT high-bit masking, nibble=0x" << std::hex << Nib;
   }
 }

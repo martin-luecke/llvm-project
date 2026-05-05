@@ -8,39 +8,21 @@
 
 #include "hotswap/code_object_utils.h"
 
+#include "llvm/Support/Error.h"
+
 #include "gtest/gtest.h"
 
 #include <cstdint>
-#include <vector>
+#include <string>
 
-namespace {
+TEST(CodeObjectUtils, KernelSymbolOffsetMalformedElfReturnsError) {
+  uint8_t Garbage[] = {0x7f, 'E', 'L', 'F', 0, 0, 0, 0};
 
-// Minimal "ELF-shaped garbage" that does not parse as a valid AMDGPU
-// code object: the magic bytes are correct but everything else is zero.
-std::vector<uint8_t> garbageElf() {
-  return {0x7f, 'E', 'L', 'F', 0, 0, 0, 0};
-}
+  llvm::Expected<uint64_t> Offset =
+      COMGR::hotswap::findKernelSymbolOffset(Garbage, "missing_kernel");
 
-} // namespace
-
-TEST(CodeObjectUtils, EmptyDataParsesAsEmpty) {
-  std::vector<uint8_t> empty;
-  EXPECT_TRUE(COMGR::hotswap::listKernelNames(empty).empty());
-  EXPECT_FALSE(COMGR::hotswap::extractTextSection(empty).Valid);
-  EXPECT_TRUE(COMGR::hotswap::detectIsaFromElf(empty).empty());
-}
-
-TEST(CodeObjectUtils, MalformedElfYieldsNoKernels) {
-  auto data = garbageElf();
-  EXPECT_TRUE(COMGR::hotswap::listKernelNames(data).empty());
-  EXPECT_FALSE(COMGR::hotswap::extractTextSection(data).Valid);
-  EXPECT_TRUE(COMGR::hotswap::detectIsaFromElf(data).empty());
-}
-
-TEST(CodeObjectUtils, MissingKernelMetaIsDefaulted) {
-  auto data = garbageElf();
-  COMGR::hotswap::KernelMeta meta =
-      COMGR::hotswap::extractKernelMeta(data, "missing_kernel");
-  EXPECT_FALSE(meta.HasKernelDescriptor);
-  EXPECT_EQ(meta.KernargSegmentSize, 0);
+  ASSERT_FALSE(static_cast<bool>(Offset));
+  std::string Message = llvm::toString(Offset.takeError());
+  EXPECT_NE(Message.find("findKernelSymbolOffset: Failed to parse ELF"),
+            std::string::npos);
 }

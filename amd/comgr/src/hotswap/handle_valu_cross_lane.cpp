@@ -357,10 +357,10 @@ HandlerResult handleValuCrossLane(RaiseContext &Ctx, const DecodedInst &Di,
   // lands the ds_bpermute emulation.
   case CanonicalOp::V_PERMLANE16_B32:
   case CanonicalOp::V_PERMLANEX16_B32: {
-    const bool isPermlaneX16 = (Sop == CanonicalOp::V_PERMLANEX16_B32);
-    const bool fi = (Op.srcMod(0) & SISrcMods::OP_SEL_0) != 0;
-    const bool bc = (Op.srcMod(1) & SISrcMods::OP_SEL_0) != 0;
-    if (!fi || bc) {
+    const bool IsPermlaneX16 = (Sop == CanonicalOp::V_PERMLANEX16_B32);
+    const bool Fi = (Op.srcMod(0) & SISrcMods::OP_SEL_0) != 0;
+    const bool Bc = (Op.srcMod(1) & SISrcMods::OP_SEL_0) != 0;
+    if (!Fi || Bc) {
       // Empirically the GPT-OSS / softmax / bitmatrix corpora emit
       // `op_sel:[1, 0]` exclusively (fi=1, bc=0). Refuse any other
       // encoding loudly so a future corpus kernel's extended
@@ -371,7 +371,7 @@ HandlerResult handleValuCrossLane(RaiseContext &Ctx, const DecodedInst &Di,
       raw_string_ostream Os(Detail);
       Os << "permlane16 / permlanex16 emulation supports only "
             "op_sel:[1,0] (fi=1, bc=0); saw fi="
-         << (fi ? 1 : 0) << ", bc=" << (bc ? 1 : 0);
+         << (Fi ? 1 : 0) << ", bc=" << (Bc ? 1 : 0);
       Hr.Failure = RaiseFailure::unsupportedShape(Di, "VALU", Detail);
       return Hr;
     }
@@ -402,7 +402,7 @@ HandlerResult handleValuCrossLane(RaiseContext &Ctx, const DecodedInst &Di,
     Value *Nibble = Ctx.B.CreateAnd(Shifted, Ctx.B.getInt32(0xF), "pl_nibble");
 
     // For permlanex16, XOR the group base by 0x10 to swap adjacent groups.
-    Value *SrcGroup = isPermlaneX16
+    Value *SrcGroup = IsPermlaneX16
         ? Ctx.B.CreateXor(GroupBase, Ctx.B.getInt32(0x10), "plx_group")
         : GroupBase;
     Value *SrcLaneAbs = Ctx.B.CreateOr(SrcGroup, Nibble, "pl_src_lane");
@@ -415,7 +415,7 @@ HandlerResult handleValuCrossLane(RaiseContext &Ctx, const DecodedInst &Di,
         &Ctx.M, Intrinsic::amdgcn_ds_bpermute);
     Value *Result = Ctx.B.CreateCall(
         Bperm, {ByteAddr, Src0},
-        isPermlaneX16 ? "permlanex16_emu" : "permlane16_emu");
+        IsPermlaneX16 ? "permlanex16_emu" : "permlane16_emu");
     Ctx.writeReg32(Op.dst(), Result);
     Hr.Handled = true;
     return Hr;
