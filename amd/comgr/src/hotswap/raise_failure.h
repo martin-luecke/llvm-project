@@ -68,6 +68,10 @@ struct RaiseFailure {
                                        const llvm::Twine &Detail = {});
 };
 
+// Stable string label for a `RaiseFailureReason`, used by the pipeline
+// driver when surfacing per-kernel failures to its callers.
+const char *reasonString(RaiseFailureReason R);
+
 } // namespace COMGR::hotswap
 
 #endif

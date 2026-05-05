@@ -94,42 +94,42 @@ namespace {
 // `siteOffset` is the source-MC byte offset of the dispatching
 // instruction; it is embedded in dispatch BB names to keep them
 // unique across multiple dispatch sites in the same kernel.
-void emitEnumeratedDispatch(RaiseContext &ctx, Value *targetInt,
-                            ArrayRef<uint64_t> targets,
-                            uint64_t siteOffset) {
-  assert(!targets.empty() && "enumerated dispatch needs ≥1 target");
-  assert(targetInt->getType() == ctx.i64Ty &&
+void emitEnumeratedDispatch(RaiseContext &Ctx, Value *TargetInt,
+                            ArrayRef<uint64_t> Targets,
+                            uint64_t SiteOffset) {
+  assert(!Targets.empty() && "enumerated dispatch needs ≥1 target");
+  assert(TargetInt->getType() == Ctx.I64Ty &&
          "enumerated dispatch expects i64 target marker");
 
-  SmallString<32> sitePrefixStorage;
-  raw_svector_ostream(sitePrefixStorage) << "dispatch_0x"
-                                         << utohexstr(siteOffset);
-  StringRef sitePrefix = sitePrefixStorage;
+  SmallString<32> SitePrefixStorage;
+  raw_svector_ostream(SitePrefixStorage) << "dispatch_0x"
+                                         << utohexstr(SiteOffset);
+  StringRef SitePrefix = SitePrefixStorage;
 
-  IRBuilder<> &B = ctx.B;
+  IRBuilder<> &B = Ctx.B;
 
   // Pre-create the unreachable trap block so we can name it
   // deterministically and reference it from the last cascade step.
-  BasicBlock *unreachableBB = BasicBlock::Create(
-      ctx.C, sitePrefix.str() + "_unreachable", ctx.kernel);
+  BasicBlock *UnreachableBb = BasicBlock::Create(
+      Ctx.C, SitePrefix.str() + "_unreachable", Ctx.Kernel);
 
-  for (size_t i = 0; i < targets.size(); ++i) {
-    BasicBlock *targetBB = ctx.lookupBB(targets[i]);
-    Constant *markerCI = ConstantInt::get(ctx.i64Ty, targets[i]);
-    SmallString<48> cmpName;
-    raw_svector_ostream(cmpName) << sitePrefix << "_cmp_" << i;
-    Value *cmp = B.CreateICmpEQ(targetInt, markerCI, cmpName);
+  for (size_t I = 0; I < Targets.size(); ++I) {
+    BasicBlock *TargetBb = Ctx.lookupBB(Targets[I]);
+    Constant *MarkerCi = ConstantInt::get(Ctx.I64Ty, Targets[I]);
+    SmallString<48> CmpName;
+    raw_svector_ostream(CmpName) << SitePrefix << "_cmp_" << I;
+    Value *Cmp = B.CreateICmpEQ(TargetInt, MarkerCi, CmpName);
 
-    BasicBlock *fallthroughBB;
-    if (i + 1 < targets.size()) {
-      SmallString<48> nextName;
-      raw_svector_ostream(nextName) << sitePrefix << "_" << (i + 1);
-      fallthroughBB = BasicBlock::Create(ctx.C, nextName, ctx.kernel);
+    BasicBlock *FallthroughBb;
+    if (I + 1 < Targets.size()) {
+      SmallString<48> NextName;
+      raw_svector_ostream(NextName) << SitePrefix << "_" << (I + 1);
+      FallthroughBb = BasicBlock::Create(Ctx.C, NextName, Ctx.Kernel);
     } else {
-      fallthroughBB = unreachableBB;
+      FallthroughBb = UnreachableBb;
     }
-    B.CreateCondBr(cmp, targetBB, fallthroughBB);
-    B.SetInsertPoint(fallthroughBB);
+    B.CreateCondBr(Cmp, TargetBb, FallthroughBb);
+    B.SetInsertPoint(FallthroughBb);
   }
 
   // Builder is now positioned at the start of unreachableBB. Emit the
@@ -160,28 +160,28 @@ ArrayRef<CanonicalOpAttrSpec> getHandlerSOP1Attrs() {
   return kAttrs;
 }
 
-HandlerResult handleSOP1(RaiseContext &ctx, const DecodedInst &di,
-                         OpResolver &op) {
-  HandlerResult hr;
-  CanonicalOp sop = di.canonOp;
+HandlerResult handleSOP1(RaiseContext &Ctx, const DecodedInst &Di,
+                         OpResolver &Op) {
+  HandlerResult Hr;
+  CanonicalOp Sop = Di.CanonOp;
 
-  if (sop == CanonicalOp::S_MOV_B32) {
-    ParsedReg dst = op.dst();
-    ParsedReg srcReg = op.isSrcReg(0) ? op.srcReg(0) : ParsedReg{};
-    Value *src = op.src(0);
-    ctx.regs.writeReg32(ctx.B, dst, src);
-    if (dst.kind == ParsedReg::SGPR && srcReg.kind == ParsedReg::EXEC) {
-      Value *execI1 = ctx.projection.extractLaneBitFromWaveMask(
-          ctx.B, ctx.regs.loadExec(ctx.B));
-      ctx.recordSgprWaveMaskI1(dst.baseIdx, execI1, /*isPair=*/false);
+  if (Sop == CanonicalOp::S_MOV_B32) {
+    ParsedReg Dst = Op.dst();
+    ParsedReg SrcReg = Op.isSrcReg(0) ? Op.srcReg(0) : ParsedReg{};
+    Value *Src = Op.src(0);
+    Ctx.Regs.writeReg32(Ctx.B, Dst, Src);
+    if (Dst.RegKind == ParsedReg::SGPR && SrcReg.RegKind == ParsedReg::EXEC) {
+      Value *ExecI1 = Ctx.Projection.extractLaneBitFromWaveMask(
+          Ctx.B, Ctx.Regs.loadExec(Ctx.B));
+      Ctx.recordSgprWaveMaskI1(Dst.BaseIdx, ExecI1, /*isPair=*/false);
     }
-    hr.handled = true;
-    return hr;
+    Hr.Handled = true;
+    return Hr;
   }
-  if (sop == CanonicalOp::S_MOV_B64) {
-    ctx.regs.writeReg64(ctx.B, op.dst(), op.src64(0));
-    hr.handled = true;
-    return hr;
+  if (Sop == CanonicalOp::S_MOV_B64) {
+    Ctx.Regs.writeReg64(Ctx.B, Op.dst(), Op.src64(0));
+    Hr.Handled = true;
+    return Hr;
   }
   // S_*_SAVEEXEC_B32 family — save old EXEC into dst SGPR and
   // update EXEC via the family-specific combine.  The dst SGPR is
@@ -210,71 +210,71 @@ HandlerResult handleSOP1(RaiseContext &ctx, const DecodedInst &di,
   // itself — non-saveexec form?  there isn't one for these
   // opcodes) the helper is a no-op.  The recorded i1 is a fresh
   // SSA value so `I2` (SSA-monotonic within a BB) holds.
-  auto recordOldExecShadowOnDst = [&](Value *oldExec) {
-    ParsedReg dst = op.dst();
-    if (dst.kind != ParsedReg::SGPR)
+  auto RecordOldExecShadowOnDst = [&](Value *OldExec) {
+    ParsedReg Dst = Op.dst();
+    if (Dst.RegKind != ParsedReg::SGPR)
       return;
-    llvm::Value *oldExecI1 =
-        ctx.projection.extractLaneBitFromWaveMask(ctx.B, oldExec);
-    ctx.recordSgprWaveMaskI1(dst.baseIdx, oldExecI1, /*isPair=*/false);
+    llvm::Value *OldExecI1 =
+        Ctx.Projection.extractLaneBitFromWaveMask(Ctx.B, OldExec);
+    Ctx.recordSgprWaveMaskI1(Dst.BaseIdx, OldExecI1, /*isPair=*/false);
   };
 
-  if (sop == CanonicalOp::S_AND_SAVEEXEC_B32) {
-    Value *oldExec = ctx.regs.loadExec(ctx.B);
-    Value *src = op.srcExecWidth(0);
-    ctx.regs.writeRegExecWidth(ctx.B, op.dst(), oldExec);
-    recordOldExecShadowOnDst(oldExec);
-    Value *newExec = ctx.B.CreateAnd(oldExec, src, "new_exec");
-    ctx.regs.storeExec(ctx.B, newExec);
-    hr.sccResult = newExec;
-    hr.handled = true;
-    return hr;
+  if (Sop == CanonicalOp::S_AND_SAVEEXEC_B32) {
+    Value *OldExec = Ctx.Regs.loadExec(Ctx.B);
+    Value *Src = Op.srcExecWidth(0);
+    Ctx.Regs.writeRegExecWidth(Ctx.B, Op.dst(), OldExec);
+    RecordOldExecShadowOnDst(OldExec);
+    Value *NewExec = Ctx.B.CreateAnd(OldExec, Src, "new_exec");
+    Ctx.Regs.storeExec(Ctx.B, NewExec);
+    Hr.SccResult = NewExec;
+    Hr.Handled = true;
+    return Hr;
   }
-  if (sop == CanonicalOp::S_OR_SAVEEXEC_B32) {
-    Value *oldExec = ctx.regs.loadExec(ctx.B);
-    Value *src = op.srcExecWidth(0);
-    ctx.regs.writeRegExecWidth(ctx.B, op.dst(), oldExec);
-    recordOldExecShadowOnDst(oldExec);
-    Value *newExec = ctx.B.CreateOr(oldExec, src, "new_exec");
-    ctx.regs.storeExec(ctx.B, newExec);
-    hr.sccResult = newExec;
-    hr.handled = true;
-    return hr;
+  if (Sop == CanonicalOp::S_OR_SAVEEXEC_B32) {
+    Value *OldExec = Ctx.Regs.loadExec(Ctx.B);
+    Value *Src = Op.srcExecWidth(0);
+    Ctx.Regs.writeRegExecWidth(Ctx.B, Op.dst(), OldExec);
+    RecordOldExecShadowOnDst(OldExec);
+    Value *NewExec = Ctx.B.CreateOr(OldExec, Src, "new_exec");
+    Ctx.Regs.storeExec(Ctx.B, NewExec);
+    Hr.SccResult = NewExec;
+    Hr.Handled = true;
+    return Hr;
   }
-  if (sop == CanonicalOp::S_XOR_SAVEEXEC_B32) {
-    Value *oldExec = ctx.regs.loadExec(ctx.B);
-    Value *src = op.srcExecWidth(0);
-    ctx.regs.writeRegExecWidth(ctx.B, op.dst(), oldExec);
-    recordOldExecShadowOnDst(oldExec);
-    Value *newExec = ctx.B.CreateXor(oldExec, src, "new_exec");
-    ctx.regs.storeExec(ctx.B, newExec);
-    hr.sccResult = newExec;
-    hr.handled = true;
-    return hr;
+  if (Sop == CanonicalOp::S_XOR_SAVEEXEC_B32) {
+    Value *OldExec = Ctx.Regs.loadExec(Ctx.B);
+    Value *Src = Op.srcExecWidth(0);
+    Ctx.Regs.writeRegExecWidth(Ctx.B, Op.dst(), OldExec);
+    RecordOldExecShadowOnDst(OldExec);
+    Value *NewExec = Ctx.B.CreateXor(OldExec, Src, "new_exec");
+    Ctx.Regs.storeExec(Ctx.B, NewExec);
+    Hr.SccResult = NewExec;
+    Hr.Handled = true;
+    return Hr;
   }
-  if (sop == CanonicalOp::S_ANDN2_SAVEEXEC_B32) {
-    Value *oldExec = ctx.regs.loadExec(ctx.B);
-    Value *src = op.srcExecWidth(0);
-    ctx.regs.writeRegExecWidth(ctx.B, op.dst(), oldExec);
-    recordOldExecShadowOnDst(oldExec);
-    Value *newExec = ctx.B.CreateAnd(oldExec, ctx.B.CreateNot(src), "new_exec");
-    ctx.regs.storeExec(ctx.B, newExec);
-    hr.sccResult = newExec;
-    hr.handled = true;
-    return hr;
+  if (Sop == CanonicalOp::S_ANDN2_SAVEEXEC_B32) {
+    Value *OldExec = Ctx.Regs.loadExec(Ctx.B);
+    Value *Src = Op.srcExecWidth(0);
+    Ctx.Regs.writeRegExecWidth(Ctx.B, Op.dst(), OldExec);
+    RecordOldExecShadowOnDst(OldExec);
+    Value *NewExec = Ctx.B.CreateAnd(OldExec, Ctx.B.CreateNot(Src), "new_exec");
+    Ctx.Regs.storeExec(Ctx.B, NewExec);
+    Hr.SccResult = NewExec;
+    Hr.Handled = true;
+    return Hr;
   }
-  if (sop == CanonicalOp::S_ORN2_SAVEEXEC_B32) {
-    Value *oldExec = ctx.regs.loadExec(ctx.B);
-    Value *src = op.srcExecWidth(0);
-    ctx.regs.writeRegExecWidth(ctx.B, op.dst(), oldExec);
-    recordOldExecShadowOnDst(oldExec);
-    Value *newExec = ctx.B.CreateOr(oldExec, ctx.B.CreateNot(src), "new_exec");
-    ctx.regs.storeExec(ctx.B, newExec);
-    hr.sccResult = newExec;
-    hr.handled = true;
-    return hr;
+  if (Sop == CanonicalOp::S_ORN2_SAVEEXEC_B32) {
+    Value *OldExec = Ctx.Regs.loadExec(Ctx.B);
+    Value *Src = Op.srcExecWidth(0);
+    Ctx.Regs.writeRegExecWidth(Ctx.B, Op.dst(), OldExec);
+    RecordOldExecShadowOnDst(OldExec);
+    Value *NewExec = Ctx.B.CreateOr(OldExec, Ctx.B.CreateNot(Src), "new_exec");
+    Ctx.Regs.storeExec(Ctx.B, NewExec);
+    Hr.SccResult = NewExec;
+    Hr.Handled = true;
+    return Hr;
   }
-  if (sop == CanonicalOp::S_GETPC_B64) {
+  if (Sop == CanonicalOp::S_GETPC_B64) {
     // Stub: the destination's symbolic PC is irrelevant for raised
     // IR. For Pattern A chains, the chain's binary value is never
     // read after we emit the `br label %target`. For Pattern B call
@@ -284,11 +284,11 @@ HandlerResult handleSOP1(RaiseContext &ctx, const DecodedInst &di,
     // produce is also discarded. Writing zero keeps SROA happy and
     // surfaces any stray downstream read as an obvious-zero use that
     // would crash the verifier rather than silently miscompile.
-    ctx.regs.writeReg64(ctx.B, op.dst(), ConstantInt::get(ctx.i64Ty, 0));
-    hr.handled = true;
-    return hr;
+    Ctx.Regs.writeReg64(Ctx.B, Op.dst(), ConstantInt::get(Ctx.I64Ty, 0));
+    Hr.Handled = true;
+    return Hr;
   }
-  if (sop == CanonicalOp::S_SET_PC_I64) {
+  if (Sop == CanonicalOp::S_SET_PC_I64) {
     // Look up the static analysis classification (Pattern A direct,
     // Pattern B enumerated-dispatch, or Unresolvable). Both patterns
     // emit a terminator into the current BB (and Pattern B / DispatchSet
@@ -296,26 +296,26 @@ HandlerResult handleSOP1(RaiseContext &ctx, const DecodedInst &di,
     // `emitEnumeratedDispatch`); the raiser's BB-layout phase has
     // already promoted the next linear offset to a leader so subsequent
     // instructions land in their own BBs.
-    if (!ctx.setpcAnalysis) {
-      hr.failure = RaiseFailure::unsupportedShape(
-          di, "SOP1",
+    if (!Ctx.SetpcAnalysis) {
+      Hr.Failure = RaiseFailure::unsupportedShape(
+          Di, "SOP1",
           "s_set_pc_i64 reached without a SetPcAnalysis "
           "(raiser pipeline is missing the Phase 1.1 step)");
-      return hr;
+      return Hr;
     }
-    auto it = ctx.setpcAnalysis->setpcSites.find(di.offset);
-    if (it == ctx.setpcAnalysis->setpcSites.end()) {
-      hr.failure = RaiseFailure::unsupportedShape(
-          di, "SOP1",
+    auto It = Ctx.SetpcAnalysis->SetpcSites.find(Di.Offset);
+    if (It == Ctx.SetpcAnalysis->SetpcSites.end()) {
+      Hr.Failure = RaiseFailure::unsupportedShape(
+          Di, "SOP1",
           "s_set_pc_i64 site not classified by SetPcAnalysis");
-      return hr;
+      return Hr;
     }
-    const SetPcSiteInfo &info = it->second;
-    switch (info.kind) {
+    const SetPcSiteInfo &Info = It->second;
+    switch (Info.SiteKind) {
     case SetPcSiteInfo::Kind::DirectA: {
-      ctx.B.CreateBr(ctx.lookupBB(info.directTarget));
-      hr.handled = true;
-      return hr;
+      Ctx.B.CreateBr(Ctx.lookupBB(Info.DirectTarget));
+      Hr.Handled = true;
+      return Hr;
     }
     case SetPcSiteInfo::Kind::IndirectB:
     case SetPcSiteInfo::Kind::DispatchSet: {
@@ -330,24 +330,24 @@ HandlerResult handleSOP1(RaiseContext &ctx, const DecodedInst &di,
       // `indirectbr` / a ptr-equality check against `blockaddress`.
       // The classification difference is purely semantic (return vs.
       // forward dispatch); the lowering mechanism is identical.
-      Value *retVal = ctx.regs.loadSGPR64(
-          ctx.B, static_cast<int>(info.indirectRetPairLowReg));
-      retVal->setName("ret_pc_marker");
-      emitEnumeratedDispatch(ctx, retVal, info.indirectTargets,
-                             di.offset);
-      hr.handled = true;
-      return hr;
+      Value *RetVal = Ctx.Regs.loadSGPR64(
+          Ctx.B, static_cast<int>(Info.IndirectRetPairLowReg));
+      RetVal->setName("ret_pc_marker");
+      emitEnumeratedDispatch(Ctx, RetVal, Info.IndirectTargets,
+                             Di.Offset);
+      Hr.Handled = true;
+      return Hr;
     }
     case SetPcSiteInfo::Kind::Unresolvable:
-      hr.failure = RaiseFailure::unsupportedShape(di, "SOP1",
-                                                  info.refusalReason);
-      return hr;
+      Hr.Failure = RaiseFailure::unsupportedShape(Di, "SOP1",
+                                                  Info.RefusalReason);
+      return Hr;
     }
-    hr.failure = RaiseFailure::unsupportedShape(
-        di, "SOP1", "s_set_pc_i64 SetPcSiteInfo::Kind not handled");
-    return hr;
+    Hr.Failure = RaiseFailure::unsupportedShape(
+        Di, "SOP1", "s_set_pc_i64 SetPcSiteInfo::Kind not handled");
+    return Hr;
   }
-  if (sop == CanonicalOp::S_SWAP_PC_I64) {
+  if (Sop == CanonicalOp::S_SWAP_PC_I64) {
     // Branch-and-link. setpc_analysis classifies the call-target
     // pair (ssrc) as DirectA (chain resolves the absolute callee
     // offset intra-block), DispatchSet (inter-block dataflow
@@ -380,39 +380,39 @@ HandlerResult handleSOP1(RaiseContext &ctx, const DecodedInst &di,
     //
     // Unresolvable is refused loudly with the analysis's diagnostic.
     // See canonical_op.h's S_SWAP_PC_I64 doc for the lowering contract.
-    if (!ctx.setpcAnalysis) {
-      hr.failure = RaiseFailure::unsupportedShape(
-          di, "SOP1",
+    if (!Ctx.SetpcAnalysis) {
+      Hr.Failure = RaiseFailure::unsupportedShape(
+          Di, "SOP1",
           "s_swap_pc_i64 reached without a SetPcAnalysis "
           "(raiser pipeline is missing the Phase 1.1 step)");
-      return hr;
+      return Hr;
     }
-    auto it = ctx.setpcAnalysis->setpcSites.find(di.offset);
-    if (it == ctx.setpcAnalysis->setpcSites.end()) {
-      hr.failure = RaiseFailure::unsupportedShape(
-          di, "SOP1",
+    auto It = Ctx.SetpcAnalysis->SetpcSites.find(Di.Offset);
+    if (It == Ctx.SetpcAnalysis->SetpcSites.end()) {
+      Hr.Failure = RaiseFailure::unsupportedShape(
+          Di, "SOP1",
           "s_swap_pc_i64 site not classified by SetPcAnalysis");
-      return hr;
+      return Hr;
     }
-    const SetPcSiteInfo &info = it->second;
-    if (info.kind == SetPcSiteInfo::Kind::Unresolvable) {
-      hr.failure = RaiseFailure::unsupportedShape(di, "SOP1",
-                                                  info.refusalReason);
-      return hr;
+    const SetPcSiteInfo &Info = It->second;
+    if (Info.SiteKind == SetPcSiteInfo::Kind::Unresolvable) {
+      Hr.Failure = RaiseFailure::unsupportedShape(Di, "SOP1",
+                                                  Info.RefusalReason);
+      return Hr;
     }
-    if (info.kind == SetPcSiteInfo::Kind::IndirectB) {
+    if (Info.SiteKind == SetPcSiteInfo::Kind::IndirectB) {
       // Defensive: the analysis should never produce IndirectB for
       // a swap_pc site (a swap_pc's source pair is a call target,
       // not a return slot — IndirectB is the return-side use of
       // such a pair). If it ever does, refuse loudly so the
       // mismatch surfaces rather than silently mis-lowering.
-      hr.failure = RaiseFailure::unsupportedShape(
-          di, "SOP1",
+      Hr.Failure = RaiseFailure::unsupportedShape(
+          Di, "SOP1",
           "s_swap_pc_i64 classified as IndirectB by setpc_analysis "
           "(unexpected — IndirectB is the return-side classification "
           "for s_set_pc_i64; a swap_pc reaching this code path "
           "indicates an analysis invariant violation)");
-      return hr;
+      return Hr;
     }
     // Materialise the return address marker (the offset of the BB
     // immediately after the swap) into sdst on both DirectA and
@@ -424,70 +424,70 @@ HandlerResult handleSOP1(RaiseContext &ctx, const DecodedInst &di,
     // cmp+br cascade. See `emitEnumeratedDispatch` above for why we
     // use an integer marker rather than `ptrtoint(blockaddress(...))`
     // (AMDGPU ISel cannot materialise a `BlockAddress` as an i64).
-    uint64_t returnAddr = di.offset + di.size;
+    uint64_t ReturnAddr = Di.Offset + Di.Size;
     // Force the target BB to exist in the lift so the subsequent
     // `br label %bb_<returnAddr>` has a valid destination; we don't
     // use the returned BB pointer here.
-    (void)ctx.lookupBB(returnAddr);
-    Value *retMarker = ConstantInt::get(ctx.i64Ty, returnAddr);
-    ctx.regs.writeReg64(ctx.B, op.dst(), retMarker);
+    (void)Ctx.lookupBB(ReturnAddr);
+    Value *RetMarker = ConstantInt::get(Ctx.I64Ty, ReturnAddr);
+    Ctx.Regs.writeReg64(Ctx.B, Op.dst(), RetMarker);
 
-    if (info.kind == SetPcSiteInfo::Kind::DirectA) {
-      ctx.B.CreateBr(ctx.lookupBB(info.directTarget));
-      hr.handled = true;
-      return hr;
+    if (Info.SiteKind == SetPcSiteInfo::Kind::DirectA) {
+      Ctx.B.CreateBr(Ctx.lookupBB(Info.DirectTarget));
+      Hr.Handled = true;
+      return Hr;
     }
     // DispatchSet: emit an enumerated-dispatch cascade through the
     // source pair into the enumerated targets. The source pair holds
     // a per-predecessor i64 marker (the resolved callee's source-MC
     // byte offset), rewritten by the chain-terminator hook in
     // raiser.cpp on each contributing predecessor path.
-    Value *callTarget = ctx.regs.loadSGPR64(
-        ctx.B, static_cast<int>(info.indirectRetPairLowReg));
-    callTarget->setName("swap_call_target_marker");
-    emitEnumeratedDispatch(ctx, callTarget, info.indirectTargets,
-                           di.offset);
-    hr.handled = true;
-    return hr;
+    Value *CallTarget = Ctx.Regs.loadSGPR64(
+        Ctx.B, static_cast<int>(Info.IndirectRetPairLowReg));
+    CallTarget->setName("swap_call_target_marker");
+    emitEnumeratedDispatch(Ctx, CallTarget, Info.IndirectTargets,
+                           Di.Offset);
+    Hr.Handled = true;
+    return Hr;
   }
-  if (sop == CanonicalOp::S_NOT_B64) {
-    hr.sccResult = ctx.B.CreateNot(op.src64(0), "not64");
-    ctx.regs.writeReg64(ctx.B, op.dst(), hr.sccResult);
-    hr.handled = true;
-    return hr;
+  if (Sop == CanonicalOp::S_NOT_B64) {
+    Hr.SccResult = Ctx.B.CreateNot(Op.src64(0), "not64");
+    Ctx.Regs.writeReg64(Ctx.B, Op.dst(), Hr.SccResult);
+    Hr.Handled = true;
+    return Hr;
   }
-  if (sop == CanonicalOp::S_NOT_B32) {
-    hr.sccResult = ctx.B.CreateNot(op.src(0), "not32");
-    ctx.regs.writeReg32(ctx.B, op.dst(), hr.sccResult);
-    hr.handled = true;
-    return hr;
+  if (Sop == CanonicalOp::S_NOT_B32) {
+    Hr.SccResult = Ctx.B.CreateNot(Op.src(0), "not32");
+    Ctx.Regs.writeReg32(Ctx.B, Op.dst(), Hr.SccResult);
+    Hr.Handled = true;
+    return Hr;
   }
-  if (sop == CanonicalOp::S_BREV_B32) {
-    Function *brev = Intrinsic::getOrInsertDeclaration(
-        &ctx.M, Intrinsic::bitreverse, {ctx.i32Ty});
-    ctx.regs.writeReg32(ctx.B, op.dst(),
-                        ctx.B.CreateCall(brev, {op.src(0)}, "sbrev"));
-    hr.handled = true;
-    return hr;
+  if (Sop == CanonicalOp::S_BREV_B32) {
+    Function *Brev = Intrinsic::getOrInsertDeclaration(
+        &Ctx.M, Intrinsic::bitreverse, {Ctx.I32Ty});
+    Ctx.Regs.writeReg32(Ctx.B, Op.dst(),
+                        Ctx.B.CreateCall(Brev, {Op.src(0)}, "sbrev"));
+    Hr.Handled = true;
+    return Hr;
   }
-  if (sop == CanonicalOp::S_FF1_I32_B32) {
-    Function *cttz = Intrinsic::getOrInsertDeclaration(&ctx.M, Intrinsic::cttz,
-                                                       {ctx.i32Ty});
-    ctx.regs.writeReg32(
-        ctx.B, op.dst(),
-        ctx.B.CreateCall(cttz, {op.src(0), ConstantInt::getTrue(ctx.i1Ty)},
+  if (Sop == CanonicalOp::S_FF1_I32_B32) {
+    Function *Cttz = Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::cttz,
+                                                       {Ctx.I32Ty});
+    Ctx.Regs.writeReg32(
+        Ctx.B, Op.dst(),
+        Ctx.B.CreateCall(Cttz, {Op.src(0), ConstantInt::getTrue(Ctx.I1Ty)},
                          "ff1"));
-    hr.handled = true;
-    return hr;
+    Hr.Handled = true;
+    return Hr;
   }
-  if (sop == CanonicalOp::S_FF1_I32_B64) {
-    Function *cttz64 = Intrinsic::getOrInsertDeclaration(
-        &ctx.M, Intrinsic::cttz, {ctx.i64Ty});
-    Value *r = ctx.B.CreateCall(
-        cttz64, {op.src64(0), ConstantInt::getTrue(ctx.i1Ty)}, "ff1_64");
-    ctx.regs.writeReg32(ctx.B, op.dst(), ctx.B.CreateTrunc(r, ctx.i32Ty));
-    hr.handled = true;
-    return hr;
+  if (Sop == CanonicalOp::S_FF1_I32_B64) {
+    Function *Cttz64 = Intrinsic::getOrInsertDeclaration(
+        &Ctx.M, Intrinsic::cttz, {Ctx.I64Ty});
+    Value *R = Ctx.B.CreateCall(
+        Cttz64, {Op.src64(0), ConstantInt::getTrue(Ctx.I1Ty)}, "ff1_64");
+    Ctx.Regs.writeReg32(Ctx.B, Op.dst(), Ctx.B.CreateTrunc(R, Ctx.I32Ty));
+    Hr.Handled = true;
+    return Hr;
   }
   // s_ff0_i32_b{32,64} — find first 0 bit (lowest position), -1 if
   // none. SOPInstructions.td:278-279 omits an LLVM ISel pattern, so
@@ -496,55 +496,55 @@ HandlerResult handleSOP1(RaiseContext &ctx, const DecodedInst &di,
   // the all-ones-input case to -1 since llvm.cttz with
   // is_zero_poison=false returns the bitwidth (32 / 64) for a zero
   // input rather than the AMDGPU's -1 sentinel.
-  if (sop == CanonicalOp::S_FF0_I32_B32) {
-    Function *cttz = Intrinsic::getOrInsertDeclaration(&ctx.M, Intrinsic::cttz,
-                                                       {ctx.i32Ty});
-    Value *src = op.src(0);
-    Value *inv = ctx.B.CreateNot(src, "ff0_inv");
-    Value *raw = ctx.B.CreateCall(
-        cttz, {inv, ConstantInt::getFalse(ctx.i1Ty)}, "ff0_raw");
-    Value *isAllOnes = ctx.B.CreateICmpEQ(
-        src, ConstantInt::getAllOnesValue(ctx.i32Ty), "ff0_allones");
-    Value *res = ctx.B.CreateSelect(
-        isAllOnes, ctx.B.getInt32(-1), raw, "ff0");
-    ctx.regs.writeReg32(ctx.B, op.dst(), res);
-    hr.handled = true;
-    return hr;
+  if (Sop == CanonicalOp::S_FF0_I32_B32) {
+    Function *Cttz = Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::cttz,
+                                                       {Ctx.I32Ty});
+    Value *Src = Op.src(0);
+    Value *Inv = Ctx.B.CreateNot(Src, "ff0_inv");
+    Value *Raw = Ctx.B.CreateCall(
+        Cttz, {Inv, ConstantInt::getFalse(Ctx.I1Ty)}, "ff0_raw");
+    Value *IsAllOnes = Ctx.B.CreateICmpEQ(
+        Src, ConstantInt::getAllOnesValue(Ctx.I32Ty), "ff0_allones");
+    Value *Res = Ctx.B.CreateSelect(
+        IsAllOnes, Ctx.B.getInt32(-1), Raw, "ff0");
+    Ctx.Regs.writeReg32(Ctx.B, Op.dst(), Res);
+    Hr.Handled = true;
+    return Hr;
   }
-  if (sop == CanonicalOp::S_FF0_I32_B64) {
-    Function *cttz64 = Intrinsic::getOrInsertDeclaration(
-        &ctx.M, Intrinsic::cttz, {ctx.i64Ty});
-    Value *src64 = op.src64(0);
-    Value *inv = ctx.B.CreateNot(src64, "ff0_inv64");
-    Value *raw = ctx.B.CreateCall(
-        cttz64, {inv, ConstantInt::getFalse(ctx.i1Ty)}, "ff0_raw64");
-    Value *rawTrunc = ctx.B.CreateTrunc(raw, ctx.i32Ty, "ff0_raw32");
-    Value *isAllOnes = ctx.B.CreateICmpEQ(
-        src64, ConstantInt::getAllOnesValue(ctx.i64Ty), "ff0_allones64");
-    Value *res = ctx.B.CreateSelect(
-        isAllOnes, ctx.B.getInt32(-1), rawTrunc, "ff0_64");
-    ctx.regs.writeReg32(ctx.B, op.dst(), res);
-    hr.handled = true;
-    return hr;
+  if (Sop == CanonicalOp::S_FF0_I32_B64) {
+    Function *Cttz64 = Intrinsic::getOrInsertDeclaration(
+        &Ctx.M, Intrinsic::cttz, {Ctx.I64Ty});
+    Value *Src64 = Op.src64(0);
+    Value *Inv = Ctx.B.CreateNot(Src64, "ff0_inv64");
+    Value *Raw = Ctx.B.CreateCall(
+        Cttz64, {Inv, ConstantInt::getFalse(Ctx.I1Ty)}, "ff0_raw64");
+    Value *RawTrunc = Ctx.B.CreateTrunc(Raw, Ctx.I32Ty, "ff0_raw32");
+    Value *IsAllOnes = Ctx.B.CreateICmpEQ(
+        Src64, ConstantInt::getAllOnesValue(Ctx.I64Ty), "ff0_allones64");
+    Value *Res = Ctx.B.CreateSelect(
+        IsAllOnes, Ctx.B.getInt32(-1), RawTrunc, "ff0_64");
+    Ctx.Regs.writeReg32(Ctx.B, Op.dst(), Res);
+    Hr.Handled = true;
+    return Hr;
   }
-  if (sop == CanonicalOp::S_FLBIT_I32_B64) {
-    Function *ctlz64 = Intrinsic::getOrInsertDeclaration(
-        &ctx.M, Intrinsic::ctlz, {ctx.i64Ty});
-    Value *r = ctx.B.CreateCall(
-        ctlz64, {op.src64(0), ConstantInt::getTrue(ctx.i1Ty)}, "flbit64");
-    ctx.regs.writeReg32(ctx.B, op.dst(), ctx.B.CreateTrunc(r, ctx.i32Ty));
-    hr.handled = true;
-    return hr;
+  if (Sop == CanonicalOp::S_FLBIT_I32_B64) {
+    Function *Ctlz64 = Intrinsic::getOrInsertDeclaration(
+        &Ctx.M, Intrinsic::ctlz, {Ctx.I64Ty});
+    Value *R = Ctx.B.CreateCall(
+        Ctlz64, {Op.src64(0), ConstantInt::getTrue(Ctx.I1Ty)}, "flbit64");
+    Ctx.Regs.writeReg32(Ctx.B, Op.dst(), Ctx.B.CreateTrunc(R, Ctx.I32Ty));
+    Hr.Handled = true;
+    return Hr;
   }
-  if (sop == CanonicalOp::S_FLBIT_I32_B32) {
-    Function *ctlz = Intrinsic::getOrInsertDeclaration(&ctx.M, Intrinsic::ctlz,
-                                                      {ctx.i32Ty});
-    ctx.regs.writeReg32(
-        ctx.B, op.dst(),
-        ctx.B.CreateCall(ctlz, {op.src(0), ConstantInt::getTrue(ctx.i1Ty)},
+  if (Sop == CanonicalOp::S_FLBIT_I32_B32) {
+    Function *Ctlz = Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::ctlz,
+                                                      {Ctx.I32Ty});
+    Ctx.Regs.writeReg32(
+        Ctx.B, Op.dst(),
+        Ctx.B.CreateCall(Ctlz, {Op.src(0), ConstantInt::getTrue(Ctx.I1Ty)},
                          "flbit"));
-    hr.handled = true;
-    return hr;
+    Hr.Handled = true;
+    return Hr;
   }
   // s_flbit_i32 / s_flbit_i32_i64 — signed find-leading-bit-not-equal-
   // to-sign-bit. SOPInstructions.td:296-298. Lower via the dedicated
@@ -553,69 +553,69 @@ HandlerResult handleSOP1(RaiseContext &ctx, const DecodedInst &di,
   // pseudo equivalent) on AMDGPU. Hardware returns -1 for uniform-sign
   // input (0 or all-ones) — the intrinsic shares the same convention,
   // so no explicit zero-fixup is needed.
-  if (sop == CanonicalOp::S_FLBIT_I32) {
-    Function *sffbh = Intrinsic::getOrInsertDeclaration(
-        &ctx.M, Intrinsic::amdgcn_sffbh, {ctx.i32Ty});
-    ctx.regs.writeReg32(ctx.B, op.dst(),
-                        ctx.B.CreateCall(sffbh, {op.src(0)}, "sflbit"));
-    hr.handled = true;
-    return hr;
+  if (Sop == CanonicalOp::S_FLBIT_I32) {
+    Function *Sffbh = Intrinsic::getOrInsertDeclaration(
+        &Ctx.M, Intrinsic::amdgcn_sffbh, {Ctx.I32Ty});
+    Ctx.Regs.writeReg32(Ctx.B, Op.dst(),
+                        Ctx.B.CreateCall(Sffbh, {Op.src(0)}, "sflbit"));
+    Hr.Handled = true;
+    return Hr;
   }
-  if (sop == CanonicalOp::S_FLBIT_I32_I64) {
-    Function *sffbh = Intrinsic::getOrInsertDeclaration(
-        &ctx.M, Intrinsic::amdgcn_sffbh, {ctx.i64Ty});
-    Value *r = ctx.B.CreateCall(sffbh, {op.src64(0)}, "sflbit64");
-    ctx.regs.writeReg32(ctx.B, op.dst(), ctx.B.CreateTrunc(r, ctx.i32Ty));
-    hr.handled = true;
-    return hr;
+  if (Sop == CanonicalOp::S_FLBIT_I32_I64) {
+    Function *Sffbh = Intrinsic::getOrInsertDeclaration(
+        &Ctx.M, Intrinsic::amdgcn_sffbh, {Ctx.I64Ty});
+    Value *R = Ctx.B.CreateCall(Sffbh, {Op.src64(0)}, "sflbit64");
+    Ctx.Regs.writeReg32(Ctx.B, Op.dst(), Ctx.B.CreateTrunc(R, Ctx.I32Ty));
+    Hr.Handled = true;
+    return Hr;
   }
-  if (sop == CanonicalOp::S_SEXT_I32_I8) {
-    Value *v = ctx.B.CreateTrunc(op.src(0), ctx.i8Ty);
-    ctx.regs.writeReg32(ctx.B, op.dst(),
-                        ctx.B.CreateSExt(v, ctx.i32Ty, "sext8"));
-    hr.handled = true;
-    return hr;
+  if (Sop == CanonicalOp::S_SEXT_I32_I8) {
+    Value *V = Ctx.B.CreateTrunc(Op.src(0), Ctx.I8Ty);
+    Ctx.Regs.writeReg32(Ctx.B, Op.dst(),
+                        Ctx.B.CreateSExt(V, Ctx.I32Ty, "sext8"));
+    Hr.Handled = true;
+    return Hr;
   }
-  if (sop == CanonicalOp::S_SEXT_I32_I16) {
-    Value *v = ctx.B.CreateTrunc(op.src(0), Type::getInt16Ty(ctx.C));
-    ctx.regs.writeReg32(ctx.B, op.dst(),
-                        ctx.B.CreateSExt(v, ctx.i32Ty, "sext16"));
-    hr.handled = true;
-    return hr;
+  if (Sop == CanonicalOp::S_SEXT_I32_I16) {
+    Value *V = Ctx.B.CreateTrunc(Op.src(0), Type::getInt16Ty(Ctx.C));
+    Ctx.Regs.writeReg32(Ctx.B, Op.dst(),
+                        Ctx.B.CreateSExt(V, Ctx.I32Ty, "sext16"));
+    Hr.Handled = true;
+    return Hr;
   }
-  if (sop == CanonicalOp::S_CVT_F32_U32) {
-    Value *r = ctx.B.CreateUIToFP(op.src(0), ctx.f32Ty, "s_cvt_f");
-    ctx.regs.writeReg32(ctx.B, op.dst(), ctx.B.CreateBitCast(r, ctx.i32Ty));
-    hr.handled = true;
-    return hr;
+  if (Sop == CanonicalOp::S_CVT_F32_U32) {
+    Value *R = Ctx.B.CreateUIToFP(Op.src(0), Ctx.F32Ty, "s_cvt_f");
+    Ctx.Regs.writeReg32(Ctx.B, Op.dst(), Ctx.B.CreateBitCast(R, Ctx.I32Ty));
+    Hr.Handled = true;
+    return Hr;
   }
-  if (sop == CanonicalOp::S_CVT_F32_I32) {
-    Value *r = ctx.B.CreateSIToFP(op.src(0), ctx.f32Ty, "s_cvt_f");
-    ctx.regs.writeReg32(ctx.B, op.dst(), ctx.B.CreateBitCast(r, ctx.i32Ty));
-    hr.handled = true;
-    return hr;
+  if (Sop == CanonicalOp::S_CVT_F32_I32) {
+    Value *R = Ctx.B.CreateSIToFP(Op.src(0), Ctx.F32Ty, "s_cvt_f");
+    Ctx.Regs.writeReg32(Ctx.B, Op.dst(), Ctx.B.CreateBitCast(R, Ctx.I32Ty));
+    Hr.Handled = true;
+    return Hr;
   }
-  if (sop == CanonicalOp::S_CVT_U32_F32) {
-    Value *s = ctx.B.CreateBitCast(op.src(0), ctx.f32Ty);
-    ctx.regs.writeReg32(ctx.B, op.dst(),
-                        ctx.B.CreateFPToUI(s, ctx.i32Ty, "s_cvt_u"));
-    hr.handled = true;
-    return hr;
+  if (Sop == CanonicalOp::S_CVT_U32_F32) {
+    Value *S = Ctx.B.CreateBitCast(Op.src(0), Ctx.F32Ty);
+    Ctx.Regs.writeReg32(Ctx.B, Op.dst(),
+                        Ctx.B.CreateFPToUI(S, Ctx.I32Ty, "s_cvt_u"));
+    Hr.Handled = true;
+    return Hr;
   }
-  if (sop == CanonicalOp::S_CVT_I32_F32) {
-    Value *s = ctx.B.CreateBitCast(op.src(0), ctx.f32Ty);
-    ctx.regs.writeReg32(ctx.B, op.dst(),
-                        ctx.B.CreateFPToSI(s, ctx.i32Ty, "s_cvt_i"));
-    hr.handled = true;
-    return hr;
+  if (Sop == CanonicalOp::S_CVT_I32_F32) {
+    Value *S = Ctx.B.CreateBitCast(Op.src(0), Ctx.F32Ty);
+    Ctx.Regs.writeReg32(Ctx.B, Op.dst(),
+                        Ctx.B.CreateFPToSI(S, Ctx.I32Ty, "s_cvt_i"));
+    Hr.Handled = true;
+    return Hr;
   }
-  if (sop == CanonicalOp::S_ABS_I32) {
-    Function *absF =
-        Intrinsic::getOrInsertDeclaration(&ctx.M, Intrinsic::abs, {ctx.i32Ty});
-    Value *r = ctx.B.CreateCall(absF, {op.src(0), ctx.B.getFalse()}, "s_abs");
-    ctx.regs.writeReg32(ctx.B, op.dst(), r);
-    hr.handled = true;
-    return hr;
+  if (Sop == CanonicalOp::S_ABS_I32) {
+    Function *AbsF =
+        Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::abs, {Ctx.I32Ty});
+    Value *R = Ctx.B.CreateCall(AbsF, {Op.src(0), Ctx.B.getFalse()}, "s_abs");
+    Ctx.Regs.writeReg32(Ctx.B, Op.dst(), R);
+    Hr.Handled = true;
+    return Hr;
   }
   // s_bitset{0,1}_b{32,64}: clear or set a single bit in sdst.
   //   B32: bit index = src0[4:0], dst and tied read are 32-bit.
@@ -636,29 +636,29 @@ HandlerResult handleSOP1(RaiseContext &ctx, const DecodedInst &di,
   // we declare it semantically a real input — but no actual MCInst
   // operand survives disassembly to land in srcMap, so the read has
   // to come from the destination register itself.)
-  if (sop == CanonicalOp::S_BITSET0_B32 || sop == CanonicalOp::S_BITSET1_B32 ||
-      sop == CanonicalOp::S_BITSET0_B64 || sop == CanonicalOp::S_BITSET1_B64) {
-    bool is64 = (sop == CanonicalOp::S_BITSET0_B64 || sop == CanonicalOp::S_BITSET1_B64);
-    bool isSet = (sop == CanonicalOp::S_BITSET1_B32 || sop == CanonicalOp::S_BITSET1_B64);
-    llvm::Type *ty = is64 ? ctx.i64Ty : ctx.i32Ty;
+  if (Sop == CanonicalOp::S_BITSET0_B32 || Sop == CanonicalOp::S_BITSET1_B32 ||
+      Sop == CanonicalOp::S_BITSET0_B64 || Sop == CanonicalOp::S_BITSET1_B64) {
+    bool Is64 = (Sop == CanonicalOp::S_BITSET0_B64 || Sop == CanonicalOp::S_BITSET1_B64);
+    bool IsSet = (Sop == CanonicalOp::S_BITSET1_B32 || Sop == CanonicalOp::S_BITSET1_B64);
+    llvm::Type *Ty = Is64 ? Ctx.I64Ty : Ctx.I32Ty;
     // Hardware only consumes low log2(width) bits of the bit-index src;
     // mask explicitly so `shl 1, N` never becomes poison for N >= width.
-    Value *bitIdx = ctx.B.CreateAnd(op.src(0),
-                                    ConstantInt::get(ctx.i32Ty,
-                                                     is64 ? 0x3F : 0x1F));
-    if (is64) bitIdx = ctx.B.CreateZExt(bitIdx, ctx.i64Ty);
-    Value *mask = ctx.B.CreateShl(ConstantInt::get(ty, 1), bitIdx);
-    Value *old = is64 ? ctx.regs.readReg64(ctx.B, op.dst())
-                      : ctx.regs.readReg32(ctx.B, op.dst());
-    Value *res = isSet
-                     ? ctx.B.CreateOr(old, mask, "bitset1")
-                     : ctx.B.CreateAnd(old, ctx.B.CreateNot(mask), "bitset0");
-    if (is64)
-      ctx.regs.writeReg64(ctx.B, op.dst(), res);
+    Value *BitIdx = Ctx.B.CreateAnd(Op.src(0),
+                                    ConstantInt::get(Ctx.I32Ty,
+                                                     Is64 ? 0x3F : 0x1F));
+    if (Is64) BitIdx = Ctx.B.CreateZExt(BitIdx, Ctx.I64Ty);
+    Value *Mask = Ctx.B.CreateShl(ConstantInt::get(Ty, 1), BitIdx);
+    Value *Old = Is64 ? Ctx.Regs.readReg64(Ctx.B, Op.dst())
+                      : Ctx.Regs.readReg32(Ctx.B, Op.dst());
+    Value *Res = IsSet
+                     ? Ctx.B.CreateOr(Old, Mask, "bitset1")
+                     : Ctx.B.CreateAnd(Old, Ctx.B.CreateNot(Mask), "bitset0");
+    if (Is64)
+      Ctx.Regs.writeReg64(Ctx.B, Op.dst(), Res);
     else
-      ctx.regs.writeReg32(ctx.B, op.dst(), res);
-    hr.handled = true;
-    return hr;
+      Ctx.Regs.writeReg32(Ctx.B, Op.dst(), Res);
+    Hr.Handled = true;
+    return Hr;
   }
   // s_cmov_b{32,64}: scalar conditional move on SCC. Hardware
   // semantics (per the gfx1250 ISA manual; see also
@@ -677,32 +677,32 @@ HandlerResult handleSOP1(RaiseContext &ctx, const DecodedInst &di,
   // at index 1 because LLVM's `kKnownTiedIn` audit (decode.cpp)
   // keeps it. This asymmetry is a property of the LLVM .td
   // definitions, not a transpiler choice.
-  if (sop == CanonicalOp::S_CMOV_B32) {
-    Value *cond = ctx.regs.loadSCC(ctx.B);
-    Value *src = op.src(0);
-    Value *oldDst = ctx.regs.readReg32(ctx.B, op.dst());
-    ctx.regs.writeReg32(ctx.B, op.dst(),
-                        ctx.B.CreateSelect(cond, src, oldDst, "scmov"));
-    hr.handled = true;
-    return hr;
+  if (Sop == CanonicalOp::S_CMOV_B32) {
+    Value *Cond = Ctx.Regs.loadSCC(Ctx.B);
+    Value *Src = Op.src(0);
+    Value *OldDst = Ctx.Regs.readReg32(Ctx.B, Op.dst());
+    Ctx.Regs.writeReg32(Ctx.B, Op.dst(),
+                        Ctx.B.CreateSelect(Cond, Src, OldDst, "scmov"));
+    Hr.Handled = true;
+    return Hr;
   }
-  if (sop == CanonicalOp::S_CMOV_B64) {
-    Value *cond = ctx.regs.loadSCC(ctx.B);
-    Value *src = op.src64(0);
-    Value *oldDst = ctx.regs.readReg64(ctx.B, op.dst());
-    ctx.regs.writeReg64(ctx.B, op.dst(),
-                        ctx.B.CreateSelect(cond, src, oldDst, "scmov64"));
-    hr.handled = true;
-    return hr;
+  if (Sop == CanonicalOp::S_CMOV_B64) {
+    Value *Cond = Ctx.Regs.loadSCC(Ctx.B);
+    Value *Src = Op.src64(0);
+    Value *OldDst = Ctx.Regs.readReg64(Ctx.B, Op.dst());
+    Ctx.Regs.writeReg64(Ctx.B, Op.dst(),
+                        Ctx.B.CreateSelect(Cond, Src, OldDst, "scmov64"));
+    Hr.Handled = true;
+    return Hr;
   }
   // S_SET_VGPR_MSB is SOPP format — handled in handleSOPP, not here.
   // GFX12+ `s_barrier_signal` appears in SOP1 encoding; model it as a no-op
   // (the paired SOPP `s_barrier_wait` does the actual rendezvous).
-  if (sop == CanonicalOp::S_BARRIER_SIGNAL) {
-    hr.handled = true;
-    return hr;
+  if (Sop == CanonicalOp::S_BARRIER_SIGNAL) {
+    Hr.Handled = true;
+    return Hr;
   }
-  return hr;
+  return Hr;
 }
 
 } // namespace COMGR::hotswap
