@@ -15,6 +15,7 @@
 #include "raise_context.hpp"
 #include "sem_op_attrs.hpp"
 #include "setpc_analysis.hpp"
+#include "source_hidden_args.hpp"
 #include "user_sgpr_layout.hpp"
 #include "wave_projection.hpp"
 #include "wave_size_obstruction.hpp"
@@ -60,41 +61,6 @@ using namespace llvm;
 namespace transpiler {
 
 namespace {
-
-namespace HsaKernelDispatchPacket {
-constexpr unsigned WorkgroupSizeXOffset = 4;
-constexpr unsigned WorkgroupSizeYOffset = 6;
-constexpr unsigned WorkgroupSizeZOffset = 8;
-constexpr unsigned GridSizeXOffset = 12;
-constexpr unsigned GridSizeYOffset = 16;
-constexpr unsigned GridSizeZOffset = 20;
-
-unsigned workgroupSizeOffset(unsigned dim) {
-  switch (dim) {
-  case 0:
-    return WorkgroupSizeXOffset;
-  case 1:
-    return WorkgroupSizeYOffset;
-  case 2:
-    return WorkgroupSizeZOffset;
-  default:
-    report_fatal_error("invalid HSA dispatch-packet workgroup-size dimension");
-  }
-}
-
-unsigned gridSizeOffset(unsigned dim) {
-  switch (dim) {
-  case 0:
-    return GridSizeXOffset;
-  case 1:
-    return GridSizeYOffset;
-  case 2:
-    return GridSizeZOffset;
-  default:
-    report_fatal_error("invalid HSA dispatch-packet grid-size dimension");
-  }
-}
-} // namespace HsaKernelDispatchPacket
 
 enum class ThreadLoopDecision {
   NotApplicable,
@@ -601,6 +567,7 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> textBytes,
     paramIdx = 1;
   }
   kernargs.implicitArgsBase = meta.implicitArgsBase();
+  kernargs.args = meta.args;
   kernargs.kernargSegmentSize = meta.kernargSegmentSize;
 
   auto *funcTy = FunctionType::get(voidTy, paramTypes, false);
@@ -647,7 +614,10 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> textBytes,
     F->addFnAttr("amdgpu-no-completion-action");
     F->addFnAttr("amdgpu-no-default-queue");
     F->addFnAttr("amdgpu-no-dispatch-id");
-    F->addFnAttr("amdgpu-no-dispatch-ptr");
+    // Do not suppress dispatch-ptr: source hidden-arg synthesis materialises
+    // values such as hidden_group_size_* and hidden_block_count_* from the
+    // target dispatch packet, because the lifted HSACO intentionally does not
+    // ask HIP to append source-ABI hidden args after the opaque kargs blob.
     F->addFnAttr("amdgpu-no-heap-ptr");
     F->addFnAttr("amdgpu-no-hostcall-ptr");
     F->addFnAttr("amdgpu-no-implicitarg-ptr");
@@ -766,52 +736,16 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> textBytes,
     regs.storeSGPR32(B, userSgprLayout.workgroupIdYSgpr,
                      B.CreateCall(fnWorkgroupIdY, {}, "wg_id_y"));
   }
-  auto loadDispatchU16 = [&](Value *dispatchPtr, unsigned byteOffset,
-                             const Twine &name) -> Value * {
-    Value *p = B.CreateConstInBoundsGEP1_32(i8Ty, dispatchPtr, byteOffset);
-    return B.CreateZExt(B.CreateLoad(Type::getInt16Ty(C), p, name), i32Ty,
-                        name + "_zext");
-  };
-  auto loadDispatchU32 = [&](Value *dispatchPtr, unsigned byteOffset,
-                             const Twine &name) -> Value * {
-    Value *p = B.CreateConstInBoundsGEP1_32(i8Ty, dispatchPtr, byteOffset);
-    return B.CreateLoad(i32Ty, p, name);
-  };
-  auto emitHiddenBlockCount = [&](unsigned dim) -> Value * {
-    Function *dispatchPtrFn = Intrinsic::getOrInsertDeclaration(
-        &M, Intrinsic::amdgcn_dispatch_ptr);
-    Value *dispatchPtr = B.CreateCall(dispatchPtrFn, {}, "dispatch_ptr");
-    // HSA kernel dispatch packet layout: workgroup_size_{x,y,z} are u16 at
-    // bytes 4/6/8 and grid_size_{x,y,z} are u32 at bytes 12/16/20. Triton's
-    // hidden_block_count_* ABI wants gridDim, i.e. grid_size / workgroup_size.
-    unsigned wgOffset = HsaKernelDispatchPacket::workgroupSizeOffset(dim);
-    unsigned gridOffset = HsaKernelDispatchPacket::gridSizeOffset(dim);
-    Value *wgSize = loadDispatchU16(dispatchPtr, wgOffset,
-                                    Twine("dispatch_wg_size_") + Twine(dim));
-    Value *gridSize = loadDispatchU32(dispatchPtr, gridOffset,
-                                      Twine("dispatch_grid_size_") + Twine(dim));
-    return B.CreateUDiv(gridSize, wgSize,
-                        Twine("hidden_block_count_") + Twine(dim));
-  };
+  SourceHiddenArgContext HiddenCtx{C, M, B, i8Ty, i32Ty, i64Ty, meta.args};
   auto emitPreloadedHiddenKernargDword = [&](int byteOffset) -> Value * {
-    switch (classifyPreloadedHiddenKernargDword(meta.args, byteOffset)) {
-    case PreloadedHiddenKernargDword::NotHidden:
+    SourceHiddenArgValue hidden = emitSourceHiddenDword(HiddenCtx, byteOffset);
+    if (!hidden.Matched)
       return nullptr;
-    case PreloadedHiddenKernargDword::HiddenBlockCountX:
-      return emitHiddenBlockCount(/*dim=*/0);
-    case PreloadedHiddenKernargDword::HiddenBlockCountY:
-      return emitHiddenBlockCount(/*dim=*/1);
-    case PreloadedHiddenKernargDword::HiddenBlockCountZ:
-      return emitHiddenBlockCount(/*dim=*/2);
-    case PreloadedHiddenKernargDword::UnsupportedHidden:
+    if (!hidden.Value)
       report_fatal_error(Twine("transpiler: preloaded hidden kernarg at byte "
-                               "offset ") +
-                         Twine(byteOffset) +
-                       " has no modeled entry-SGPR seed. Refusing instead "
-                       "of treating a runtime-provided hidden value as "
-                       "padding/undef.");
-    }
-    return nullptr;
+                               "offset ") + Twine(byteOffset) + ": " +
+                         hidden.FailureDetail);
+    return hidden.Value;
   };
   // Kernarg preload SGPRs carry dwords copied by hardware from the kernarg
   // segment before kernel entry. Materialize the same dwords by loading

@@ -163,6 +163,7 @@ add_library(hotswap-transpiler STATIC
   mc_state.cpp
   opcode_map.cpp
   semop.cpp
+  source_hidden_args.cpp
   setpc_analysis.cpp
   handle_sopp.cpp
   handle_smem.cpp
@@ -328,6 +329,7 @@ set(TEST_SOURCES
   tests/mc_context_inline_srcmgr_test.cpp
   tests/mxfp4_dequant_test.cpp
   tests/opcode_map_test.cpp
+  tests/source_hidden_args_test.cpp
   tests/translation_cache_test.cpp
   tests/wave_projection_test.cpp
 )
