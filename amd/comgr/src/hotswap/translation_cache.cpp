@@ -469,6 +469,8 @@ llvm::json::Object metadataObject(const TranslationCacheRequest &request,
       {"cached_object_size", static_cast<int64_t>(result.Hsaco.size())},
       {"lifted_count", result.LiftedCount},
       {"total_count", result.TotalCount},
+      {"c5_suppressed_count", result.C5SuppressedCount},
+      {"c5_suppression_reason", result.C5SuppressionReason},
       {"uses_scratch_private_segment", result.UsesScratchPrivateSegment},
       {"source_private_segment_fixed_size",
        static_cast<int64_t>(result.SourcePrivateSegmentFixedSize)},
@@ -520,6 +522,8 @@ bool validateMetadata(const TranslationCacheRequest &request,
 
   auto lifted = requireInt(obj, "lifted_count", reason);
   auto total = requireInt(obj, "total_count", reason);
+  auto c5Count = requireInt(obj, "c5_suppressed_count", reason);
+  auto c5Reason = requireString(obj, "c5_suppression_reason", reason);
   auto usesScratch = requireBool(obj, "uses_scratch_private_segment", reason);
   auto sourceScratch =
       requireInt(obj, "source_private_segment_fixed_size", reason);
@@ -527,13 +531,15 @@ bool validateMetadata(const TranslationCacheRequest &request,
       requireInt(obj, "target_private_segment_fixed_size", reason);
   auto targetEnable =
       requireBool(obj, "target_enable_private_segment", reason);
-  if (!lifted || !total || !usesScratch ||
+  if (!lifted || !total || !c5Count || !c5Reason || !usesScratch ||
       !sourceScratch || !targetScratch || !targetEnable)
     return false;
 
   result.Success = true;
   result.LiftedCount = static_cast<int>(*lifted);
   result.TotalCount = static_cast<int>(*total);
+  result.C5SuppressedCount = static_cast<int>(*c5Count);
+  result.C5SuppressionReason = *c5Reason;
   result.UsesScratchPrivateSegment = *usesScratch;
   result.SourcePrivateSegmentFixedSize =
       static_cast<uint32_t>(*sourceScratch);
