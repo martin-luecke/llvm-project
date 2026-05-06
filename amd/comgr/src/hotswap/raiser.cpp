@@ -1502,6 +1502,29 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
                                 UseThreadLoop &&
                                     SuppressC5ForThreadLoopRoute);
 
+    if (!PredReport.Refused && !PredReport.ObservedSites.empty()) {
+      Result.C5SuppressedCount +=
+          static_cast<int>(PredReport.ObservedSites.size());
+      if (Result.C5SuppressionReason.empty())
+        Result.C5SuppressionReason = PredReport.SuppressionReason;
+      const char *ProjectionName =
+          PredProjection == PredicateChainProjection::ThreadLoop
+              ? "ThreadLoopProjection"
+              : (PredProjection == PredicateChainProjection::WaveNative
+                     ? "WaveNativeProjection"
+                     : "ModuloReplicationProjection");
+      LLVM_DEBUG({
+        dbgs() << "c5-predicate-chain: observed "
+               << PredReport.ObservedSites.size()
+               << " C5-shape site(s) in '" << KernelName << "' under "
+               << ProjectionName
+               << " (refusal "
+                  "suppressed per c5_predicate_chain_classifier.h "
+                  "projection contract):\n";
+        for (llvm::StringRef Site : PredReport.ObservedSites)
+          dbgs() << "  - " << Site << "\n";
+      });
+    }
 
     if (PredReport.Refused) {
       auto HasMatrixOp = [&]() {
