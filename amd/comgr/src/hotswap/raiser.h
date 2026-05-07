@@ -26,22 +26,24 @@ namespace COMGR::hotswap {
 struct RaiseResult {
   std::unique_ptr<llvm::LLVMContext> Ctx;
   std::unique_ptr<llvm::Module> Module;
+  int TotalCount = 0;
   // Structured failure description. `failure.reason == None` iff `success`.
   RaiseFailure Failure;
   bool Success = false;
 };
 
-// Raise a kernel named `KernelName` whose source ISA is `SourceISA`. `Meta`
-// carries the MsgPack-derived per-kernel metadata. The scaffolding
-// implementation emits a `ret void` placeholder and refuses inputs the full
-// pipeline would also refuse: missing kernel descriptor, empty kernel name,
-// and `SourceISA` strings that don't parse via
-// `llvm::AMDGPU::parseArchAMDGCN`. The kernel-text bytes, kernel offset, and
-// compilation-target ISA become real parameters once the decoder is wired
-// in (subsequent commit).
-RaiseResult raiseToIR(llvm::StringRef SourceISA,
+// Raise a kernel named `KernelName` from the disassembled `TextBytes` of the
+// AMDGPU code object whose source ISA is `SourceISA`. `Meta` carries the
+// MsgPack-derived per-kernel metadata. `KernelOffset` is the byte offset of
+// the kernel's code-object entry point inside `TextBytes`.
+// `CompilationTargetISA` (defaults to the source ISA) selects the AMDGPU
+// codegen target the lifted IR will be compiled for.
+RaiseResult raiseToIR(llvm::ArrayRef<uint8_t> TextBytes,
+                      llvm::StringRef SourceISA,
                       llvm::StringRef KernelName,
-                      const KernelMeta &Meta);
+                      const KernelMeta &Meta,
+                      uint64_t KernelOffset = 0,
+                      llvm::StringRef CompilationTargetISA = "");
 
 } // namespace COMGR::hotswap
 

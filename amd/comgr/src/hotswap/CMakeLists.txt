@@ -48,6 +48,7 @@ add_library(hotswap-transpiler OBJECT
   canonical_op.cpp
   opcode_map.cpp
   decode.cpp
+  raise_failure.cpp
 )
 
 if(NOT TARGET hotswap::transpiler)
