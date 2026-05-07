@@ -20,6 +20,7 @@ add_definitions(${LLVM_DEFINITIONS})
 add_library(hotswap-transpiler STATIC
   raiser.cpp
   raise_failure.cpp
+  code_object_utils.cpp
 )
 
 if(NOT TARGET hotswap::transpiler)
@@ -44,4 +45,28 @@ target_link_libraries(hotswap-transpiler
     LLVMCore
     LLVMSupport
     LLVMTargetParser
+    LLVMObject
+    LLVMBinaryFormat
 )
+
+# --- Tests --------------------------------------------------------------------
+if(HOTSWAP_TRANSPILER_BUILD_TOOLS)
+  find_package(GTest REQUIRED)
+  enable_testing()
+  include(GoogleTest)
+
+  add_executable(transpiler_tests
+    tests/test_main.cpp
+    tests/raiser_empty_module_test.cpp
+    tests/code_object_utils_test.cpp
+  )
+  llvm_update_compile_flags(transpiler_tests)
+  target_link_libraries(transpiler_tests
+    PRIVATE
+      hotswap-transpiler
+      GTest::GTest
+  )
+  gtest_discover_tests(transpiler_tests
+    PROPERTIES TIMEOUT 60 LABELS "transpiler"
+  )
+endif()
