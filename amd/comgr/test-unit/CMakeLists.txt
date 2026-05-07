@@ -180,15 +180,32 @@ target_include_directories(MCContextInlineSrcmgrTests PRIVATE
 
 comgr_configure_test_target(MCContextInlineSrcmgrTests)
 
+# -- OpcodeMapTests -----------------------------------------------------------------
+
+add_executable(OpcodeMapTests
+  OpcodeMapTest.cpp)
+
+target_link_libraries(OpcodeMapTests PRIVATE
+  ${COMGR_GTEST_LIBS}
+  hotswap::transpiler
+  ${LLVM_PTHREAD_LIB})
+
+target_include_directories(OpcodeMapTests PRIVATE
+  ${COMGR_GTEST_INCLUDE_DIRS})
+
+comgr_configure_test_target(OpcodeMapTests)
+
 # Register every test binary with the test-unit / check-comgr plumbing.
 add_custom_target(test-unit
   COMMAND $<TARGET_FILE:HotswapElfTests>
   COMMAND $<TARGET_FILE:HotswapMCTests>
   COMMAND $<TARGET_FILE:CodeObjectUtilsTests>
   COMMAND $<TARGET_FILE:MCContextInlineSrcmgrTests>
+  COMMAND $<TARGET_FILE:OpcodeMapTests>
   COMMAND $<TARGET_FILE:RaiserScaffoldingTests>)
 add_dependencies(test-unit HotswapElfTests HotswapMCTests
   RaiserScaffoldingTests
   CodeObjectUtilsTests
-  MCContextInlineSrcmgrTests)
+  MCContextInlineSrcmgrTests
+  OpcodeMapTests)
 add_dependencies(check-comgr test-unit)
