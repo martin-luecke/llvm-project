@@ -45,6 +45,7 @@ add_library(hotswap-transpiler OBJECT
   raiser.cpp
   code_object_utils.cpp
   mc_state.cpp
+  canonical_op.cpp
 )
 
 if(NOT TARGET hotswap::transpiler)
