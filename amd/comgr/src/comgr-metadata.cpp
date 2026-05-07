@@ -37,9 +37,10 @@ using namespace llvm::object;
 namespace COMGR {
 namespace metadata {
 
+namespace {
+
 template <typename ELFT> using Elf_Note = typename ELFT::Note;
 
-namespace {
 Expected<std::unique_ptr<ELFObjectFileBase>>
 getELFObjectFileBase(DataObject *DataP) {
   std::unique_ptr<MemoryBuffer> Buf =
@@ -57,7 +58,7 @@ getELFObjectFileBase(DataObject *DataP) {
 
 // PAL currently produces MsgPack metadata in a note with this ID.
 // FIXME: Unify with HSA note types?
-#define PAL_METADATA_NOTE_TYPE 13
+constexpr uint32_t PAL_METADATA_NOTE_TYPE = 13;
 
 // Try to merge "amdhsa.kernels" from DocNode @p From to @p To.
 // The merge is allowed only if
@@ -140,135 +141,143 @@ bool mergeNoteRecords(llvm::msgpack::DocNode &From, llvm::msgpack::DocNode &To,
   return true;
 }
 
+// Process one ELF note. Recognises `NT_AMD_HSA_METADATA` (older YAML
+// dialect, name="AMD") and `NT_AMDGPU_METADATA` (MsgPack, name="AMDGPU"),
+// plus the PAL metadata note (type 13, name="AMD" or "AMDGPU"). Merges
+// successive PAL/AMDGPU notes; the YAML-formatted HSA note may appear
+// only once.
 template <class ELFT>
-bool processNote(const Elf_Note<ELFT> &Note, DataMeta *MetaP,
-                 llvm::msgpack::DocNode &Root) {
-  auto DescString = Note.getDescAsStringRef(4);
+bool processElfNote(const Elf_Note<ELFT> &Note, llvm::msgpack::Document &Doc,
+                    llvm::msgpack::DocNode &Root, bool &EmitIntegerBooleans) {
+  StringRef DescString = Note.getDescAsStringRef(4);
 
   if (Note.getName() == "AMD" && Note.getType() == ELF::NT_AMD_HSA_METADATA) {
-
-    if (!Root.isEmpty()) {
+    if (!Root.isEmpty())
       return false;
-    }
-
-    MetaP->MetaDoc->EmitIntegerBooleans = false;
-    MetaP->MetaDoc->RawDocument.clear();
-    if (!MetaP->MetaDoc->Document.fromYAML(DescString)) {
+    EmitIntegerBooleans = false;
+    if (!Doc.fromYAML(DescString))
       return false;
-    }
-
-    Root = MetaP->MetaDoc->Document.getRoot();
+    Root = Doc.getRoot();
     return true;
   }
-  if (((Note.getName() == "AMD" || Note.getName() == "AMDGPU") &&
-       Note.getType() == PAL_METADATA_NOTE_TYPE) ||
-      (Note.getName() == "AMDGPU" &&
-       Note.getType() == ELF::NT_AMDGPU_METADATA)) {
-    if (!Root.isEmpty() && MetaP->MetaDoc->EmitIntegerBooleans != true) {
-      return false;
-    }
 
-    MetaP->MetaDoc->EmitIntegerBooleans = true;
-    MetaP->MetaDoc->RawDocumentList.push_back(std::string(DescString));
+  bool IsPal = (Note.getName() == "AMD" || Note.getName() == "AMDGPU") &&
+               Note.getType() == PAL_METADATA_NOTE_TYPE;
+  bool IsAmdgpu =
+      Note.getName() == "AMDGPU" && Note.getType() == ELF::NT_AMDGPU_METADATA;
+  if (IsPal || IsAmdgpu) {
+    if (!Root.isEmpty() && EmitIntegerBooleans != true)
+      return false;
+    EmitIntegerBooleans = true;
 
     // Use a temporary document for parsing to avoid invalidating Root.
-    // DocNode contains pointers to memory owned by its Document, so reusing
-    // the same Document for parsing would invalidate nodes accumulated in Root.
+    // mergeNoteRecords deep-copies strings via Document::copyNode so the
+    // descriptor bytes don't need to outlive this call.
     llvm::msgpack::Document TempDoc;
-    if (!TempDoc.readFromBlob(MetaP->MetaDoc->RawDocumentList.back(), false)) {
+    if (!TempDoc.readFromBlob(DescString, false))
       return false;
-    }
-
     return mergeNoteRecords(TempDoc.getRoot(), Root, "amdhsa.version",
-                            "amdhsa.printf", "amdhsa.kernels",
-                            MetaP->MetaDoc->Document);
+                            "amdhsa.printf", "amdhsa.kernels", Doc);
   }
   return false;
 }
 
+// Walk an ELF object's PT_NOTE program headers AND SHT_NOTE sections,
+// merging every recognised AMDGPU metadata note into `Doc`. Program
+// headers are tried first (matches the historical preference); sections
+// are the fallback for inputs that lack PT_NOTE entries.
 template <class ELFT>
-amd_comgr_status_t getElfMetadataRoot(const ELFObjectFile<ELFT> *Obj,
-                                      DataMeta *MetaP) {
+Expected<bool> walkElfMetadata(const ELFObjectFile<ELFT> &Obj,
+                               llvm::msgpack::Document &Doc,
+                               bool &EmitIntegerBooleans) {
   bool Found = false;
   llvm::msgpack::DocNode Root;
-  const ELFFile<ELFT> &ELFFile = Obj->getELFFile();
+  const ELFFile<ELFT> &ELFFile = Obj.getELFFile();
 
-  auto ProgramHeadersOrError = ELFFile.program_headers();
-  if (errorToBool(ProgramHeadersOrError.takeError())) {
-    return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
-  }
-
-  for (const auto &Phdr : *ProgramHeadersOrError) {
-    if (Phdr.p_type != ELF::PT_NOTE) {
+  // Program headers (preferred).
+  auto PhdrsOrErr = ELFFile.program_headers();
+  if (!PhdrsOrErr)
+    return PhdrsOrErr.takeError();
+  for (const auto &Phdr : *PhdrsOrErr) {
+    if (Phdr.p_type != ELF::PT_NOTE)
       continue;
-    }
     Error Err = Error::success();
     for (const auto &Note : ELFFile.notes(Phdr, Err)) {
-      if (processNote<ELFT>(Note, MetaP, Root)) {
+      if (processElfNote<ELFT>(Note, Doc, Root, EmitIntegerBooleans))
         Found = true;
+    }
+    if (Err)
+      return std::move(Err);
+  }
+
+  if (!Found) {
+    // Section-header fallback.
+    auto SectionsOrErr = ELFFile.sections();
+    if (!SectionsOrErr)
+      return SectionsOrErr.takeError();
+    for (const auto &Shdr : *SectionsOrErr) {
+      if (Shdr.sh_type != ELF::SHT_NOTE)
+        continue;
+      Error Err = Error::success();
+      for (const auto &Note : ELFFile.notes(Shdr, Err)) {
+        if (processElfNote<ELFT>(Note, Doc, Root, EmitIntegerBooleans))
+          Found = true;
       }
-    }
-
-    if (errorToBool(std::move(Err))) {
-      return AMD_COMGR_STATUS_ERROR;
+      if (Err)
+        return std::move(Err);
     }
   }
 
-  if (Found) {
-    MetaP->MetaDoc->Document.getRoot() = Root;
-    MetaP->DocNode = MetaP->MetaDoc->Document.getRoot();
-    return AMD_COMGR_STATUS_SUCCESS;
-  }
-
-  auto SectionsOrError = ELFFile.sections();
-  if (errorToBool(SectionsOrError.takeError())) {
-    return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
-  }
-
-  for (const auto &Shdr : *SectionsOrError) {
-    if (Shdr.sh_type != ELF::SHT_NOTE) {
-      continue;
-    }
-    Error Err = Error::success();
-    for (const auto &Note : ELFFile.notes(Shdr, Err)) {
-      if (processNote<ELFT>(Note, MetaP, Root)) {
-        Found = true;
-      }
-    }
-
-    if (errorToBool(std::move(Err))) {
-      return AMD_COMGR_STATUS_ERROR;
-    }
-  }
-
-  if (Found) {
-    MetaP->MetaDoc->Document.getRoot() = Root;
-    MetaP->DocNode = MetaP->MetaDoc->Document.getRoot();
-    return AMD_COMGR_STATUS_SUCCESS;
-  }
-
-  return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
+  if (Found)
+    Doc.getRoot() = Root;
+  return Found;
 }
+
 } // namespace
 
+Expected<bool> walkElfMetadataIntoDoc(MemoryBufferRef MB,
+                                      llvm::msgpack::Document &Doc,
+                                      bool &EmitIntegerBooleans) {
+  auto ObjOrErr = ObjectFile::createELFObjectFile(MB);
+  if (!ObjOrErr)
+    return ObjOrErr.takeError();
+
+  auto Walk = [&](auto &E) -> Expected<bool> {
+    return walkElfMetadata(E, Doc, EmitIntegerBooleans);
+  };
+
+  auto *Base = ObjOrErr->get();
+  if (auto *E = dyn_cast<ELF32LEObjectFile>(Base))
+    return Walk(*E);
+  if (auto *E = dyn_cast<ELF64LEObjectFile>(Base))
+    return Walk(*E);
+  if (auto *E = dyn_cast<ELF32BEObjectFile>(Base))
+    return Walk(*E);
+  if (auto *E = dyn_cast<ELF64BEObjectFile>(Base))
+    return Walk(*E);
+  return createStringError(inconvertibleErrorCode(),
+                           "unsupported ELF variant");
+}
+
 amd_comgr_status_t getMetadataRoot(DataObject *DataP, DataMeta *MetaP) {
-  auto ObjOrErr = getELFObjectFileBase(DataP);
-  if (errorToBool(ObjOrErr.takeError())) {
+  // Walk the ELF's PT_NOTE / SHT_NOTE entries for AMDGPU metadata,
+  // populating `MetaP->MetaDoc->Document`. The walker writes parsed nodes
+  // into that document directly (deep-copying strings via
+  // `Document::copyNode`) and sets `EmitIntegerBooleans` based on which
+  // note format matched — downstream `iterate_map_metadata` reads it to
+  // decide 0/1 → bool coercion.
+  MemoryBufferRef MB(StringRef(DataP->Data, DataP->Size), "");
+  auto FoundOrErr = walkElfMetadataIntoDoc(
+      MB, MetaP->MetaDoc->Document, MetaP->MetaDoc->EmitIntegerBooleans);
+  if (!FoundOrErr) {
+    consumeError(FoundOrErr.takeError());
     return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
   }
-  auto *Obj = ObjOrErr->get();
-
-  if (auto *ELF32LE = dyn_cast<ELF32LEObjectFile>(Obj)) {
-    return getElfMetadataRoot(ELF32LE, MetaP);
+  if (!*FoundOrErr) {
+    return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
   }
-  if (auto *ELF64LE = dyn_cast<ELF64LEObjectFile>(Obj)) {
-    return getElfMetadataRoot(ELF64LE, MetaP);
-  }
-  if (auto *ELF32BE = dyn_cast<ELF32BEObjectFile>(Obj)) {
-    return getElfMetadataRoot(ELF32BE, MetaP);
-  }
-  auto *ELF64BE = dyn_cast<ELF64BEObjectFile>(Obj);
-  return getElfMetadataRoot(ELF64BE, MetaP);
+  MetaP->DocNode = MetaP->MetaDoc->Document.getRoot();
+  return AMD_COMGR_STATUS_SUCCESS;
 }
 
 struct IsaInfo {
@@ -406,6 +415,23 @@ amd_comgr_status_t getElfIsaNameFromElfHeader(const ELFObjectFile<ELFT> *Obj,
   return AMD_COMGR_STATUS_SUCCESS;
 }
 } // namespace
+
+amd_comgr_status_t getElfIsaNameFromBuffer(MemoryBufferRef MB,
+                                           std::string &IsaName) {
+  auto ObjOrErr = ObjectFile::createELFObjectFile(MB);
+  if (auto Err = ObjOrErr.takeError()) {
+    consumeError(std::move(Err));
+    return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
+  }
+  auto *Obj = ObjOrErr->get();
+
+  // Match the historical behaviour of `getElfIsaName(DataObject*, ...)`:
+  // only ELF64LE is recognised. AMDGPU code objects are always 64-bit LE,
+  // so anything else is invalid input here.
+  if (auto *ELF64LE = dyn_cast<ELF64LEObjectFile>(Obj))
+    return getElfIsaNameFromElfHeader(ELF64LE, IsaName);
+  return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
+}
 
 amd_comgr_status_t getElfIsaName(DataObject *DataP, std::string &IsaName) {
   auto ObjOrErr = getELFObjectFileBase(DataP);
