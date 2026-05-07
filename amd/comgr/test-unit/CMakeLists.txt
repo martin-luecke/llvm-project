@@ -150,11 +150,45 @@ target_include_directories(RaiserScaffoldingTests PRIVATE
 
 comgr_configure_test_target(RaiserScaffoldingTests)
 
+# -- CodeObjectUtilsTests ---------------------------------------------------------------
+
+add_executable(CodeObjectUtilsTests
+  CodeObjectUtilsTest.cpp)
+
+target_link_libraries(CodeObjectUtilsTests PRIVATE
+  ${COMGR_GTEST_LIBS}
+  hotswap::transpiler
+  ${LLVM_PTHREAD_LIB})
+
+target_include_directories(CodeObjectUtilsTests PRIVATE
+  ${COMGR_GTEST_INCLUDE_DIRS})
+
+comgr_configure_test_target(CodeObjectUtilsTests)
+
+# -- MCContextInlineSrcmgrTests -----------------------------------------------------------------
+
+add_executable(MCContextInlineSrcmgrTests
+  MCContextInlineSrcmgrTest.cpp)
+
+target_link_libraries(MCContextInlineSrcmgrTests PRIVATE
+  ${COMGR_GTEST_LIBS}
+  hotswap::transpiler
+  ${LLVM_PTHREAD_LIB})
+
+target_include_directories(MCContextInlineSrcmgrTests PRIVATE
+  ${COMGR_GTEST_INCLUDE_DIRS})
+
+comgr_configure_test_target(MCContextInlineSrcmgrTests)
+
 # Register every test binary with the test-unit / check-comgr plumbing.
 add_custom_target(test-unit
   COMMAND $<TARGET_FILE:HotswapElfTests>
   COMMAND $<TARGET_FILE:HotswapMCTests>
+  COMMAND $<TARGET_FILE:CodeObjectUtilsTests>
+  COMMAND $<TARGET_FILE:MCContextInlineSrcmgrTests>
   COMMAND $<TARGET_FILE:RaiserScaffoldingTests>)
 add_dependencies(test-unit HotswapElfTests HotswapMCTests
-  RaiserScaffoldingTests)
+  RaiserScaffoldingTests
+  CodeObjectUtilsTests
+  MCContextInlineSrcmgrTests)
 add_dependencies(check-comgr test-unit)
