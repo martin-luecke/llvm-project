@@ -18,6 +18,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "comgr-metadata.h"
+#include "co-utils/comgr-co-utils.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/BinaryFormat/MsgPackDocument.h"
@@ -37,8 +38,6 @@ using namespace llvm::object;
 namespace COMGR {
 namespace metadata {
 
-template <typename ELFT> using Elf_Note = typename ELFT::Note;
-
 namespace {
 Expected<std::unique_ptr<ELFObjectFileBase>>
 getELFObjectFileBase(DataObject *DataP) {
@@ -55,220 +54,26 @@ getELFObjectFileBase(DataObject *DataP) {
   return unique_dyn_cast<ELFObjectFileBase>(std::move(*ObjOrErr));
 }
 
-// PAL currently produces MsgPack metadata in a note with this ID.
-// FIXME: Unify with HSA note types?
-#define PAL_METADATA_NOTE_TYPE 13
-
-// Try to merge "amdhsa.kernels" from DocNode @p From to @p To.
-// The merge is allowed only if
-// 1. "amdhsa.version" exists and is same.
-// 2. "amdhsa.kernels" exists in both nodes.
-//
-// "amdhsa.printf" is copied from @p From if @p To doesn't have it.
-// If both have it, the merge is allowed only if they are identical
-// (as expected from LTO partitions sharing the same module-level
-// llvm.printf.fmts metadata).
-//
-// If merge is possible the function merges Kernel records
-// to @p To and returns @c true.
-// @p DestDoc is the document into which merged nodes are deep copied.
-bool mergeNoteRecords(llvm::msgpack::DocNode &From, llvm::msgpack::DocNode &To,
-                      const StringRef VersionStrKey,
-                      const StringRef PrintfStrKey,
-                      const StringRef KernelStrKey,
-                      llvm::msgpack::Document &DestDoc) {
-  if (!From.isMap()) {
-    return false;
-  }
-
-  if (To.isEmpty()) {
-    To = DestDoc.copyNode(From);
-    return true;
-  }
-
-  assert(To.isMap());
-
-  if (From.getMap().find(PrintfStrKey) != From.getMap().end()) {
-    if (To.getMap().find(PrintfStrKey) != To.getMap().end()) {
-      if (From.getMap()[PrintfStrKey] != To.getMap()[PrintfStrKey])
-        return false;
-    } else {
-      To.getMap()[PrintfStrKey] = DestDoc.copyNode(From.getMap()[PrintfStrKey]);
-    }
-  }
-
-  auto &FromMapNode = From.getMap();
-  auto &ToMapNode = To.getMap();
-
-  auto FromVersionArrayNode = FromMapNode.find(VersionStrKey);
-  auto ToVersionArrayNode = ToMapNode.find(VersionStrKey);
-
-  if ((FromVersionArrayNode == FromMapNode.end() ||
-       !FromVersionArrayNode->second.isArray()) ||
-      (ToVersionArrayNode == ToMapNode.end() ||
-       !ToVersionArrayNode->second.isArray())) {
-    return false;
-  }
-
-  auto FromVersionArray = FromMapNode[VersionStrKey].getArray();
-  auto ToVersionArray = ToMapNode[VersionStrKey].getArray();
-
-  if (FromVersionArray.size() != ToVersionArray.size()) {
-    return false;
-  }
-
-  for (size_t I = 0, E = FromVersionArray.size(); I != E; ++I) {
-    if (FromVersionArray[I] != ToVersionArray[I]) {
-      return false;
-    }
-  }
-
-  auto FromKernelArray = FromMapNode.find(KernelStrKey);
-  auto ToKernelArray = ToMapNode.find(KernelStrKey);
-
-  if ((FromKernelArray == FromMapNode.end() ||
-       !FromKernelArray->second.isArray()) ||
-      (ToKernelArray == ToMapNode.end() || !ToKernelArray->second.isArray())) {
-    return false;
-  }
-
-  auto &ToKernelRecords = ToKernelArray->second.getArray();
-  for (auto Kernel : FromKernelArray->second.getArray()) {
-    ToKernelRecords.push_back(DestDoc.copyNode(Kernel));
-  }
-
-  return true;
-}
-
-template <class ELFT>
-bool processNote(const Elf_Note<ELFT> &Note, DataMeta *MetaP,
-                 llvm::msgpack::DocNode &Root) {
-  auto DescString = Note.getDescAsStringRef(4);
-
-  if (Note.getName() == "AMD" && Note.getType() == ELF::NT_AMD_HSA_METADATA) {
-
-    if (!Root.isEmpty()) {
-      return false;
-    }
-
-    MetaP->MetaDoc->EmitIntegerBooleans = false;
-    MetaP->MetaDoc->RawDocument.clear();
-    if (!MetaP->MetaDoc->Document.fromYAML(DescString)) {
-      return false;
-    }
-
-    Root = MetaP->MetaDoc->Document.getRoot();
-    return true;
-  }
-  if (((Note.getName() == "AMD" || Note.getName() == "AMDGPU") &&
-       Note.getType() == PAL_METADATA_NOTE_TYPE) ||
-      (Note.getName() == "AMDGPU" &&
-       Note.getType() == ELF::NT_AMDGPU_METADATA)) {
-    if (!Root.isEmpty() && MetaP->MetaDoc->EmitIntegerBooleans != true) {
-      return false;
-    }
-
-    MetaP->MetaDoc->EmitIntegerBooleans = true;
-    MetaP->MetaDoc->RawDocumentList.push_back(std::string(DescString));
-
-    // Use a temporary document for parsing to avoid invalidating Root.
-    // DocNode contains pointers to memory owned by its Document, so reusing
-    // the same Document for parsing would invalidate nodes accumulated in Root.
-    llvm::msgpack::Document TempDoc;
-    if (!TempDoc.readFromBlob(MetaP->MetaDoc->RawDocumentList.back(), false)) {
-      return false;
-    }
-
-    return mergeNoteRecords(TempDoc.getRoot(), Root, "amdhsa.version",
-                            "amdhsa.printf", "amdhsa.kernels",
-                            MetaP->MetaDoc->Document);
-  }
-  return false;
-}
-
-template <class ELFT>
-amd_comgr_status_t getElfMetadataRoot(const ELFObjectFile<ELFT> *Obj,
-                                      DataMeta *MetaP) {
-  bool Found = false;
-  llvm::msgpack::DocNode Root;
-  const ELFFile<ELFT> &ELFFile = Obj->getELFFile();
-
-  auto ProgramHeadersOrError = ELFFile.program_headers();
-  if (errorToBool(ProgramHeadersOrError.takeError())) {
-    return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
-  }
-
-  for (const auto &Phdr : *ProgramHeadersOrError) {
-    if (Phdr.p_type != ELF::PT_NOTE) {
-      continue;
-    }
-    Error Err = Error::success();
-    for (const auto &Note : ELFFile.notes(Phdr, Err)) {
-      if (processNote<ELFT>(Note, MetaP, Root)) {
-        Found = true;
-      }
-    }
-
-    if (errorToBool(std::move(Err))) {
-      return AMD_COMGR_STATUS_ERROR;
-    }
-  }
-
-  if (Found) {
-    MetaP->MetaDoc->Document.getRoot() = Root;
-    MetaP->DocNode = MetaP->MetaDoc->Document.getRoot();
-    return AMD_COMGR_STATUS_SUCCESS;
-  }
-
-  auto SectionsOrError = ELFFile.sections();
-  if (errorToBool(SectionsOrError.takeError())) {
-    return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
-  }
-
-  for (const auto &Shdr : *SectionsOrError) {
-    if (Shdr.sh_type != ELF::SHT_NOTE) {
-      continue;
-    }
-    Error Err = Error::success();
-    for (const auto &Note : ELFFile.notes(Shdr, Err)) {
-      if (processNote<ELFT>(Note, MetaP, Root)) {
-        Found = true;
-      }
-    }
-
-    if (errorToBool(std::move(Err))) {
-      return AMD_COMGR_STATUS_ERROR;
-    }
-  }
-
-  if (Found) {
-    MetaP->MetaDoc->Document.getRoot() = Root;
-    MetaP->DocNode = MetaP->MetaDoc->Document.getRoot();
-    return AMD_COMGR_STATUS_SUCCESS;
-  }
-
-  return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
-}
 } // namespace
 
 amd_comgr_status_t getMetadataRoot(DataObject *DataP, DataMeta *MetaP) {
-  auto ObjOrErr = getELFObjectFileBase(DataP);
-  if (errorToBool(ObjOrErr.takeError())) {
+  // Defer ELF parsing + AMDGPU note walking to the shared `comgr-co-utils`
+  // helper. The helper writes parsed nodes directly into the
+  // `MetaP->MetaDoc->Document` arena (deep-copying strings via
+  // `Document::copyNode`) and reports which note format was matched via
+  // `EmitIntegerBooleans`, which downstream `iterate_map_metadata` reads.
+  MemoryBufferRef MB(StringRef(DataP->Data, DataP->Size), "");
+  auto FoundOrErr = co_utils::walkElfMetadataIntoDoc(
+      MB, MetaP->MetaDoc->Document, MetaP->MetaDoc->EmitIntegerBooleans);
+  if (!FoundOrErr) {
+    consumeError(FoundOrErr.takeError());
     return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
   }
-  auto *Obj = ObjOrErr->get();
-
-  if (auto *ELF32LE = dyn_cast<ELF32LEObjectFile>(Obj)) {
-    return getElfMetadataRoot(ELF32LE, MetaP);
+  if (!*FoundOrErr) {
+    return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
   }
-  if (auto *ELF64LE = dyn_cast<ELF64LEObjectFile>(Obj)) {
-    return getElfMetadataRoot(ELF64LE, MetaP);
-  }
-  if (auto *ELF32BE = dyn_cast<ELF32BEObjectFile>(Obj)) {
-    return getElfMetadataRoot(ELF32BE, MetaP);
-  }
-  auto *ELF64BE = dyn_cast<ELF64BEObjectFile>(Obj);
-  return getElfMetadataRoot(ELF64BE, MetaP);
+  MetaP->DocNode = MetaP->MetaDoc->Document.getRoot();
+  return AMD_COMGR_STATUS_SUCCESS;
 }
 
 struct IsaInfo {
