@@ -226,16 +226,12 @@ bool isStrictMode() {
 
 // Raise one kernel to IR, compile to a relocatable .o via llc + llvm-mc.
 // On success, writes the .o to objPath and returns true.
-static bool raiseAndCompileKernel(const TextSection &text,
-                                  llvm::ArrayRef<uint8_t> codeObjectData,
-                                  llvm::StringRef kernelName,
-                                  llvm::StringRef sourceISA,
-                                  llvm::StringRef targetISA,
-                                  const DumpDir &tmpDir,
-                                  llvm::StringRef objPath,
-                                  PipelineResult &result,
-                                  bool enableWritelaneRewrite,
-                                  bool enableWaveNative) {
+static bool raiseAndCompileKernel(
+    const TextSection &text, llvm::ArrayRef<uint8_t> codeObjectData,
+    llvm::StringRef kernelName, llvm::StringRef sourceISA,
+    llvm::StringRef targetISA, const DumpDir &tmpDir, llvm::StringRef objPath,
+    PipelineResult &result, bool enableWritelaneRewrite, bool enableWaveNative,
+    bool enableHighPrecisionMfma) {
   auto meta = extractKernelMeta(codeObjectData, kernelName);
   if (meta.args.empty()) {
     llvm::errs() << "transpiler: WARNING: No metadata found for '" << kernelName
@@ -260,8 +256,8 @@ static bool raiseAndCompileKernel(const TextSection &text,
                  << "\n");
 
   auto raised = raiseToIR(text.bytes, sourceISA, kernelName, meta, kernelOffset,
-                           targetISA, enableWritelaneRewrite,
-                           enableWaveNative);
+                          targetISA, enableWritelaneRewrite, enableWaveNative,
+                          enableHighPrecisionMfma);
   if (!raised.success) {
     llvm::errs() << "transpiler: Raising '" << kernelName << "' to LLVM IR failed";
     result.failKernel = kernelName;
@@ -378,11 +374,10 @@ void collectTargetPrivateSegmentMetadata(PipelineResult &result,
 }
 
 PipelineResult runPipeline(llvm::ArrayRef<uint8_t> codeObjectData,
-                           llvm::StringRef sourceISA,
-                           llvm::StringRef targetISA,
+                           llvm::StringRef sourceISA, llvm::StringRef targetISA,
                            llvm::StringRef kernelName,
-                           bool enableWritelaneRewrite,
-                           bool enableWaveNative) {
+                           bool enableWritelaneRewrite, bool enableWaveNative,
+                           bool enableHighPrecisionMfma) {
   PipelineResult result;
 
   auto text = extractTextSection(codeObjectData);
@@ -404,9 +399,10 @@ PipelineResult runPipeline(llvm::ArrayRef<uint8_t> codeObjectData,
   std::string objPath   = tmpDir.filePath("kernel.o");
   std::string hsacoPath = tmpDir.filePath("kernel.hsaco");
 
-  if (!raiseAndCompileKernel(text, codeObjectData, kernelName,
-                             sourceISA, targetISA, tmpDir, objPath, result,
-                             enableWritelaneRewrite, enableWaveNative))
+  if (!raiseAndCompileKernel(text, codeObjectData, kernelName, sourceISA,
+                             targetISA, tmpDir, objPath, result,
+                             enableWritelaneRewrite, enableWaveNative,
+                             enableHighPrecisionMfma))
     return result;
 
   if (!linkObjects({objPath}, hsacoPath))
@@ -430,7 +426,8 @@ PipelineResult runPipelineAllKernels(llvm::ArrayRef<uint8_t> codeObjectData,
                                      llvm::StringRef sourceISA,
                                      llvm::StringRef targetISA,
                                      bool enableWritelaneRewrite,
-                                     bool enableWaveNative) {
+                                     bool enableWaveNative,
+                                     bool enableHighPrecisionMfma) {
   PipelineResult result;
 
   auto kernelNames = listKernelNames(codeObjectData);
@@ -465,9 +462,10 @@ PipelineResult runPipelineAllKernels(llvm::ArrayRef<uint8_t> codeObjectData,
     LLVM_DEBUG(llvm::dbgs() << "transpiler:   [" << (i + 1) << "/"
                             << kernelNames.size() << "] " << kName << " ... ");
 
-    if (!raiseAndCompileKernel(text, codeObjectData, kName,
-                               sourceISA, targetISA, tmpDir, objPath, result,
-                               enableWritelaneRewrite, enableWaveNative)) {
+    if (!raiseAndCompileKernel(text, codeObjectData, kName, sourceISA,
+                               targetISA, tmpDir, objPath, result,
+                               enableWritelaneRewrite, enableWaveNative,
+                               enableHighPrecisionMfma)) {
       LLVM_DEBUG(llvm::dbgs() << "FAILED\n");
       result.success = false;
       return result;

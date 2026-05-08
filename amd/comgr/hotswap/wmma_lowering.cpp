@@ -30,10 +30,21 @@
 // width (K=32 for 16-bit elements, K=64 for 8-bit elements), so the
 // total bytes per lane stay constant. The lane redistribution math
 // below operates on dwords (32-bit cells); it is therefore byte-
-// identical across element widths — the only per-variant divergence
-// lives in (a) the MFMA intrinsic dispatched on the gfx942 side and
-// (b) the per-MFMA bitcast / pack type. See `runGroupPass` and the
-// `WMMAInputType` enum in `wmma_lowering.hpp` for the full enumeration.
+// identical across element widths — the per-variant divergence lives
+// in:
+//   (a) the MFMA intrinsic dispatched on the gfx942 side,
+//   (b) the per-MFMA bitcast / pack type, and
+//   (c) optionally, when `RaiseContext::enableHighPrecisionMfma` is
+//       set and the source WMMA carries bf16 inputs, a software
+//       bf16 → fp32 upcast followed by a chain of K=4 fp32 MFMAs
+//       (`emitChainedF32MfmaBF16Upcast`) instead of the default
+//       chained K=16 bf16 MFMA path (`emitDefaultChainedMfma`).
+//       The high-precision path is a precision/throughput tradeoff
+//       and is NOT bit-exact equivalent to either the source WMMA
+//       or to the default chained-bf16 path; see the helper's
+//       block comment for the contract.
+// See `runGroupPass` for the dispatch and the `WMMAInputType` enum
+// in `wmma_lowering.hpp` for the full variant enumeration.
 //
 //   A input — 16-bit variants (8 VGPRs, <16 x {half|bfloat}>):
 //     i = lane % 16
@@ -76,7 +87,8 @@
 //   C/D output (4 VGPRs, <4 x float>) — invariant across variants:
 //     i = 4*floor(lane/16) + (GPR % 4)
 //     j = lane % 16
-//     → Lanes 0-15: rows 0-3; 16-31: rows 4-7; 32-47: rows 8-11; 48-63: rows 12-15
+//     → Lanes 0-15: rows 0-3; 16-31: rows 4-7;
+//       32-47: rows 8-11; 48-63: rows 12-15
 //
 // Approach
 // --------
@@ -323,56 +335,56 @@ static void collectResult(IRBuilder<> &B, Module &M,
   }
 }
 
-/// Run one full pass for a virtual Wave32 group:
-/// redistribute → 2× MFMA → collect, wrapped in a single whole-wave
-/// region so the cross-lane pipeline runs with EXEC = -1 regardless
-/// of the caller-level EXEC mask (see file-header "Whole-wave mode").
+/// Default chained-MFMA path: emits 2 chained MFMAs per source-wave
+/// group (one for K=0..15, one for K=16..31), feeding each redistributed
+/// AB pair into the per-input-type CDNA intrinsic with the source's
+/// native element width (bf16 / fp16 / fp8 / bf8 / i8). This is the
+/// long-standing default; the diagnostic high-precision alternative
+/// for bf16 lives in `emitChainedF32MfmaBF16Upcast` above and is
+/// dispatched from `runGroupPass` based on `RaiseContext::
+/// enableHighPrecisionMfma`.
 ///
-/// \param groupBase  0 for group 0 (W64 lanes 0-31), 32 for group 1 (lanes 32-63)
-/// \param inputType  selects MFMA intrinsic + per-MFMA pack/bitcast type.
-///                   The lane-redistribution math is element-type-agnostic
-///                   across the entire WMMAInputType enumeration because
-///                   every supported variant has the same per-Wave32-lane
-///                   fragment size (8 VGPRs of A, 8 VGPRs of B, 8 VGPRs of
-///                   f32 C/D) and the same K-decomposition factor (split
-///                   into 2 chained MFMA calls per Wave32 group). The only
-///                   per-variant divergence is the MFMA intrinsic name
-///                   and the per-MFMA-call pack type:
-///                     F16    → mfma_f32_16x16x16f16,        <4 x half>
-///                     BF16   → mfma_f32_16x16x16bf16_1k,    <4 x i16>
-///                     FP8_*  → mfma_f32_16x16x32_<a>_<b>,   i64
-///                     BF8_*  → mfma_f32_16x16x32_<a>_<b>,   i64
-///                   The bf16 → i16 and fp8/bf8 → i64 bitcasts are
-///                   principled: the matching CDNA MFMA intrinsics were
-///                   defined before the corresponding first-class LLVM
-///                   types existed, and the storage containers are
-///                   bit-for-bit identical.
-static void runGroupPass(IRBuilder<> &B, Module &M, RaiseContext &ctx,
-                         unsigned groupBase, Value *laneId,
-                         Value **aDwords, Value **bDwords, Value **cDwords,
-                         WMMAInputType inputType,
-                         Value **resultDwords) {
-  Value *laneMod16 = B.CreateAnd(laneId, B.getInt32(15), "lane16");
-  Value *loLane = B.CreateAdd(laneMod16, B.getInt32(groupBase), "lo_lane");
-  Value *hiLane = B.CreateAdd(laneMod16, B.getInt32(groupBase + 16), "hi_lane");
-  Value *addrLo = B.CreateShl(loLane, B.getInt32(2), "addr_lo");
-  Value *addrHi = B.CreateShl(hiLane, B.getInt32(2), "addr_hi");
-  Value *laneGroup = B.CreateLShr(laneId, B.getInt32(4), "lane_grp");
-
-  Value *mfmaA_lo[2], *mfmaA_hi[2];
-  redistributeInput(B, M, aDwords, addrLo, addrHi, laneGroup,
-                    mfmaA_lo, mfmaA_hi);
-
-  Value *mfmaB_lo[2], *mfmaB_hi[2];
-  redistributeInput(B, M, bDwords, addrLo, addrHi, laneGroup,
-                    mfmaB_lo, mfmaB_hi);
-
-  Value *mfmaC[4];
-  redistributeAcc(B, M, cDwords, addrLo, addrHi, laneGroup, mfmaC);
-
-  // Per-MFMA bitcast type and intrinsic dispatch — the only point in
-  // the lowering where the WMMA variants diverge.
-  //
+/// CONTRACT (matches what the source WMMA computes for one Wave32 group):
+///   inputs:  mfmaA_lo / mfmaB_lo / mfmaA_hi / mfmaB_hi are 2-dword
+///            `i32` arrays from `redistributeInput`. lo covers K=0..15
+///            and hi covers K=16..31 (per `redistributeInput`'s K-mapping).
+///   acc:     `<4 x float>` (or `<4 x i32>` for IU8) accumulator from
+///            `redistributeAcc`.
+/// returns:  updated accumulator covering K=0..31, with the same vector
+///           shape as the input `acc` (the dispatched MFMA preserves the
+///           accumulator pack type).
+///
+/// `wrapAsWWMValue` rationale (preserved from the pre-refactor code):
+/// MFMA is EXEC-gated on its WRITE: a lane with EXEC=0 skips updating
+/// its destination VGPR. Under `WaveNativeProjection` the kernel-entry
+/// `init_whole_wave` keeps HW EXEC=-1 kernel-wide so every lane writes
+/// its MFMA output and `wrapAsWWMValue` is a no-op. Under
+/// `ModuloReplicationProjection` (phantom-lane fallback) HW EXEC =
+/// source-active-mask kernel-wide, so target lanes 32..63 would never
+/// write their MFMA destination VGPR — and the subsequent
+/// `collectResult` bpermute DOES read from those target lanes (target
+/// lanes 16..31 pull rows 8..15 from source lanes 32..47's MFMA
+/// output), so stale data would corrupt output rows 8..15.
+/// `wrapAsWWMValue` inserts a `strict.wwm` marker on each MFMA output
+/// under MODREP, telling the AMDGPU backend's `SIWholeQuadMode` pass
+/// to mark the MFMA itself as WWM and emit `s_or_saveexec_b64 sN, -1`
+/// / `s_mov_b64 exec, sN` around it so every lane writes its output.
+///
+/// We wrap the MFMA outputs specifically (not just the final collect
+/// results) because SIWholeQuadMode's backward-propagation from a
+/// `strict.wwm` on a later `ds_bpermute` result stops at the bpermute
+/// boundary — the backend sees the bpermute reads source lanes
+/// 0..W_src-1 by address and concludes the MFMA output on lanes
+/// W_src..2*W_src-1 is "not consumed", which is correct for a
+/// single-pass MFMA but wrong for our cross-widening lowering where
+/// the collect bpermute DOES pull from those upper-half lanes to
+/// assemble rows 8..15. Wrapping the MFMA result directly forces the
+/// MFMA into the WWM backward slice.
+static Value *emitDefaultChainedMfma(IRBuilder<> &B, Module &M,
+                                     RaiseContext &ctx, Value **mfmaA_lo,
+                                     Value **mfmaB_lo, Value **mfmaA_hi,
+                                     Value **mfmaB_hi, Value *acc,
+                                     WMMAInputType inputType) {
   // AB pack type:
   //   16-bit variants pack 2 redistributed dwords into a `<4 x t>` vector
   //   (4 elements per lane × 2 bytes = 8 bytes = 2 dwords). The 8-bit
@@ -381,99 +393,299 @@ static void runGroupPass(IRBuilder<> &B, Module &M, RaiseContext &ctx,
   //   LLVM type (and there's no first-class packed-i8 vector type either),
   //   so they take 8 packed fp8/bf8/i8 bytes as i64 directly. Both packings
   //   are 64-bit and produced by the same 2-dword reduce (`packDwords`).
-  //
-  // Accumulator pack type:
-  //   F32-accumulator MFMAs (everything except IU8) take `<4 x float>`.
-  //   The IU8 path takes `<4 x i32>` to match the integer-accumulator
-  //   `mfma_i32_16x16x32_i8` signature.
-  Type *mfmaABPackTy = nullptr;
-  Type *mfmaAccPackTy = nullptr;
+  Type *abPackTy = nullptr;
   Intrinsic::ID mfmaId;
   switch (inputType) {
   case WMMAInputType::F16:
-    mfmaABPackTy = FixedVectorType::get(ctx.f16Ty, 4);
-    mfmaAccPackTy = FixedVectorType::get(ctx.f32Ty, 4);
+    abPackTy = FixedVectorType::get(ctx.f16Ty, 4);
     mfmaId = Intrinsic::amdgcn_mfma_f32_16x16x16f16;
     break;
   case WMMAInputType::BF16:
-    mfmaABPackTy = FixedVectorType::get(Type::getInt16Ty(ctx.C), 4);
-    mfmaAccPackTy = FixedVectorType::get(ctx.f32Ty, 4);
+    abPackTy = FixedVectorType::get(Type::getInt16Ty(ctx.C), 4);
     mfmaId = Intrinsic::amdgcn_mfma_f32_16x16x16bf16_1k;
     break;
   case WMMAInputType::FP8_FP8:
-    mfmaABPackTy = ctx.i64Ty;
-    mfmaAccPackTy = FixedVectorType::get(ctx.f32Ty, 4);
+    abPackTy = ctx.i64Ty;
     mfmaId = Intrinsic::amdgcn_mfma_f32_16x16x32_fp8_fp8;
     break;
   case WMMAInputType::FP8_BF8:
-    mfmaABPackTy = ctx.i64Ty;
-    mfmaAccPackTy = FixedVectorType::get(ctx.f32Ty, 4);
+    abPackTy = ctx.i64Ty;
     mfmaId = Intrinsic::amdgcn_mfma_f32_16x16x32_fp8_bf8;
     break;
   case WMMAInputType::BF8_FP8:
-    mfmaABPackTy = ctx.i64Ty;
-    mfmaAccPackTy = FixedVectorType::get(ctx.f32Ty, 4);
+    abPackTy = ctx.i64Ty;
     mfmaId = Intrinsic::amdgcn_mfma_f32_16x16x32_bf8_fp8;
     break;
   case WMMAInputType::BF8_BF8:
-    mfmaABPackTy = ctx.i64Ty;
-    mfmaAccPackTy = FixedVectorType::get(ctx.f32Ty, 4);
+    abPackTy = ctx.i64Ty;
     mfmaId = Intrinsic::amdgcn_mfma_f32_16x16x32_bf8_bf8;
     break;
   case WMMAInputType::IU8:
-    mfmaABPackTy = ctx.i64Ty;
-    mfmaAccPackTy = FixedVectorType::get(ctx.i32Ty, 4);
+    abPackTy = ctx.i64Ty;
     mfmaId = Intrinsic::amdgcn_mfma_i32_16x16x32_i8;
     break;
   }
 
-  Value *srcA_lo = packDwords(B, mfmaA_lo, 2, ctx.i32Ty, mfmaABPackTy);
-  Value *srcB_lo = packDwords(B, mfmaB_lo, 2, ctx.i32Ty, mfmaABPackTy);
-  Value *acc     = packDwords(B, mfmaC,    4, ctx.i32Ty, mfmaAccPackTy);
+  Value *srcA_lo = packDwords(B, mfmaA_lo, 2, ctx.i32Ty, abPackTy);
+  Value *srcB_lo = packDwords(B, mfmaB_lo, 2, ctx.i32Ty, abPackTy);
 
   Function *mfmaFn = Intrinsic::getOrInsertDeclaration(&M, mfmaId);
   Value *cbsz = B.getInt32(0), *abid = B.getInt32(0), *blgp = B.getInt32(0);
 
-  // MFMA is EXEC-gated on its WRITE: a lane with EXEC=0 skips
-  // updating its destination VGPR.  Under `WaveNativeProjection` the
-  // kernel-entry `init_whole_wave` keeps HW EXEC=-1 kernel-wide so
-  // every lane writes its MFMA output and `wrapAsWWMValue` is a
-  // no-op.  Under `ModuloReplicationProjection` (phantom-lane
-  // fallback) HW EXEC = source-active-mask kernel-wide, so target
-  // lanes 32..63 would never write their MFMA destination VGPR —
-  // and the subsequent `collectResult` bpermute DOES read from
-  // those target lanes (target lanes 16..31 pull rows 8..15 from
-  // source lanes 32..47's MFMA output), so stale data would
-  // corrupt output rows 8..15.  `wrapAsWWMValue` inserts a
-  // `strict.wwm` marker on each MFMA output under MODREP, telling
-  // the AMDGPU backend's `SIWholeQuadMode` pass to mark the MFMA
-  // itself as WWM and emit `s_or_saveexec_b64 sN, -1` / `s_mov_b64
-  // exec, sN` around it so every lane writes its output.
-  //
-  // We wrap the MFMA outputs specifically (not just the final collect
-  // results) because SIWholeQuadMode's backward-propagation from a
-  // `strict.wwm` on a later `ds_bpermute` result stops at the
-  // bpermute boundary — the backend sees the bpermute reads source
-  // lanes 0..W_src-1 by address and concludes the MFMA output on
-  // lanes W_src..2*W_src-1 is "not consumed", which is correct for
-  // a single-pass MFMA but wrong for our cross-widening lowering
-  // where the collect bpermute DOES pull from those upper-half
-  // lanes to assemble rows 8..15.  Wrapping the MFMA result directly
-  // forces the MFMA into the WWM backward slice.
   Value *mfma1 = ctx.projection.wrapAsWWMValue(
       B,
-      B.CreateCall(mfmaFn,
-                   {srcA_lo, srcB_lo, acc, cbsz, abid, blgp}, "mfma1"),
+      B.CreateCall(mfmaFn, {srcA_lo, srcB_lo, acc, cbsz, abid, blgp}, "mfma1"),
       "mfma1_wwm");
 
-  Value *srcA_hi = packDwords(B, mfmaA_hi, 2, ctx.i32Ty, mfmaABPackTy);
-  Value *srcB_hi = packDwords(B, mfmaB_hi, 2, ctx.i32Ty, mfmaABPackTy);
+  Value *srcA_hi = packDwords(B, mfmaA_hi, 2, ctx.i32Ty, abPackTy);
+  Value *srcB_hi = packDwords(B, mfmaB_hi, 2, ctx.i32Ty, abPackTy);
 
-  Value *mfma2 = ctx.projection.wrapAsWWMValue(
+  return ctx.projection.wrapAsWWMValue(
       B,
-      B.CreateCall(mfmaFn,
-                   {srcA_hi, srcB_hi, mfma1, cbsz, abid, blgp}, "mfma2"),
+      B.CreateCall(mfmaFn, {srcA_hi, srcB_hi, mfma1, cbsz, abid, blgp},
+                   "mfma2"),
       "mfma2_wwm");
+}
+
+/// Diagnostic helper: chain four `mfma_f32_16x16x4f32` calls to cover
+/// the same K=16 work that one `mfma_f32_16x16x16bf16_1k` covers,
+/// but doing the bf16 → fp32 upcast in software so the multiplier
+/// hardware rounds differently from the bf16-with-fp32-accum path.
+/// Selected only when `RaiseContext::enableHighPrecisionMfma` is set
+/// AND the source WMMA's input type is BF16; other input variants
+/// stay on the default chained path.
+///
+/// BIT-EXACTNESS CONTRACT. This is NOT a path to bit-exact equivalence
+/// with either (a) the source `v_wmma_f32_16x16x32_bf16` or (b) a
+/// native gfx-target Triton compilation that uses the default chained
+/// bf16 MFMA path. Two facts make bit-exact equivalence impossible
+/// in this direction:
+///
+///   1. The K=32 single-shot bf16 MFMA does not exist on gfx942.
+///      `mfma_f32_16x16x32_bf16` is gfx950-only (gated behind
+///      `VOP3P_Real_MFMA_gfx950`); on gfx942 we have only K=16 bf16
+///      MFMA and have to chain calls to cover K=32, which forces an
+///      intermediate rounding boundary that the source WMMA did not
+///      have.
+///
+///   2. fp32×fp32 multiplication via `mfma_f32_16x16x4f32` is genuinely
+///      different from bf16-with-fp32-accum hardware. Even with the
+///      bf16→fp32 software upcast being lossless, the MFMA multiplier
+///      hardware itself rounds differently between the bf16 and f32
+///      input variants. The internal precision of gfx942's bf16 MFMA
+///      product is not specified by AMD docs in a way we can
+///      replicate by software upcast.
+///
+/// The helper's value is therefore diagnostic rather than corrective:
+/// comparing the matched-prefix logprob drift with the flag on vs off
+/// lets callers attribute drift to the chained-MFMA accumulator
+/// boundary (off vs on differs), to bf16-multiply precision (off vs
+/// on differs in the opposite direction), or to upstream Triton-
+/// compilation differences between wave32 source and a native wave64
+/// compilation (off vs on roughly the same).
+///
+/// CONTRACT (matches the bf16 K=16 MFMA the caller would otherwise emit):
+///   inputs:  a32[2], b32[2] are `i32` dwords as produced by
+///            `redistributeInput`. Each lane carries 2 dwords = 4 bf16
+///            elements. The K-mapping per lane-group matches the bf16
+///            K=16 MFMA: LG0 holds k=0..3, LG1 holds k=4..7, LG2 holds
+///            k=8..11, LG3 holds k=12..15. Within each lane-group the
+///            4 bf16 elements are laid out: dword 0 half 0 → K-element
+///            index 0, dword 0 half 1 → 1, dword 1 half 0 → 2, dword 1
+///            half 1 → 3.
+///   acc:     `<4 x float>` accumulator coming from `redistributeAcc`
+///            (or chained from the previous K-chunk's MFMA output).
+/// returns:  updated `<4 x float>` accumulator covering K=0..15.
+///
+/// The 4 chained `mfma_f32_16x16x4f32` calls below cycle through the
+/// within-lane-group K-element index (0, 1, 2, 3 in order). Each
+/// `mfma_f32_16x16x4f32` reduces across its 4 lane-groups, so per
+/// call the source K-positions covered are:
+///
+///     call k=0:  K ∈ {0, 4, 8, 12}   (each LG provides its element-0)
+///     call k=1:  K ∈ {1, 5, 9, 13}
+///     call k=2:  K ∈ {2, 6, 10, 14}
+///     call k=3:  K ∈ {3, 7, 11, 15}
+///
+/// Union over k=0..3 covers K=0..15 exactly once.
+///
+/// LAYOUT INVARIANTS INHERITED FROM `redistributeInput`. This helper
+/// makes no independent claims about the source WMMA layout — it
+/// consumes whatever `redistributeInput` produces. So the existing
+/// caveats on `redistributeInput` (notably the WMMA.A vs WMMA.B
+/// asymmetry documented at lines 240-248 above and resolved by the
+/// asymmetric `v_permlane16_swap_b32` lift in `handle_valu_cross_lane.cpp`
+/// per `matrix-translation.md` §12.4.7) apply identically. A layout
+/// regression upstream of `redistributeInput` would surface as
+/// wrong numerics in BOTH the default chained-bf16 path and this
+/// high-precision path.
+///
+/// FP-ARITHMETIC ORDER. The decomposition is a strict left-fold over
+/// the within-lane-group K-element index (0, 1, 2, 3). Under fp32
+/// arithmetic each per-K-element contribution is added to a fresh
+/// fp32 accumulator with one rounding per addition; this is a
+/// different rounding shape than the bf16 K=16 MFMA hardware uses
+/// internally. The choice of K-order is one of several arithmetically-
+/// equivalent (in real arithmetic) but FP-distinct deterministic
+/// orderings; "ascending K-element index" is the simplest and matches
+/// what a maintainer would expect. See the design doc section 5.2 for
+/// the bit-exactness analysis and section 8 for the empirical drift
+/// comparison.
+///
+/// BF16 → FP32 UPCAST. `bitcast i32 → <2 x bfloat>` reinterprets the
+/// dword as two bf16 halves. On the AMDGPU target (little-endian, per
+/// the data layout string emitted by `raiseToIRImpl` and the AMDGPU
+/// backend's invariant), `<2 x bfloat>` element 0 = low 16 bits of the
+/// i32 = the bf16 half at smaller K within the K-pair stored in that
+/// dword (per the `k = ... + 2*GPR + floor(bits/16)` mapping documented
+/// at the file-header `gfx12 (RDNA4) ... A input` section). `fpext
+/// bfloat → float` is value-preserving for every finite, ±Inf, NaN, and
+/// denormal bf16 input — every representable bf16 value has a unique
+/// exact fp32 representation (same sign, same exponent, mantissa padded
+/// with 16 trailing zeros), and on AMDGPU this lowers to
+/// `v_cvt_f32_bf16` which preserves bits 1:1. Whether subsequent fp32
+/// arithmetic then flushes denormals depends on the kernel's
+/// denormal-fp-math mode, NOT on the upcast itself.
+///
+/// `wrapAsWWMValue` is applied to every MFMA output in the chain (not
+/// just the last one) for the same MODREP phantom-lane correctness
+/// reason that the bf16 K=16 path wraps both `mfma1` and `mfma2`: each
+/// MFMA's output VGPR is an input to the NEXT MFMA in the chain, and
+/// under MODREP a hardware-EXEC-gated MFMA write would leave phantom-
+/// lane VGPRs stale, causing the subsequent MFMA's accumulator read
+/// to pick up garbage. Wrapping every MFMA output forces the AMDGPU
+/// backend's `SIWholeQuadMode` pass to keep each MFMA in a WWM
+/// region. Under WaveNative `wrapAsWWMValue` is an identity no-op
+/// (kernel-entry `init_whole_wave` already pins HW EXEC=-1 kernel-
+/// wide), so the markers are zero-cost in the WaveNative case.
+///
+/// `namePrefix` is prepended to every emitted SSA value's name; see
+/// the call sites in `runGroupPass` for the "lo" / "hi" convention
+/// (one chain per K-chunk under the source WMMA's K=32 → 2*K=16
+/// decomposition). Default `"hpf32"` keeps standalone callers' IR
+/// readable without forcing them to invent a label.
+static Value *emitChainedF32MfmaBF16Upcast(IRBuilder<> &B, Module &M,
+                                           RaiseContext &ctx, Value **a32,
+                                           Value **b32, Value *acc,
+                                           const Twine &namePrefix = "hpf32") {
+  // Bitcast each i32 dword into <2 x bfloat>, then fpext to <2 x float>.
+  // Two dwords give us 4 bfloat elements per lane → 4 fp32 elements.
+  // The bitcast direction relies on the AMDGPU target being little-
+  // endian; the upcast itself is value-preserving (every bf16 value
+  // has an exact fp32 representation). See the function-level block
+  // comment above for the precise contract.
+  Type *bf16Ty = Type::getBFloatTy(ctx.C);
+  auto *v2bf16Ty = FixedVectorType::get(bf16Ty, 2);
+  auto *v2f32Ty = FixedVectorType::get(ctx.f32Ty, 2);
+  Value *aFp32[4];
+  Value *bFp32[4];
+  for (unsigned d = 0; d < 2; ++d) {
+    Value *aBf =
+        B.CreateBitCast(a32[d], v2bf16Ty, namePrefix + "_a_bf16_d" + Twine(d));
+    Value *bBf =
+        B.CreateBitCast(b32[d], v2bf16Ty, namePrefix + "_b_bf16_d" + Twine(d));
+    Value *aF = B.CreateFPExt(aBf, v2f32Ty, namePrefix + "_a_f32_d" + Twine(d));
+    Value *bF = B.CreateFPExt(bBf, v2f32Ty, namePrefix + "_b_f32_d" + Twine(d));
+    for (unsigned e = 0; e < 2; ++e) {
+      aFp32[2 * d + e] = B.CreateExtractElement(
+          aF, B.getInt32(e), namePrefix + "_a_e" + Twine(e) + "_d" + Twine(d));
+      bFp32[2 * d + e] = B.CreateExtractElement(
+          bF, B.getInt32(e), namePrefix + "_b_e" + Twine(e) + "_d" + Twine(d));
+    }
+  }
+
+  Function *mfmaFn = Intrinsic::getOrInsertDeclaration(
+      &M, Intrinsic::amdgcn_mfma_f32_16x16x4f32);
+  Value *cbsz = B.getInt32(0), *abid = B.getInt32(0), *blgp = B.getInt32(0);
+
+  // Strict left-fold over k_elem ∈ {0,1,2,3}. See the function-level
+  // block comment above for the K-coverage table and the discussion
+  // of why this ordering is one of several arithmetically-equivalent
+  // (in real arithmetic) but FP-distinct deterministic choices.
+  for (unsigned k = 0; k < 4; ++k) {
+    acc = ctx.projection.wrapAsWWMValue(
+        B,
+        B.CreateCall(mfmaFn, {aFp32[k], bFp32[k], acc, cbsz, abid, blgp},
+                     namePrefix + "_mfma_k" + Twine(k)),
+        namePrefix + "_mfma_k" + Twine(k) + "_wwm");
+  }
+  return acc;
+}
+
+/// Run one full pass for a virtual Wave32 group:
+/// redistribute → 2× MFMA → collect, wrapped in a single whole-wave
+/// region so the cross-lane pipeline runs with EXEC = -1 regardless
+/// of the caller-level EXEC mask (see file-header "Whole-wave mode").
+///
+/// \param groupBase  0 for source-wave group 0 (W64 lanes 0-31), 32 for
+///                   group 1 (lanes 32-63).
+/// \param inputType  selects which MFMA decomposition to dispatch to.
+///                   The lane-redistribution math is element-type-agnostic
+///                   across the entire WMMAInputType enumeration because
+///                   every supported variant has the same per-Wave32-lane
+///                   fragment size (8 VGPRs of A, 8 VGPRs of B, 8 VGPRs of
+///                   f32 C/D) and the same K-decomposition factor (split
+///                   into 2 chained MFMA calls per Wave32 group). The
+///                   per-input-type intrinsic / pack-type dispatch lives
+///                   in `emitDefaultChainedMfma` (default path) and in
+///                   `emitChainedF32MfmaBF16Upcast` (high-precision
+///                   diagnostic path for the BF16 variant only); see the
+///                   block comment above each helper for the variant
+///                   coverage and the bit-exactness contract.
+static void runGroupPass(IRBuilder<> &B, Module &M, RaiseContext &ctx,
+                         unsigned groupBase, Value *laneId, Value **aDwords,
+                         Value **bDwords, Value **cDwords,
+                         WMMAInputType inputType, Value **resultDwords) {
+  Value *laneMod16 = B.CreateAnd(laneId, B.getInt32(15), "lane16");
+  Value *loLane = B.CreateAdd(laneMod16, B.getInt32(groupBase), "lo_lane");
+  Value *hiLane = B.CreateAdd(laneMod16, B.getInt32(groupBase + 16), "hi_lane");
+  Value *addrLo = B.CreateShl(loLane, B.getInt32(2), "addr_lo");
+  Value *addrHi = B.CreateShl(hiLane, B.getInt32(2), "addr_hi");
+  Value *laneGroup = B.CreateLShr(laneId, B.getInt32(4), "lane_grp");
+
+  Value *mfmaA_lo[2], *mfmaA_hi[2];
+  redistributeInput(B, M, aDwords, addrLo, addrHi, laneGroup, mfmaA_lo,
+                    mfmaA_hi);
+
+  Value *mfmaB_lo[2], *mfmaB_hi[2];
+  redistributeInput(B, M, bDwords, addrLo, addrHi, laneGroup, mfmaB_lo,
+                    mfmaB_hi);
+
+  Value *mfmaC[4];
+  redistributeAcc(B, M, cDwords, addrLo, addrHi, laneGroup, mfmaC);
+
+  // Pack the accumulator up-front; both the default chained-MFMA path
+  // and the diagnostic fp32 K=4 chain consume it as `<4 x float>` (or
+  // `<4 x i32>` for the IU8 integer-accumulator variant). The chosen
+  // accumulator type follows the dispatched MFMA's intrinsic
+  // signature; everything except IU8 uses the f32 accumulator.
+  Type *accPackTy = (inputType == WMMAInputType::IU8)
+                        ? FixedVectorType::get(ctx.i32Ty, 4)
+                        : FixedVectorType::get(ctx.f32Ty, 4);
+  Value *acc = packDwords(B, mfmaC, 4, ctx.i32Ty, accPackTy);
+
+  // High-precision diagnostic path: only meaningful for the BF16 input
+  // variant today (see `RaiseContext::enableHighPrecisionMfma` and the
+  // bit-exactness contract on `emitChainedF32MfmaBF16Upcast`). Other
+  // input variants fall through to the default chained-MFMA path so
+  // the flag is a no-op for them — this leaves the door open for an
+  // extension once the bf16 experiment validates the design, but does
+  // not silently change behaviour for variants we have not measured.
+  // To extend, drop the `inputType == BF16` guard, add the matching
+  // helper, and dispatch on `inputType`.
+  Value *mfma2;
+  if (ctx.enableHighPrecisionMfma && inputType == WMMAInputType::BF16) {
+    // K=0..15 chunk first, then chain K=16..31 onto its result;
+    // matches the default path's accumulator chaining order so a flag
+    // flip does not silently re-order the K-summation across chunks.
+    Value *accLo =
+        emitChainedF32MfmaBF16Upcast(B, M, ctx, mfmaA_lo, mfmaB_lo, acc, "lo");
+    mfma2 = emitChainedF32MfmaBF16Upcast(B, M, ctx, mfmaA_hi, mfmaB_hi, accLo,
+                                         "hi");
+  } else {
+    mfma2 = emitDefaultChainedMfma(B, M, ctx, mfmaA_lo, mfmaB_lo, mfmaA_hi,
+                                   mfmaB_hi, acc, inputType);
+  }
 
   Value *mfmaDst[4];
   unpackDwords(B, mfma2, 4, ctx.i32Ty, mfmaDst);

@@ -146,13 +146,15 @@ int usage() {
       "usage:\n"
       "  raise_cli <code-object.co|.hsaco> [--isa=<arch>] "
       "[--target-isa=<arch>] [--disable-writelane-rewrite] "
-      "[--disable-wave-native]\n"
+      "[--disable-wave-native] [--enable-high-precision-mfma]\n"
       "  raise_cli <code-object.co|.hsaco> --emit-ir[=<kernel>] "
       "[--isa=<arch>] [--target-isa=<arch>] "
-      "[--disable-writelane-rewrite] [--disable-wave-native]\n"
+      "[--disable-writelane-rewrite] [--disable-wave-native] "
+      "[--enable-high-precision-mfma]\n"
       "  raise_cli <code-object.co|.hsaco> --write-hsaco=<path> "
       "[--kernel=<name>] [--isa=<arch>] [--target-isa=<arch>] "
-      "[--disable-writelane-rewrite] [--disable-wave-native]\n"
+      "[--disable-writelane-rewrite] [--disable-wave-native] "
+      "[--enable-high-precision-mfma]\n"
       "\n"
       "Default mode: emits per-kernel OK/FAIL lines on stdout in the format\n"
       "  kerneldex coverage expects. Exits 0 iff every kernel raises.\n"
@@ -178,6 +180,15 @@ int usage() {
       "  class coverage (see wave-size-translation.md \u00a7\u00a72.2 / 5.6.1\n"
       "  and modrep-predicate-chain.md \u00a76 for the graduation\n"
       "  rationale). Later-wins on the command line.\n"
+      "--enable-high-precision-mfma / --disable-high-precision-mfma:\n"
+      "  diagnostic flag that routes bf16 WMMA \u2192 MFMA lowering through\n"
+      "  software bf16\u2192fp32 upcast and chained mfma_f32_16x16x4f32 calls\n"
+      "  instead of the default chained mfma_f32_16x16x16bf16_1k path.\n"
+      "  Default off. NOT a path to bit-exact equivalence with the\n"
+      "  source WMMA; intended as a more numerically-faithful reference\n"
+      "  for drift triage. See the block comment on\n"
+      "  `emitChainedF32MfmaBF16Upcast` in `wmma_lowering.cpp` for the\n"
+      "  bit-exactness contract.\n"
       "ISA is inferred from the filename when --isa is not given.\n");
   return 2;
 }
@@ -196,6 +207,13 @@ int main(int argc, char **argv) {
   // REFUSE / UNCHANGED sibling contracts.
   bool enableWritelaneRewrite = true;
   bool enableWaveNative = true;
+  // Diagnostic high-precision MFMA path. Default off so existing lit
+  // fixtures and corpus runs keep their pinned IR shapes; opt in via
+  // `--enable-high-precision-mfma` for fixtures that pin the
+  // upcasted-fp32 MFMA chain. See the block comment on
+  // `emitChainedF32MfmaBF16Upcast` in `wmma_lowering.cpp` for the
+  // bit-exactness contract.
+  bool enableHighPrecisionMfma = false;
   std::string emitIrKernel;
   std::string writeHsacoPath;
   std::string writeHsacoKernel;
@@ -242,6 +260,24 @@ int main(int argc, char **argv) {
       // "independent halves" throughput on pointwise kernels. See
       // this file's top-of-file comment.
       enableWaveNative = false;
+    } else if (a == "--enable-high-precision-mfma") {
+      // Diagnostic flag: route bf16 WMMA → MFMA through software-
+      // upcast fp32 K=4 chains (`emitChainedF32MfmaBF16Upcast` in
+      // `wmma_lowering.cpp`) rather than the default chained
+      // `mfma_f32_16x16x16bf16_1k` path. Opt in for the fixture
+      // that pins the upcasted IR shape and for triage workflows
+      // that want to compare matched-prefix logprob drift with vs
+      // without the upcast. NOT a path to bit-exact equivalence
+      // with the source WMMA — see `amd/comgr/hotswap/docs/local/
+      // 2026-05-08-sglang-bf16-attention-divergence.md` section 5.2
+      // for the bit-exactness analysis.
+      enableHighPrecisionMfma = true;
+    } else if (a == "--disable-high-precision-mfma") {
+      // Default off; this flag exists for symmetry with the other
+      // `--enable-/--disable-` pairs above and so a downstream
+      // wrapper can clear an earlier `--enable-` on the same
+      // command line. Later-wins on the command line.
+      enableHighPrecisionMfma = false;
     } else if (!a.empty() && a[0] == '-') {
       std::fprintf(stderr, "raise_cli: unknown flag: %s\n", a.c_str());
       return usage();
@@ -329,10 +365,9 @@ int main(int argc, char **argv) {
       return 1;
     }
     uint64_t kernelOffset = *kernelOffsetOrErr;
-    auto raised = transpiler::raiseToIR(text.bytes, isa, target, meta,
-                                        kernelOffset, targetIsa,
-                                        enableWritelaneRewrite,
-                                        enableWaveNative);
+    auto raised = transpiler::raiseToIR(
+        text.bytes, isa, target, meta, kernelOffset, targetIsa,
+        enableWritelaneRewrite, enableWaveNative, enableHighPrecisionMfma);
     if (!raised.success) {
       // Contract: raiseToIR only populates RaiseResult::irText on the
       // success path (the last write before setting `success = true`),
@@ -392,9 +427,9 @@ int main(int argc, char **argv) {
       }
     }
     std::string effectiveTargetIsa = targetIsa.empty() ? isa : targetIsa;
-    auto pipe = transpiler::runPipeline(coData, isa, effectiveTargetIsa,
-                                        target, enableWritelaneRewrite,
-                                        enableWaveNative);
+    auto pipe = transpiler::runPipeline(
+        coData, isa, effectiveTargetIsa, target, enableWritelaneRewrite,
+        enableWaveNative, enableHighPrecisionMfma);
     if (!pipe.success) {
       std::fprintf(stderr,
                    "raise_cli: pipeline failed for kernel '%s' (lifted=%d/%d, "
@@ -464,10 +499,9 @@ int main(int argc, char **argv) {
         close(devnull);
       }
       auto meta = transpiler::extractKernelMeta(coData, kName);
-      auto raised = transpiler::raiseToIR(text.bytes, isa, kName, meta,
-                                          kernelOffset, targetIsa,
-                                          enableWritelaneRewrite,
-                                          enableWaveNative);
+      auto raised = transpiler::raiseToIR(
+          text.bytes, isa, kName, meta, kernelOffset, targetIsa,
+          enableWritelaneRewrite, enableWaveNative, enableHighPrecisionMfma);
       shm->done = true;
       shm->success = raised.success;
       shm->lifted = raised.liftedCount;

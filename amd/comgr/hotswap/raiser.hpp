@@ -41,13 +41,12 @@ struct RaiseResult {
 };
 
 RaiseResult raiseToIR(llvm::ArrayRef<uint8_t> textBytes,
-                      llvm::StringRef sourceISA,
-                      llvm::StringRef kernelName,
-                      const KernelMeta &meta,
-                      uint64_t kernelOffset = 0,
+                      llvm::StringRef sourceISA, llvm::StringRef kernelName,
+                      const KernelMeta &meta, uint64_t kernelOffset = 0,
                       llvm::StringRef compilationTargetISA = "",
                       bool enableWritelaneRewrite = true,
-                      bool enableWaveNative = true);
+                      bool enableWaveNative = true,
+                      bool enableHighPrecisionMfma = false);
 
 } // namespace transpiler
 

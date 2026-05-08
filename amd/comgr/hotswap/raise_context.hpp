@@ -75,6 +75,33 @@ struct RaiseContext {
   // `S_SET_PC_I64` doc for the lowering shapes.
   const SetPcAnalysis *setpcAnalysis = nullptr;
 
+  // Diagnostic high-precision MFMA path. When true, WMMA → MFMA
+  // lowering for bf16 inputs is dispatched through
+  // `wmma_lowering.cpp::emitChainedF32MfmaBF16Upcast` (software bf16
+  // → fp32 upcast followed by a chain of `mfma_f32_16x16x4f32` calls)
+  // instead of the default `wmma_lowering.cpp::emitDefaultChainedMfma`
+  // (chained `mfma_f32_16x16x16bf16_1k`). Other input variants
+  // (`F16`, `FP8_*`, `BF8_*`, `IU8`) currently fall through to the
+  // default path even with this flag set; see the dispatch in
+  // `runGroupPass` and the per-helper block comments for the
+  // bf16-only scope.
+  //
+  // Defaults to false so the existing aggregate-init call sites in
+  // `raiser.cpp` keep working without being touched. The raiser sets
+  // the field from the pipeline-level `enableHighPrecisionMfma`
+  // argument right after constructing the context. The translation
+  // cache key in `translation_cache.cpp` carries this bit so a flag
+  // flip invalidates cached translations automatically.
+  //
+  // Bit-exactness contract: this path is a diagnostic alternative,
+  // NOT bit-exact equivalent to either the source WMMA or to a
+  // native gfx-target Triton compilation. See the block comment on
+  // `emitChainedF32MfmaBF16Upcast` in `wmma_lowering.cpp` for the
+  // full reasoning (K=32 single-shot bf16 MFMA does not exist on
+  // gfx942, and gfx942's f32×f32 MFMA hardware rounds differently
+  // from its bf16-with-fp32-accum hardware).
+  bool enableHighPrecisionMfma = false;
+
   // gfx1250 s_set_vgpr_msb state: only the LOW 8 bits of the instruction's
   // 16-bit immediate carry runtime meaning.  They encode the MSB bit pair for
   // every operand slot of the next ALU instruction:

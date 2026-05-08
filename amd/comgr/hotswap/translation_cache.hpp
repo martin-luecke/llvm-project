@@ -24,6 +24,15 @@ struct TranslationCacheRequest {
   int origMach = -1;
   bool enableWritelaneRewrite = true;
   bool enableWaveNative = true;
+  // Diagnostic high-precision MFMA path: when true, bf16 inputs to a
+  // WMMA-lowered MFMA are software-upcast to fp32 and routed through a
+  // chained `mfma_f32_16x16x4f32` sequence instead of the default
+  // `mfma_f32_16x16x16bf16_1k` chain. Default is false (existing
+  // behaviour). Threaded through to the raiser via
+  // `RaiseContext::enableHighPrecisionMfma` and read by
+  // `wmma_lowering.cpp::runGroupPass`. Included in the translation cache
+  // key so a flag flip invalidates cached translations.
+  bool enableHighPrecisionMfma = false;
   bool strictMode = false;
   bool cacheDisabled = true;
   bool cacheReadonly = false;

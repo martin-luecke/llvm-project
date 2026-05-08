@@ -65,11 +65,11 @@ struct PipelineResult {
 /// instead; the ~5 single-ISA call sites that did this pre-fix are
 /// all updated to the two-string form.
 PipelineResult runPipeline(llvm::ArrayRef<uint8_t> codeObjectData,
-                           llvm::StringRef sourceISA,
-                           llvm::StringRef targetISA,
+                           llvm::StringRef sourceISA, llvm::StringRef targetISA,
                            llvm::StringRef kernelName,
                            bool enableWritelaneRewrite = true,
-                           bool enableWaveNative = true);
+                           bool enableWaveNative = true,
+                           bool enableHighPrecisionMfma = false);
 
 /// Raise and lower ALL kernels in a code object, producing a single merged
 /// HSACO containing every kernel.  Returns success only if every kernel was
@@ -83,7 +83,8 @@ PipelineResult runPipelineAllKernels(llvm::ArrayRef<uint8_t> codeObjectData,
                                      llvm::StringRef sourceISA,
                                      llvm::StringRef targetISA,
                                      bool enableWritelaneRewrite = true,
-                                     bool enableWaveNative = true);
+                                     bool enableWaveNative = true,
+                                     bool enableHighPrecisionMfma = false);
 
 /// Process-global "strict mode" toggle, controlled by the
 /// `HSA_HOTSWAP_STRICT` environment variable. When set to a non-empty

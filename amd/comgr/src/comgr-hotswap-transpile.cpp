@@ -31,6 +31,7 @@
 #include "hotswap/translation_cache.hpp"
 
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <new>
 #include <string>
@@ -102,6 +103,21 @@ amd_comgr_status_t createExecutableData(llvm::ArrayRef<uint8_t> hsaco,
 bool hasFlag(const amd_comgr_hotswap_transpile_options_t *options,
              amd_comgr_hotswap_transpile_option_flags_t flag) {
   return options && (options->flags & static_cast<uint64_t>(flag));
+}
+
+// Treat any non-empty value other than literal "0" as enabled. Mirrors
+// the policy ROCr's HotSwap loader uses for its own `HSA_HOTSWAP_*`
+// env vars (see `loader/executable.cpp::HotSwapEnvEnabled` in
+// `rocm-systems/projects/rocr-runtime`) so an end user gets the same
+// on/off interpretation whether the flag eventually arrives at COMGR
+// via ROCr's env-to-option-bit bridge or via this direct env-var
+// lookup. The double-getenv (ROCr reading the env to set the bit, then
+// COMGR re-reading the env here) is cheap and idempotent under OR
+// semantics; the direct lookup makes the public COMGR C API usable
+// without a co-installed HotSwap-aware ROCr loader.
+bool envEnabled(const char *name) {
+  const char *value = std::getenv(name);
+  return value && value[0] != '\0' && std::strcmp(value, "0") != 0;
 }
 
 std::string pipelineFailReason(const transpiler::PipelineResult &pipeline) {
@@ -251,6 +267,30 @@ amd_comgr_status_t AMD_COMGR_API amd_comgr_hotswap_transpile_with_options(
       options && options->cache_skip_kernels ? options->cache_skip_kernels : "";
   CacheRequest.strictMode =
       hasFlag(options, AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_STRICT);
+  // Diagnostic high-precision MFMA path. The flag name and contract
+  // are deliberately verbose: this is a precision-vs-throughput knob
+  // that is NOT bit-exact equivalent to the source, only a more
+  // numerically-faithful reference. See the doxygen on the option
+  // flag in `amd_comgr.h` for the full contract and the block
+  // comment on `emitChainedF32MfmaBF16Upcast` in
+  // `amd/comgr/hotswap/wmma_lowering.cpp` for the lowering details.
+  //
+  // OR semantics with the env var: setting either the option-flag bit
+  // OR the `HSA_HOTSWAP_HIGH_PRECISION_MFMA` env enables the path. The
+  // env-var bridge is the convenience for end users running through
+  // HIP / ROCr without a HotSwap-aware loader to translate the env
+  // into the option bit; ROCr always passes a non-null `options`
+  // struct (so dropping to the `nullptr`-options branch is not the
+  // signal we can use to gate the env). The option bit therefore
+  // cannot suppress an env-var-enabled path; programmatic callers
+  // that need deterministic behavior independent of the surrounding
+  // process environment must `unsetenv` before the call. The
+  // resolved value lands on the translation cache key, so toggling
+  // either source invalidates cached translations automatically.
+  CacheRequest.enableHighPrecisionMfma =
+      hasFlag(options,
+              AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_HIGH_PRECISION_MFMA) ||
+      envEnabled("HSA_HOTSWAP_HIGH_PRECISION_MFMA");
   CacheRequest.cacheDisabled =
       !options || hasFlag(options,
                           AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_CACHE_DISABLE) ||
@@ -315,9 +355,18 @@ amd_comgr_status_t AMD_COMGR_API amd_comgr_hotswap_transpile_with_options(
   // separate options struct rather than overloading this entry point.
   if (!CacheHit) {
     transpiler::ScopedStrictMode StrictMode(CacheRequest.strictMode);
-    Pipeline = transpiler::runPipelineAllKernels(InputBytes,
-                                                 SourceIdent.Processor.str(),
-                                                 TargetIdent.Processor.str());
+    // `runPipelineAllKernels` defaults the writelane-rewrite and
+    // wave-native projection knobs to their post-graduation values
+    // (both on); the public comgr surface intentionally hides those
+    // because they are correctness-preserving rewrites or projection
+    // strategies that callers should not have to reason about. The
+    // high-precision MFMA path, by contrast, is a precision /
+    // throughput tradeoff that callers must opt into explicitly,
+    // so it surfaces here as an option-flag-driven argument.
+    Pipeline = transpiler::runPipelineAllKernels(
+        InputBytes, SourceIdent.Processor.str(), TargetIdent.Processor.str(),
+        /*enableWritelaneRewrite=*/true,
+        /*enableWaveNative=*/true, CacheRequest.enableHighPrecisionMfma);
   }
 
   if (!Pipeline.success || Pipeline.hsaco.empty()) {

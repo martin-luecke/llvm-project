@@ -2805,6 +2805,57 @@ typedef enum amd_comgr_hotswap_transpile_option_flags_s {
    * Enable HotSwap strict mode for unsafe lowering refusals.
    */
   AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_STRICT = 1u << 2,
+  /**
+   * Diagnostic: lower bf16 WMMA inputs through an fp32 MFMA chain
+   * instead of the default bf16 MFMA chain when transpiling a
+   * wave32-source WMMA whose target ISA only exposes a smaller-K
+   * native MFMA than the source WMMA covers in one shot. With this
+   * flag set and the source WMMA carrying bf16 inputs, those inputs
+   * are upcast to fp32 in software (lossless: bf16 fits in fp32
+   * exactly) and fed through @c mfma_f32_16x16x4f32 chains instead
+   * of the chained @c mfma_f32_16x16x16bf16_1k path.
+   *
+   * Scope today is bf16-only. Other input variants ( @c f16,
+   * @c fp8 , @c bf8 , @c iu8 ) continue to use the default chained
+   * MFMA path even with this flag set; an extension to those
+   * variants is structurally straightforward but stays behind a
+   * separate decision until the bf16 experiment has validated the
+   * design.
+   *
+   * This is NOT a path to bit-exact equivalence with either the
+   * source WMMA or with a native gfx-target Triton compilation: the
+   * gfx942 bf16-with-fp32-accum MFMA hardware rounds differently
+   * from the gfx942 f32-with-fp32-accum MFMA hardware, and the
+   * source WMMA on gfx1250 rounds differently from both. The flag's
+   * primary purpose is diagnostic: comparing matched-prefix logprob
+   * drift with the flag on vs. off lets callers attribute drift to
+   * the chained-MFMA accumulator boundary (off vs. on differs), to
+   * bf16-multiply precision (off vs. on differs in the opposite
+   * direction), or to Triton-compilation-level differences between
+   * the wave32 source and a native wave64 compilation (off vs. on
+   * roughly the same).
+   *
+   * Performance cost: ~4x more MFMA calls per bf16 WMMA (8x K=4 fp32
+   * vs. 2x K=16 bf16) plus per-element software bf16->fp32 upcasts.
+   * Intended for evaluation pipelines and triage workflows; not for
+   * production throughput.
+   *
+   * The translation cache key includes this flag so a flag flip
+   * invalidates cached translations; callers do not need to clear
+   * the cache directory manually.
+   *
+   * As a convenience for end users running through HIP / ROCr without
+   * a HotSwap-aware loader to translate the env into this option-flag
+   * bit, the implementation also honors the
+   * @c HSA_HOTSWAP_HIGH_PRECISION_MFMA process-environment variable
+   * (any non-empty value other than literal "0" enables the path).
+   * The bit and the env var are OR'd: setting either one enables the
+   * path. The option bit therefore cannot be used to suppress an
+   * env-var-enabled path; programmatic callers that need deterministic
+   * behavior independent of the surrounding process environment must
+   * unset @c HSA_HOTSWAP_HIGH_PRECISION_MFMA before the call.
+   */
+  AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_HIGH_PRECISION_MFMA = 1u << 3,
 } amd_comgr_hotswap_transpile_option_flags_t;
 
 /**

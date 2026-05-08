@@ -104,6 +104,7 @@ transpiler::TranslationCacheRequest makeRequest(
   request.origMach = 0x49;
   request.enableWritelaneRewrite = true;
   request.enableWaveNative = true;
+  request.enableHighPrecisionMfma = false;
   request.strictMode = true;
   return request;
 }
@@ -246,6 +247,59 @@ TEST(TranslationCache, CorruptObjectIsInvalid) {
   auto lookup = transpiler::lookupTranslationCache(request);
   EXPECT_EQ(lookup.status, transpiler::TranslationCacheStatus::Invalid);
   EXPECT_NE(lookup.reason.find("cached_object_sha256"), std::string::npos);
+}
+
+// The high-precision MFMA path is a precision-vs-throughput tradeoff
+// (see `RaiseContext::enableHighPrecisionMfma` and the block comment
+// on `emitChainedF32MfmaBF16Upcast` in
+// `amd/comgr/hotswap/wmma_lowering.cpp`). Flipping the flag MUST
+// change the cache key so a cached translation produced under the
+// default path is not silently reused under the high-precision path
+// (and vice versa) — otherwise an evaluation pipeline that toggles
+// the flag would unknowingly reuse stale translations and the A/B
+// comparison the flag exists to enable would be invalidated.
+TEST(TranslationCache, HighPrecisionMfmaFlagInvalidatesCache) {
+  TempDir temp("hotswap_cache_test");
+  ASSERT_TRUE(temp.valid);
+  ScopedEnv cacheDir("HSA_HOTSWAP_CACHE_DIR", temp.path.str().str());
+  ScopedEnv noDisable("HSA_HOTSWAP_CACHE_DISABLE", "0");
+  ScopedEnv noReadonly("HSA_HOTSWAP_CACHE_READONLY", "0");
+
+  std::string rules = temp.file("rules.json");
+  writeTextFile(rules, "{\"version\":1,\"rules\":[]}\n");
+  auto source = fakeAmdgpuElf();
+
+  // Default-flag write, then default-flag lookup → hit.
+  auto defaultRequest = makeRequest(source, rules);
+  ASSERT_FALSE(defaultRequest.enableHighPrecisionMfma);
+  ASSERT_EQ(
+      transpiler::writeTranslationCache(defaultRequest, makeSuccessfulResult())
+          .status,
+      transpiler::TranslationCacheStatus::WriteSuccess);
+  EXPECT_EQ(transpiler::lookupTranslationCache(defaultRequest).status,
+            transpiler::TranslationCacheStatus::Hit);
+
+  // Same request with the high-precision flag flipped on must miss
+  // (the cache key carries the flag value, so the lookup looks up a
+  // different key).
+  auto highPrecisionRequest = defaultRequest;
+  highPrecisionRequest.enableHighPrecisionMfma = true;
+  EXPECT_EQ(transpiler::lookupTranslationCache(highPrecisionRequest).status,
+            transpiler::TranslationCacheStatus::Miss);
+
+  // Symmetric: writing the high-precision entry then flipping back to
+  // default must also miss the high-precision entry.
+  ASSERT_EQ(transpiler::writeTranslationCache(highPrecisionRequest,
+                                              makeSuccessfulResult())
+                .status,
+            transpiler::TranslationCacheStatus::WriteSuccess);
+  EXPECT_EQ(transpiler::lookupTranslationCache(highPrecisionRequest).status,
+            transpiler::TranslationCacheStatus::Hit);
+  EXPECT_EQ(transpiler::lookupTranslationCache(defaultRequest).status,
+            transpiler::TranslationCacheStatus::Hit);
+  // The two cache entries must be distinct on disk (different keys).
+  EXPECT_NE(transpiler::lookupTranslationCache(defaultRequest).key,
+            transpiler::lookupTranslationCache(highPrecisionRequest).key);
 }
 
 TEST(TranslationCache, ReadonlyMissDoesNotWrite) {

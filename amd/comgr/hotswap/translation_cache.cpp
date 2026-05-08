@@ -242,6 +242,8 @@ KeyData buildKeyData(const TranslationCacheRequest &request) {
   appendKeyField(material, "enable_writelane_rewrite",
                  request.enableWritelaneRewrite);
   appendKeyField(material, "enable_wave_native", request.enableWaveNative);
+  appendKeyField(material, "enable_high_precision_mfma",
+                 request.enableHighPrecisionMfma);
   appendKeyField(material, "hotswap_build_identity", data.buildIdentity);
   appendKeyField(material, "llc_identity", data.llcIdentity);
   appendKeyField(material, "llvm_mc_identity", data.llvmMcIdentity);
@@ -445,6 +447,7 @@ llvm::json::Object metadataObject(const TranslationCacheRequest &request,
       {"strict_mode", request.strictMode},
       {"enable_writelane_rewrite", request.enableWritelaneRewrite},
       {"enable_wave_native", request.enableWaveNative},
+      {"enable_high_precision_mfma", request.enableHighPrecisionMfma},
       {"hotswap_build_identity", keyData.buildIdentity},
       {"llc_identity", keyData.llcIdentity},
       {"llvm_mc_identity", keyData.llvmMcIdentity},
@@ -491,8 +494,10 @@ bool validateMetadata(const TranslationCacheRequest &request,
                         request.enableWritelaneRewrite, reason) ||
       !requireEqualBool(obj, "enable_wave_native", request.enableWaveNative,
                         reason) ||
-      !requireEqualString(obj, "hotswap_build_identity",
-                          keyData.buildIdentity, reason) ||
+      !requireEqualBool(obj, "enable_high_precision_mfma",
+                        request.enableHighPrecisionMfma, reason) ||
+      !requireEqualString(obj, "hotswap_build_identity", keyData.buildIdentity,
+                          reason) ||
       !requireEqualString(obj, "llc_identity", keyData.llcIdentity, reason) ||
       !requireEqualString(obj, "llvm_mc_identity", keyData.llvmMcIdentity,
                           reason) ||

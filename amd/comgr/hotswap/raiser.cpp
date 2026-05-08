@@ -173,16 +173,13 @@ static bool threadLoopUnsupportedWorkgroupMemoryOrBarrier(
 // Main raising function
 // ============================================================================
 
-static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> textBytes,
-                                 llvm::StringRef sourceISA,
-                                 llvm::StringRef kernelName,
-                                 const KernelMeta &meta,
-                                 uint64_t kernelOffset,
-                                 llvm::StringRef compilationTargetISA,
-                                 bool enableWritelaneRewrite,
-                                 bool enableWaveNative,
-                                 bool forceThreadLoopProjection,
-                                 bool suppressC5ForThreadLoopRoute) {
+static RaiseResult
+raiseToIRImpl(llvm::ArrayRef<uint8_t> textBytes, llvm::StringRef sourceISA,
+              llvm::StringRef kernelName, const KernelMeta &meta,
+              uint64_t kernelOffset, llvm::StringRef compilationTargetISA,
+              bool enableWritelaneRewrite, bool enableWaveNative,
+              bool enableHighPrecisionMfma, bool forceThreadLoopProjection,
+              bool suppressC5ForThreadLoopRoute) {
   RaiseResult result;
 
   // NOTE. The `HSA_HOTSWAP_WAVE_NATIVE=1` process-environment override
@@ -927,6 +924,11 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> textBytes,
       static_cast<uint32_t>(std::max(meta.privateSegmentFixedSize, 0));
   ctx.sourceComputePgmRsrc2 = meta.computePgmRsrc2;
   ctx.sourceKernelCodeProperties = meta.kernelCodeProperties;
+  // Diagnostic high-precision MFMA path. Plumbed through from the
+  // pipeline-level argument; consumed by `wmma_lowering.cpp` when
+  // dispatching the bf16 WMMA → MFMA decomposition. See `RaiseContext`
+  // documentation and the design doc for the bit-exactness contract.
+  ctx.enableHighPrecisionMfma = enableHighPrecisionMfma;
 
   // Dominance-safe SGPR wave-mask shadow storage.
   // One EXEC-width mask + one scalar-valid bit per SGPR base index.
@@ -1305,6 +1307,7 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> textBytes,
                              kernelOffset, compilationTargetISA,
                              /*enableWritelaneRewrite=*/false,
                              /*enableWaveNative=*/false,
+                             enableHighPrecisionMfma,
                              /*forceThreadLoopProjection=*/true,
                              /*suppressC5ForThreadLoopRoute=*/true);
       }
@@ -1491,6 +1494,7 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> textBytes,
                              kernelOffset, compilationTargetISA,
                              /*enableWritelaneRewrite=*/false,
                              /*enableWaveNative=*/false,
+                             enableHighPrecisionMfma,
                              /*forceThreadLoopProjection=*/true,
                              /*suppressC5ForThreadLoopRoute=*/true);
       }
@@ -1546,16 +1550,14 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> textBytes,
 }
 
 RaiseResult raiseToIR(llvm::ArrayRef<uint8_t> textBytes,
-                      llvm::StringRef sourceISA,
-                      llvm::StringRef kernelName,
-                      const KernelMeta &meta,
-                      uint64_t kernelOffset,
+                      llvm::StringRef sourceISA, llvm::StringRef kernelName,
+                      const KernelMeta &meta, uint64_t kernelOffset,
                       llvm::StringRef compilationTargetISA,
-                      bool enableWritelaneRewrite,
-                      bool enableWaveNative) {
+                      bool enableWritelaneRewrite, bool enableWaveNative,
+                      bool enableHighPrecisionMfma) {
   return raiseToIRImpl(textBytes, sourceISA, kernelName, meta, kernelOffset,
                        compilationTargetISA, enableWritelaneRewrite,
-                       enableWaveNative,
+                       enableWaveNative, enableHighPrecisionMfma,
                        /*forceThreadLoopProjection=*/false,
                        /*suppressC5ForThreadLoopRoute=*/false);
 }
