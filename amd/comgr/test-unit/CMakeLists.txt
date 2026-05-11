@@ -42,10 +42,45 @@ else()
   endif()
 endif()
 
+# Compile-in the hotswap transpiler sources for a test target. Hotswap is
+# part of amd_comgr's TU set (see `amd/comgr/src/hotswap/CMakeLists.txt`),
+# so test binaries that exercise it pull the same source list, AMDGPU
+# target-private include dirs, extra LLVM libs, and compile defs into
+# their own build.
+function(comgr_link_hotswap_transpiler target)
+  target_sources(${target} PRIVATE
+    ${HOTSWAP_TRANSPILER_SOURCES}
+    # Hotswap calls into amd_comgr's metadata helpers
+    # (`metadata::walkElfMetadataIntoDoc`, `metadata::getElfIsaNameFromBuffer`)
+    # to share ELF/MsgPack parsing with the rest of comgr. Test binaries
+    # compile in the same TU so those symbols resolve without dragging in
+    # all of amd_comgr.
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/comgr-metadata.cpp)
+  target_include_directories(${target} PRIVATE
+    ${HOTSWAP_TRANSPILER_PRIVATE_INCLUDES}
+    # Hotswap headers are addressed as `hotswap/<name>.h` from src/, so put
+    # `src/` on the include path. Same as the public include comgr.so applies
+    # to its own hotswap sources.
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+    # comgr-metadata.cpp uses `comgr-isa-metadata.def` from
+    # ${CMAKE_BINARY_DIR}/include after configure_file processes it.
+    ${CMAKE_CURRENT_BINARY_DIR}/../include)
+  target_link_libraries(${target} PRIVATE ${HOTSWAP_TRANSPILER_LLVM_LIBS})
+  target_compile_definitions(${target} PRIVATE ${HOTSWAP_TRANSPILER_COMPILE_DEFS})
+  # Compile each function/data into its own section + ask the linker to drop
+  # unused ones. comgr-metadata.cpp pulls in `parseTargetIdentifier` (defined
+  # in comgr.cpp, not part of the hotswap test surface); --gc-sections lets
+  # the linker discard those unreferenced TUs without us having to also
+  # compile-in comgr.cpp and its transitive dependency closure.
+  if(NOT MSVC)
+    target_compile_options(${target} PRIVATE -ffunction-sections -fdata-sections)
+    target_link_options(${target} PRIVATE -Wl,--gc-sections)
+  endif()
+endfunction()
+
 # Pin C++17 and mirror LLVM's RTTI setting (avoids type_info link errors
-# against LLVM libs built with RTTI off, including hotswap::transpiler
-# which carries its own non-RTTI / non-exceptions compile flags via
-# llvm_update_compile_flags()).
+# against LLVM libs built with RTTI off, including the hotswap transpiler
+# which carries its own non-RTTI / non-exceptions compile flags).
 function(comgr_configure_test_target target)
   set_target_properties(${target} PROPERTIES
     CXX_STANDARD 17
@@ -142,8 +177,8 @@ add_executable(RaiserScaffoldingTests
 
 target_link_libraries(RaiserScaffoldingTests PRIVATE
   ${COMGR_GTEST_LIBS}
-  hotswap::transpiler
   ${LLVM_PTHREAD_LIB})
+comgr_link_hotswap_transpiler(RaiserScaffoldingTests)
 
 target_include_directories(RaiserScaffoldingTests PRIVATE
   ${COMGR_GTEST_INCLUDE_DIRS})
@@ -157,8 +192,8 @@ add_executable(CodeObjectUtilsTests
 
 target_link_libraries(CodeObjectUtilsTests PRIVATE
   ${COMGR_GTEST_LIBS}
-  hotswap::transpiler
   ${LLVM_PTHREAD_LIB})
+comgr_link_hotswap_transpiler(CodeObjectUtilsTests)
 
 target_include_directories(CodeObjectUtilsTests PRIVATE
   ${COMGR_GTEST_INCLUDE_DIRS})
@@ -172,8 +207,8 @@ add_executable(MCContextInlineSrcmgrTests
 
 target_link_libraries(MCContextInlineSrcmgrTests PRIVATE
   ${COMGR_GTEST_LIBS}
-  hotswap::transpiler
   ${LLVM_PTHREAD_LIB})
+comgr_link_hotswap_transpiler(MCContextInlineSrcmgrTests)
 
 target_include_directories(MCContextInlineSrcmgrTests PRIVATE
   ${COMGR_GTEST_INCLUDE_DIRS})
@@ -187,8 +222,8 @@ add_executable(OpcodeMapTests
 
 target_link_libraries(OpcodeMapTests PRIVATE
   ${COMGR_GTEST_LIBS}
-  hotswap::transpiler
   ${LLVM_PTHREAD_LIB})
+comgr_link_hotswap_transpiler(OpcodeMapTests)
 
 target_include_directories(OpcodeMapTests PRIVATE
   ${COMGR_GTEST_INCLUDE_DIRS}
@@ -208,8 +243,8 @@ add_executable(KernargLayoutTests
 
 target_link_libraries(KernargLayoutTests PRIVATE
   ${COMGR_GTEST_LIBS}
-  hotswap::transpiler
   ${LLVM_PTHREAD_LIB})
+comgr_link_hotswap_transpiler(KernargLayoutTests)
 
 target_include_directories(KernargLayoutTests PRIVATE
   ${COMGR_GTEST_INCLUDE_DIRS})
@@ -223,8 +258,8 @@ add_executable(WaveProjectionTests
 
 target_link_libraries(WaveProjectionTests PRIVATE
   ${COMGR_GTEST_LIBS}
-  hotswap::transpiler
   ${LLVM_PTHREAD_LIB})
+comgr_link_hotswap_transpiler(WaveProjectionTests)
 
 target_include_directories(WaveProjectionTests PRIVATE
   ${COMGR_GTEST_INCLUDE_DIRS}
@@ -243,8 +278,8 @@ add_executable(TranslationCacheTests
 
 target_link_libraries(TranslationCacheTests PRIVATE
   ${COMGR_GTEST_LIBS}
-  hotswap::transpiler
   ${LLVM_PTHREAD_LIB})
+comgr_link_hotswap_transpiler(TranslationCacheTests)
 
 target_include_directories(TranslationCacheTests PRIVATE
   ${COMGR_GTEST_INCLUDE_DIRS})
@@ -258,8 +293,8 @@ add_executable(MXFP4DequantTests
 
 target_link_libraries(MXFP4DequantTests PRIVATE
   ${COMGR_GTEST_LIBS}
-  hotswap::transpiler
   ${LLVM_PTHREAD_LIB})
+comgr_link_hotswap_transpiler(MXFP4DequantTests)
 
 target_include_directories(MXFP4DequantTests PRIVATE
   ${COMGR_GTEST_INCLUDE_DIRS})
@@ -273,8 +308,8 @@ add_executable(C5PredicateChainTests
 
 target_link_libraries(C5PredicateChainTests PRIVATE
   ${COMGR_GTEST_LIBS}
-  hotswap::transpiler
   ${LLVM_PTHREAD_LIB})
+comgr_link_hotswap_transpiler(C5PredicateChainTests)
 
 target_include_directories(C5PredicateChainTests PRIVATE
   ${COMGR_GTEST_INCLUDE_DIRS})
@@ -288,8 +323,8 @@ add_executable(SourceHiddenArgsTests
 
 target_link_libraries(SourceHiddenArgsTests PRIVATE
   ${COMGR_GTEST_LIBS}
-  hotswap::transpiler
   ${LLVM_PTHREAD_LIB})
+comgr_link_hotswap_transpiler(SourceHiddenArgsTests)
 
 target_include_directories(SourceHiddenArgsTests PRIVATE
   ${COMGR_GTEST_INCLUDE_DIRS})

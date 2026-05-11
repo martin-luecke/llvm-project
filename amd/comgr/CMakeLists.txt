@@ -134,7 +134,16 @@ if(COMGR_ENABLE_HOTSWAP_TRANSPILE)
       "COMGR_HOTSWAP_DIR='${COMGR_HOTSWAP_DIR}'. Point COMGR_HOTSWAP_DIR at "
       "the hotswap source tree or set COMGR_ENABLE_HOTSWAP_TRANSPILE=OFF.")
   endif()
-  list(APPEND SOURCES src/comgr-hotswap-transpile.cpp)
+  # Pull in the hotswap subproject early so its source list is available
+  # before we build amd_comgr. The subproject populates
+  # HOTSWAP_TRANSPILER_SOURCES (file list), HOTSWAP_TRANSPILER_PRIVATE_INCLUDES,
+  # HOTSWAP_TRANSPILER_LLVM_LIBS, and HOTSWAP_TRANSPILER_COMPILE_DEFS in our
+  # scope. We compile its sources directly into amd_comgr — no separate
+  # static lib, no link-step layering.
+  add_subdirectory(${COMGR_HOTSWAP_DIR} src/hotswap)
+  list(APPEND SOURCES
+    src/comgr-hotswap-transpile.cpp
+    ${HOTSWAP_TRANSPILER_SOURCES})
 endif()
 
 # Add Windows resource file for version info
@@ -215,14 +224,15 @@ target_include_directories(amd_comgr
   PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-# The hotswap subdirectory is added unconditionally below (around the
-# add_subdirectory(src/hotswap) line) so the static library is available to
-# the test-unit suite; here we only opt amd_comgr into linking the
-# transpiler in and exposing the `amd_comgr_hotswap_transpile` entry
-# point.
+# Hotswap sources are compiled directly into amd_comgr (added to SOURCES
+# above). Here we wire up the AMDGPU target-private include dirs, extra
+# LLVM libs, and compile definitions exported by `src/hotswap/CMakeLists.txt`.
 if(COMGR_ENABLE_HOTSWAP_TRANSPILE)
-  target_link_libraries(amd_comgr PRIVATE hotswap::transpiler)
-  target_compile_definitions(amd_comgr PRIVATE COMGR_ENABLE_HOTSWAP_TRANSPILE=1)
+  target_include_directories(amd_comgr PRIVATE ${HOTSWAP_TRANSPILER_PRIVATE_INCLUDES})
+  target_link_libraries(amd_comgr PRIVATE ${HOTSWAP_TRANSPILER_LLVM_LIBS})
+  target_compile_definitions(amd_comgr PRIVATE
+    COMGR_ENABLE_HOTSWAP_TRANSPILE=1
+    ${HOTSWAP_TRANSPILER_COMPILE_DEFS})
 endif()
 
 message("")
@@ -634,12 +644,6 @@ if (NOT WIN32)
       c
       ${CMAKE_DL_LIBS})
 endif()
-
-# Hotswap subproject — IR-level transpiler library + supporting tools.
-# Always added so the static library is available to the test-unit suite;
-# linking into amd_comgr happens in a later patch via the
-# COMGR_ENABLE_HOTSWAP_TRANSPILE option.
-add_subdirectory(src/hotswap)
 
 include(CTest)
 if(BUILD_TESTING)

@@ -59,14 +59,41 @@ if(COMGR_ENABLE_HOTSWAP_TRANSPILE)
   add_comgr_lit_binary(hotswap-transpile c)
 
   # raise_cli is the per-kernel transpile-to-IR driver used by the
-  # hotswap-transpile/ lit fixtures. It links the in-tree hotswap
-  # transpiler library directly (the public amd_comgr API only exposes
-  # the rewriting flow, not raw IR emission), so it doesn't fit the
-  # add_comgr_lit_binary macro that links amd_comgr.
-  add_executable(raise_cli comgr-sources/raise_cli.cpp)
+  # hotswap-transpile/ lit fixtures. It needs to call the hotswap raiser
+  # directly (the public amd_comgr API only exposes the rewriting flow,
+  # not raw IR emission), so it compiles in the hotswap source list
+  # rather than going through amd_comgr.
+  add_executable(raise_cli
+    comgr-sources/raise_cli.cpp
+    ${HOTSWAP_TRANSPILER_SOURCES}
+    # `metadata::walkElfMetadataIntoDoc` / `getElfIsaNameFromBuffer` live
+    # in comgr-metadata.cpp; pull it in so raise_cli's hotswap TUs link.
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/comgr-metadata.cpp)
   llvm_update_compile_flags(raise_cli)
-  target_include_directories(raise_cli PRIVATE ${LLVM_INCLUDE_DIRS})
-  target_link_libraries(raise_cli PRIVATE hotswap-transpiler)
+  # Mirror amd_comgr's RTTI/EH posture: every typeinfo we touch comes from
+  # LLVM libs that were built with -fno-rtti, so any TU here that emits
+  # typeinfo (Error/ErrorInfo, format_adapter, etc.) will fail to link.
+  if(NOT LLVM_ENABLE_RTTI)
+    if(MSVC)
+      target_compile_options(raise_cli PRIVATE /GR-)
+    else()
+      target_compile_options(raise_cli PRIVATE -fno-rtti)
+    endif()
+  endif()
+  target_include_directories(raise_cli PRIVATE
+    ${LLVM_INCLUDE_DIRS}
+    ${HOTSWAP_TRANSPILER_PRIVATE_INCLUDES}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+    ${CMAKE_CURRENT_BINARY_DIR}/../include)
+  target_link_libraries(raise_cli PRIVATE ${HOTSWAP_TRANSPILER_LLVM_LIBS})
+  target_compile_definitions(raise_cli PRIVATE ${HOTSWAP_TRANSPILER_COMPILE_DEFS})
+  # See comgr_link_hotswap_transpiler in test-unit/: --gc-sections drops the
+  # unreferenced comgr-metadata.cpp entries (parseTargetIdentifier, ISA
+  # lookup, etc.) so we don't have to compile in comgr.cpp's closure.
+  if(NOT MSVC)
+    target_compile_options(raise_cli PRIVATE -ffunction-sections -fdata-sections)
+    target_link_options(raise_cli PRIVATE -Wl,--gc-sections)
+  endif()
   add_dependencies(check-comgr raise_cli)
 endif()
 

@@ -1,91 +1,50 @@
+# Hotswap transpiler — compiled directly into amd_comgr, no separate static
+# library. This subdirectory builds the optional TDM emulation-runtime
+# bitcode blob and exports the hotswap source list / target-private include
+# dirs / extra LLVM libs / compile definitions to the parent scope so
+# `amd/comgr/CMakeLists.txt` can fold them into amd_comgr's build (and
+# the test-unit / test-lit binaries can compile-in the same set).
+
 cmake_minimum_required(VERSION 3.20)
-project(hotswap-transpiler LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-
-# --- Paths to LLVM ------------------------------------------------------------
-# Hotswap needs an LLVM *build tree* (not an install tree) because the raiser
-# uses AMDGPU target-private headers (SIDefines.h, SIInstrInfo.h,
-# AMDGPUBaseInfo.h) which transitively #include TableGen-generated
-# AMDGPUGen*.inc files. Those .inc files are produced by llvm-tblgen during
-# the LLVM build and are not copied by `ninja install`.
+# Resolve the LLVM source / binary tree we'll need for AMDGPU target-private
+# headers and TableGen-generated `.inc` files. Three supported configurations,
+# matching how the parent `amd_comgr` is built:
 #
-# We support three configurations:
-#
-#   1. In-tree LLVM build. Hotswap was added via add_subdirectory() from
-#      COMGR's CMake via add_subdirectory(). LLVM has
-#      already populated LLVM_MAIN_SRC_DIR / LLVM_BINARY_DIR and the LLVM
-#      library targets; AddLLVM.cmake is loaded. No find_package needed.
-#
-#   2. add_subdirectory() from another out-of-tree project (comgr, ROCR,
-#      ...) that already called find_package(LLVM). Variables are
-#      populated; the find_package call below becomes a no-op.
-#
-#   3. Standalone (cmake -S amd/comgr/hotswap -B build). We need
-#      find_package(LLVM) to resolve LLVM_DIR. Since hotswap now lives at
-#      <llvm-project>/amd/comgr/hotswap, default LLVM_DIR to the conventional
-#      <llvm-project>/build tree if the user did not pass one explicitly.
+#   1. In-tree LLVM monorepo: LLVMSupport target + LLVM_MAIN_SRC_DIR are
+#      already populated by the LLVM build.
+#   2. Out-of-tree: parent already called find_package(LLVM); variables are
+#      populated, so the find_package below is a no-op.
+#   3. Standalone configure of just amd/comgr: explicit find_package call
+#      resolves LLVM_DIR.
 if(TARGET LLVMSupport AND DEFINED LLVM_MAIN_SRC_DIR)
-  # Case 1. Mirror the variable name find_package(LLVM) would have set
-  # against a build tree, so the rest of this file does not have to
-  # branch.
-  set(LLVM_BUILD_MAIN_SRC_DIR "${LLVM_MAIN_SRC_DIR}")
+  set(_hotswap_llvm_src "${LLVM_MAIN_SRC_DIR}")
 else()
-  # Cases 2 and 3.
-  if(NOT DEFINED LLVM_DIR OR NOT LLVM_DIR)
-    # amd/comgr/hotswap/ -> amd/comgr/ -> amd/ -> <llvm-project>/
-    set(_hotswap_default_llvm_build
-        "${CMAKE_CURRENT_SOURCE_DIR}/../../../build/lib/cmake/llvm")
-    if(EXISTS "${_hotswap_default_llvm_build}/LLVMConfig.cmake")
-      get_filename_component(_hotswap_default_llvm_build
-                             "${_hotswap_default_llvm_build}" ABSOLUTE)
-      set(LLVM_DIR "${_hotswap_default_llvm_build}" CACHE PATH
-          "Path to LLVMConfig.cmake (auto-detected from <llvm-project>/build)")
-      message(STATUS
-        "LLVM_DIR not set; defaulting to ${LLVM_DIR}")
-    endif()
-    unset(_hotswap_default_llvm_build)
+  if(NOT DEFINED LLVM_BUILD_MAIN_SRC_DIR OR NOT LLVM_BUILD_MAIN_SRC_DIR)
+    find_package(LLVM REQUIRED CONFIG)
   endif()
-  find_package(LLVM REQUIRED CONFIG)
+  if(DEFINED LLVM_BUILD_MAIN_SRC_DIR AND LLVM_BUILD_MAIN_SRC_DIR)
+    set(_hotswap_llvm_src "${LLVM_BUILD_MAIN_SRC_DIR}")
+  endif()
 endif()
 
-if(NOT DEFINED LLVM_BUILD_MAIN_SRC_DIR OR NOT LLVM_BUILD_MAIN_SRC_DIR OR
+if(NOT DEFINED _hotswap_llvm_src OR NOT _hotswap_llvm_src OR
    NOT DEFINED LLVM_BINARY_DIR OR NOT LLVM_BINARY_DIR)
   message(FATAL_ERROR
     "hotswap-transpiler requires an LLVM build tree (not an install tree). "
     "The install tree does not expose AMDGPU target-private headers "
-    "(SIDefines.h, AMDGPUBaseInfo.h, AMDGPUGen*.inc). "
-    "Pass -DLLVM_DIR=<llvm-build>/lib/cmake/llvm or build LLVM at "
+    "(SIDefines.h, AMDGPUBaseInfo.h, AMDGPUGen*.inc). Pass "
+    "-DLLVM_DIR=<llvm-build>/lib/cmake/llvm or build LLVM at "
     "<llvm-project>/build so it can be auto-detected.")
 endif()
 
-if(DEFINED LLVM_DIR AND LLVM_DIR)
-  message(STATUS "Using LLVM from: ${LLVM_DIR}")
-endif()
-message(STATUS "LLVM source tree: ${LLVM_BUILD_MAIN_SRC_DIR}")
-message(STATUS "LLVM build tree:  ${LLVM_BINARY_DIR}")
-if(DEFINED LLVM_PACKAGE_VERSION)
-  message(STATUS "LLVM version:     ${LLVM_PACKAGE_VERSION}")
-endif()
-
-# In the in-tree case (1), AddLLVM is already loaded by the parent LLVM
-# build and llvm_update_compile_flags is available. Only pull it in
-# explicitly for cases (2) and (3).
+# Pull in AddLLVM.cmake so consumers (test-lit/raise_cli, the hotswap
+# helper macro in test-unit/) can call `llvm_update_compile_flags` on
+# their targets to mirror LLVM's RTTI/EH settings.
 if(NOT COMMAND llvm_update_compile_flags)
   list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
   include(AddLLVM)
 endif()
-
-# --- Include paths ------------------------------------------------------------
-include_directories(${LLVM_INCLUDE_DIRS})
-
-# --- Link paths ---------------------------------------------------------------
-link_directories(${LLVM_LIBRARY_DIRS})
-
-# --- LLVM definitions ---------------------------------------------------------
-add_definitions(${LLVM_DEFINITIONS})
 
 # --- TDM emulation runtime helper (HIP -> bitcode -> embedded array) --------
 # When `hipcc` is available we build `runtime/tdm.hip` to LLVM bitcode for
@@ -135,163 +94,97 @@ else()
                  "cross-target gfx1250->gfx942 TENSOR ops will keep refusing")
 endif()
 
-# --- Raiser + Pipeline library ------------------------------------------------
-add_library(hotswap-transpiler STATIC
-  raiser.cpp
-  raise_context.cpp
-  reg_file.cpp
-  decode.cpp
-  wave_projection.cpp
-  wave_size_obstruction.cpp
-  rewrite_cross_lane_divergent.cpp
-  c5_predicate_chain_classifier.cpp
-  canonical_op_attrs.cpp
-  raise_failure.cpp
-  mc_state.cpp
-  opcode_map.cpp
-  canonical_op.cpp
-  source_hidden_args.cpp
-  setpc_analysis.cpp
-  handle_sopp.cpp
-  handle_smem.cpp
-  handle_sopc.cpp
-  handle_sop1.cpp
-  handle_sopk.cpp
-  handle_sop2.cpp
-  handle_valu.cpp
-  handle_valu_cross_lane.cpp
-  handle_valu_small_ops.cpp
-  handle_valu_vcmp.cpp
-  handle_valu_vop3p.cpp
-  flat_addr.cpp
-  mubuf_addr.cpp
-  handle_flat.cpp
-  handle_ds.cpp
-  handle_mubuf.cpp
-  handle_mfma.cpp
-  handle_vopd.cpp
-  handle_vimage.cpp
-  wmma_lowering.cpp
-  mxfp4_dequant.cpp
-  pipeline.cpp
-  translation_cache.cpp
-  code_object_utils.cpp
-  kernarg_layout.cpp
-  user_sgpr_layout.cpp
-  tdm_runtime.cpp
+# --- Hotswap source list, exported to parent scope ---------------------------
+# Each commit that adds a new translation unit appends to this list. The
+# parent (`amd/comgr/CMakeLists.txt`) folds these into amd_comgr's SOURCES,
+# and individual test targets in `test-unit/` / `test-lit/` reuse the same
+# list to compile-in just the hotswap pieces they need.
+set(HOTSWAP_TRANSPILER_SOURCES
+  ${CMAKE_CURRENT_SOURCE_DIR}/raiser.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/raise_context.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/reg_file.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/decode.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/wave_projection.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/wave_size_obstruction.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/rewrite_cross_lane_divergent.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/c5_predicate_chain_classifier.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/canonical_op_attrs.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/raise_failure.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/mc_state.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/opcode_map.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/canonical_op.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/source_hidden_args.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/setpc_analysis.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/handle_sopp.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/handle_smem.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/handle_sopc.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/handle_sop1.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/handle_sopk.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/handle_sop2.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/handle_valu.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/handle_valu_cross_lane.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/handle_valu_small_ops.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/handle_valu_vcmp.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/handle_valu_vop3p.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/flat_addr.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/mubuf_addr.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/handle_flat.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/handle_ds.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/handle_mubuf.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/handle_mfma.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/handle_vopd.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/handle_vimage.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/wmma_lowering.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/mxfp4_dequant.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/pipeline.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/translation_cache.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/code_object_utils.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/kernarg_layout.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/user_sgpr_layout.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/tdm_runtime.cpp
   ${HOTSWAP_TDM_RUNTIME_GENERATED_CPP}
-)
+  PARENT_SCOPE)
 
-if(NOT TARGET hotswap::transpiler)
-  add_library(hotswap::transpiler ALIAS hotswap-transpiler)
-endif()
-
-target_compile_definitions(hotswap-transpiler PRIVATE
-  HOTSWAP_HAVE_TDM_RUNTIME=${HOTSWAP_HAVE_TDM_RUNTIME}
-)
-
-# Match LLVM's compile flags (no-rtti, no-exceptions, etc.). LLVM is built
-# with `LLVM_ENABLE_RTTI=OFF` and `LLVM_ENABLE_EH=OFF` by default, and every
-# public LLVM type we consume — Value, Type, Instruction, MCInst, ... — relies
-# on LLVM's hand-rolled RTTI (`isa<>` / `cast<>` / `dyn_cast<>`) rather than
-# C++ `typeid` / `dynamic_cast`. Mixing an RTTI-on TU with RTTI-off LLVM libs
-# produces undefined-reference errors for `typeinfo` symbols on any class with
-# a virtual method. `llvm_update_compile_flags` (from AddLLVM) is the canonical
-# way to stay in lockstep with libLLVM: it reads `LLVM_ENABLE_RTTI` /
-# `LLVM_ENABLE_EH` from the LLVM CMake package and propagates the matching
-# `-fno-rtti` / `-fno-exceptions` (or MSVC equivalents) to the target.
-llvm_update_compile_flags(hotswap-transpiler)
-
-# AMDGPU target-private headers (not installed by `ninja install`).
-# SIDefines.h, SIInstrInfo.h → source tree Target/AMDGPU/{,Utils}
-# AMDGPUGenInstrInfo.inc etc.  → build tree Target/AMDGPU
-# These are PRIVATE because no public header (pipeline.hpp, transpiler.hpp)
-# exposes AMDGPU-private LLVM types, so consumers (e.g. ROCR) do not need
-# these paths to compile against us.
-target_include_directories(hotswap-transpiler PRIVATE
-  "${LLVM_BUILD_MAIN_SRC_DIR}/lib/Target/AMDGPU"
-  "${LLVM_BUILD_MAIN_SRC_DIR}/lib/Target/AMDGPU/Utils"
+# AMDGPU target-private include directories. SIDefines.h, SIInstrInfo.h,
+# AMDGPUBaseInfo.h are in the LLVM source tree; AMDGPUGen*.inc files are
+# in the LLVM build tree. Neither set is installed by `ninja install`, so
+# every consumer of the hotswap sources needs these on the include path.
+set(HOTSWAP_TRANSPILER_PRIVATE_INCLUDES
+  "${_hotswap_llvm_src}/lib/Target/AMDGPU"
+  "${_hotswap_llvm_src}/lib/Target/AMDGPU/Utils"
   "${LLVM_BINARY_DIR}/lib/Target/AMDGPU"
-)
+  PARENT_SCOPE)
 
-# Allow this static library to be linked into a shared library
-# (libhsa-runtime64.so when consumed from ROCR).
-set_target_properties(hotswap-transpiler PROPERTIES POSITION_INDEPENDENT_CODE ON)
+# Extra LLVM libraries the hotswap raiser pulls in beyond what comgr core
+# already links (codegen, AMDGPU target backend, MIR / GlobalISel / SelDAG
+# infrastructure).
+set(HOTSWAP_TRANSPILER_LLVM_LIBS
+  LLVMAMDGPUDisassembler
+  LLVMAMDGPUCodeGen
+  LLVMAMDGPUAsmParser
+  LLVMAMDGPUDesc
+  LLVMAMDGPUInfo
+  LLVMAMDGPUUtils
+  LLVMAsmPrinter
+  LLVMSelectionDAG
+  LLVMGlobalISel
+  LLVMMIRParser
+  LLVMScalarOpts
+  LLVMTransformUtils
+  LLVMAnalysis
+  LLVMipo
+  LLVMInstCombine
+  LLVMAggressiveInstCombine
+  LLVMInstrumentation
+  LLVMVectorize
+  LLVMPasses
+  LLVMFrontendOffloading
+  LLVMFrontendOpenMP
+  LLVMLinker
+  LLVMObjCARCOpts
+  PARENT_SCOPE)
 
-# Public headers consumed by parent projects (pipeline.hpp, transpiler.hpp).
-# Use the hotswap/ root so consumers can write `#include "hotswap/pipeline.hpp"`
-# or `#include "hotswap/transpiler.hpp"`, matching existing ROCR usage.
-target_include_directories(hotswap-transpiler PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>
-)
-
-# `llc`, `llvm-mc`, `llvm-objdump` etc. live in the build tree's bin/.
-# ROCR's trap-handler subproject may require a ROCm Clang package even when
-# Hotswap itself is validated against a local LLVM build, so keep the tool path
-# overrideable rather than deriving it unconditionally from the LLVM package
-# used for in-process linkage.
-set(HOTSWAP_TRANSPILER_LLVM_TOOLS_DIR "${LLVM_TOOLS_BINARY_DIR}" CACHE PATH
-  "Directory containing llc, llvm-mc, llvm-objdump, and related LLVM tools used by Hotswap")
-target_compile_definitions(hotswap-transpiler PRIVATE
-  LLVM_TOOLS_DIR="${HOTSWAP_TRANSPILER_LLVM_TOOLS_DIR}"
-)
-
-target_link_libraries(hotswap-transpiler
-  PUBLIC
-    # LLVM AMDGPU
-    LLVMAMDGPUDisassembler
-    LLVMAMDGPUCodeGen
-    LLVMAMDGPUAsmParser
-    LLVMAMDGPUDesc
-    LLVMAMDGPUInfo
-    LLVMAMDGPUUtils
-    # LLVM CodeGen
-    LLVMCodeGen
-    LLVMCodeGenTypes
-    LLVMTarget
-    LLVMAsmPrinter
-    LLVMSelectionDAG
-    LLVMGlobalISel
-    LLVMMIRParser
-    # LLVM MC
-    LLVMMCDisassembler
-    LLVMMC
-    LLVMMCParser
-    # LLVM Core + Support
-    LLVMCore
-    LLVMSupport
-    LLVMObject
-    LLVMBinaryFormat
-    LLVMRemarks
-    LLVMBitReader
-    LLVMBitWriter
-    LLVMBitstreamReader
-    LLVMScalarOpts
-    LLVMTransformUtils
-    LLVMAnalysis
-    LLVMipo
-    LLVMIRReader
-    LLVMAsmParser
-    LLVMInstCombine
-    LLVMAggressiveInstCombine
-    LLVMInstrumentation
-    LLVMVectorize
-    LLVMPasses
-    LLVMProfileData
-    LLVMDebugInfoDWARF
-    LLVMDebugInfoCodeView
-    LLVMCFGuard
-    LLVMSymbolize
-    LLVMDebugInfoMSF
-    LLVMDebugInfoPDB
-    LLVMDemangle
-    LLVMTextAPI
-    LLVMFrontendOffloading
-    LLVMFrontendOpenMP
-    LLVMLinker
-    LLVMObjCARCOpts
-)
-
-# Per-file gtests live under amd/comgr/test-unit/ and follow the 3-tier
-# llvm_gtest / find_package(GTest CONFIG) / LLVM-installed fallback discovery
-# there. No standalone gtest target lives in this subdirectory.
+set(HOTSWAP_TRANSPILER_COMPILE_DEFS
+  HOTSWAP_HAVE_TDM_RUNTIME=${HOTSWAP_HAVE_TDM_RUNTIME}
+  LLVM_TOOLS_DIR="${LLVM_TOOLS_BINARY_DIR}"
+  PARENT_SCOPE)
