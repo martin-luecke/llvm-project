@@ -311,6 +311,112 @@ HandlerResult handleVALU_VOP3P(RaiseContext &ctx, const DecodedInst &di,
     hr.handled = true;
     return hr;
   }
+  case CanonicalOp::V_PK_ADD_BF16:
+  case CanonicalOp::V_PK_MUL_BF16:
+  case CanonicalOp::V_PK_MIN_NUM_BF16:
+  case CanonicalOp::V_PK_MAX_NUM_BF16:
+  case CanonicalOp::V_PK_FMA_BF16: {
+    constexpr unsigned KnownPkBF16Mods =
+        SISrcMods::NEG | SISrcMods::NEG_HI | SISrcMods::OP_SEL_0 |
+        SISrcMods::OP_SEL_1;
+    const bool isFMA = sop == CanonicalOp::V_PK_FMA_BF16;
+    const bool isMinMax = sop == CanonicalOp::V_PK_MIN_NUM_BF16 ||
+                          sop == CanonicalOp::V_PK_MAX_NUM_BF16;
+    unsigned mods[3] = {};
+    if (!readPackedSrcMods(di, op, isFMA ? 3 : 2, KnownPkBF16Mods, mods, hr))
+      return hr;
+
+    int clampIdx = AMDGPU::getNamedOperandIdx(di.inst.getOpcode(),
+                                              AMDGPU::OpName::clamp);
+    if (clampIdx < 0 || !di.isImm(static_cast<unsigned>(clampIdx))) {
+      hr.failure = RaiseFailure::unsupportedShape(
+          di, "VOP3P",
+          (diagnosticMnemonic(di) + " missing immediate clamp operand").str());
+      return hr;
+    }
+    int64_t clampImm = di.getImm(static_cast<unsigned>(clampIdx));
+    if (clampImm != 0 && clampImm != 1) {
+      hr.failure = RaiseFailure::unsupportedShape(
+          di, "VOP3P",
+          (diagnosticMnemonic(di) + " clamp operand is not 0 or 1").str());
+      return hr;
+    }
+    if (clampImm != 0 && !isMinMax) {
+      // Packed BF16 add/mul/fma do not use the ordinary VOP3 ALU clamp
+      // contract ([0, 1] saturation). Their non-default clamp/overflow
+      // behavior is tied to the wave's MODE.FP16_OVFL state, which this
+      // raiser does not currently model. Refuse instead of silently lowering
+      // it as min(max(x, 0), 1).
+      hr.failure = RaiseFailure::unsupportedShape(
+          di, "VOP3P",
+          (diagnosticMnemonic(di) +
+           " has a nonzero clamp bit; packed BF16 add/mul/fma clamp and "
+           "overflow-mode semantics are not modelled")
+              .str());
+      return hr;
+    }
+
+    Type *bf16Ty = Type::getBFloatTy(ctx.C);
+    auto *v2bf16 = FixedVectorType::get(bf16Ty, 2);
+    PackedSrcOptions opts;
+    opts.ApplyFloatNeg = true;
+    opts.Name = "pk_bf16_src";
+    Value *s0 = readPacked2Src(ctx, op, 0, bf16Ty, mods[0], opts);
+    Value *s1 = readPacked2Src(ctx, op, 1, bf16Ty, mods[1], opts);
+    Value *res = nullptr;
+    if (isFMA) {
+      Value *s2 = readPacked2Src(ctx, op, 2, bf16Ty, mods[2], opts);
+      Function *fmaFn = Intrinsic::getOrInsertDeclaration(
+          &ctx.M, Intrinsic::fma, {v2bf16});
+      res = ctx.B.CreateCall(fmaFn, {s0, s1, s2}, "pk_fma_bf16");
+    } else if (sop == CanonicalOp::V_PK_ADD_BF16) {
+      res = ctx.B.CreateFAdd(s0, s1, "pk_add_bf16");
+    } else if (sop == CanonicalOp::V_PK_MUL_BF16) {
+      res = ctx.B.CreateFMul(s0, s1, "pk_mul_bf16");
+    } else {
+      Intrinsic::ID id = (sop == CanonicalOp::V_PK_MIN_NUM_BF16)
+                             ? Intrinsic::minnum
+                             : Intrinsic::maxnum;
+      Function *fn = Intrinsic::getOrInsertDeclaration(&ctx.M, id, {v2bf16});
+      res = ctx.B.CreateCall(fn, {s0, s1},
+                             sop == CanonicalOp::V_PK_MIN_NUM_BF16
+                                 ? "pk_min_num_bf16"
+                                 : "pk_max_num_bf16");
+    }
+
+    if (clampImm != 0) {
+      Function *maxFn = Intrinsic::getOrInsertDeclaration(
+          &ctx.M, Intrinsic::maxnum, {v2bf16});
+      Function *minFn = Intrinsic::getOrInsertDeclaration(
+          &ctx.M, Intrinsic::minnum, {v2bf16});
+      Value *zero = ConstantVector::getSplat(
+          ElementCount::getFixed(2), ConstantFP::get(bf16Ty, 0.0));
+      Value *one = ConstantVector::getSplat(
+          ElementCount::getFixed(2), ConstantFP::get(bf16Ty, 1.0));
+      const char *name = (sop == CanonicalOp::V_PK_MIN_NUM_BF16)
+                             ? "pk_min_num_bf16"
+                             : "pk_max_num_bf16";
+      res = ctx.B.CreateCall(maxFn, {res, zero}, Twine(name) + "_clamp_lo");
+      res = ctx.B.CreateCall(minFn, {res, one}, Twine(name) + "_clamp");
+    }
+
+    const char *packName = "pk_bf16_pack";
+    switch (sop) {
+    case CanonicalOp::V_PK_ADD_BF16: packName = "pk_add_bf16_pack"; break;
+    case CanonicalOp::V_PK_MUL_BF16: packName = "pk_mul_bf16_pack"; break;
+    case CanonicalOp::V_PK_MIN_NUM_BF16:
+      packName = "pk_min_num_bf16_pack";
+      break;
+    case CanonicalOp::V_PK_MAX_NUM_BF16:
+      packName = "pk_max_num_bf16_pack";
+      break;
+    case CanonicalOp::V_PK_FMA_BF16: packName = "pk_fma_bf16_pack"; break;
+    default: llvm_unreachable("filtered by outer switch");
+    }
+    ctx.writeReg32(op.dst(), ctx.B.CreateBitCast(res, ctx.i32Ty, packName));
+    hr.handled = true;
+    return hr;
+  }
   case CanonicalOp::V_PK_ADD_F32:
   case CanonicalOp::V_PK_MUL_F32:
   case CanonicalOp::V_PK_FMA_F32:
