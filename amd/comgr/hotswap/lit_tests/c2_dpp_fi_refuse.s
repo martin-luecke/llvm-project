@@ -1,48 +1,36 @@
-; Negative fixture: the DPP cross-widen rewrite must refuse
-; loudly on any `dpp_ctrl` outside the supported family
-; (quad_perm / row_shl / row_shr / row_xmask).  This fixture pins the
-; refusal diagnostic for `row_ror:1` (ctrl = 0x121); the
-; companion positive fixture is `c2_dpp_quad_perm.s`.
-;
-; Contract: `raise_cli` under cross-widening (gfx1250 -> gfx942)
-; must exit non-zero AND the stderr must name the specific
-; unsupported ctrl.  This closes the pair with the positive
-; fixture: together they pin BOTH sides of the rewrite's
-; all-or-nothing symmetry invariant.
+; Negative fixture: DPP16 `fi:1` must refuse loudly. The manuals'
+; Table 57 gives FI-specific inactive-source behavior, but
+; llvm.amdgcn.update.dpp has no FI operand today.
 
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %not %raise_cli %t.hsaco \
-; RUN:     --target-isa=gfx942 --emit-ir=c2_dpp_row_ror_refuse_kernel \
+; RUN:     --target-isa=gfx942 --emit-ir=c2_dpp_fi_refuse_kernel \
 ; RUN:   2>&1 \
-; RUN:   | %FileCheck %s
+; RUN:   | %FileCheck %s --check-prefix=CROSS
+; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
+; RUN:   && %not %raise_cli %t.hsaco \
+; RUN:     --target-isa=gfx1250 --emit-ir=c2_dpp_fi_refuse_kernel \
+; RUN:   2>&1 \
+; RUN:   | %FileCheck %s --check-prefix=SAME
 
-; The refusal diagnostic MUST name:
-;
-;   1. The failing kernel, so `grep function '` pinpoints it in a
-;      batch-raise run.
-;   2. The specific unsupported ctrl, so the extension path is
-;      obvious (add the case to `buildDppLaneMap` + widen
-;      `isDppCtrlRewritable`).
-;   3. The reference to wave-size-translation.md §5.3, so the next
-;      session can read the rewrite invariant without digging
-;      through the rewrite pass's source.
-;
-; CHECK-DAG: function 'c2_dpp_row_ror_refuse_kernel'
-; CHECK-DAG: unsupported row_ror:1
-; CHECK-DAG: wave-size-translation.md
+; CROSS-DAG: kernel 'c2_dpp_fi_refuse_kernel'
+; CROSS-DAG: DPP16 FI fetch-inactive form
+; CROSS-DAG: llvm.amdgcn.update.dpp has no FI operand
+; CROSS-DAG: Table 57 fetch-inactive semantics
+; CROSS-DAG: rewrite pending
 
-; And the supported-family list MUST appear so a reviewer seeing a
-; new refusal knows the current rewrite scope without cross-
-; referencing source.
-; CHECK-DAG: quad_perm, row_shl:N, row_shr:N and row_xmask:N
+; SAME-DAG: kernel 'c2_dpp_fi_refuse_kernel'
+; SAME-DAG: DPP16 FI fetch-inactive form
+; SAME-DAG: llvm.amdgcn.update.dpp has no FI operand
+; SAME-DAG: Table 57 fetch-inactive semantics
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
 	.text
-	.globl	c2_dpp_row_ror_refuse_kernel
+	.globl	c2_dpp_fi_refuse_kernel
 	.p2align	8
-	.type	c2_dpp_row_ror_refuse_kernel,@function
-c2_dpp_row_ror_refuse_kernel:           ; @c2_dpp_row_ror_refuse_kernel
+	.type	c2_dpp_fi_refuse_kernel,@function
+c2_dpp_fi_refuse_kernel:                ; @c2_dpp_fi_refuse_kernel
 ; %bb.0:
 	s_clause 0x1
 	s_load_b32 s4, s[0:1], 0x14
@@ -63,14 +51,14 @@ c2_dpp_row_ror_refuse_kernel:           ; @c2_dpp_row_ror_refuse_kernel
 	global_load_b32 v1, v0, s[2:3] scale_offset
 	s_wait_loadcnt 0x0
 	;;#ASMSTART
-	v_mov_b32_dpp v1, v1 row_ror:1 row_mask:0xf bank_mask:0xf bound_ctrl:1
-	
+	v_mov_b32_dpp v1, v1 row_xmask:2 row_mask:0xf bank_mask:0xf fi:1
+
 	;;#ASMEND
 	global_store_b32 v0, v1, s[2:3] scale_offset
 	s_endpgm
 	.section	.rodata,"a",@progbits
 	.p2align	6, 0x0
-	.amdhsa_kernel c2_dpp_row_ror_refuse_kernel
+	.amdhsa_kernel c2_dpp_fi_refuse_kernel
 		.amdhsa_kernarg_size 264
 		.amdhsa_user_sgpr_count 2
 		.amdhsa_user_sgpr_kernarg_segment_ptr 1
@@ -136,10 +124,10 @@ amdhsa.kernels:
     .kernarg_segment_align: 8
     .kernarg_segment_size: 264
     .max_flat_workgroup_size: 1024
-    .name:           c2_dpp_row_ror_refuse_kernel
+    .name:           c2_dpp_fi_refuse_kernel
     .private_segment_fixed_size: 0
     .sgpr_count:     6
-    .symbol:         c2_dpp_row_ror_refuse_kernel.kd
+    .symbol:         c2_dpp_fi_refuse_kernel.kd
     .vgpr_count:     2
     .wavefront_size: 32
 amdhsa.target:   amdgcn-amd-amdhsa--gfx1250

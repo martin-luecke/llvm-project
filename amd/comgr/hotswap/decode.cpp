@@ -307,9 +307,10 @@ void decodeScaleOffset(DecodedInst &di) {
 }
 
 // Decode DPP16 modifier operands (dpp_ctrl / row_mask / bank_mask /
-// bound_ctrl) so the raiser can lift DPP-modified VALU ops through
-// `llvm.amdgcn.update.dpp`. Sets `di.hasDpp = true` only when every
-// DPP16 operand is present and immediate-typed.
+// bound_ctrl / optional fi) so the raiser can either lift ordinary
+// DPP16 VALU ops through `llvm.amdgcn.update.dpp` or refuse FI forms
+// explicitly. Sets `di.hasDpp = true` only when every required DPP16
+// operand is present and immediate-typed.
 //
 // Preconditions:
 //   - `di.tsFlags` is populated from the ORIGINAL (pre-canonicalisation)
@@ -327,9 +328,12 @@ void decodeScaleOffset(DecodedInst &di) {
 // extension to `llvm.amdgcn.mov.dpp8`), so the raiser refuses loudly
 // rather than crashing on a partially-populated DPP modifier set.
 //
-// `fi` (fetch-invalid) is not surfaced for DPP16 — `llvm.amdgcn.
-// update.dpp` does not take it. A future DPP8 lift would route
-// through `llvm.amdgcn.mov.dpp8` which also does not take `fi`.
+// `fi` (fetch-inactive / fetch-invalid) is decoded when the DPP16
+// operand exists. `llvm.amdgcn.update.dpp` does not take FI, so FI
+// sites refuse before handler emission (via the cross-wave
+// obstruction classifier) or at the DPP wrapper for same-wave raises.
+// This keeps the ordinary DPP16 path representable while making the
+// semantic gap explicit.
 void decodeDppModifiers(DecodedInst &di) {
   if (!(di.tsFlags & SIInstrFlags::DPP))
     return;
@@ -353,6 +357,7 @@ void decodeDppModifiers(DecodedInst &di) {
   auto rowMask = immOpt(AMDGPU::OpName::row_mask);
   auto bankMask = immOpt(AMDGPU::OpName::bank_mask);
   auto boundCtrl = immOpt(AMDGPU::OpName::bound_ctrl);
+  auto fi = immOpt(AMDGPU::OpName::fi);
   if (!ctrl || !rowMask || !bankMask || !boundCtrl) {
     // MCInstrDesc declared DPP and it is not a DPP8 variant, yet the
     // MCInst operand list is missing one of the four DPP16 modifier
@@ -376,6 +381,7 @@ void decodeDppModifiers(DecodedInst &di) {
   di.dppRowMask = static_cast<uint8_t>(*rowMask & 0xF);
   di.dppBankMask = static_cast<uint8_t>(*bankMask & 0xF);
   di.dppBoundCtrl = (*boundCtrl) != 0;
+  di.dppFi = fi && *fi != 0;
 }
 
 // Decode the 16-bit `OpName::offset` immediate of `ds_swizzle_b32`

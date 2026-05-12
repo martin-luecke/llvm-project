@@ -1330,12 +1330,11 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> textBytes,
     }
 
     // Unsupported `dpp_ctrl` on an i32 update.dpp site — the rewrite
-    // family covers quad_perm / row_shl / row_shr today (all stay
-    // within a single 16-lane row).  Any ctrl outside that set is
-    // either wave-size-dependent (wave_* shifts / rotations) or
-    // hasn't been audited yet (row_mirror / row_half_mirror /
-    // row_share / row_xmask — expressible but no corpus demand
-    // yet).  Refusing loudly surfaces the demand so the next
+    // family covers quad_perm / row_shl / row_shr / row_xmask today
+    // (all stay within a single 16-lane row).  Any ctrl outside that
+    // set is either wave-size-dependent (wave_* shifts / rotations)
+    // or hasn't been audited yet (row_mirror / row_half_mirror /
+    // row_share).  Refusing loudly surfaces the demand so the next
     // extension has a concrete test pointer.  See
     // `buildDppLaneMap` in rewrite_cross_lane_divergent.cpp for
     // the per-ctrl widening protocol.

@@ -870,25 +870,28 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> insts,
       site.kind = ObstructionKind::DppCrossLane;
       site.rewrite = RewriteId::P5_DppModifier;
       // P5 (DPP16 lift via `llvm.amdgcn.update.dpp`) landed for the
-      // DPP16 encoding family. `decodeDppModifiers` sets
-      // `di.hasDpp = true` only after successfully extracting every
-      // DPP16 modifier operand (dpp_ctrl / row_mask / bank_mask /
+      // DPP16 encoding family when FI is not set. `decodeDppModifiers`
+      // sets `di.hasDpp = true` only after successfully extracting every
+      // required DPP16 modifier operand (dpp_ctrl / row_mask / bank_mask /
       // bound_ctrl); for DPP8 instructions it early-returns and leaves
-      // `hasDpp` false. Gate `rewriteImplemented` on `hasDpp` so DPP16
-      // accepts (outcome b) while DPP8 refuses loudly (outcome c
-      // pending a P5 extension to `llvm.amdgcn.mov.dpp8`). The
-      // `tsFlags & SIInstrFlags::DPP` check still fires for both
-      // forms — both are a Class-2 cross-lane site by the hotswap/
-      // docs/wave-size-translation.md §6 taxonomy; the flipped-by-
-      // form `rewriteImplemented` bit is
-      // what separates "handled" from "pending" without mucking with
-      // the taxonomy.
-      site.rewriteImplemented = di.hasDpp;
+      // `hasDpp` false. DPP16 FI is decoded but not representable by
+      // `llvm.amdgcn.update.dpp`, so it is treated as pending too. The
+      // `tsFlags & SIInstrFlags::DPP` check still fires for all forms —
+      // all are Class-2 cross-lane sites by the hotswap/docs/wave-size-
+      // translation.md §6 taxonomy; the flipped-by-form
+      // `rewriteImplemented` bit separates "handled" from "pending"
+      // without changing the taxonomy.
+      site.rewriteImplemented = di.hasDpp && !di.dppFi;
       if (!di.hasDpp)
         site.detail =
             "DPP8 lane-permutation form — P5 currently covers only the "
             "DPP16 encoding family via llvm.amdgcn.update.dpp; extending "
             "to DPP8 requires an llvm.amdgcn.mov.dpp8 lift path.";
+      else if (di.dppFi)
+        site.detail =
+            "DPP16 FI fetch-inactive form — llvm.amdgcn.update.dpp has no "
+            "FI operand; extending P5 requires modelling Table 57 "
+            "fetch-inactive semantics rather than silently dropping FI.";
       report.sites.push_back(std::move(site));
       continue;
     }

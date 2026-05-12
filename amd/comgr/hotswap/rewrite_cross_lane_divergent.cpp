@@ -779,10 +779,11 @@ void rewriteReadfirstlaneCall(CallInst *CI, Value *laneId,
 // ============================================================================
 
 // Pure predicate: is `dpp_ctrl` in the supported family (QUAD_PERM /
-// ROW_SHL / ROW_SHR)?  Split out from `buildDppLaneMap` so the pre-
-// flight phase can answer "is this ctrl rewritable?" without running
-// an IRBuilder and without relying on IRBuilder's implicit constant-
-// folding to make the dummy-inputs decode into pure constants.
+// ROW_SHL / ROW_SHR / ROW_XMASK)?  Split out from `buildDppLaneMap`
+// so the pre-flight phase can answer "is this ctrl rewritable?"
+// without running an IRBuilder and without relying on IRBuilder's
+// implicit constant-folding to make the dummy-inputs decode into pure
+// constants.
 //
 // Invariant: this must be the single source of truth for the
 // supported-ctrl set.  `buildDppLaneMap` handles the exact same
@@ -798,24 +799,26 @@ bool isDppCtrlRewritable(unsigned ctrl) {
   // quad permutation — no "unused" encodings in this range.
   if (ctrl <= QUAD_PERM_LAST)
     return true;
-  // ROW_SHL:N with N in [1, 15].  Note ROW_SHL0 (0x100) is a
-  // shift-by-zero identity that the ISA marks as "unused" (same
-  // encoding as DPP_UNUSED1); we include it here for decode
-  // completeness and `buildDppLaneMap` handles it correctly as
-  // N=0 (identity: srcWithinRow == withinRow, always in-range).
+  // ROW_SHL:N with N in [1, 15]. ROW_SHL0 shares the reserved
+  // DPP_UNUSED1 encoding and is intentionally not accepted.
   if (ctrl >= ROW_SHL_FIRST && ctrl <= ROW_SHL_LAST)
     return true;
-  // ROW_SHR:N with N in [1, 15].  Same identity-at-N=0 note as
-  // ROW_SHL above.
+  // ROW_SHR:N with N in [1, 15]. ROW_SHR0 shares the reserved
+  // DPP_UNUSED2 encoding and is intentionally not accepted.
   if (ctrl >= ROW_SHR_FIRST && ctrl <= ROW_SHR_LAST)
     return true;
+  // ROW_XMASK:N with N in [0, 15].  The ISA defines this as
+  // source lane `(within-row lane) XOR N`, so it never leaves the
+  // current 16-lane row.
+  if (ctrl >= ROW_XMASK_FIRST && ctrl <= ROW_XMASK_LAST)
+    return true;
   // Every other family (ROW_ROR, WAVE_*, ROW_MIRROR /
-  // ROW_HALF_MIRROR, BCAST15 / BCAST31, ROW_NEWBCAST / ROW_SHARE,
-  // ROW_XMASK) either crosses 16-lane row boundaries in a wave-
-  // size-dependent way OR has a correctness argument this rewrite
-  // has not yet codified.  Refusing loudly via this predicate
-  // surfaces new-corpus demand concretely — each "unsupported"
-  // refusal points at a specific ctrl to extend.
+  // ROW_HALF_MIRROR, BCAST15 / BCAST31, ROW_NEWBCAST / ROW_SHARE)
+  // either crosses 16-lane row boundaries in a wave-size-dependent
+  // way OR has a correctness argument this rewrite has not yet
+  // codified.  Refusing loudly via this predicate surfaces new-
+  // corpus demand concretely — each "unsupported" refusal points at
+  // a specific ctrl to extend.
   return false;
 }
 
@@ -841,15 +844,19 @@ struct DppLaneMap {
 //     quad reads source-lane-in-quad = selector[L & 3].  Always
 //     in-range.
 //
-//   * ROW_SL:N           (0x101..0x10F)  — row shift left by N.
+//   * ROW_SHL:N          (0x101..0x10F)  — row shift left by N.
 //     Target-lane L (within-row W) reads source within-row W + N.
 //     Out-of-range iff W + N >= 16.
 //
-//   * ROW_SR:N           (0x111..0x11F)  — row shift right by N.
+//   * ROW_SHR:N          (0x111..0x11F)  — row shift right by N.
 //     Target-lane L (within-row W) reads source within-row W - N.
 //     Out-of-range iff W < N.
 //
-// All three families keep the source lane within the same 16-lane
+//   * ROW_XMASK:N        (0x160..0x16F)  — row-local XOR by mask N.
+//     Target-lane L (within-row W) reads source within-row W ^ N.
+//     Always in-range because W and N are both 4-bit row indices.
+//
+// All supported families keep the source lane within the same 16-lane
 // row as the target lane.  Since a 16-lane row is a topology
 // invariant of every AMDGPU wave size >= 16, the `rowBase(L) |
 // srcWithinRow` computation produces identical source-lane indices
@@ -878,8 +885,10 @@ struct DppLaneMap {
 //     `permlane16` rather than the wave-wide DPP ctrls, so this
 //     family has no corpus demand.
 //
-//   * ROW_MIRROR / ROW_HALF_MIRROR.  Within a 16-lane row, so
-//     expressible here — no corpus demand yet.
+//   * ROW_MIRROR / ROW_HALF_MIRROR.  Within a 16-lane row and
+//     equivalent to row_xmask:15 / row_xmask:7 in current ISA
+//     manuals, but left unsupported until a kernel demands those
+//     named controls directly.
 //
 //   * BCAST15 / BCAST31 (gfx9-only).  Cross 16- and 32-lane row
 //     boundaries respectively.  gfx1250 source cannot emit them
@@ -888,10 +897,6 @@ struct DppLaneMap {
 //   * ROW_SHARE:N (gfx10+).  Broadcasts lane N of each row to all
 //     other lanes in that row.  Expressible via srcWithinRow = N,
 //     inRange = true — no corpus demand yet.
-//
-//   * ROW_XMASK:N (gfx10+).  Each lane reads from its XOR-N partner
-//     within the row.  Expressible via srcWithinRow = withinRow ^ N
-//     — no corpus demand yet.
 //
 // When extending this table, prefer a one-case-per-ctrl-family
 // layout and document the in-range predicate and source-lane
@@ -930,7 +935,7 @@ DppLaneMap buildDppLaneMap(IRBuilder<> &B, Value *withinRow,
   }
 
   if (ctrl >= ROW_SHL_FIRST && ctrl <= ROW_SHL_LAST) {
-    // ROW_SL:N.  Source within-row = withinRow + N; OOB iff the sum
+    // ROW_SHL:N.  Source within-row = withinRow + N; OOB iff the sum
     // falls outside [0, 16).  Use unsigned comparison — withinRow
     // is already masked to [0, 16) by the caller's `laneId & 0xF`,
     // so the addition cannot wrap.
@@ -944,7 +949,7 @@ DppLaneMap buildDppLaneMap(IRBuilder<> &B, Value *withinRow,
   }
 
   if (ctrl >= ROW_SHR_FIRST && ctrl <= ROW_SHR_LAST) {
-    // ROW_SR:N.  Source within-row = withinRow - N; OOB iff
+    // ROW_SHR:N.  Source within-row = withinRow - N; OOB iff
     // withinRow < N.  Compute srcWithinRow as a plain i32 subtract
     // — the select on `inRange` at the caller clamps the bogus
     // wrap-around result before it feeds the ds_bpermute selector.
@@ -952,6 +957,20 @@ DppLaneMap buildDppLaneMap(IRBuilder<> &B, Value *withinRow,
     Value *nVal = ConstantInt::get(i32Ty, N);
     out.inRange = B.CreateICmpUGE(withinRow, nVal, "cwd_dpp_sr_inrange");
     out.srcWithinRow = B.CreateSub(withinRow, nVal, "cwd_dpp_sr_src");
+    return out;
+  }
+
+  if (ctrl >= ROW_XMASK_FIRST && ctrl <= ROW_XMASK_LAST) {
+    // ROW_XMASK:N.  Source within-row = withinRow XOR N.  The ISA
+    // manual spells this as `lane[(n & 0x30) + ((n & 0xf) ^ mask)]`;
+    // `rowBase | srcWithinRow` supplies the `(n & 0x30)` component
+    // for the target wave, while the XOR stays entirely in the
+    // 4-bit row index.  Hence every row_xmask:[0..15] is always
+    // in-range and wave-size-oblivious under cross-widening.
+    unsigned N = ctrl - ROW_XMASK0;
+    Value *nVal = ConstantInt::get(i32Ty, N);
+    out.srcWithinRow = B.CreateXor(withinRow, nVal, "cwd_dpp_xmask_src");
+    out.inRange = ConstantInt::getTrue(B.getContext());
     return out;
   }
 
@@ -1019,10 +1038,16 @@ std::string describeDppCtrl(unsigned ctrl) {
 // release builds) because a silently-half-rewritten function is
 // exactly the "silent-fallback" shape the project rule forbids.
 //
-// Only called for i32-overloaded DPP.  i64 DPP sites are left to
-// the backend's native lowering (see the header's "@llvm.amdgcn.
-// update.dpp" paragraph for the i32-only scope rationale).
-void rewriteUpdateDppI32Call(CallInst *CI, Value *laneId) {
+// Only called for i32-overloaded DPP.  i64 DPP sites are outside this
+// rewrite rollout (see the header's "@llvm.amdgcn.update.dpp"
+// paragraph for the i32-only scope rationale).
+void rewriteUpdateDppI32Call(CallInst *CI, Value *laneId,
+                             unsigned sourceWaveSize) {
+  if (sourceWaveSize < 16 || (sourceWaveSize & (sourceWaveSize - 1)) != 0)
+    report_fatal_error(
+        "rewriteUpdateDppI32Call invariant: source wave size must be a "
+        "power-of-two >= 16 for DPP row/bank mask projection");
+
   IRBuilder<> B(CI);
   B.SetCurrentDebugLocation(CI->getDebugLoc());
   Module *M = CI->getModule();
@@ -1060,12 +1085,15 @@ void rewriteUpdateDppI32Call(CallInst *CI, Value *laneId) {
   // instcombine folds post-pass.
   Value *withinRow = B.CreateAnd(laneId, ConstantInt::get(i32Ty, 0xF),
                                   "cwd_dpp_within_row");
+  Value *sourceLane = B.CreateAnd(
+      laneId, ConstantInt::get(i32Ty, sourceWaveSize - 1),
+      "cwd_dpp_source_lane");
   Value *rowIdx =
-      B.CreateAnd(B.CreateLShr(laneId, ConstantInt::get(i32Ty, 4)),
-                   ConstantInt::get(i32Ty, 3), "cwd_dpp_row");
+      B.CreateAnd(B.CreateLShr(sourceLane, ConstantInt::get(i32Ty, 4)),
+                   ConstantInt::get(i32Ty, 3), "cwd_dpp_source_row");
   Value *bankIdx =
-      B.CreateAnd(B.CreateLShr(laneId, ConstantInt::get(i32Ty, 2)),
-                   ConstantInt::get(i32Ty, 3), "cwd_dpp_bank");
+      B.CreateAnd(B.CreateLShr(sourceLane, ConstantInt::get(i32Ty, 2)),
+                   ConstantInt::get(i32Ty, 3), "cwd_dpp_source_bank");
   Value *rowBase = B.CreateAnd(laneId, ConstantInt::get(i32Ty, ~0xFu),
                                 "cwd_dpp_row_base");
 
@@ -1099,7 +1127,11 @@ void rewriteUpdateDppI32Call(CallInst *CI, Value *laneId) {
   Value *dppVal = B.CreateSelect(m.inRange, bperm, oobVal,
                                   "cwd_dpp_inrange");
 
-  // row_mask / bank_mask gating.  Fold the select away when both
+  // row_mask / bank_mask gate destination writes only; they do not
+  // affect source fetch.  Interpret both masks in source-wave-local
+  // coordinates so a wave32 row mask applies to rows 0/1 of each
+  // replicated source wave instead of accidentally treating wave64
+  // rows 2/3 as native source rows.  Fold the select away when both
   // masks are 0xF (the common "every lane participates" case) —
   // keeps the rewritten IR minimal for the overwhelmingly common
   // reduction-tree shape the corpus emits, and keeps lit-test
@@ -1152,12 +1184,10 @@ CrossLaneDivergentRewriteReport rewriteCrossLaneDivergent(
   // number of matched sites.
   //
   // DPP collection is i32-only: the rewrite's `ds_bpermute` path is
-  // i32-typed and i64 DPP sites keep their native `@llvm.amdgcn.
-  // update.dpp.i64` lowering via the backend's implicit split
-  // (correct but not wave-size-aware; see the header for rationale
-  // of the i32-only rollout).  Any future widening of the rewrite
-  // to i64 would add a split/recombine shim here alongside this
-  // walk and need to update the symmetry invariant downstream.
+  // i32-typed, and i64 DPP sites are intentionally outside this
+  // rollout. Any future widening of the rewrite to i64 would add a
+  // split/recombine shim here alongside this walk and need to update
+  // the symmetry invariant downstream.
   SmallVector<CallInst *, 16> writelaneSites;
   SmallVector<CallInst *, 16> readlaneSites;
   SmallVector<CallInst *, 16> dppI32Sites;
@@ -1179,7 +1209,7 @@ CrossLaneDivergentRewriteReport rewriteCrossLaneDivergent(
     case Intrinsic::amdgcn_update_dpp:
       if (CI->getType() == Type::getInt32Ty(F.getContext()))
         dppI32Sites.push_back(CI);
-      // i64 DPP: intentionally left unrewritten (see walk comment).
+      // i64 DPP: outside this rewrite rollout (see walk comment).
       break;
     default:
       break;
@@ -1248,11 +1278,6 @@ CrossLaneDivergentRewriteReport rewriteCrossLaneDivergent(
   // symmetry exists to prevent (a shared VGPR written by one form
   // and read by the other produces divergent data).  All-or-nothing.
   //
-  // Pre-flight via a non-mutating decode: walk the collected DPP
-  // sites, call `buildDppLaneMap` with a dummy IRBuilder, check
-  // `supported`.  Any failure populates the report and returns zero
-  // rewrites across all three primitive families.
-  //
   // Pre-flight is a pure predicate (`isDppCtrlRewritable`) on the
   // immediate dpp_ctrl operand — no IRBuilder state, no dummy IR
   // insertion.  Keeps the check cheap, decouples it from any
@@ -1268,7 +1293,7 @@ CrossLaneDivergentRewriteReport rewriteCrossLaneDivergent(
          << "' has an update.dpp site with unsupported "
          << describeDppCtrl(ctrl)
          << ". The cross-widen rewrite only covers quad_perm, "
-            "row_shl:N and row_shr:N today (all stay within a "
+            "row_shl:N, row_shr:N and row_xmask:N today (all stay within a "
             "single 16-lane row, hence wave-size-oblivious). "
             "Extending the supported set requires a per-ctrl "
             "correctness argument in buildDppLaneMap and a new "
@@ -1317,7 +1342,7 @@ CrossLaneDivergentRewriteReport rewriteCrossLaneDivergent(
     // half-rewrite through).  The counter increments only AFTER the
     // rewriter successfully returns; a hypothetical fatal-error (which
     // aborts the whole process) cannot leave the report lying.
-    rewriteUpdateDppI32Call(CI, getLaneId());
+    rewriteUpdateDppI32Call(CI, getLaneId(), sourceWaveSize);
     ++report.dppRewritten;
   }
 

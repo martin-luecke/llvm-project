@@ -1,48 +1,33 @@
-; Negative fixture: the DPP cross-widen rewrite must refuse
-; loudly on any `dpp_ctrl` outside the supported family
-; (quad_perm / row_shl / row_shr / row_xmask).  This fixture pins the
-; refusal diagnostic for `row_ror:1` (ctrl = 0x121); the
-; companion positive fixture is `c2_dpp_quad_perm.s`.
-;
-; Contract: `raise_cli` under cross-widening (gfx1250 -> gfx942)
-; must exit non-zero AND the stderr must name the specific
-; unsupported ctrl.  This closes the pair with the positive
-; fixture: together they pin BOTH sides of the rewrite's
-; all-or-nothing symmetry invariant.
-
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && %not %raise_cli %t.hsaco \
-; RUN:     --target-isa=gfx942 --emit-ir=c2_dpp_row_ror_refuse_kernel \
-; RUN:   2>&1 \
+; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 \
+; RUN:     --emit-ir=c2_dpp_row_shr_bound_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
-
-; The refusal diagnostic MUST name:
 ;
-;   1. The failing kernel, so `grep function '` pinpoints it in a
-;      batch-raise run.
-;   2. The specific unsupported ctrl, so the extension path is
-;      obvious (add the case to `buildDppLaneMap` + widen
-;      `isDppCtrlRewritable`).
-;   3. The reference to wave-size-translation.md §5.3, so the next
-;      session can read the rewrite invariant without digging
-;      through the rewrite pass's source.
-;
-; CHECK-DAG: function 'c2_dpp_row_ror_refuse_kernel'
-; CHECK-DAG: unsupported row_ror:1
-; CHECK-DAG: wave-size-translation.md
+; Positive canary for the shared DPP16 out-of-range path. row_shr:4
+; can read outside the 16-lane row; bound_ctrl:1 must turn those lanes
+; into zero after the ds_bpermute rewrite rather than preserving `old`.
 
-; And the supported-family list MUST appear so a reviewer seeing a
-; new refusal knows the current rewrite scope without cross-
-; referencing source.
-; CHECK-DAG: quad_perm, row_shl:N, row_shr:N and row_xmask:N
+; CHECK-LABEL: define amdgpu_kernel void @c2_dpp_row_shr_bound_kernel(
+; CHECK-NOT: call i32 @llvm.amdgcn.update.dpp.i32(
+; CHECK-DAG: %cwd_dpp_within_row = and i32 %{{.+}}, 15
+; CHECK-DAG: %cwd_dpp_row_base = and i32 %{{.+}}, -16
+; CHECK-DAG: %cwd_dpp_sr_inrange = icmp uge i32 %cwd_dpp_within_row, 4
+; CHECK-DAG: %cwd_dpp_sr_src = sub i32 %cwd_dpp_within_row, 4
+; CHECK-DAG: %cwd_dpp_src_safe = select i1 %cwd_dpp_sr_inrange, i32 %cwd_dpp_sr_src, i32 0
+; CHECK-DAG: %cwd_dpp_src_abs = or i32 %cwd_dpp_row_base, %cwd_dpp_src_safe
+; CHECK-DAG: %cwd_dpp_selector = shl i32 %cwd_dpp_src_abs, 2
+; CHECK-DAG: %cwd_dpp_bperm = call i32 @llvm.amdgcn.ds.bpermute(i32 %cwd_dpp_selector, i32 %{{[^,]+}})
+; CHECK-DAG: %cwd_dpp_inrange = select i1 %cwd_dpp_sr_inrange, i32 %cwd_dpp_bperm, i32 0
+; CHECK-NOT: call i32 @llvm.amdgcn.update.dpp.i32(
+; CHECK: declare i32 @llvm.amdgcn.ds.bpermute(i32, i32)
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
 	.text
-	.globl	c2_dpp_row_ror_refuse_kernel
+	.globl	c2_dpp_row_shr_bound_kernel
 	.p2align	8
-	.type	c2_dpp_row_ror_refuse_kernel,@function
-c2_dpp_row_ror_refuse_kernel:           ; @c2_dpp_row_ror_refuse_kernel
+	.type	c2_dpp_row_shr_bound_kernel,@function
+c2_dpp_row_shr_bound_kernel:            ; @c2_dpp_row_shr_bound_kernel
 ; %bb.0:
 	s_clause 0x1
 	s_load_b32 s4, s[0:1], 0x14
@@ -63,14 +48,14 @@ c2_dpp_row_ror_refuse_kernel:           ; @c2_dpp_row_ror_refuse_kernel
 	global_load_b32 v1, v0, s[2:3] scale_offset
 	s_wait_loadcnt 0x0
 	;;#ASMSTART
-	v_mov_b32_dpp v1, v1 row_ror:1 row_mask:0xf bank_mask:0xf bound_ctrl:1
-	
+	v_mov_b32_dpp v1, v1 row_shr:4 row_mask:0xf bank_mask:0xf bound_ctrl:1
+
 	;;#ASMEND
 	global_store_b32 v0, v1, s[2:3] scale_offset
 	s_endpgm
 	.section	.rodata,"a",@progbits
 	.p2align	6, 0x0
-	.amdhsa_kernel c2_dpp_row_ror_refuse_kernel
+	.amdhsa_kernel c2_dpp_row_shr_bound_kernel
 		.amdhsa_kernarg_size 264
 		.amdhsa_user_sgpr_count 2
 		.amdhsa_user_sgpr_kernarg_segment_ptr 1
@@ -136,10 +121,10 @@ amdhsa.kernels:
     .kernarg_segment_align: 8
     .kernarg_segment_size: 264
     .max_flat_workgroup_size: 1024
-    .name:           c2_dpp_row_ror_refuse_kernel
+    .name:           c2_dpp_row_shr_bound_kernel
     .private_segment_fixed_size: 0
     .sgpr_count:     6
-    .symbol:         c2_dpp_row_ror_refuse_kernel.kd
+    .symbol:         c2_dpp_row_shr_bound_kernel.kd
     .vgpr_count:     2
     .wavefront_size: 32
 amdhsa.target:   amdgcn-amd-amdhsa--gfx1250
