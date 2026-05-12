@@ -187,29 +187,29 @@ static void recordDerivedWaveMaskI1(RaiseContext &ctx, ParsedReg dstReg,
   }
 }
 
-// Preserve full target-lane mask semantics through scalar SOP2 mask algebra.
-//
-// The architectural scalar result is still source-width (for example a
-// wave32-source s_b32 mask), so reconstructing a later V_CNDMASK predicate
-// from that scalar value can lose target lanes 32..63 after wave32 -> wave64
-// lifting.  If both operands still have per-lane i1 shadows, derive the
-// boolean result directly and record it on the destination for later mask
-// consumers.  When either operand has no shadow, the scalar result emitted by
-// the opcode remains the only available source of truth.
-static void recordDerivedBinaryWaveMaskI1(
-    RaiseContext &ctx, OpResolver &op,
-    llvm::function_ref<llvm::Value *(llvm::Value *, llvm::Value *)> combine) {
-  Value *s0_i1 = tryGetSrcWaveMaskI1(ctx, op, 0);
-  Value *s1_i1 = tryGetSrcWaveMaskI1(ctx, op, 1);
-  if (!s0_i1 || !s1_i1)
-    return;
-  recordDerivedWaveMaskI1(ctx, op.dst(), combine(s0_i1, s1_i1));
-}
-
 HandlerResult handleSOP2(RaiseContext &ctx, const DecodedInst &di,
                          OpResolver &op) {
   HandlerResult hr;
   CanonicalOp sop = di.canonOp;
+
+  // Preserve full target-lane mask semantics through scalar SOP2 mask algebra.
+  //
+  // The architectural scalar result is still source-width (for example a
+  // wave32-source s_b32 mask), so reconstructing a later V_CNDMASK predicate
+  // from that scalar value can lose target lanes 32..63 after wave32 -> wave64
+  // lifting.  If both operands still have per-lane i1 shadows, derive the
+  // boolean result directly and record it on the destination for later mask
+  // consumers.  When either operand has no shadow, the scalar result emitted by
+  // the opcode remains the only available source of truth.
+  auto RecordDerivedBinaryWaveMaskI1 =
+      [&](ParsedReg Dst, Value *S0I1, Value *S1I1,
+          llvm::function_ref<llvm::Value *(llvm::Value *, llvm::Value *)>
+              Combine) {
+        if (!S0I1 || !S1I1) {
+          return;
+        }
+        recordDerivedWaveMaskI1(ctx, Dst, Combine(S0I1, S1I1));
+      };
 
   // 32-bit binary ops — auto SCC via sccResult.
   //
@@ -223,19 +223,23 @@ HandlerResult handleSOP2(RaiseContext &ctx, const DecodedInst &di,
   // `compare_correctness: tl.sort N=4 probe` landed the regression
   // probe).
   if (sop == CanonicalOp::S_AND_B32) {
+    Value *S0I1 = tryGetSrcWaveMaskI1(ctx, op, 0);
+    Value *S1I1 = tryGetSrcWaveMaskI1(ctx, op, 1);
     hr.sccResult = ctx.B.CreateAnd(op.src(0), op.src(1), "and");
     ctx.regs.writeReg32(ctx.B, op.dst(), hr.sccResult);
-    recordDerivedBinaryWaveMaskI1(ctx, op, [&](Value *a, Value *b) {
-      return ctx.B.CreateAnd(a, b, "wave_mask_and");
+    RecordDerivedBinaryWaveMaskI1(op.dst(), S0I1, S1I1, [&](Value *A, Value *B) {
+      return ctx.B.CreateAnd(A, B, "wave_mask_and");
     });
     hr.handled = true;
     return hr;
   }
   if (sop == CanonicalOp::S_OR_B32) {
+    Value *S0I1 = tryGetSrcWaveMaskI1(ctx, op, 0);
+    Value *S1I1 = tryGetSrcWaveMaskI1(ctx, op, 1);
     hr.sccResult = ctx.B.CreateOr(op.src(0), op.src(1), "or");
     ctx.regs.writeReg32(ctx.B, op.dst(), hr.sccResult);
-    recordDerivedBinaryWaveMaskI1(ctx, op, [&](Value *a, Value *b) {
-      return ctx.B.CreateOr(a, b, "wave_mask_or");
+    RecordDerivedBinaryWaveMaskI1(op.dst(), S0I1, S1I1, [&](Value *A, Value *B) {
+      return ctx.B.CreateOr(A, B, "wave_mask_or");
     });
     hr.handled = true;
     return hr;
@@ -514,10 +518,12 @@ HandlerResult handleSOP2(RaiseContext &ctx, const DecodedInst &di,
     return hr;
   }
   if (sop == CanonicalOp::S_XOR_B32) {
+    Value *S0I1 = tryGetSrcWaveMaskI1(ctx, op, 0);
+    Value *S1I1 = tryGetSrcWaveMaskI1(ctx, op, 1);
     hr.sccResult = ctx.B.CreateXor(op.src(0), op.src(1), "xor");
     ctx.regs.writeReg32(ctx.B, op.dst(), hr.sccResult);
-    recordDerivedBinaryWaveMaskI1(ctx, op, [&](Value *a, Value *b) {
-      return ctx.B.CreateXor(a, b, "wave_mask_xor");
+    RecordDerivedBinaryWaveMaskI1(op.dst(), S0I1, S1I1, [&](Value *A, Value *B) {
+      return ctx.B.CreateXor(A, B, "wave_mask_xor");
     });
     hr.handled = true;
     return hr;
@@ -797,60 +803,72 @@ HandlerResult handleSOP2(RaiseContext &ctx, const DecodedInst &di,
     return hr;
   }
   if (sop == CanonicalOp::S_OR_B64) {
+    Value *S0I1 = tryGetSrcWaveMaskI1(ctx, op, 0);
+    Value *S1I1 = tryGetSrcWaveMaskI1(ctx, op, 1);
     Value *res = ctx.B.CreateOr(op.src64(0), op.src64(1), "or64");
     ctx.regs.writeReg64(ctx.B, op.dst(), res);
-    recordDerivedBinaryWaveMaskI1(ctx, op, [&](Value *a, Value *b) {
-      return ctx.B.CreateOr(a, b, "wave_mask_or64");
+    RecordDerivedBinaryWaveMaskI1(op.dst(), S0I1, S1I1, [&](Value *A, Value *B) {
+      return ctx.B.CreateOr(A, B, "wave_mask_or64");
     });
     hr.sccResult = res;
     hr.handled = true;
     return hr;
   }
   if (sop == CanonicalOp::S_AND_B64) {
+    Value *S0I1 = tryGetSrcWaveMaskI1(ctx, op, 0);
+    Value *S1I1 = tryGetSrcWaveMaskI1(ctx, op, 1);
     Value *res = ctx.B.CreateAnd(op.src64(0), op.src64(1), "and64");
     ctx.regs.writeReg64(ctx.B, op.dst(), res);
-    recordDerivedBinaryWaveMaskI1(ctx, op, [&](Value *a, Value *b) {
-      return ctx.B.CreateAnd(a, b, "wave_mask_and64");
+    RecordDerivedBinaryWaveMaskI1(op.dst(), S0I1, S1I1, [&](Value *A, Value *B) {
+      return ctx.B.CreateAnd(A, B, "wave_mask_and64");
     });
     hr.sccResult = res;
     hr.handled = true;
     return hr;
   }
   if (sop == CanonicalOp::S_ANDN2_B64) {
+    Value *S0I1 = tryGetSrcWaveMaskI1(ctx, op, 0);
+    Value *S1I1 = tryGetSrcWaveMaskI1(ctx, op, 1);
     hr.sccResult =
         ctx.B.CreateAnd(op.src64(0), ctx.B.CreateNot(op.src64(1)), "andn2_64");
     ctx.regs.writeReg64(ctx.B, op.dst(), hr.sccResult);
-    recordDerivedBinaryWaveMaskI1(ctx, op, [&](Value *a, Value *b) {
-      return ctx.B.CreateAnd(a, ctx.B.CreateNot(b), "wave_mask_andn2_64");
+    RecordDerivedBinaryWaveMaskI1(op.dst(), S0I1, S1I1, [&](Value *A, Value *B) {
+      return ctx.B.CreateAnd(A, ctx.B.CreateNot(B), "wave_mask_andn2_64");
     });
     hr.handled = true;
     return hr;
   }
   if (sop == CanonicalOp::S_ORN2_B64) {
+    Value *S0I1 = tryGetSrcWaveMaskI1(ctx, op, 0);
+    Value *S1I1 = tryGetSrcWaveMaskI1(ctx, op, 1);
     hr.sccResult =
         ctx.B.CreateOr(op.src64(0), ctx.B.CreateNot(op.src64(1)), "orn2_64");
     ctx.regs.writeReg64(ctx.B, op.dst(), hr.sccResult);
-    recordDerivedBinaryWaveMaskI1(ctx, op, [&](Value *a, Value *b) {
-      return ctx.B.CreateOr(a, ctx.B.CreateNot(b), "wave_mask_orn2_64");
+    RecordDerivedBinaryWaveMaskI1(op.dst(), S0I1, S1I1, [&](Value *A, Value *B) {
+      return ctx.B.CreateOr(A, ctx.B.CreateNot(B), "wave_mask_orn2_64");
     });
     hr.handled = true;
     return hr;
   }
   if (sop == CanonicalOp::S_ANDN2_B32) {
+    Value *S0I1 = tryGetSrcWaveMaskI1(ctx, op, 0);
+    Value *S1I1 = tryGetSrcWaveMaskI1(ctx, op, 1);
     hr.sccResult =
         ctx.B.CreateAnd(op.src(0), ctx.B.CreateNot(op.src(1)), "andn2");
     ctx.regs.writeReg32(ctx.B, op.dst(), hr.sccResult);
-    recordDerivedBinaryWaveMaskI1(ctx, op, [&](Value *a, Value *b) {
-      return ctx.B.CreateAnd(a, ctx.B.CreateNot(b), "wave_mask_andn2");
+    RecordDerivedBinaryWaveMaskI1(op.dst(), S0I1, S1I1, [&](Value *A, Value *B) {
+      return ctx.B.CreateAnd(A, ctx.B.CreateNot(B), "wave_mask_andn2");
     });
     hr.handled = true;
     return hr;
   }
   if (sop == CanonicalOp::S_ORN2_B32) {
+    Value *S0I1 = tryGetSrcWaveMaskI1(ctx, op, 0);
+    Value *S1I1 = tryGetSrcWaveMaskI1(ctx, op, 1);
     hr.sccResult = ctx.B.CreateOr(op.src(0), ctx.B.CreateNot(op.src(1)), "orn2");
     ctx.regs.writeReg32(ctx.B, op.dst(), hr.sccResult);
-    recordDerivedBinaryWaveMaskI1(ctx, op, [&](Value *a, Value *b) {
-      return ctx.B.CreateOr(a, ctx.B.CreateNot(b), "wave_mask_orn2");
+    RecordDerivedBinaryWaveMaskI1(op.dst(), S0I1, S1I1, [&](Value *A, Value *B) {
+      return ctx.B.CreateOr(A, ctx.B.CreateNot(B), "wave_mask_orn2");
     });
     hr.handled = true;
     return hr;
@@ -861,61 +879,73 @@ HandlerResult handleSOP2(RaiseContext &ctx, const DecodedInst &di,
   // and identical sign-/zero-extension semantics as their non-negated
   // siblings (S_AND_B32 etc.), so we can reuse op.src/op.src64 directly.
   if (sop == CanonicalOp::S_NAND_B32) {
+    Value *S0I1 = tryGetSrcWaveMaskI1(ctx, op, 0);
+    Value *S1I1 = tryGetSrcWaveMaskI1(ctx, op, 1);
     hr.sccResult = ctx.B.CreateNot(
         ctx.B.CreateAnd(op.src(0), op.src(1), "and"), "nand");
     ctx.regs.writeReg32(ctx.B, op.dst(), hr.sccResult);
-    recordDerivedBinaryWaveMaskI1(ctx, op, [&](Value *a, Value *b) {
-      return ctx.B.CreateNot(ctx.B.CreateAnd(a, b), "wave_mask_nand");
+    RecordDerivedBinaryWaveMaskI1(op.dst(), S0I1, S1I1, [&](Value *A, Value *B) {
+      return ctx.B.CreateNot(ctx.B.CreateAnd(A, B), "wave_mask_nand");
     });
     hr.handled = true;
     return hr;
   }
   if (sop == CanonicalOp::S_NAND_B64) {
+    Value *S0I1 = tryGetSrcWaveMaskI1(ctx, op, 0);
+    Value *S1I1 = tryGetSrcWaveMaskI1(ctx, op, 1);
     hr.sccResult = ctx.B.CreateNot(
         ctx.B.CreateAnd(op.src64(0), op.src64(1), "and64"), "nand64");
     ctx.regs.writeReg64(ctx.B, op.dst(), hr.sccResult);
-    recordDerivedBinaryWaveMaskI1(ctx, op, [&](Value *a, Value *b) {
-      return ctx.B.CreateNot(ctx.B.CreateAnd(a, b), "wave_mask_nand64");
+    RecordDerivedBinaryWaveMaskI1(op.dst(), S0I1, S1I1, [&](Value *A, Value *B) {
+      return ctx.B.CreateNot(ctx.B.CreateAnd(A, B), "wave_mask_nand64");
     });
     hr.handled = true;
     return hr;
   }
   if (sop == CanonicalOp::S_NOR_B32) {
+    Value *S0I1 = tryGetSrcWaveMaskI1(ctx, op, 0);
+    Value *S1I1 = tryGetSrcWaveMaskI1(ctx, op, 1);
     hr.sccResult = ctx.B.CreateNot(
         ctx.B.CreateOr(op.src(0), op.src(1), "or"), "nor");
     ctx.regs.writeReg32(ctx.B, op.dst(), hr.sccResult);
-    recordDerivedBinaryWaveMaskI1(ctx, op, [&](Value *a, Value *b) {
-      return ctx.B.CreateNot(ctx.B.CreateOr(a, b), "wave_mask_nor");
+    RecordDerivedBinaryWaveMaskI1(op.dst(), S0I1, S1I1, [&](Value *A, Value *B) {
+      return ctx.B.CreateNot(ctx.B.CreateOr(A, B), "wave_mask_nor");
     });
     hr.handled = true;
     return hr;
   }
   if (sop == CanonicalOp::S_NOR_B64) {
+    Value *S0I1 = tryGetSrcWaveMaskI1(ctx, op, 0);
+    Value *S1I1 = tryGetSrcWaveMaskI1(ctx, op, 1);
     hr.sccResult = ctx.B.CreateNot(
         ctx.B.CreateOr(op.src64(0), op.src64(1), "or64"), "nor64");
     ctx.regs.writeReg64(ctx.B, op.dst(), hr.sccResult);
-    recordDerivedBinaryWaveMaskI1(ctx, op, [&](Value *a, Value *b) {
-      return ctx.B.CreateNot(ctx.B.CreateOr(a, b), "wave_mask_nor64");
+    RecordDerivedBinaryWaveMaskI1(op.dst(), S0I1, S1I1, [&](Value *A, Value *B) {
+      return ctx.B.CreateNot(ctx.B.CreateOr(A, B), "wave_mask_nor64");
     });
     hr.handled = true;
     return hr;
   }
   if (sop == CanonicalOp::S_XNOR_B32) {
+    Value *S0I1 = tryGetSrcWaveMaskI1(ctx, op, 0);
+    Value *S1I1 = tryGetSrcWaveMaskI1(ctx, op, 1);
     hr.sccResult = ctx.B.CreateNot(
         ctx.B.CreateXor(op.src(0), op.src(1), "xor"), "xnor");
     ctx.regs.writeReg32(ctx.B, op.dst(), hr.sccResult);
-    recordDerivedBinaryWaveMaskI1(ctx, op, [&](Value *a, Value *b) {
-      return ctx.B.CreateNot(ctx.B.CreateXor(a, b), "wave_mask_xnor");
+    RecordDerivedBinaryWaveMaskI1(op.dst(), S0I1, S1I1, [&](Value *A, Value *B) {
+      return ctx.B.CreateNot(ctx.B.CreateXor(A, B), "wave_mask_xnor");
     });
     hr.handled = true;
     return hr;
   }
   if (sop == CanonicalOp::S_XNOR_B64) {
+    Value *S0I1 = tryGetSrcWaveMaskI1(ctx, op, 0);
+    Value *S1I1 = tryGetSrcWaveMaskI1(ctx, op, 1);
     hr.sccResult = ctx.B.CreateNot(
         ctx.B.CreateXor(op.src64(0), op.src64(1), "xor64"), "xnor64");
     ctx.regs.writeReg64(ctx.B, op.dst(), hr.sccResult);
-    recordDerivedBinaryWaveMaskI1(ctx, op, [&](Value *a, Value *b) {
-      return ctx.B.CreateNot(ctx.B.CreateXor(a, b), "wave_mask_xnor64");
+    RecordDerivedBinaryWaveMaskI1(op.dst(), S0I1, S1I1, [&](Value *A, Value *B) {
+      return ctx.B.CreateNot(ctx.B.CreateXor(A, B), "wave_mask_xnor64");
     });
     hr.handled = true;
     return hr;

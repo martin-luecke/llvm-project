@@ -24,6 +24,8 @@
 ; CHECK: %cndmask{{[0-9]*}} = select i1 %wave_mask_nor, i32 1, i32 0
 ; CHECK: %wave_mask_xnor = xor i1
 ; CHECK: %cndmask{{[0-9]*}} = select i1 %wave_mask_xnor, i32 1, i32 0
+; CHECK: [[ALIAS:%wave_mask_andn2[0-9]*]] = and i1
+; CHECK: %cndmask{{[0-9]*}} = select i1 [[ALIAS]], i32 1, i32 0
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
@@ -46,6 +48,8 @@ s_andn2_mask_shadow_kernel:
 	v_cndmask_b32_e32 v1, v2, v3
 	s_xnor_b32 vcc_lo, s2, s3
 	v_cndmask_b32_e32 v1, v2, v3
+	s_andn2_b32 s2, s2, s3
+	v_cndmask_b32_e64 v1, v2, v3, s2
 	s_endpgm
 	.section	.rodata,"a",@progbits
 	.p2align	6, 0x0
