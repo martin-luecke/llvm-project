@@ -55,13 +55,52 @@ bool requireDefaultPseudoScalarOutputMods(const DecodedInst &di,
   return true;
 }
 
+// Guard handlers that share one CanonicalOp across e32/e64 forms. e32 forms
+// have no clamp/omod operands, while e64/VOP3 forms expose output modifiers
+// that the base lifts below do not model. Accept missing operands and default
+// modifier values; refuse non-default values rather than silently dropping
+// clamp/omod semantics.
+bool requireDefaultOutputModsIfPresent(const DecodedInst &di,
+                                       HandlerResult &hr) {
+  int clampIdx = AMDGPU::getNamedOperandIdx(di.inst.getOpcode(),
+                                            AMDGPU::OpName::clamp);
+  int omodIdx = AMDGPU::getNamedOperandIdx(di.inst.getOpcode(),
+                                           AMDGPU::OpName::omod);
+  if (clampIdx < 0 && omodIdx < 0)
+    return true;
+
+  int64_t clamp = 0;
+  int64_t omod = 0;
+  if ((clampIdx >= 0 && !readNamedImm(di, AMDGPU::OpName::clamp, clamp)) ||
+      (omodIdx >= 0 && !readNamedImm(di, AMDGPU::OpName::omod, omod))) {
+    hr.failure = RaiseFailure::unsupportedShape(
+        di, "VOP3",
+        (Twine(canonicalOpName(di.canonOp)) +
+         " has malformed clamp/omod operands; operand table layout does not "
+         "match the expected VOP3 profile")
+            .str());
+    return false;
+  }
+
+  if (clamp != 0 || omod != 0) {
+    hr.failure = RaiseFailure::unsupportedShape(
+        di, "VOP3",
+        (Twine(canonicalOpName(di.canonOp)) +
+         " with non-default clamp/omod is not yet lifted; output modifier "
+         "semantics must not be silently dropped")
+            .str());
+    return false;
+  }
+  return true;
+}
+
 } // namespace
 
 // "Small ops": conversions (F32↔{U,I}32, F16↔F32, F16↔{U,I}16, byte
 // extract), F16 two-src arith (add/sub/mul/min/max/mac/fmac), packed
 // F16 fmac, 16-bit min/max and reverse-operand shifts, byte pack,
 // V_BFREV_B32 / V_NOT_B32, and F32 single-src transcendentals
-// (rcp/exp/log/ldexp/sqrt/rsq/floor/ceil/trunc/fract).
+// (rcp/exp/log/ldexp/sqrt/rsq/floor/ceil/trunc/rndne/fract).
 //
 // Grouped here because each case is 1-5 lines of IR emission and they
 // would bloat the arithmetic / 3-src sub-handlers if interleaved.
@@ -396,8 +435,10 @@ HandlerResult handleVALU_SmallOps(RaiseContext &ctx, const DecodedInst &di,
     return hr;
   }
 
-  // ---- F32 single-src transcendentals / rounding ----
+  // ---- F32 scalar math / rounding ----
   case CanonicalOp::V_RCP_IFLAG_F32: {
+    if (!requireDefaultOutputModsIfPresent(di, hr))
+      return hr;
     Value *s = ctx.B.CreateBitCast(op.srcF(0), ctx.f32Ty);
     Value *r = ctx.B.CreateFDiv(ConstantFP::get(ctx.f32Ty, 1.0), s, "rcp");
     ctx.writeReg32(op.dst(), ctx.B.CreateBitCast(r, ctx.i32Ty));
@@ -409,6 +450,9 @@ HandlerResult handleVALU_SmallOps(RaiseContext &ctx, const DecodedInst &di,
     if (di.canonOp == CanonicalOp::V_S_RCP_F32 &&
         !requireDefaultPseudoScalarOutputMods(di, hr))
       return hr;
+    if (di.canonOp == CanonicalOp::V_RCP_F32 &&
+        !requireDefaultOutputModsIfPresent(di, hr))
+      return hr;
     Value *s = ctx.B.CreateBitCast(op.srcF(0), ctx.f32Ty);
     Function *rcpFn = Intrinsic::getOrInsertDeclaration(
         &ctx.M, Intrinsic::amdgcn_rcp, {ctx.f32Ty});
@@ -419,6 +463,8 @@ HandlerResult handleVALU_SmallOps(RaiseContext &ctx, const DecodedInst &di,
     return hr;
   }
   case CanonicalOp::V_EXP_F32: {
+    if (!requireDefaultOutputModsIfPresent(di, hr))
+      return hr;
     Value *s = ctx.B.CreateBitCast(op.srcF(0), ctx.f32Ty);
     Function *exp2Fn = Intrinsic::getOrInsertDeclaration(
         &ctx.M, Intrinsic::amdgcn_exp2, {ctx.f32Ty});
@@ -445,6 +491,9 @@ HandlerResult handleVALU_SmallOps(RaiseContext &ctx, const DecodedInst &di,
     if (di.canonOp == CanonicalOp::V_S_LOG_F32 &&
         !requireDefaultPseudoScalarOutputMods(di, hr))
       return hr;
+    if (di.canonOp == CanonicalOp::V_LOG_F32 &&
+        !requireDefaultOutputModsIfPresent(di, hr))
+      return hr;
     Value *s = ctx.B.CreateBitCast(op.srcF(0), ctx.f32Ty);
     Function *log2Fn = Intrinsic::getOrInsertDeclaration(
         &ctx.M, Intrinsic::amdgcn_log, {ctx.f32Ty});
@@ -455,6 +504,8 @@ HandlerResult handleVALU_SmallOps(RaiseContext &ctx, const DecodedInst &di,
     return hr;
   }
   case CanonicalOp::V_LDEXP_F32: {
+    if (!requireDefaultOutputModsIfPresent(di, hr))
+      return hr;
     Value *s0 = ctx.B.CreateBitCast(op.srcF(0), ctx.f32Ty);
     Value *s1 = op.src(1);
     Function *ldexpFn = Intrinsic::getOrInsertDeclaration(
@@ -471,6 +522,9 @@ HandlerResult handleVALU_SmallOps(RaiseContext &ctx, const DecodedInst &di,
     if (di.canonOp == CanonicalOp::V_S_SQRT_F32 &&
         !requireDefaultPseudoScalarOutputMods(di, hr))
       return hr;
+    if (di.canonOp == CanonicalOp::V_SQRT_F32 &&
+        !requireDefaultOutputModsIfPresent(di, hr))
+      return hr;
     Value *s = ctx.B.CreateBitCast(op.srcF(0), ctx.f32Ty);
     Function *sqrtFn = Intrinsic::getOrInsertDeclaration(
         &ctx.M, Intrinsic::amdgcn_sqrt, {ctx.f32Ty});
@@ -485,6 +539,9 @@ HandlerResult handleVALU_SmallOps(RaiseContext &ctx, const DecodedInst &di,
     if (di.canonOp == CanonicalOp::V_S_RSQ_F32 &&
         !requireDefaultPseudoScalarOutputMods(di, hr))
       return hr;
+    if (di.canonOp == CanonicalOp::V_RSQ_F32 &&
+        !requireDefaultOutputModsIfPresent(di, hr))
+      return hr;
     Value *s = ctx.B.CreateBitCast(op.srcF(0), ctx.f32Ty);
     Function *rsqFn = Intrinsic::getOrInsertDeclaration(
         &ctx.M, Intrinsic::amdgcn_rsq, {ctx.f32Ty});
@@ -495,6 +552,8 @@ HandlerResult handleVALU_SmallOps(RaiseContext &ctx, const DecodedInst &di,
     return hr;
   }
   case CanonicalOp::V_FLOOR_F32: {
+    if (!requireDefaultOutputModsIfPresent(di, hr))
+      return hr;
     Value *s = ctx.B.CreateBitCast(op.srcF(0), ctx.f32Ty);
     Function *floorFn = Intrinsic::getOrInsertDeclaration(
         &ctx.M, Intrinsic::floor, {ctx.f32Ty});
@@ -505,6 +564,8 @@ HandlerResult handleVALU_SmallOps(RaiseContext &ctx, const DecodedInst &di,
     return hr;
   }
   case CanonicalOp::V_CEIL_F32: {
+    if (!requireDefaultOutputModsIfPresent(di, hr))
+      return hr;
     Value *s = ctx.B.CreateBitCast(op.srcF(0), ctx.f32Ty);
     Function *ceilFn = Intrinsic::getOrInsertDeclaration(
         &ctx.M, Intrinsic::ceil, {ctx.f32Ty});
@@ -515,6 +576,8 @@ HandlerResult handleVALU_SmallOps(RaiseContext &ctx, const DecodedInst &di,
     return hr;
   }
   case CanonicalOp::V_TRUNC_F32: {
+    if (!requireDefaultOutputModsIfPresent(di, hr))
+      return hr;
     Value *s = ctx.B.CreateBitCast(op.srcF(0), ctx.f32Ty);
     Function *truncFn = Intrinsic::getOrInsertDeclaration(
         &ctx.M, Intrinsic::trunc, {ctx.f32Ty});
@@ -524,7 +587,21 @@ HandlerResult handleVALU_SmallOps(RaiseContext &ctx, const DecodedInst &di,
     hr.handled = true;
     return hr;
   }
+  case CanonicalOp::V_RNDNE_F32: {
+    if (!requireDefaultOutputModsIfPresent(di, hr))
+      return hr;
+    Value *s = ctx.B.CreateBitCast(op.srcF(0), ctx.f32Ty);
+    Function *roundEvenFn = Intrinsic::getOrInsertDeclaration(
+        &ctx.M, Intrinsic::roundeven, {ctx.f32Ty});
+    ctx.writeReg32(op.dst(),
+                   ctx.B.CreateBitCast(
+                       ctx.B.CreateCall(roundEvenFn, {s}, "rndne"), ctx.i32Ty));
+    hr.handled = true;
+    return hr;
+  }
   case CanonicalOp::V_FRACT_F32: {
+    if (!requireDefaultOutputModsIfPresent(di, hr))
+      return hr;
     Value *s = ctx.B.CreateBitCast(op.srcF(0), ctx.f32Ty);
     Function *floorFn = Intrinsic::getOrInsertDeclaration(
         &ctx.M, Intrinsic::floor, {ctx.f32Ty});
