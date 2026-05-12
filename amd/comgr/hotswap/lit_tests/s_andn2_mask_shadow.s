@@ -64,7 +64,7 @@ s_andn2_mask_shadow_kernel:
 	.amdgpu_metadata
 ---
 amdhsa.kernels:
-  - .args:
+  - .args: []
     .group_segment_fixed_size: 0
     .kernarg_segment_align: 8
     .kernarg_segment_size: 0
