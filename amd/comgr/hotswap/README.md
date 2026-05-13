@@ -26,12 +26,11 @@ cmake -S llvm -B <build-dir> -G Ninja \
   -DLLVM_USE_LINKER=lld
 ```
 
-Build the focused targets used by the COMGR smoke test:
+Build and test:
 
 ```bash
 cmake --build <build-dir> \
-  --target amd_codeobj_to_llvm amd_comgr hotswap-transpile \
-           FileCheck llc llvm-mc lld llvm-readelf llvm-objdump \
+  --target check-amd-codeobj-to-llvm \
   --parallel 16
 ```
 

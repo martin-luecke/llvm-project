@@ -69,6 +69,21 @@ configure_file(
   "${CMAKE_CURRENT_BINARY_DIR}/Unit/lit.site.cfg.py"
   @ONLY)
 
+set(AMD_CODEOBJ_TO_LLVM_TEST_DEPENDS
+  # Internal targets.
+  amd_codeobj_to_llvm_unittests
+  raise_cli
+
+  # LLVM tools.
+  FileCheck
+  llc
+  lld
+  llvm-mc
+  llvm-objdump
+  llvm-readelf
+  not
+)
+
 # Canonical LLVM convention for `check-*` targets: `-sv` = succinct
 # (only per-test results on failure) + verbose-on-failure. Matches
 # check-llvm / check-clang / check-mlir. One llvm-lit invocation runs the
@@ -76,7 +91,7 @@ configure_file(
 add_custom_target(
   check-amd-codeobj-to-llvm
   COMMAND "${LIT_LLVM_LIT_EXE}" -sv "${CMAKE_CURRENT_BINARY_DIR}"
-  DEPENDS raise_cli amd_codeobj_to_llvm_unittests
+  DEPENDS ${AMD_CODEOBJ_TO_LLVM_TEST_DEPENDS}
   WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
   COMMENT "Running amd_codeobj-to-llvm lit suites (FileCheck + gtest)")
 
