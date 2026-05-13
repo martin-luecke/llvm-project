@@ -1,4 +1,5 @@
 #include "handle_valu_internal.hpp"
+#include "handle_valu_output_mods.hpp"
 #include "handlers.hpp"
 #include "opcode_map.hpp"
 #include "wmma_lowering.hpp"
@@ -150,6 +151,98 @@ Intrinsic::ID true16AddSubSatIntrinsic(bool IsSub, bool IsSigned) {
   if (IsSub)
     return IsSigned ? Intrinsic::ssub_sat : Intrinsic::usub_sat;
   return IsSigned ? Intrinsic::sadd_sat : Intrinsic::uadd_sat;
+}
+
+// VOP3 f16 source modifiers carry both arithmetic modifiers and half-register
+// selection:
+//   bit 0: source neg
+//   bit 1: source abs
+//   bit 2: source op_sel (0 = low 16 bits, 1 = high 16 bits)
+// For VOP3_t16, src0_modifiers bit 3 is also the destination op_sel. It
+// selects which 16-bit half of the destination VGPR receives the result; the
+// other half must be preserved by explicitly merging with the old destination
+// dword. Missing or non-immediate modifier operands are treated as TableGen
+// layout drift and refused rather than defaulting to low-half semantics.
+bool readRequiredVOP3F16SrcMods(const DecodedInst &DI, HandlerResult &HR,
+                                 unsigned SrcIndex, const char *OpName,
+                                 unsigned &Mods) {
+  if (SrcIndex >= DI.numSrcs) {
+    HR.failure = RaiseFailure::unsupportedShape(
+        DI, "VOP3",
+        (Twine(OpName) + " missing f16 source operand").str());
+    return false;
+  }
+
+  unsigned ModIdx = DI.modMap[SrcIndex];
+  if (ModIdx == UINT_MAX || !DI.isImm(ModIdx)) {
+    HR.failure = RaiseFailure::unsupportedShape(
+        DI, "VOP3",
+        (Twine(OpName) + " missing immediate f16 src" + Twine(SrcIndex) +
+         "_modifiers operand; operand table layout does not match the "
+         "expected VOP3 f16 profile")
+            .str());
+    return false;
+  }
+
+  int64_t Raw = DI.getImm(ModIdx);
+  const unsigned Allowed = SrcIndex == 0 ? 0xFu : 0x7u;
+  if (Raw < 0 || (static_cast<unsigned>(Raw) & ~Allowed) != 0) {
+    HR.failure = RaiseFailure::unsupportedShape(
+        DI, "VOP3",
+        (Twine(OpName) + " has unsupported f16 src" + Twine(SrcIndex) +
+         "_modifiers bits")
+            .str());
+    return false;
+  }
+
+  Mods = static_cast<unsigned>(Raw);
+  return true;
+}
+
+Value *readOpSelF16(RaiseContext &Ctx, const DecodedInst &DI,
+                    OpResolver &Op, HandlerResult &HR,
+                    unsigned SrcIndex, const char *OpName) {
+  unsigned Mods = 0;
+  if (!readRequiredVOP3F16SrcMods(DI, HR, SrcIndex, OpName, Mods))
+    return nullptr;
+
+  Type *I16Ty = Type::getInt16Ty(Ctx.C);
+  Value *Raw = Op.src(SrcIndex);
+  if ((Mods & 4) != 0)
+    Raw = Ctx.B.CreateLShr(Raw, 16, "f16_src_hi");
+  Value *Bits = Ctx.B.CreateTrunc(Raw, I16Ty);
+  Value *V = Ctx.B.CreateBitCast(Bits, Ctx.f16Ty);
+  if (Mods & 2)
+    V = Ctx.B.CreateUnaryIntrinsic(Intrinsic::fabs, V, nullptr, "abs_f16");
+  if (Mods & 1)
+    V = Ctx.B.CreateFNeg(V, "neg_f16");
+  return V;
+}
+
+bool readVOP3F16DstHigh(const DecodedInst &DI, HandlerResult &HR,
+                        const char *OpName, bool &DstHigh) {
+  unsigned Mods = 0;
+  if (!readRequiredVOP3F16SrcMods(DI, HR, 0, OpName, Mods))
+    return false;
+  DstHigh = (Mods & 8) != 0;
+  return true;
+}
+
+void writeOpSelF16(RaiseContext &Ctx, OpResolver &Op, Value *Result,
+                   bool DstHigh) {
+  Type *I16Ty = Type::getInt16Ty(Ctx.C);
+  Value *Bits = Ctx.B.CreateZExt(Ctx.B.CreateBitCast(Result, I16Ty),
+                                 Ctx.i32Ty);
+  Value *Old = Ctx.regs.readReg32(Ctx.B, Op.dst());
+  if (!DstHigh) {
+    Value *High = Ctx.B.CreateAnd(
+        Old, ConstantInt::get(Ctx.i32Ty, 0xFFFF0000u));
+    Ctx.writeReg32(Op.dst(), Ctx.B.CreateOr(High, Bits, "f16_merge_lo"));
+    return;
+  }
+  Value *Low = Ctx.B.CreateAnd(Old, ConstantInt::get(Ctx.i32Ty, 0x0000FFFFu));
+  Value *Shifted = Ctx.B.CreateShl(Bits, 16);
+  Ctx.writeReg32(Op.dst(), Ctx.B.CreateOr(Low, Shifted, "f16_merge_hi"));
 }
 
 // ============================================================================
@@ -1856,26 +1949,185 @@ HandlerResult handleVALU(RaiseContext &ctx, const DecodedInst &di,
     hr.handled = true;
     return hr;
   }
-  // VOP3 v_minmax_num_f32: dst = maxnum(minnum(s0, s1), s2).
-  // gfx11 emitted this as v_minmax_f32; gfx12 renamed it to
-  // v_minmax_num_f32 once the IEEE-2019 NaN-propagating
-  // V_MINIMUMMAXIMUM_F32 (opcode 0x26c) needed an unambiguous
-  // namesake. The .NUM suffix is the IEEE-754 2008 minNum
-  // semantic — NaN-pruning, exactly what `llvm.maxnum` /
-  // `llvm.minnum` model. Same shape as V_MAX3_F32 above with
-  // minnum as the outer reduction.
-  if (sop == CanonicalOp::V_MINMAX_NUM_F32) {
-    Value *s0 = op.srcF(0), *s1 = op.srcF(1), *s2 = op.srcF(2);
-    if (s0->getType() != ctx.f32Ty) s0 = ctx.B.CreateBitCast(s0, ctx.f32Ty);
-    if (s1->getType() != ctx.f32Ty) s1 = ctx.B.CreateBitCast(s1, ctx.f32Ty);
-    if (s2->getType() != ctx.f32Ty) s2 = ctx.B.CreateBitCast(s2, ctx.f32Ty);
-    Function *maxFn = Intrinsic::getOrInsertDeclaration(
+  // IEEE-754 2019 ternary clamp pair:
+  //   v_maximumminimum_f32: minimum(maximum(S0, S1), S2)
+  //   v_minimummaximum_f32: maximum(minimum(S0, S1), S2)
+  // These are the NaN-propagating non-.NUM forms, so they must use
+  // llvm.maximum / llvm.minimum rather than maxnum / minnum.
+  if (sop == CanonicalOp::V_MAXIMUMMINIMUM_F32 ||
+      sop == CanonicalOp::V_MINIMUMMAXIMUM_F32) {
+    const bool MaxThenMin = sop == CanonicalOp::V_MAXIMUMMINIMUM_F32;
+    const char *OpName = MaxThenMin ? "v_maximumminimum_f32"
+                                    : "v_minimummaximum_f32";
+    if (!requireDefaultVOP3FpValuOutputMods(di, hr, OpName))
+      return hr;
+
+    Value *S0 = op.srcF(0), *S1 = op.srcF(1), *S2 = op.srcF(2);
+    if (S0->getType() != ctx.f32Ty) S0 = ctx.B.CreateBitCast(S0, ctx.f32Ty);
+    if (S1->getType() != ctx.f32Ty) S1 = ctx.B.CreateBitCast(S1, ctx.f32Ty);
+    if (S2->getType() != ctx.f32Ty) S2 = ctx.B.CreateBitCast(S2, ctx.f32Ty);
+
+    Intrinsic::ID InnerId =
+        MaxThenMin ? Intrinsic::maximum : Intrinsic::minimum;
+    Intrinsic::ID OuterId =
+        MaxThenMin ? Intrinsic::minimum : Intrinsic::maximum;
+    Function *InnerFn = Intrinsic::getOrInsertDeclaration(&ctx.M, InnerId,
+                                                          {ctx.f32Ty});
+    Function *OuterFn = Intrinsic::getOrInsertDeclaration(&ctx.M, OuterId,
+                                                          {ctx.f32Ty});
+    const char *InnerName = MaxThenMin ? "vmaximumminimum_inner"
+                                       : "vminimummaximum_inner";
+    const char *OutName = MaxThenMin ? "vmaximumminimum"
+                                     : "vminimummaximum";
+    Value *R01 = ctx.B.CreateCall(InnerFn, {S0, S1}, InnerName);
+    Value *R = ctx.B.CreateCall(OuterFn, {R01, S2}, OutName);
+    ctx.writeReg32(op.dst(), ctx.B.CreateBitCast(R, ctx.i32Ty));
+    hr.handled = true;
+    return hr;
+  }
+  // IEEE-754 2019 f16 maximum/minimum family. Source and
+  // destination op_sel select the low/high half; writes merge with the
+  // unselected destination half preserved.
+  if (sop == CanonicalOp::V_MAXIMUM_F16 ||
+      sop == CanonicalOp::V_MINIMUM_F16 ||
+      sop == CanonicalOp::V_MAXIMUM3_F16 ||
+      sop == CanonicalOp::V_MINIMUM3_F16 ||
+      sop == CanonicalOp::V_MAXIMUMMINIMUM_F16 ||
+      sop == CanonicalOp::V_MINIMUMMAXIMUM_F16) {
+    const bool IsBinary = sop == CanonicalOp::V_MAXIMUM_F16 ||
+                          sop == CanonicalOp::V_MINIMUM_F16;
+    const bool IsThreeSame = sop == CanonicalOp::V_MAXIMUM3_F16 ||
+                             sop == CanonicalOp::V_MINIMUM3_F16;
+    const bool MaxThenMin = sop == CanonicalOp::V_MAXIMUMMINIMUM_F16;
+    const char *OpName = nullptr;
+    switch (sop) {
+    case CanonicalOp::V_MAXIMUM_F16:
+      OpName = "v_maximum_f16";
+      break;
+    case CanonicalOp::V_MINIMUM_F16:
+      OpName = "v_minimum_f16";
+      break;
+    case CanonicalOp::V_MAXIMUM3_F16:
+      OpName = "v_maximum3_f16";
+      break;
+    case CanonicalOp::V_MINIMUM3_F16:
+      OpName = "v_minimum3_f16";
+      break;
+    case CanonicalOp::V_MAXIMUMMINIMUM_F16:
+      OpName = "v_maximumminimum_f16";
+      break;
+    case CanonicalOp::V_MINIMUMMAXIMUM_F16:
+      OpName = "v_minimummaximum_f16";
+      break;
+    default: llvm_unreachable("filtered by outer f16 IEEE switch");
+    }
+
+    bool DstHigh = false;
+    if (!requireDefaultVOP3FpValuOutputMods(di, hr, OpName) ||
+        !readVOP3F16DstHigh(di, hr, OpName, DstHigh))
+      return hr;
+
+    const unsigned NumSrcs = IsBinary ? 2 : 3;
+    SmallVector<Value *, 3> Srcs;
+    for (unsigned i = 0; i < NumSrcs; ++i) {
+      Value *Src = readOpSelF16(ctx, di, op, hr, i, OpName);
+      if (!Src)
+        return hr;
+      Srcs.push_back(Src);
+    }
+
+    Intrinsic::ID InnerId;
+    Intrinsic::ID OuterId;
+    if (IsBinary || IsThreeSame) {
+      InnerId = (sop == CanonicalOp::V_MAXIMUM_F16 ||
+                 sop == CanonicalOp::V_MAXIMUM3_F16)
+                    ? Intrinsic::maximum
+                    : Intrinsic::minimum;
+      OuterId = InnerId;
+    } else {
+      InnerId = MaxThenMin ? Intrinsic::maximum : Intrinsic::minimum;
+      OuterId = MaxThenMin ? Intrinsic::minimum : Intrinsic::maximum;
+    }
+
+    Function *InnerFn = Intrinsic::getOrInsertDeclaration(&ctx.M, InnerId,
+                                                          {ctx.f16Ty});
+    Value *R = ctx.B.CreateCall(InnerFn, {Srcs[0], Srcs[1]},
+                                Twine(OpName) + "_inner");
+    if (!IsBinary) {
+      Function *OuterFn = Intrinsic::getOrInsertDeclaration(&ctx.M, OuterId,
+                                                            {ctx.f16Ty});
+      R = ctx.B.CreateCall(OuterFn, {R, Srcs[2]}, OpName);
+    }
+    writeOpSelF16(ctx, op, R, DstHigh);
+    hr.handled = true;
+    return hr;
+  }
+
+  // F16 .NUM clamp pair: NaN-pruning minnum/maxnum semantics with full
+  // source/destination op_sel handling.
+  if (sop == CanonicalOp::V_MINMAX_NUM_F16 ||
+      sop == CanonicalOp::V_MAXMIN_NUM_F16) {
+    const bool MinThenMax = sop == CanonicalOp::V_MINMAX_NUM_F16;
+    const char *OpName = MinThenMax ? "v_minmax_num_f16"
+                                    : "v_maxmin_num_f16";
+    bool DstHigh = false;
+    if (!requireDefaultVOP3FpValuOutputMods(di, hr, OpName) ||
+        !readVOP3F16DstHigh(di, hr, OpName, DstHigh))
+      return hr;
+
+    SmallVector<Value *, 3> Srcs;
+    for (unsigned i = 0; i < 3; ++i) {
+      Value *Src = readOpSelF16(ctx, di, op, hr, i, OpName);
+      if (!Src)
+        return hr;
+      Srcs.push_back(Src);
+    }
+
+    Function *MaxFn = Intrinsic::getOrInsertDeclaration(
+        &ctx.M, Intrinsic::maxnum, {ctx.f16Ty});
+    Function *MinFn = Intrinsic::getOrInsertDeclaration(
+        &ctx.M, Intrinsic::minnum, {ctx.f16Ty});
+    Function *InnerFn = MinThenMax ? MinFn : MaxFn;
+    Function *OuterFn = MinThenMax ? MaxFn : MinFn;
+    Value *Inner = ctx.B.CreateCall(InnerFn, {Srcs[0], Srcs[1]},
+                                    MinThenMax ? "vminmax_num_f16_inner"
+                                               : "vmaxmin_num_f16_inner");
+    Value *R = ctx.B.CreateCall(OuterFn, {Inner, Srcs[2]},
+                                MinThenMax ? "vminmax_num_f16"
+                                           : "vmaxmin_num_f16");
+    writeOpSelF16(ctx, op, R, DstHigh);
+    hr.handled = true;
+    return hr;
+  }
+
+  // VOP3 .NUM clamp pair: NaN-pruning minnum/maxnum semantics.
+  //   v_minmax_num_f32: maxnum(minnum(S0, S1), S2)
+  //   v_maxmin_num_f32: minnum(maxnum(S0, S1), S2)
+  if (sop == CanonicalOp::V_MINMAX_NUM_F32 ||
+      sop == CanonicalOp::V_MAXMIN_NUM_F32) {
+    const bool MinThenMax = sop == CanonicalOp::V_MINMAX_NUM_F32;
+    const char *OpName = MinThenMax ? "v_minmax_num_f32"
+                                    : "v_maxmin_num_f32";
+    if (!requireDefaultVOP3FpValuOutputMods(di, hr, OpName))
+      return hr;
+
+    Value *S0 = op.srcF(0), *S1 = op.srcF(1), *S2 = op.srcF(2);
+    if (S0->getType() != ctx.f32Ty) S0 = ctx.B.CreateBitCast(S0, ctx.f32Ty);
+    if (S1->getType() != ctx.f32Ty) S1 = ctx.B.CreateBitCast(S1, ctx.f32Ty);
+    if (S2->getType() != ctx.f32Ty) S2 = ctx.B.CreateBitCast(S2, ctx.f32Ty);
+    Function *MaxFn = Intrinsic::getOrInsertDeclaration(
         &ctx.M, Intrinsic::maxnum, {ctx.f32Ty});
-    Function *minFn = Intrinsic::getOrInsertDeclaration(
+    Function *MinFn = Intrinsic::getOrInsertDeclaration(
         &ctx.M, Intrinsic::minnum, {ctx.f32Ty});
-    Value *mn = ctx.B.CreateCall(minFn, {s0, s1}, "vminmax_inner");
-    Value *r = ctx.B.CreateCall(maxFn, {mn, s2}, "vminmax_num");
-    ctx.writeReg32(op.dst(), ctx.B.CreateBitCast(r, ctx.i32Ty));
+    Function *InnerFn = MinThenMax ? MinFn : MaxFn;
+    Function *OuterFn = MinThenMax ? MaxFn : MinFn;
+    const char *InnerName = MinThenMax ? "vminmax_inner"
+                                       : "vmaxmin_inner";
+    const char *OutName = MinThenMax ? "vminmax_num"
+                                     : "vmaxmin_num";
+    Value *Inner = ctx.B.CreateCall(InnerFn, {S0, S1}, InnerName);
+    Value *R = ctx.B.CreateCall(OuterFn, {Inner, S2}, OutName);
+    ctx.writeReg32(op.dst(), ctx.B.CreateBitCast(R, ctx.i32Ty));
     hr.handled = true;
     return hr;
   }

@@ -1,3 +1,4 @@
+#include "amdgpu_mode_hwreg.hpp"
 #include "handlers.hpp"
 #include "pipeline.hpp" // isStrictMode()
 
@@ -94,8 +95,8 @@ enum class HwregWrite {
   //     (the common case for bits 0..22 — standard FP round /
   //     denormal / IEEE, unchanged since gfx8), `Preserve` produces
   //     byte-exact behaviour versus dropping.
-  //   * If the bit is gfx-generation-specific (bits 23+ — FP16_OVFL
-  //     and gfx12 additions), `Preserve` writes to the target's
+  //   * If the bit is gfx-generation-specific (bit 23 FP16_OVFL, bit 25
+  //     REPLAY_MODE, and other high MODE fields), `Preserve` writes to the
   //     bit position; the target hardware's interpretation is
   //     authoritative.  If a kernel later surfaces as WRONG
   //     because of a bit-23+ repurpose, that is a NEW data point
@@ -105,8 +106,8 @@ enum class HwregWrite {
   // Not a fix for any currently-known miscompile.  The
   // `topk_forward_bf16` silent miscompile flagged in commit
   // `7507185094` WAS empirically checked under `Preserve`: output
-  // unchanged (gfx942's MODE bit 25 is a no-op for Triton's softmax
-  // path at this shape; the bug is elsewhere — see the
+  // unchanged (gfx942's MODE.REPLAY_MODE write is a no-op for Triton's
+  // softmax path at this shape; the bug is elsewhere — see the
   // `topk_forward_bisect_*` recipes landed alongside this change
   // for the ongoing triage).  `Preserve` is a principled-improvement
   // change, independent of that triage.
@@ -143,8 +144,9 @@ static HwregPolicy classifyHwreg(unsigned id) {
   // mutates FP rounding / FTZ / clamp / IEEE / various graphics-
   // context bits.  HIP-compiled and Triton-compiled compute kernels
   // routinely emit `s_setreg_imm32_b32 mode(offset, size), imm` in
-  // their prologue to pin FP mode — e.g. Triton's MoE-router
-  // `_topk_forward` writes `hwreg(MODE, 25, 1), 1`.  The previous
+  // their prologue — e.g. gfx1250 kernels set MODE.REPLAY_MODE
+  // (`isModeReplayMultiGroupWrite` in amdgpu_mode_hwreg.hpp) before the
+  // first SMEM load.  The
   // `WarnDrop` policy silently discarded these writes; `Preserve`
   // is the faithful lift path.  See the `HwregWrite::Preserve`
   // enum-variant comment for the full rationale and the
