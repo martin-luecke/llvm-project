@@ -1,0 +1,10 @@
+# -*- Python -*-
+"""CMake-generated site config for amd_codeobj_to_llvm_unittests gtest discovery via lit."""
+
+import os
+
+config.amd_codeobj_gtest_lit_exedir = r"@AMD_CODEOBJ_GTEST_LIT_EXEDIR@"
+config.llvm_build_mode = lit_config.substitute("@LLVM_BUILD_MODE@")
+lit_config.load_config(
+    config, os.path.join(r"@AMD_CODEOBJ_TO_LLVM_UNIT_SOURCE_DIR@", "lit.cfg.py")
+)

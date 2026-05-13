@@ -232,7 +232,7 @@ hands the result to a wrapping VGPR store.
 `lit_tests/divergent_vgpr_ir/`, etc. Rename protocol (one patch):
 update the emitter, update this list, update every failing lit
 `CHECK` to the new name (no regex loosening), run
-`ninja check-amd-codeobj-to-llvm-lit`.
+`ninja check-amd-codeobj-to-llvm`.
 
 Core landing: `2873d140b0` (SPE diamond, `lane_active` cache,
 `onExecWritten`, allow-list gate).

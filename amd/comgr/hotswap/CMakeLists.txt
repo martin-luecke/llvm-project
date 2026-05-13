@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # When this CMakeLists is the top-level project we build the raise_cli driver
-# and the gtest-based transpiler_tests binary. When it is pulled in by a
+# and the gtest-based amd_codeobj_to_llvm_unittests binary. When it is pulled in by a
 # parent project (e.g. ROCR) via add_subdirectory we only build the library.
 # A parent may still opt in explicitly by setting HOTSWAP_TRANSPILER_BUILD_TOOLS
 # before add_subdirectory.
@@ -334,14 +334,14 @@ set(TEST_SOURCES
   tests/wave_projection_test.cpp
 )
 
-add_executable(transpiler_tests ${TEST_SOURCES})
-llvm_update_compile_flags(transpiler_tests)
+add_executable(amd_codeobj_to_llvm_unittests ${TEST_SOURCES})
+llvm_update_compile_flags(amd_codeobj_to_llvm_unittests)
 
-target_compile_definitions(transpiler_tests PRIVATE
+target_compile_definitions(amd_codeobj_to_llvm_unittests PRIVATE
   LLVM_TOOLS_DIR="${LLVM_TOOLS_BINARY_DIR}"
 )
 
-target_link_libraries(transpiler_tests
+target_link_libraries(amd_codeobj_to_llvm_unittests
   PRIVATE
     -Wl,--exclude-libs,ALL
     amd_codeobj_to_llvm
@@ -357,13 +357,20 @@ target_link_libraries(transpiler_tests
 # itself links these in PRIVATE because no public header exposes
 # the AMDGPU-private types, but test TUs that reach into the full
 # transpiler graph need them at compile time.
-target_include_directories(transpiler_tests PRIVATE
+target_include_directories(amd_codeobj_to_llvm_unittests PRIVATE
   "${LLVM_BUILD_MAIN_SRC_DIR}/lib/Target/AMDGPU"
   "${LLVM_BUILD_MAIN_SRC_DIR}/lib/Target/AMDGPU/Utils"
   "${LLVM_BINARY_DIR}/lib/Target/AMDGPU"
 )
 
-gtest_discover_tests(transpiler_tests
+# Isolate amd_codeobj_to_llvm_unittests so lit's GoogleTest scanner (lit_tests/Unit/) only
+# sees this binary.
+set(AMD_CODEOBJ_GTEST_LIT_EXEDIR "${CMAKE_CURRENT_BINARY_DIR}/gtest-lit-exedir")
+file(MAKE_DIRECTORY "${AMD_CODEOBJ_GTEST_LIT_EXEDIR}")
+set_target_properties(amd_codeobj_to_llvm_unittests PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${AMD_CODEOBJ_GTEST_LIT_EXEDIR}")
+
+gtest_discover_tests(amd_codeobj_to_llvm_unittests
   PROPERTIES TIMEOUT 120 LABELS "transpiler"
 )
 

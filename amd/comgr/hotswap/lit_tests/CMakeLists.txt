@@ -41,8 +41,8 @@ if(NOT LIT_LLVM_LIT_EXE)
   return()
 endif()
 
-set(LIT_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
-set(TRANSPILER_BUILD_DIR "${CMAKE_BINARY_DIR}")
+set(AMD_CODEOBJ_TO_LLVM_LIT_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+set(AMD_CODEOBJ_TO_LLVM_BUILD_DIR "${CMAKE_BINARY_DIR}")
 if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
   # Standalone hotswap build: raise_cli is emitted at the standalone build root.
   set(LIT_TOOL_RAISE_CLI "${CMAKE_BINARY_DIR}/raise_cli")
@@ -61,29 +61,33 @@ configure_file(
   "${CMAKE_CURRENT_BINARY_DIR}/lit.site.cfg.py"
   @ONLY)
 
+# Make LIT discover unit tests.
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/Unit")
+set(AMD_CODEOBJ_TO_LLVM_UNIT_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Unit")
+configure_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/Unit/lit.site.cfg.py.in"
+  "${CMAKE_CURRENT_BINARY_DIR}/Unit/lit.site.cfg.py"
+  @ONLY)
+
 # Canonical LLVM convention for `check-*` targets: `-sv` = succinct
 # (only per-test results on failure) + verbose-on-failure. Matches
-# check-llvm / check-clang / check-mlir so CI logs stay readable.
+# check-llvm / check-clang / check-mlir. One llvm-lit invocation runs the
+# FileCheck `.s` suite and the Unit GoogleTest suite (no ctest aggregation).
 add_custom_target(
-  check-amd-codeobj-to-llvm-lit
+  check-amd-codeobj-to-llvm
   COMMAND "${LIT_LLVM_LIT_EXE}" -sv "${CMAKE_CURRENT_BINARY_DIR}"
-  DEPENDS raise_cli
+  DEPENDS raise_cli amd_codeobj_to_llvm_unittests
   WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
-  COMMENT "Running transpiler lit tests")
+  COMMENT "Running amd_codeobj-to-llvm lit suites (FileCheck + gtest)")
 
-# CTest registration. The `transpiler-lit` test only invokes llvm-lit;
-# `raise_cli` is the sole build dependency (the checked-in `.s`
-# fixtures are source-tree artefacts). We pair the test with a
-# FIXTURES_SETUP test that runs `cmake --build` for raise_cli, letting
-# `ctest -R transpiler-lit` just work on a clean tree. The setup test
-# is idempotent — if the binary already exists, the build is a no-op.
+# CTest: same llvm-lit invocation as check-amd-codeobj-to-llvm (optional).
 add_test(
-  NAME transpiler-lit-build-raise-cli
-  COMMAND
-    "${CMAKE_COMMAND}" --build "${CMAKE_BINARY_DIR}" --target raise_cli)
+  NAME transpiler-lit-build-tools
+  COMMAND "${CMAKE_COMMAND}" --build "${CMAKE_BINARY_DIR}"
+          --target raise_cli --target amd_codeobj_to_llvm_unittests)
 set_tests_properties(
-  transpiler-lit-build-raise-cli
-  PROPERTIES FIXTURES_SETUP transpiler-lit-raise-cli)
+  transpiler-lit-build-tools
+  PROPERTIES FIXTURES_SETUP transpiler-lit-tools)
 
 add_test(
   NAME transpiler-lit
@@ -91,4 +95,4 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 set_tests_properties(
   transpiler-lit
-  PROPERTIES FIXTURES_REQUIRED transpiler-lit-raise-cli)
+  PROPERTIES FIXTURES_REQUIRED transpiler-lit-tools)

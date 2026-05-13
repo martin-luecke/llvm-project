@@ -44,8 +44,15 @@ lit_tests/
 ├── CMakeLists.txt          — harness (discovers FileCheck / llvm-mc / ld.lld)
 ├── lit.cfg.py              — lit configuration (substitutions, suite name)
 ├── lit.site.cfg.py.in      — CMake-generated site configuration
+├── Unit/                   — lit GoogleTest suite for `amd_codeobj_to_llvm_unittests`
+│   ├── lit.cfg.py
+│   └── lit.site.cfg.py.in
 └── README.md               — this file
 ```
+
+The `check-amd-codeobj-to-llvm` target runs `llvm-lit` once on this
+directory’s **build** tree; lit recurses into `Unit/` (nested suite) to run
+`amd_codeobj_to_llvm_unittests` via GoogleTest alongside the FileCheck `.s` tests.
 
 ## RUN-line template
 
