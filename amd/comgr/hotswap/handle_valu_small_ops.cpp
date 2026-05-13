@@ -173,6 +173,43 @@ HandlerResult handleVALU_SmallOps(RaiseContext &ctx, const DecodedInst &di,
     hr.handled = true;
     return hr;
   }
+  case CanonicalOp::V_CVT_F32_F64: {
+    if (!requireDefaultOutputModsIfPresent(di, hr))
+      return hr;
+    if (di.hasDpp) {
+      hr.failure = RaiseFailure::unsupportedShape(
+          di, "VOP1",
+          "V_CVT_F32_F64 DPP has mixed source/destination widths; inactive "
+          "lane preservation must be modeled as old-destination semantics, "
+          "not the generic same-width DPP source wrapper");
+      return hr;
+    }
+    Type *DoubleTy = Type::getDoubleTy(ctx.C);
+    Value *Src = ctx.B.CreateBitCast(op.src64(0), DoubleTy);
+    Src = op.applyMods(0, Src);
+    Value *Result = ctx.B.CreateFPTrunc(Src, ctx.f32Ty, "cvt_f32_f64");
+    ctx.writeReg32(op.dst(), ctx.B.CreateBitCast(Result, ctx.i32Ty));
+    hr.handled = true;
+    return hr;
+  }
+  case CanonicalOp::V_CVT_F64_F32: {
+    if (!requireDefaultOutputModsIfPresent(di, hr))
+      return hr;
+    if (di.hasDpp) {
+      hr.failure = RaiseFailure::unsupportedShape(
+          di, "VOP1",
+          "V_CVT_F64_F32 DPP has mixed source/destination widths; inactive "
+          "lane preservation must be modeled as old-destination semantics, "
+          "not the generic same-width DPP source wrapper");
+      return hr;
+    }
+    Type *DoubleTy = Type::getDoubleTy(ctx.C);
+    Value *Src = ctx.B.CreateBitCast(op.srcF(0), ctx.f32Ty);
+    Value *Result = ctx.B.CreateFPExt(Src, DoubleTy, "cvt_f64_f32");
+    ctx.writeReg64(op.dst(), ctx.B.CreateBitCast(Result, ctx.i64Ty));
+    hr.handled = true;
+    return hr;
+  }
   case CanonicalOp::V_CVT_F32_UBYTE0: {
     Value *byte = ctx.B.CreateAnd(op.src(0),
                                    ConstantInt::get(ctx.i32Ty, 0xFF));
