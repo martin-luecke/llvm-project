@@ -4,6 +4,7 @@
 #include "wmma_lowering.hpp"
 
 #include "canonical_op.hpp"
+#include "SIDefines.h"
 #include "Utils/AMDGPUBaseInfo.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Twine.h"
@@ -50,6 +51,106 @@ std::optional<bool> readVOP3Clamp(const DecodedInst &di, HandlerResult &hr,
     return std::nullopt;
   }
   return *clamp != 0;
+}
+
+// True16 VOP3 half-select helpers. For code-object disassembly, LLVM decodes
+// these op_sel bits into src*_modifiers; the non-DPP path does not reliably
+// synthesize a standalone OpName::op_sel operand. The destination selector is
+// carried as DST_OP_SEL on src0_modifiers. Keep the accepted modifier mask
+// narrow so future neg/abs/other modifier forms fail loudly instead of being
+// silently dropped.
+struct True16OpSel {
+  bool Src0Hi = false;
+  bool Src1Hi = false;
+  bool DstHi = false;
+};
+
+std::optional<True16OpSel> readTrue16OpSel(const DecodedInst &Di,
+                                           OpResolver &Op, HandlerResult &Hr,
+                                           const char *OpName) {
+  if (Op.nSrcs() < 2) {
+    Hr.failure = RaiseFailure::unsupportedShape(
+        Di, "VOP3",
+        (Twine(OpName) +
+         " has too few source operands; expected src0/src1")
+            .str());
+    return std::nullopt;
+  }
+
+  unsigned Src0Mods = Op.srcMod(0);
+  unsigned Src1Mods = Op.srcMod(1);
+  constexpr unsigned AllowedSrc0Mods =
+      SISrcMods::OP_SEL_0 | SISrcMods::DST_OP_SEL;
+  constexpr unsigned AllowedSrc1Mods = SISrcMods::OP_SEL_0;
+  if ((Src0Mods & ~AllowedSrc0Mods) != 0 ||
+      (Src1Mods & ~AllowedSrc1Mods) != 0) {
+    Hr.failure = RaiseFailure::unsupportedShape(
+        Di, "VOP3",
+        (Twine(OpName) +
+         " has unsupported source modifiers; only op_sel bits are modeled")
+            .str());
+    return std::nullopt;
+  }
+
+  True16OpSel Sel;
+  Sel.Src0Hi = (Src0Mods & SISrcMods::OP_SEL_0) != 0;
+  Sel.Src1Hi = (Src1Mods & SISrcMods::OP_SEL_0) != 0;
+  Sel.DstHi = (Src0Mods & SISrcMods::DST_OP_SEL) != 0;
+  return Sel;
+}
+
+// Extract the selected true16 source half from the containing 32-bit value.
+Value *extractU16Half(RaiseContext &Ctx, Value *Bits, bool HighHalf,
+                      Type *I16Ty) {
+  if (HighHalf)
+    Bits = Ctx.B.CreateLShr(Bits, 16);
+  return Ctx.B.CreateTrunc(Bits, I16Ty);
+}
+
+// Merge the 16-bit result into the selected half, preserving the other half.
+void writeSelectedU16Half(RaiseContext &Ctx, ParsedReg Dst, Value *Result,
+                          bool HighHalf, StringRef MergeName) {
+  Value *ResultZ = Ctx.B.CreateZExt(Result, Ctx.i32Ty);
+  Value *Old = Ctx.regs.readReg32(Ctx.B, Dst);
+  if (!HighHalf) {
+    Value *High =
+        Ctx.B.CreateAnd(Old, ConstantInt::get(Ctx.i32Ty, 0xFFFF0000u));
+    Ctx.writeReg32(Dst, Ctx.B.CreateOr(High, ResultZ, MergeName));
+    return;
+  }
+
+  Value *Low = Ctx.B.CreateAnd(Old, ConstantInt::get(Ctx.i32Ty, 0x0000FFFFu));
+  Value *Shifted = Ctx.B.CreateShl(ResultZ, 16);
+  Ctx.writeReg32(Dst, Ctx.B.CreateOr(Low, Shifted, MergeName));
+}
+
+const char *true16AddSubOpName(bool IsSub, bool IsSigned) {
+  if (IsSub)
+    return IsSigned ? "v_sub_nc_i16" : "v_sub_nc_u16";
+  return IsSigned ? "v_add_nc_i16" : "v_add_nc_u16";
+}
+
+const char *true16AddSubResultName(bool IsSub, bool IsSigned) {
+  if (IsSub)
+    return IsSigned ? "vsub_nc_i16" : "vsub_nc_u16";
+  return IsSigned ? "vadd_nc_i16" : "vadd_nc_u16";
+}
+
+const char *true16AddSubMergeName(bool IsSub, bool IsSigned, bool DstHi) {
+  if (IsSub) {
+    if (DstHi)
+      return IsSigned ? "vsub_i16_merge_hi" : "vsub_u16_merge_hi";
+    return IsSigned ? "vsub_i16_merge_lo" : "vsub_u16_merge_lo";
+  }
+  if (DstHi)
+    return IsSigned ? "vadd_i16_merge_hi" : "vadd_u16_merge_hi";
+  return IsSigned ? "vadd_i16_merge_lo" : "vadd_u16_merge_lo";
+}
+
+Intrinsic::ID true16AddSubSatIntrinsic(bool IsSub, bool IsSigned) {
+  if (IsSub)
+    return IsSigned ? Intrinsic::ssub_sat : Intrinsic::usub_sat;
+  return IsSigned ? Intrinsic::sadd_sat : Intrinsic::uadd_sat;
 }
 
 // ============================================================================
@@ -1536,64 +1637,57 @@ HandlerResult handleVALU(RaiseContext &ctx, const DecodedInst &di,
     hr.handled = true;
     return hr;
   }
-  // VOP3 v_add_nc_u16: 16-bit no-carry add with op_sel half
-  // selection on src0/src1/dst. Defined at
-  // VOP3Instructions.td:1362; gfx10/gfx11/gfx12 share the same
-  // 0x303 opcode (lines :1852, :2016).
+  // VOP3 true16 16-bit no-carry add/sub with op_sel half selection on
+  // src0/src1/dst. Unsigned forms use V_{ADD,SUB}_NC_U16 pseudos; signed
+  // forms use LLVM's older V_{ADD,SUB}_I16 pseudos even when gfx10+ real
+  // mnemonics print the no-carry spelling v_{add,sub}_nc_i16.
   //
-  // op_sel layout in the disassembly is `op_sel:[s0,s1,dst]`
-  // where each entry picks the lo (0) or hi (1) 16-bit half of
-  // the corresponding 32-bit VGPR. The unselected half of the
-  // destination register is preserved per the RDNA3+ ISA — that
-  // is the *only* reason this handler reads the prior dst value
-  // and merges, distinguishing it from the existing V_MAX_U16 /
-  // V_MIN_U16 family which assume default op_sel and
+  // The true16 disassembler decodes op_sel bits into src*_modifiers.
+  // src0/src1 OP_SEL_0 choose the lo (0) or hi (1) 16-bit half of the
+  // corresponding source; src0 DST_OP_SEL chooses which half of the 32-bit
+  // destination receives the result. The unselected destination half is
+  // preserved per the RDNA3+ ISA -- that is the only reason this handler
+  // reads the prior dst value and merges, distinguishing it from the
+  // existing V_MAX_U16 / V_MIN_U16 family which assume default op_sel and
   // zero-extend.
-  if (sop == CanonicalOp::V_ADD_NC_U16) {
-    Type *i16Ty = Type::getInt16Ty(ctx.C);
-    int opSel[3] = {0, 0, 0};
-    StringRef text(di.fullText);
-    auto pos = text.find("op_sel:");
-    if (pos != StringRef::npos) {
-      auto brk = text.find('[', pos);
-      auto end = text.find(']', brk);
-      if (brk != StringRef::npos && end != StringRef::npos) {
-        StringRef inner = text.slice(brk + 1, end);
-        SmallVector<StringRef, 3> parts;
-        inner.split(parts, ',');
-        for (unsigned i = 0; i < parts.size() && i < 3; i++) {
-          int val = 0;
-          if (!parts[i].trim().getAsInteger(10, val))
-            opSel[i] = val;
-        }
-      }
-    }
-    auto half = [&](Value *v, int sel) -> Value * {
-      if (sel) v = ctx.B.CreateLShr(v, 16);
-      return ctx.B.CreateTrunc(v, i16Ty);
-    };
-    Value *a = half(op.src(0), opSel[0]);
-    Value *b = half(op.src(1), opSel[1]);
-    Value *sum = ctx.B.CreateAdd(a, b, "vadd_nc_u16");
-    Value *sumZ = ctx.B.CreateZExt(sum, ctx.i32Ty);
-    if (opSel[2] == 0) {
-      // Write low half, preserve high half. The default-opsel
-      // case is the dominant one (matches the corpus instances
-      // we've seen) and would lift identically to a plain
-      // trunc+add+zext if the prior dst high bits were known to
-      // be zero — the explicit OR with the masked old value
-      // makes the merge semantics observable in the IR shape.
-      Value *old = ctx.regs.readReg32(ctx.B, op.dst());
-      Value *high = ctx.B.CreateAnd(old,
-          ConstantInt::get(ctx.i32Ty, 0xFFFF0000u));
-      ctx.writeReg32(op.dst(), ctx.B.CreateOr(high, sumZ, "vadd_u16_merge_lo"));
+  if (sop == CanonicalOp::V_ADD_NC_U16 ||
+      sop == CanonicalOp::V_SUB_NC_U16 ||
+      sop == CanonicalOp::V_ADD_NC_I16 ||
+      sop == CanonicalOp::V_SUB_NC_I16) {
+    bool IsSub = sop == CanonicalOp::V_SUB_NC_U16 ||
+                 sop == CanonicalOp::V_SUB_NC_I16;
+    bool IsSigned = sop == CanonicalOp::V_ADD_NC_I16 ||
+                    sop == CanonicalOp::V_SUB_NC_I16;
+    const char *OpName = true16AddSubOpName(IsSub, IsSigned);
+    std::optional<bool> Clamp = readVOP3Clamp(di, hr, OpName);
+    if (!Clamp)
+      return hr;
+
+    std::optional<True16OpSel> Sel = readTrue16OpSel(di, op, hr, OpName);
+    if (!Sel)
+      return hr;
+
+    Type *I16Ty = Type::getInt16Ty(ctx.C);
+    Value *LHS = extractU16Half(ctx, op.src(0), Sel->Src0Hi, I16Ty);
+    Value *RHS = extractU16Half(ctx, op.src(1), Sel->Src1Hi, I16Ty);
+    Value *Result = nullptr;
+    if (*Clamp) {
+      Function *SatFn = Intrinsic::getOrInsertDeclaration(
+          &ctx.M, true16AddSubSatIntrinsic(IsSub, IsSigned), {I16Ty});
+      Result = ctx.B.CreateCall(SatFn, {LHS, RHS},
+                                true16AddSubResultName(IsSub, IsSigned));
     } else {
-      Value *old = ctx.regs.readReg32(ctx.B, op.dst());
-      Value *low = ctx.B.CreateAnd(old,
-          ConstantInt::get(ctx.i32Ty, 0x0000FFFFu));
-      Value *shifted = ctx.B.CreateShl(sumZ, 16);
-      ctx.writeReg32(op.dst(), ctx.B.CreateOr(low, shifted, "vadd_u16_merge_hi"));
+      Result = IsSub ? ctx.B.CreateSub(
+                           LHS, RHS,
+                           true16AddSubResultName(IsSub, IsSigned))
+                     : ctx.B.CreateAdd(
+                           LHS, RHS,
+                           true16AddSubResultName(IsSub, IsSigned));
     }
+
+    const char *MergeName =
+        true16AddSubMergeName(IsSub, IsSigned, Sel->DstHi);
+    writeSelectedU16Half(ctx, op.dst(), Result, Sel->DstHi, MergeName);
     hr.handled = true;
     return hr;
   }

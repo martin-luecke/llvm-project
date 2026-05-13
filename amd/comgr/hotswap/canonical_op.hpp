@@ -421,14 +421,16 @@ enum class CanonicalOp : uint16_t {
   // line 1350 directly matches `(xor (xor a, b), c)`. Lift is the
   // same shape as V_OR3_B32 above.
   V_XOR3_B32,
-  // VOP3 16-bit no-carry add — gfx10+ (VOP3Instructions.td:1362).
+  // VOP3 16-bit no-carry add/sub -- true16 VOP3Inst_t16 forms. Signed
+  // variants use LLVM's older V_{ADD,SUB}_I16 pseudos; gfx10+ real
+  // mnemonics spell those no-carry semantics as v_{add,sub}_nc_i16.
   // Op_sel routes 16-bit halves of src0/src1 (lo or hi) and
   // selects which half of the 32-bit dst register receives the
   // result; the unselected half of dst is preserved per the
   // RDNA3+ ISA. The handler must read the prior dst value when
   // dst op_sel is set so the preserved half survives the
   // read-modify-write.
-  V_ADD_NC_U16,
+  V_ADD_NC_U16, V_SUB_NC_U16, V_ADD_NC_I16, V_SUB_NC_I16,
   // gfx1250 VOP3 add-then-min: umin(uaddsat(src0, src1), src2).
   // The hardware opcode also carries a VOP3 clamp bit, which is semantically
   // redundant for this unsigned operation because the result is already in the

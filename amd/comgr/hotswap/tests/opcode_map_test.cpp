@@ -56,6 +56,57 @@ TEST(OpcodeMap, Gfx1250AddMinRealOpcodeMapsToSemOp) {
             transpiler::CanonicalOp::V_ADD_MIN_U32);
 }
 
+TEST(OpcodeMap, Gfx1250SubNcU16RealOpcodeMapsToSemOp) {
+  ensureAMDGPURegistered();
+
+  transpiler::MCState state;
+  ASSERT_TRUE(transpiler::initMCState(state, "gfx1250"));
+
+  transpiler::OpcodeMap map;
+  map.build(*state.instrInfo);
+
+  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_SUB_NC_U16_fake16_e64_gfx12),
+            transpiler::CanonicalOp::V_SUB_NC_U16);
+  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_SUB_NC_U16_t16_e64_gfx12),
+            transpiler::CanonicalOp::V_SUB_NC_U16);
+  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_SUB_NC_U16_fake16_e64_dpp_gfx12),
+            transpiler::CanonicalOp::V_SUB_NC_U16);
+  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_SUB_NC_U16_fake16_e64_dpp8_gfx12),
+            transpiler::CanonicalOp::Unknown);
+}
+
+TEST(OpcodeMap, Gfx1250AddSubNcI16RealOpcodesMapToSemOps) {
+  ensureAMDGPURegistered();
+
+  transpiler::MCState state;
+  ASSERT_TRUE(transpiler::initMCState(state, "gfx1250"));
+
+  transpiler::OpcodeMap map;
+  map.build(*state.instrInfo);
+
+  EXPECT_EQ(
+      map.lookup(llvm::AMDGPU::V_ADD_NC_I16V_ADD_I16_fake16_e64_gfx12),
+      transpiler::CanonicalOp::V_ADD_NC_I16);
+  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_ADD_NC_I16V_ADD_I16_t16_e64_gfx12),
+            transpiler::CanonicalOp::V_ADD_NC_I16);
+  EXPECT_EQ(
+      map.lookup(llvm::AMDGPU::V_ADD_NC_I16V_ADD_I16_fake16_e64_dpp_gfx12),
+      transpiler::CanonicalOp::V_ADD_NC_I16);
+  EXPECT_EQ(
+      map.lookup(llvm::AMDGPU::V_ADD_NC_I16V_ADD_I16_fake16_e64_dpp8_gfx12),
+      transpiler::CanonicalOp::Unknown);
+  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_SUB_NC_I16V_SUB_I16_fake16_e64_gfx12),
+            transpiler::CanonicalOp::V_SUB_NC_I16);
+  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_SUB_NC_I16V_SUB_I16_t16_e64_gfx12),
+            transpiler::CanonicalOp::V_SUB_NC_I16);
+  EXPECT_EQ(
+      map.lookup(llvm::AMDGPU::V_SUB_NC_I16V_SUB_I16_fake16_e64_dpp_gfx12),
+      transpiler::CanonicalOp::V_SUB_NC_I16);
+  EXPECT_EQ(
+      map.lookup(llvm::AMDGPU::V_SUB_NC_I16V_SUB_I16_fake16_e64_dpp8_gfx12),
+      transpiler::CanonicalOp::Unknown);
+}
+
 TEST(OpcodeMap, Gfx1250Min3RealOpcodeMapsToSemOp) {
   ensureAMDGPURegistered();
 
