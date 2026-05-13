@@ -109,6 +109,11 @@ enum class CanonicalOp : uint16_t {
   S_FLBIT_I32, S_FLBIT_I32_I64,
   S_SEXT_I32_I8, S_SEXT_I32_I16,
   S_CVT_F32_U32, S_CVT_F32_I32, S_CVT_U32_F32, S_CVT_I32_F32,
+  // gfx11+ scalar F32-to-F32 integral rounding family. The AMD ISA manual
+  // defines each as a 32-bit SGPR F32 input and F32 output; S_TRUNC_F32 in
+  // particular stores the integer part using round-toward-zero semantics back
+  // in floating-point format, not as an integer conversion.
+  S_CEIL_F32, S_FLOOR_F32, S_TRUNC_F32, S_RNDNE_F32,
   S_AND_SAVEEXEC_B32, S_OR_SAVEEXEC_B32, S_XOR_SAVEEXEC_B32,
   S_ANDN2_SAVEEXEC_B32, S_ORN2_SAVEEXEC_B32,
   S_GETPC_B64,
