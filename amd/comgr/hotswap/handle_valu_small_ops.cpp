@@ -62,17 +62,19 @@ bool requireDefaultPseudoScalarOutputMods(const DecodedInst &di,
 // clamp/omod semantics.
 bool requireDefaultOutputModsIfPresent(const DecodedInst &di,
                                        HandlerResult &hr) {
-  int clampIdx = AMDGPU::getNamedOperandIdx(di.inst.getOpcode(),
-                                            AMDGPU::OpName::clamp);
-  int omodIdx = AMDGPU::getNamedOperandIdx(di.inst.getOpcode(),
-                                           AMDGPU::OpName::omod);
-  if (clampIdx < 0 && omodIdx < 0)
+  int ClampIndex = AMDGPU::getNamedOperandIdx(di.inst.getOpcode(),
+                                              AMDGPU::OpName::clamp);
+  int OmodIndex = AMDGPU::getNamedOperandIdx(di.inst.getOpcode(),
+                                             AMDGPU::OpName::omod);
+  if (ClampIndex < 0 && OmodIndex < 0)
     return true;
 
-  int64_t clamp = 0;
-  int64_t omod = 0;
-  if ((clampIdx >= 0 && !readNamedImm(di, AMDGPU::OpName::clamp, clamp)) ||
-      (omodIdx >= 0 && !readNamedImm(di, AMDGPU::OpName::omod, omod))) {
+  int64_t ClampValue = 0;
+  int64_t OmodValue = 0;
+  if ((ClampIndex >= 0 &&
+       !readNamedImm(di, AMDGPU::OpName::clamp, ClampValue)) ||
+      (OmodIndex >= 0 &&
+       !readNamedImm(di, AMDGPU::OpName::omod, OmodValue))) {
     hr.failure = RaiseFailure::unsupportedShape(
         di, "VOP3",
         (Twine(canonicalOpName(di.canonOp)) +
@@ -82,7 +84,7 @@ bool requireDefaultOutputModsIfPresent(const DecodedInst &di,
     return false;
   }
 
-  if (clamp != 0 || omod != 0) {
+  if (ClampValue != 0 || OmodValue != 0) {
     hr.failure = RaiseFailure::unsupportedShape(
         di, "VOP3",
         (Twine(canonicalOpName(di.canonOp)) +
