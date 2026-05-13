@@ -140,6 +140,44 @@ TEST(OpcodeMap, Gfx1250PkBF16SiblingsRealOpcodesMapToSemOps) {
             transpiler::CanonicalOp::V_PK_MAX_NUM_BF16);
 }
 
+TEST(OpcodeMap, Gfx1250FmaMixF16HalfResultRealOpcodesMapToSemOps) {
+  ensureAMDGPURegistered();
+
+  transpiler::MCState state;
+  ASSERT_TRUE(transpiler::initMCState(state, "gfx1250"));
+
+  transpiler::OpcodeMap map;
+  map.build(*state.instrInfo);
+
+  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_FMA_MIXLO_F16_gfx12),
+            transpiler::CanonicalOp::V_FMA_MIXLO_F16);
+  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_FMA_MIXHI_F16_gfx12),
+            transpiler::CanonicalOp::V_FMA_MIXHI_F16);
+  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_FMA_MIXLO_F16_dpp_gfx12),
+            transpiler::CanonicalOp::V_FMA_MIXLO_F16);
+  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_FMA_MIXHI_F16_dpp8_gfx12),
+            transpiler::CanonicalOp::Unknown);
+}
+
+TEST(OpcodeMap, Gfx1250FmaMixBF16HalfResultRealOpcodesMapToSemOps) {
+  ensureAMDGPURegistered();
+
+  transpiler::MCState state;
+  ASSERT_TRUE(transpiler::initMCState(state, "gfx1250"));
+
+  transpiler::OpcodeMap map;
+  map.build(*state.instrInfo);
+
+  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_FMA_MIXLO_BF16_gfx1250),
+            transpiler::CanonicalOp::V_FMA_MIXLO_BF16);
+  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_FMA_MIXHI_BF16_gfx1250),
+            transpiler::CanonicalOp::V_FMA_MIXHI_BF16);
+  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_FMA_MIXLO_BF16_dpp_gfx1250),
+            transpiler::CanonicalOp::V_FMA_MIXLO_BF16);
+  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_FMA_MIXHI_BF16_dpp8_gfx1250),
+            transpiler::CanonicalOp::Unknown);
+}
+
 TEST(OpcodeMap, Gfx1250MadI32I24RealOpcodeMapsToSemOp) {
   ensureAMDGPURegistered();
 
