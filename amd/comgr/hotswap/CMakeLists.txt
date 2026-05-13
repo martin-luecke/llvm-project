@@ -149,7 +149,7 @@ else()
 endif()
 
 # --- Raiser + Pipeline library ------------------------------------------------
-add_library(hotswap-transpiler STATIC
+add_library(amd_codeobj_to_llvm STATIC
   raiser.cpp
   raise_context.cpp
   reg_file.cpp
@@ -196,10 +196,10 @@ add_library(hotswap-transpiler STATIC
 )
 
 if(NOT TARGET hotswap::transpiler)
-  add_library(hotswap::transpiler ALIAS hotswap-transpiler)
+  add_library(hotswap::transpiler ALIAS amd_codeobj_to_llvm)
 endif()
 
-target_compile_definitions(hotswap-transpiler PRIVATE
+target_compile_definitions(amd_codeobj_to_llvm PRIVATE
   HOTSWAP_HAVE_TDM_RUNTIME=${HOTSWAP_HAVE_TDM_RUNTIME}
 )
 
@@ -213,7 +213,7 @@ target_compile_definitions(hotswap-transpiler PRIVATE
 # way to stay in lockstep with libLLVM: it reads `LLVM_ENABLE_RTTI` /
 # `LLVM_ENABLE_EH` from the LLVM CMake package and propagates the matching
 # `-fno-rtti` / `-fno-exceptions` (or MSVC equivalents) to the target.
-llvm_update_compile_flags(hotswap-transpiler)
+llvm_update_compile_flags(amd_codeobj_to_llvm)
 
 # AMDGPU target-private headers (not installed by `ninja install`).
 # SIDefines.h, SIInstrInfo.h → source tree Target/AMDGPU/{,Utils}
@@ -221,7 +221,7 @@ llvm_update_compile_flags(hotswap-transpiler)
 # These are PRIVATE because no public header (pipeline.hpp, transpiler.hpp)
 # exposes AMDGPU-private LLVM types, so consumers (e.g. ROCR) do not need
 # these paths to compile against us.
-target_include_directories(hotswap-transpiler PRIVATE
+target_include_directories(amd_codeobj_to_llvm PRIVATE
   "${LLVM_BUILD_MAIN_SRC_DIR}/lib/Target/AMDGPU"
   "${LLVM_BUILD_MAIN_SRC_DIR}/lib/Target/AMDGPU/Utils"
   "${LLVM_BINARY_DIR}/lib/Target/AMDGPU"
@@ -229,12 +229,12 @@ target_include_directories(hotswap-transpiler PRIVATE
 
 # Allow this static library to be linked into a shared library
 # (libhsa-runtime64.so when consumed from ROCR).
-set_target_properties(hotswap-transpiler PROPERTIES POSITION_INDEPENDENT_CODE ON)
+set_target_properties(amd_codeobj_to_llvm PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # Public headers consumed by parent projects (pipeline.hpp, transpiler.hpp).
 # Use the hotswap/ root so consumers can write `#include "hotswap/transpiler/pipeline.hpp"`
 # or `#include "hotswap/transpiler.hpp"`, matching existing ROCR usage.
-target_include_directories(hotswap-transpiler PUBLIC
+target_include_directories(amd_codeobj_to_llvm PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>
 )
 
@@ -245,11 +245,11 @@ target_include_directories(hotswap-transpiler PUBLIC
 # used for in-process linkage.
 set(HOTSWAP_TRANSPILER_LLVM_TOOLS_DIR "${LLVM_TOOLS_BINARY_DIR}" CACHE PATH
   "Directory containing llc, llvm-mc, llvm-objdump, and related LLVM tools used by Hotswap")
-target_compile_definitions(hotswap-transpiler PRIVATE
+target_compile_definitions(amd_codeobj_to_llvm PRIVATE
   LLVM_TOOLS_DIR="${HOTSWAP_TRANSPILER_LLVM_TOOLS_DIR}"
 )
 
-target_link_libraries(hotswap-transpiler
+target_link_libraries(amd_codeobj_to_llvm
   PUBLIC
     # LLVM AMDGPU
     LLVMAMDGPUDisassembler
@@ -313,7 +313,7 @@ if(HOTSWAP_TRANSPILER_BUILD_TOOLS)
 # `kerneldex coverage --tool` parses. No gtest dependency so it can live
 # outside the test harness and be invoked directly as a coverage tool.
 add_executable(raise_cli raise_cli.cpp)
-target_link_libraries(raise_cli PRIVATE hotswap-transpiler)
+target_link_libraries(raise_cli PRIVATE amd_codeobj_to_llvm)
 llvm_update_compile_flags(raise_cli)
 
 # --- GoogleTest-based unified test binary -------------------------------------
@@ -344,7 +344,7 @@ target_compile_definitions(transpiler_tests PRIVATE
 target_link_libraries(transpiler_tests
   PRIVATE
     -Wl,--exclude-libs,ALL
-    hotswap-transpiler
+    amd_codeobj_to_llvm
     GTest::GTest
 )
 

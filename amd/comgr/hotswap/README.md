@@ -30,7 +30,7 @@ Build the focused targets used by the COMGR smoke test:
 
 ```bash
 cmake --build <build-dir> \
-  --target hotswap-transpiler amd_comgr hotswap-transpile \
+  --target amd_codeobj_to_llvm amd_comgr hotswap-transpile \
            FileCheck llc llvm-mc lld llvm-readelf llvm-objdump \
   --parallel 16
 ```
@@ -100,7 +100,7 @@ headers and generated TableGen include files.
 cmake -S amd/comgr/hotswap -B amd/comgr/hotswap/build -G Ninja \
   -DLLVM_DIR=<build-dir>/lib/cmake/llvm \
   -DCMAKE_CXX_COMPILER=clang++
-cmake --build amd/comgr/hotswap/build --target hotswap-transpiler
+cmake --build amd/comgr/hotswap/build --target amd_codeobj_to_llvm
 ```
 
 ## COMGR Integration

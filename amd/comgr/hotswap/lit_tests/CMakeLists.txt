@@ -65,7 +65,7 @@ configure_file(
 # (only per-test results on failure) + verbose-on-failure. Matches
 # check-llvm / check-clang / check-mlir so CI logs stay readable.
 add_custom_target(
-  check-transpiler-lit
+  check-amd-codeobj-to-llvm-lit
   COMMAND "${LIT_LLVM_LIT_EXE}" -sv "${CMAKE_CURRENT_BINARY_DIR}"
   DEPENDS raise_cli
   WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
