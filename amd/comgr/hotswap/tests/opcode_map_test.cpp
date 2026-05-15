@@ -75,6 +75,38 @@ TEST(OpcodeMap, Gfx1250SubNcU16RealOpcodeMapsToSemOp) {
             transpiler::CanonicalOp::Unknown);
 }
 
+TEST(OpcodeMap, Gfx1250ScalarF16ToF32RealOpcodesMapToCanonicalOps) {
+  ensureAMDGPURegistered();
+
+  transpiler::MCState state;
+  ASSERT_TRUE(transpiler::initMCState(state, "gfx1250"));
+
+  transpiler::OpcodeMap map;
+  map.build(*state.instrInfo);
+
+  EXPECT_EQ(map.lookup(llvm::AMDGPU::S_CVT_F16_F32_gfx12),
+            transpiler::CanonicalOp::S_CVT_F16_F32);
+  EXPECT_EQ(map.lookup(llvm::AMDGPU::S_CVT_F32_F16_gfx12),
+            transpiler::CanonicalOp::S_CVT_F32_F16);
+  EXPECT_EQ(map.lookup(llvm::AMDGPU::S_CVT_HI_F32_F16_gfx12),
+            transpiler::CanonicalOp::S_CVT_HI_F32_F16);
+}
+
+TEST(OpcodeMap, Gfx1250VectorF32F64RealOpcodesMapToCanonicalOps) {
+  ensureAMDGPURegistered();
+
+  transpiler::MCState state;
+  ASSERT_TRUE(transpiler::initMCState(state, "gfx1250"));
+
+  transpiler::OpcodeMap map;
+  map.build(*state.instrInfo);
+
+  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_CVT_F32_F64_e64_gfx12),
+            transpiler::CanonicalOp::V_CVT_F32_F64);
+  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_CVT_F64_F32_e64_gfx12),
+            transpiler::CanonicalOp::V_CVT_F64_F32);
+}
+
 TEST(OpcodeMap, Gfx1250AddSubNcI16RealOpcodesMapToSemOps) {
   ensureAMDGPURegistered();
 

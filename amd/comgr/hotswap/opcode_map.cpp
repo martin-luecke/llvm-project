@@ -194,6 +194,9 @@ static const Entry kCanonTable[] = {
     E(S_FLBIT_I32_B32, S_FLBIT_I32_B32), E(S_FLBIT_I32_B64, S_FLBIT_I32_B64),
     E(S_FLBIT_I32, S_FLBIT_I32), E(S_FLBIT_I32_I64, S_FLBIT_I32_I64),
     E(S_SEXT_I32_I8, S_SEXT_I32_I8), E(S_SEXT_I32_I16, S_SEXT_I32_I16),
+    E(S_CVT_F16_F32, S_CVT_F16_F32),
+    E(S_CVT_F32_F16, S_CVT_F32_F16),
+    E(S_CVT_HI_F32_F16, S_CVT_HI_F32_F16),
     E(S_CVT_F32_U32, S_CVT_F32_U32), E(S_CVT_F32_I32, S_CVT_F32_I32),
     E(S_CVT_U32_F32, S_CVT_U32_F32), E(S_CVT_I32_F32, S_CVT_I32_F32),
     // Scalar F32-to-F32 integral rounding. LLVM TableGen declares these
@@ -369,6 +372,13 @@ static const Entry kCanonTable[] = {
     E(V_CVT_F32_UBYTE1_e64, V_CVT_F32_UBYTE1),
     E(V_CVT_F32_UBYTE2_e64, V_CVT_F32_UBYTE2),
     E(V_CVT_F32_UBYTE3_e64, V_CVT_F32_UBYTE3),
+    // F32<->F64 converts are registered on `_e64` only.  On gfx11+/gfx12 the
+    // production encodings are VOP1/DPP `_e64` forms; `_e32` slots exist on
+    // older ISAs (see VOP1Instructions.td) but are not emitted for the gfx1250
+    // corpus this table targets.  An unmapped `_e32` MC opcode would surface as
+    // UnsupportedOpcode rather than silently using the wrong profile.
+    E(V_CVT_F32_F64_e64, V_CVT_F32_F64),
+    E(V_CVT_F64_F32_e64, V_CVT_F64_F32),
     E(V_CVT_F64_U32_e64, V_CVT_F64_U32),
     E(V_CVT_F64_I32_e64, V_CVT_F64_I32),
     E(V_CVT_U32_F64_e64, V_CVT_U32_F64),

@@ -51,6 +51,7 @@ struct RaiseContext {
   llvm::Type *i64Ty;
   llvm::Type *f32Ty;
   llvm::Type *f16Ty;
+  llvm::Type *f64Ty;
   llvm::Type *ptrGlobalTy;
 
   llvm::DenseMap<uint64_t, llvm::BasicBlock *> &offsetToBB;

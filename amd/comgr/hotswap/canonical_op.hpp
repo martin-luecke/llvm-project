@@ -108,6 +108,7 @@ enum class CanonicalOp : uint16_t {
   // SOPInstructions.td:296-298 / VOP1Instructions.td:373.
   S_FLBIT_I32, S_FLBIT_I32_I64,
   S_SEXT_I32_I8, S_SEXT_I32_I16,
+  S_CVT_F16_F32, S_CVT_F32_F16, S_CVT_HI_F32_F16,
   S_CVT_F32_U32, S_CVT_F32_I32, S_CVT_U32_F32, S_CVT_I32_F32,
   // gfx11+ scalar F32-to-F32 integral rounding family. The AMD ISA manual
   // defines each as a 32-bit SGPR F32 input and F32 output; S_TRUNC_F32 in
@@ -320,6 +321,7 @@ enum class CanonicalOp : uint16_t {
   V_CVT_F32_I32, V_CVT_F32_U32, V_CVT_I32_F32, V_CVT_U32_F32,
   V_CVT_F16_F32, V_CVT_F32_F16, V_CVT_F32_BF16,
   V_CVT_F32_UBYTE0, V_CVT_F32_UBYTE1, V_CVT_F32_UBYTE2, V_CVT_F32_UBYTE3,
+  V_CVT_F32_F64, V_CVT_F64_F32,
   V_CVT_F64_U32, V_CVT_F64_I32, V_CVT_U32_F64,
   V_RCP_IFLAG_F32, V_RCP_F32, V_RSQ_F32, V_SQRT_F32, V_EXP_F32, V_LOG_F32,
   // gfx12+ VOP3 pseudo-scalar f32 transcendentals: scalar input and scalar

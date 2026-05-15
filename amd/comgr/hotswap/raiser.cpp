@@ -915,12 +915,13 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> textBytes,
   // ==== Phase 5: Raise each instruction ====
 
   auto *f16Ty = Type::getHalfTy(C);
+  auto *f64Ty = Type::getDoubleTy(C);
   // `userSgprLayout` was built above before Phase 4 so entry SGPR seeding
   // and handler-side ABI decisions use the same descriptor-derived mapping.
   RaiseContext ctx{C, M, B, regs, projection, mc, isa, targetIsa, kernargs,
                    &userSgprLayout, F,
                    nullptr,
-                   i1Ty, i8Ty, i32Ty, i64Ty, f32Ty, f16Ty,
+                   i1Ty, i8Ty, i32Ty, i64Ty, f32Ty, f16Ty, f64Ty,
                    ptrGlobalTy, offsetToBB};
   ctx.setpcAnalysis = &setpcAnalysis;
   ctx.sourcePrivateSegmentFixedSize =

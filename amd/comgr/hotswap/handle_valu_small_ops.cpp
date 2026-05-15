@@ -1,4 +1,5 @@
 #include "handle_valu_internal.hpp"
+#include "handle_valu_output_mods.hpp"
 
 #include "canonical_op.hpp"
 
@@ -14,89 +15,6 @@
 using namespace llvm;
 
 namespace transpiler {
-
-namespace {
-
-bool readNamedImm(const DecodedInst &di, AMDGPU::OpName name, int64_t &out) {
-  int idx = AMDGPU::getNamedOperandIdx(di.inst.getOpcode(), name);
-  if (idx < 0 || static_cast<unsigned>(idx) >= di.inst.getNumOperands())
-    return false;
-  const MCOperand &op = di.inst.getOperand(static_cast<unsigned>(idx));
-  if (!op.isImm())
-    return false;
-  out = op.getImm();
-  return true;
-}
-
-bool requireDefaultPseudoScalarOutputMods(const DecodedInst &di,
-                                          HandlerResult &hr) {
-  int64_t clamp = 0;
-  int64_t omod = 0;
-  if (!readNamedImm(di, AMDGPU::OpName::clamp, clamp) ||
-      !readNamedImm(di, AMDGPU::OpName::omod, omod)) {
-    hr.failure = RaiseFailure::unsupportedShape(
-        di, "VOP3",
-        (Twine(canonicalOpName(di.canonOp)) +
-         " missing immediate clamp/omod operands; operand table layout does "
-         "not match the gfx12 VOP3 pseudo-scalar profile")
-            .str());
-    return false;
-  }
-  if (clamp != 0 || omod != 0) {
-    hr.failure = RaiseFailure::unsupportedShape(
-        di, "VOP3",
-        (Twine(canonicalOpName(di.canonOp)) +
-         " with non-default clamp/omod is not yet lifted; the base "
-         "instruction is supported through an AMDGPU hardware intrinsic, but "
-         "output modifier semantics must not be silently dropped")
-            .str());
-    return false;
-  }
-  return true;
-}
-
-// Guard handlers that share one CanonicalOp across e32/e64 forms. e32 forms
-// have no clamp/omod operands, while e64/VOP3 forms expose output modifiers
-// that the base lifts below do not model. Accept missing operands and default
-// modifier values; refuse non-default values rather than silently dropping
-// clamp/omod semantics.
-bool requireDefaultOutputModsIfPresent(const DecodedInst &di,
-                                       HandlerResult &hr) {
-  int ClampIndex = AMDGPU::getNamedOperandIdx(di.inst.getOpcode(),
-                                              AMDGPU::OpName::clamp);
-  int OmodIndex = AMDGPU::getNamedOperandIdx(di.inst.getOpcode(),
-                                             AMDGPU::OpName::omod);
-  if (ClampIndex < 0 && OmodIndex < 0)
-    return true;
-
-  int64_t ClampValue = 0;
-  int64_t OmodValue = 0;
-  if ((ClampIndex >= 0 &&
-       !readNamedImm(di, AMDGPU::OpName::clamp, ClampValue)) ||
-      (OmodIndex >= 0 &&
-       !readNamedImm(di, AMDGPU::OpName::omod, OmodValue))) {
-    hr.failure = RaiseFailure::unsupportedShape(
-        di, "VOP3",
-        (Twine(canonicalOpName(di.canonOp)) +
-         " has malformed clamp/omod operands; operand table layout does not "
-         "match the expected VOP3 profile")
-            .str());
-    return false;
-  }
-
-  if (ClampValue != 0 || OmodValue != 0) {
-    hr.failure = RaiseFailure::unsupportedShape(
-        di, "VOP3",
-        (Twine(canonicalOpName(di.canonOp)) +
-         " with non-default clamp/omod is not yet lifted; output modifier "
-         "semantics must not be silently dropped")
-            .str());
-    return false;
-  }
-  return true;
-}
-
-} // namespace
 
 // "Small ops": conversions (F32↔{U,I}32, F16↔F32, F16↔{U,I}16, byte
 // extract), F16 two-src arith (add/sub/mul/min/max/mac/fmac), packed
@@ -170,6 +88,41 @@ HandlerResult handleVALU_SmallOps(RaiseContext &ctx, const DecodedInst &di,
                                     ctx.f16Ty);
     Value *res = ctx.B.CreateFPToUI(s, i16Ty, "cvt_u16_f16");
     ctx.writeReg32(op.dst(), ctx.B.CreateZExt(res, ctx.i32Ty));
+    hr.handled = true;
+    return hr;
+  }
+  case CanonicalOp::V_CVT_F32_F64: {
+    if (!requireDefaultOutputModsIfPresent(di, hr))
+      return hr;
+    if (di.hasDpp) {
+      hr.failure = RaiseFailure::unsupportedShape(
+          di, "VOP1",
+          "V_CVT_F32_F64 DPP has mixed source/destination widths; inactive "
+          "lane preservation must be modeled as old-destination semantics, "
+          "not the generic same-width DPP source wrapper");
+      return hr;
+    }
+    Value *Src = ctx.B.CreateBitCast(op.src64(0), ctx.f64Ty);
+    Src = op.applyMods(0, Src);
+    Value *Result = ctx.B.CreateFPTrunc(Src, ctx.f32Ty, "cvt_f32_f64");
+    ctx.writeReg32(op.dst(), ctx.B.CreateBitCast(Result, ctx.i32Ty));
+    hr.handled = true;
+    return hr;
+  }
+  case CanonicalOp::V_CVT_F64_F32: {
+    if (!requireDefaultOutputModsIfPresent(di, hr))
+      return hr;
+    if (di.hasDpp) {
+      hr.failure = RaiseFailure::unsupportedShape(
+          di, "VOP1",
+          "V_CVT_F64_F32 DPP has mixed source/destination widths; inactive "
+          "lane preservation must be modeled as old-destination semantics, "
+          "not the generic same-width DPP source wrapper");
+      return hr;
+    }
+    Value *Src = ctx.B.CreateBitCast(op.srcF(0), ctx.f32Ty);
+    Value *Result = ctx.B.CreateFPExt(Src, ctx.f64Ty, "cvt_f64_f32");
+    ctx.writeReg64(op.dst(), ctx.B.CreateBitCast(Result, ctx.i64Ty));
     hr.handled = true;
     return hr;
   }
