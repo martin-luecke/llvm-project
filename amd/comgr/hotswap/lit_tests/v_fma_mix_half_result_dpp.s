@@ -25,7 +25,8 @@
 ; DPP16: declare i32 @llvm.amdgcn.ds.bpermute(i32, i32)
 
 ; DPP8-DAG: kernel 'v_fma_mix_half_result_dpp8_refuse_kernel'
-; DPP8-DAG: DPP8 lane-permutation form
+; DPP8-DAG: DPP cross-lane site
+; DPP8-DAG: hasDpp == false
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6

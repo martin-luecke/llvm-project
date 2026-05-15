@@ -325,6 +325,7 @@ include(GoogleTest)
 set(TEST_SOURCES
   tests/test_main.cpp
   tests/c5_predicate_chain_test.cpp
+  tests/decode_dpp_modifiers_test.cpp
   tests/code_object_utils_test.cpp
   tests/kernarg_layout_test.cpp
   tests/mc_context_inline_srcmgr_test.cpp

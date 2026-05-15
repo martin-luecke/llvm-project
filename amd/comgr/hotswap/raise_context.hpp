@@ -520,14 +520,7 @@ struct OpResolver {
   // widths; other widths abort loudly.
   llvm::Value *wrapDppIfNeeded(unsigned logicalSrc, llvm::Value *raw) {
     if (!di.hasDpp || logicalSrc != 0) return raw;
-    if (di.dppFi) {
-      ctx.recordReadFailure(RaiseFailure::unsupportedShape(
-          di, "DPP",
-          "DPP16 FI fetch-inactive form: llvm.amdgcn.update.dpp has no FI "
-          "operand; extending DPP lifting requires modelling Table 57 "
-          "fetch-inactive semantics rather than silently dropping FI"));
-      return raw;
-    }
+    if (rejectDpp16FetchInactiveIfNeeded()) return raw;
     if (!cachedDppOldVdst32)
       cachedDppOldVdst32 = ctx.readOp32(di, 0);
     return ctx.emitUpdateDpp(cachedDppOldVdst32, raw, di.dppCtrl, di.dppRowMask,
@@ -544,14 +537,7 @@ struct OpResolver {
     llvm::Value *raw = ctx.readOp64(di, srcIdx(i));
     if (!di.hasDpp || i != 0)
       return raw;
-    if (di.dppFi) {
-      ctx.recordReadFailure(RaiseFailure::unsupportedShape(
-          di, "DPP",
-          "DPP16 FI fetch-inactive form: llvm.amdgcn.update.dpp has no FI "
-          "operand; extending DPP lifting requires modelling Table 57 "
-          "fetch-inactive semantics rather than silently dropping FI"));
-      return raw;
-    }
+    if (rejectDpp16FetchInactiveIfNeeded()) return raw;
     if (!cachedDppOldVdst64)
       cachedDppOldVdst64 = ctx.readOp64(di, 0);
     return ctx.emitUpdateDpp(cachedDppOldVdst64, raw, di.dppCtrl, di.dppRowMask,
@@ -583,6 +569,21 @@ struct OpResolver {
   // on `RaiseContext` above.
   llvm::Value *cachedDppOldVdst32 = nullptr;
   llvm::Value *cachedDppOldVdst64 = nullptr;
+
+private:
+  /// `llvm.amdgcn.update.dpp` has no FI operand. Record refusal when Table-57
+  /// fetch-inactive is requested; callers must return their `raw` value
+  /// unchanged when this returns true.
+  bool rejectDpp16FetchInactiveIfNeeded() {
+    if (!di.dppFi)
+      return false;
+    ctx.recordReadFailure(RaiseFailure::unsupportedShape(
+        di, "DPP",
+        "DPP16 FI fetch-inactive form: llvm.amdgcn.update.dpp has no FI "
+        "operand; extending DPP lifting requires modelling Table 57 "
+        "fetch-inactive semantics rather than silently dropping FI"));
+    return true;
+  }
 };
 
 } // namespace transpiler

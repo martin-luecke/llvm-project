@@ -873,20 +873,21 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> insts,
       // DPP16 encoding family when FI is not set. `decodeDppModifiers`
       // sets `di.hasDpp = true` only after successfully extracting every
       // required DPP16 modifier operand (dpp_ctrl / row_mask / bank_mask /
-      // bound_ctrl); for DPP8 instructions it early-returns and leaves
-      // `hasDpp` false. DPP16 FI is decoded but not representable by
-      // `llvm.amdgcn.update.dpp`, so it is treated as pending too. The
-      // `tsFlags & SIInstrFlags::DPP` check still fires for all forms —
-      // all are Class-2 cross-lane sites by the hotswap/docs/wave-size-
-      // translation.md §6 taxonomy; the flipped-by-form
-      // `rewriteImplemented` bit separates "handled" from "pending"
-      // without changing the taxonomy.
+      // bound_ctrl). DPP8 (and any future DPP layout the decoder does not
+      // recognise yet) leaves `hasDpp` false by design so the classifier
+      // refuses rather than partially decoding. DPP16 FI is decoded but not
+      // representable by `llvm.amdgcn.update.dpp`, so it is treated as pending
+      // too. The `tsFlags & SIInstrFlags::DPP` check still fires for all forms
+      // — all are Class-2 cross-lane sites by the hotswap/docs/wave-size-
+      // translation.md §6 taxonomy; the flipped-by-form `rewriteImplemented` bit
+      // separates "handled" from "pending" without changing the taxonomy.
       site.rewriteImplemented = di.hasDpp && !di.dppFi;
       if (!di.hasDpp)
         site.detail =
-            "DPP8 lane-permutation form — P5 currently covers only the "
-            "DPP16 encoding family via llvm.amdgcn.update.dpp; extending "
-            "to DPP8 requires an llvm.amdgcn.mov.dpp8 lift path.";
+            "DPP cross-lane site (TSFlags::DPP) but `decodeDppModifiers` did "
+            "not populate the DPP16 bundle (`hasDpp == false`) — includes DPP8 "
+            "encodings and any newer AMDGPU DPP operand layout this decoder "
+            "does not yet handle; pending P5 / decode extension.";
       else if (di.dppFi)
         site.detail =
             "DPP16 FI fetch-inactive form — llvm.amdgcn.update.dpp has no "
