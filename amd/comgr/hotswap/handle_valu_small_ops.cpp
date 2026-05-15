@@ -102,10 +102,10 @@ HandlerResult handleVALU_SmallOps(RaiseContext &ctx, const DecodedInst &di,
           "not the generic same-width DPP source wrapper");
       return hr;
     }
-    Value *s = ctx.B.CreateBitCast(op.src64(0), ctx.f64Ty);
-    s = op.applyMods(0, s);
-    Value *r = ctx.B.CreateFPTrunc(s, ctx.f32Ty, "cvt_f32_f64");
-    ctx.writeReg32(op.dst(), ctx.B.CreateBitCast(r, ctx.i32Ty));
+    Value *Src = ctx.B.CreateBitCast(op.src64(0), ctx.f64Ty);
+    Src = op.applyMods(0, Src);
+    Value *Result = ctx.B.CreateFPTrunc(Src, ctx.f32Ty, "cvt_f32_f64");
+    ctx.writeReg32(op.dst(), ctx.B.CreateBitCast(Result, ctx.i32Ty));
     hr.handled = true;
     return hr;
   }
@@ -120,9 +120,9 @@ HandlerResult handleVALU_SmallOps(RaiseContext &ctx, const DecodedInst &di,
           "not the generic same-width DPP source wrapper");
       return hr;
     }
-    Value *s = ctx.B.CreateBitCast(op.srcF(0), ctx.f32Ty);
-    Value *r = ctx.B.CreateFPExt(s, ctx.f64Ty, "cvt_f64_f32");
-    ctx.writeReg64(op.dst(), ctx.B.CreateBitCast(r, ctx.i64Ty));
+    Value *Src = ctx.B.CreateBitCast(op.srcF(0), ctx.f32Ty);
+    Value *Result = ctx.B.CreateFPExt(Src, ctx.f64Ty, "cvt_f64_f32");
+    ctx.writeReg64(op.dst(), ctx.B.CreateBitCast(Result, ctx.i64Ty));
     hr.handled = true;
     return hr;
   }
