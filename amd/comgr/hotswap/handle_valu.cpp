@@ -38,13 +38,13 @@ std::optional<int64_t> readNamedImmOperand(const DecodedInst &di,
 }
 
 std::optional<bool> readVOP3Clamp(const DecodedInst &di, HandlerResult &hr,
-                                  const char *opName) {
+                                  StringRef OpName) {
   std::optional<int64_t> clamp =
       readNamedImmOperand(di, AMDGPU::OpName::clamp);
   if (!clamp) {
     hr.failure = RaiseFailure::unsupportedShape(
         di, "VOP3",
-        (Twine(opName) +
+        (Twine(OpName) +
          " missing immediate clamp operand; operand table layout does not "
          "match the expected VOP3 profile")
             .str());
@@ -67,7 +67,7 @@ struct True16OpSel {
 
 std::optional<True16OpSel> readTrue16OpSel(const DecodedInst &Di,
                                            OpResolver &Op, HandlerResult &Hr,
-                                           const char *OpName) {
+                                           StringRef OpName) {
   if (Op.nSrcs() < 2) {
     Hr.failure = RaiseFailure::unsupportedShape(
         Di, "VOP3",
@@ -100,11 +100,10 @@ std::optional<True16OpSel> readTrue16OpSel(const DecodedInst &Di,
 }
 
 // Extract the selected true16 source half from the containing 32-bit value.
-Value *extractU16Half(RaiseContext &Ctx, Value *Bits, bool HighHalf,
-                      Type *I16Ty) {
+Value *extractU16Half(RaiseContext &Ctx, Value *Bits, bool HighHalf) {
   if (HighHalf)
     Bits = Ctx.B.CreateLShr(Bits, 16);
-  return Ctx.B.CreateTrunc(Bits, I16Ty);
+  return Ctx.B.CreateTrunc(Bits, Type::getInt16Ty(Ctx.C));
 }
 
 // Merge the 16-bit result into the selected half, preserving the other half.
@@ -1668,8 +1667,8 @@ HandlerResult handleVALU(RaiseContext &ctx, const DecodedInst &di,
       return hr;
 
     Type *I16Ty = Type::getInt16Ty(ctx.C);
-    Value *LHS = extractU16Half(ctx, op.src(0), Sel->Src0Hi, I16Ty);
-    Value *RHS = extractU16Half(ctx, op.src(1), Sel->Src1Hi, I16Ty);
+    Value *LHS = extractU16Half(ctx, op.src(0), Sel->Src0Hi);
+    Value *RHS = extractU16Half(ctx, op.src(1), Sel->Src1Hi);
     Value *Result = nullptr;
     if (*Clamp) {
       Function *SatFn = Intrinsic::getOrInsertDeclaration(
