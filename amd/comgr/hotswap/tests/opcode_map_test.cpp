@@ -325,3 +325,52 @@ TEST(OpcodeMap, Gfx1250Maximum3Minimum3F32RealOpcodesMapToCanonicalOps) {
   EXPECT_EQ(map.lookup(llvm::AMDGPU::V_MINIMUM3_F32_e64_gfx12),
             transpiler::CanonicalOp::V_MINIMUM3_F32);
 }
+
+TEST(OpcodeMap, Gfx1250MaximumMinimumF32RealOpcodesMapToCanonicalOps) {
+  ensureAMDGPURegistered();
+
+  transpiler::MCState state;
+  ASSERT_TRUE(transpiler::initMCState(state, "gfx1250"));
+
+  transpiler::OpcodeMap map;
+  map.build(*state.instrInfo);
+
+  // V_MAXIMUMMINIMUM_F32 / V_MINIMUMMAXIMUM_F32: gfx11+/gfx12 ternary
+  // IEEE-754 NaN-propagating clamp pair at VOP3 opcodes 0x26d / 0x26c.
+  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_MAXIMUMMINIMUM_F32_e64_gfx12),
+            transpiler::CanonicalOp::V_MAXIMUMMINIMUM_F32);
+  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_MINIMUMMAXIMUM_F32_e64_gfx12),
+            transpiler::CanonicalOp::V_MINIMUMMAXIMUM_F32);
+}
+
+TEST(OpcodeMap, Gfx1250RelatedMinimumMaximumOpcodesMapToCanonicalOps) {
+  ensureAMDGPURegistered();
+
+  transpiler::MCState state;
+  ASSERT_TRUE(transpiler::initMCState(state, "gfx1250"));
+
+  transpiler::OpcodeMap map;
+  map.build(*state.instrInfo);
+
+  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_MAXMIN_F32_e64),
+            transpiler::CanonicalOp::V_MAXMIN_NUM_F32);
+  // LLVM names the t16 .NUM f16 real opcodes with the gfx11 suffix in this
+  // build; OpcodeMap still builds against gfx1250 MC state and validates the
+  // alias collapse from that real form to the shared canonical pseudo.
+  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_MINMAX_F16_t16_e64_gfx11),
+            transpiler::CanonicalOp::V_MINMAX_NUM_F16);
+  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_MAXMIN_F16_t16_e64_gfx11),
+            transpiler::CanonicalOp::V_MAXMIN_NUM_F16);
+  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_MAXIMUM_F16_t16_e64_gfx12),
+            transpiler::CanonicalOp::V_MAXIMUM_F16);
+  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_MINIMUM_F16_t16_e64_gfx12),
+            transpiler::CanonicalOp::V_MINIMUM_F16);
+  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_MAXIMUM3_F16_t16_e64_gfx12),
+            transpiler::CanonicalOp::V_MAXIMUM3_F16);
+  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_MINIMUM3_F16_t16_e64_gfx12),
+            transpiler::CanonicalOp::V_MINIMUM3_F16);
+  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_MAXIMUMMINIMUM_F16_t16_e64_gfx12),
+            transpiler::CanonicalOp::V_MAXIMUMMINIMUM_F16);
+  EXPECT_EQ(map.lookup(llvm::AMDGPU::V_MINIMUMMAXIMUM_F16_t16_e64_gfx12),
+            transpiler::CanonicalOp::V_MINIMUMMAXIMUM_F16);
+}

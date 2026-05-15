@@ -454,6 +454,9 @@ enum class CanonicalOp : uint16_t {
   // 2019 V_MINIMUMMAXIMUM_F32 (NaN-propagating, opcode 0x26c).
   // The opcode_map collapses both real names onto this CanonicalOp.
   V_MINMAX_NUM_F32,
+  // VOP3 ternary clamp `.NUM` dual:
+  //   V_MAXMIN_NUM_F32: minnum(maxnum(s0, s1), s2).
+  V_MAXMIN_NUM_F32,
   // VOP3 integer 3-way max/min/median. The .td uses
   // AMDGPU{u,s}{max,min,med}3 SDAG nodes which the backend pattern-
   // matches; we lift unsigned min/max as nested `llvm.{u}min/max` calls
@@ -484,6 +487,13 @@ enum class CanonicalOp : uint16_t {
   // NaN propagation is required, or expands to two 2-source IEEE
   // calls when it is.
   V_MAXIMUM3_F32, V_MINIMUM3_F32,
+  // IEEE-754 2019 ternary clamp pair, distinct from V_MINMAX_NUM_F32's
+  // NaN-pruning `.NUM` semantics:
+  //   V_MAXIMUMMINIMUM_F32: minimum(maximum(s0, s1), s2)
+  //   V_MINIMUMMAXIMUM_F32: maximum(minimum(s0, s1), s2)
+  // Both support source modifiers through OpResolver::srcF. Non-default VOP3
+  // output modifiers (clamp / omod) are refused until modeled exactly.
+  V_MAXIMUMMINIMUM_F32, V_MINIMUMMAXIMUM_F32,
   V_DIV_FIXUP_F32, V_DIV_FMAS_F32, V_DIV_SCALE_F32,
   // Mixed-precision FMA, VOP3P (VOP3PInstructions.td:109). Both
   // variants take three sources and reduce to
@@ -524,7 +534,19 @@ enum class CanonicalOp : uint16_t {
   // semantics are fused-multiply-add (no rounding of the intermediate
   // product), matching the F32 FMAMK/FMAAK convention.
   V_MADMK_F16, V_MADAK_F16,
-  V_MAX_F16, V_MIN_F16, V_LDEXP_F16, V_FLOOR_F16, V_CVT_F16_U16, V_CVT_U16_F16,
+  V_MAX_F16, V_MIN_F16,
+  // F16 ternary clamp `.NUM` pair. Like the IEEE f16 forms below, these
+  // preserve the unselected destination half and honor source/dst op_sel.
+  V_MINMAX_NUM_F16, V_MAXMIN_NUM_F16,
+  // IEEE-754 2019 f16 maximum/minimum: propagate NaN, distinct from
+  // V_MAX_F16 / V_MIN_F16's maxnum/minnum semantics.
+  V_MAXIMUM_F16, V_MINIMUM_F16,
+  // IEEE-754 2019 f16 ternary reductions and clamp pair. These handlers
+  // honor source/destination op_sel and preserve the unselected destination
+  // half.
+  V_MAXIMUM3_F16, V_MINIMUM3_F16,
+  V_MAXIMUMMINIMUM_F16, V_MINIMUMMAXIMUM_F16,
+  V_LDEXP_F16, V_FLOOR_F16, V_CVT_F16_U16, V_CVT_U16_F16,
   V_ASHRREV_I16, V_LSHRREV_B16, V_LSHLREV_B16,
   V_MAX_U16, V_MIN_U16, V_MAX_I16, V_MIN_I16,
   // 16-bit integer arith (gfx8+, VOP2Instructions.td). Plain i16

@@ -428,6 +428,11 @@ static const Entry kCanonTable[] = {
     // propagation isn't material, or two 2-source ops otherwise.
     E(V_MAXIMUM3_F32_e64, V_MAXIMUM3_F32),
     E(V_MINIMUM3_F32_e64, V_MINIMUM3_F32),
+    // gfx11+/gfx12 IEEE-754 2019 NaN-propagating clamp pair. These are the
+    // non-.NUM forms at VOP3 opcodes 0x26c / 0x26d, distinct from
+    // V_MINMAX_NUM_F32's maxnum(minnum(...), ...) semantics.
+    E(V_MAXIMUMMINIMUM_F32_e64, V_MAXIMUMMINIMUM_F32),
+    E(V_MINIMUMMAXIMUM_F32_e64, V_MINIMUMMAXIMUM_F32),
     E(V_DIV_FIXUP_F32_e64, V_DIV_FIXUP_F32),
     E(V_DIV_FMAS_F32_e64, V_DIV_FMAS_F32),
     E(V_DIV_SCALE_F32_e64, V_DIV_SCALE_F32),
@@ -520,6 +525,7 @@ static const Entry kCanonTable[] = {
     // maxnum semantics; both LLVM pseudos canonicalize onto
     // V_MINMAX_F32_e64 so a single mapping suffices.
     E(V_MINMAX_F32_e64, V_MINMAX_NUM_F32),
+    E(V_MAXMIN_F32_e64, V_MAXMIN_NUM_F32),
     // gfx11/gfx12 VOP3 integer 3-way unsigned min/max. DPP/DPP8 modifier
     // variants canonicalize through the same opcode-map stripping path used by
     // the other VOP3+DPP entries, so a base e64 row is the semantic key.
@@ -559,6 +565,14 @@ static const Entry kCanonTable[] = {
     E(V_FMAC_F16_e64, V_FMAC_F16),
     E(V_MAX_F16_e64, V_MAX_F16),
     E(V_MIN_F16_e64, V_MIN_F16),
+    E(V_MINMAX_F16_e64, V_MINMAX_NUM_F16),
+    E(V_MAXMIN_F16_e64, V_MAXMIN_NUM_F16),
+    E(V_MAXIMUM_F16_e64, V_MAXIMUM_F16),
+    E(V_MINIMUM_F16_e64, V_MINIMUM_F16),
+    E(V_MAXIMUM3_F16_e64, V_MAXIMUM3_F16),
+    E(V_MINIMUM3_F16_e64, V_MINIMUM3_F16),
+    E(V_MAXIMUMMINIMUM_F16_e64, V_MAXIMUMMINIMUM_F16),
+    E(V_MINIMUMMAXIMUM_F16_e64, V_MINIMUMMAXIMUM_F16),
     E(V_LDEXP_F16_e64, V_LDEXP_F16),
     E(V_LDEXP_F32_e64, V_LDEXP_F32),
     E(V_DOT2C_I32_I16_e64, V_DOT2C_I32_I16),
