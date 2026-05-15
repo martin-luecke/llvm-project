@@ -421,21 +421,22 @@ struct RaiseContext {
     out.append(sgprWaveMaskValidShadow.begin(), sgprWaveMaskValidShadow.end());
   }
 
-  // Pending failure raised during operand-read dispatch (e.g.
-  // `readOp32` / `readOp64` encountering an unmodeled aperture
-  // register such as SRC_SHARED_BASE / SRC_FLAT_SCRATCH_BASE_LO).
-  // Read paths cannot bail mid-handler — they must return some
+  // Pending failure raised during operand-read / operand-wrap dispatch
+  // (e.g. `readOp32` / `readOp64` encountering an unmodeled aperture
+  // register such as SRC_SHARED_BASE / SRC_FLAT_SCRATCH_BASE_LO, or a
+  // DPP modifier whose source-path semantics cannot be represented).
+  // These paths cannot bail mid-handler — they must return some
   // Value* — so they record the failure here and the per-instruction
   // dispatch loop in `raiser.cpp` checks `pendingFailure` after each
   // handler returns and aborts the kernel raise. Set via
-  // `recordReadFailure`; cleared per instruction by the dispatch
-  // loop after consumption (or before the next instruction starts).
+  // `recordReadFailure`; cleared per instruction by the dispatch loop
+  // after consumption (or before the next instruction starts).
   RaiseFailure pendingFailure;
 
-  // Record an operand-read failure. Only the first failure per
+  // Record an operand-read/wrap failure. Only the first failure per
   // instruction is captured; subsequent reads of the same kernel
-  // simply return undef and let the dispatch loop bail on the
-  // first one we observed.
+  // simply return placeholder values and let the dispatch loop bail
+  // on the first one we observed.
   void recordReadFailure(RaiseFailure f) {
     if (!pendingFailure.hasFailed())
       pendingFailure = std::move(f);
@@ -519,6 +520,7 @@ struct OpResolver {
   // widths; other widths abort loudly.
   llvm::Value *wrapDppIfNeeded(unsigned logicalSrc, llvm::Value *raw) {
     if (!di.hasDpp || logicalSrc != 0) return raw;
+    if (rejectDpp16FetchInactiveIfNeeded()) return raw;
     if (!cachedDppOldVdst32)
       cachedDppOldVdst32 = ctx.readOp32(di, 0);
     return ctx.emitUpdateDpp(cachedDppOldVdst32, raw, di.dppCtrl, di.dppRowMask,
@@ -535,6 +537,7 @@ struct OpResolver {
     llvm::Value *raw = ctx.readOp64(di, srcIdx(i));
     if (!di.hasDpp || i != 0)
       return raw;
+    if (rejectDpp16FetchInactiveIfNeeded()) return raw;
     if (!cachedDppOldVdst64)
       cachedDppOldVdst64 = ctx.readOp64(di, 0);
     return ctx.emitUpdateDpp(cachedDppOldVdst64, raw, di.dppCtrl, di.dppRowMask,
@@ -566,6 +569,21 @@ struct OpResolver {
   // on `RaiseContext` above.
   llvm::Value *cachedDppOldVdst32 = nullptr;
   llvm::Value *cachedDppOldVdst64 = nullptr;
+
+private:
+  /// `llvm.amdgcn.update.dpp` has no FI operand. Record refusal when Table-57
+  /// fetch-inactive is requested; callers must return their `raw` value
+  /// unchanged when this returns true.
+  bool rejectDpp16FetchInactiveIfNeeded() {
+    if (!di.dppFi)
+      return false;
+    ctx.recordReadFailure(RaiseFailure::unsupportedShape(
+        di, "DPP",
+        "DPP16 FI fetch-inactive form: llvm.amdgcn.update.dpp has no FI "
+        "operand; extending DPP lifting requires modelling Table 57 "
+        "fetch-inactive semantics rather than silently dropping FI"));
+    return true;
+  }
 };
 
 } // namespace transpiler

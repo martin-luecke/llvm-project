@@ -288,12 +288,29 @@ Lifted SemOps (`V_PERMLANE32_SWAP_B32`, `V_PERMLANE64_B32`,
 | `DS_BPERMUTE_B32` (P1) | `llvm.amdgcn.ds.bpermute`. Selector assumed in `[0, source_wave)` → naturally half-independent on wave64. | `d9bfd99626` |
 | `V_PERMLANE16_B32` / `V_PERMLANEX16_B32` (P2) | `ds_bpermute` emulation from decoded selector nibbles, `^ 0x10` for `permlanex16`. Only `op_sel:[1,0]` supported (`fi=0` / `bc=1` refuse). Target-independent — gfx942 lacks native ISel. | `4ff69403f0`, `01ca97e4aa` |
 | `V_PERMLANE16_SWAP_B32` (P4) | Paired `ds_bpermute`, partner `lane_id XOR 16`. Bit-exactly verified against gfx942. | `0c3f526008`, `5b721e8c91`, `bccdccfbb2` |
-| DPP modifiers (any base VOP) (P5) | Decode lifts `dppCtrl` / `dppRowMask` / `dppBankMask` / `dppBoundCtrl` into `DecodedInst` before opcode canonicalisation. `emitUpdateDpp` emits `llvm.amdgcn.update.dpp.{i32,i64}`; `OpResolver::src*` routes src0 through `wrapDppIfNeeded`. DPP8 refuses (pending P5.b). | `2dc9aa927e`, `75cf67cc18` |
+| DPP modifiers (any base VOP) (P5) | Decode lifts `dppCtrl` / `dppRowMask` / `dppBankMask` / `dppBoundCtrl` plus FI state into `DecodedInst` before opcode canonicalisation. `emitUpdateDpp` emits `llvm.amdgcn.update.dpp.{i32,i64}` for non-FI DPP16; `OpResolver::src*` routes src0 through `wrapDppIfNeeded`. Under cross-widening, i32 DPP sites are rewritten to `ds_bpermute` for audited row-local controls: `quad_perm`, `row_shl`, `row_shr`, and `row_xmask`. DPP16 FI refuses pending explicit modelling; DPP8 refuses pending a separate lift path. | `2dc9aa927e`, `75cf67cc18` |
 | `DS_SWIZZLE_B32` (P6) | Imm extracted at decode; accepts QUAD_PERM, BITMASK_PERM, valid FFT_MODE / ROTATE_MODE per LLVM's `Swizzle::EncBits`. Reserved envelopes and reserved-bit imms refuse. | `81e070c32b`, `4d4b2deacd`, `0e770da0dd`, `5cd9b6d210`, `af5c8ba4a4`, `2c02750f66` |
 
 Cross-lane closure on GPT-OSS is complete as of P4 (`0c3f526008`);
 residual failures after P1 / P2 / P4 / P5 / P6 are orthogonal Phase 5
 handler gaps (§9).
+
+For DPP16 `row_xmask:N`, the ISA manuals define the source lane as
+`lane[(n & 0x30) + ((n & 0xf) ^ N)]`.  Because `N` is a 4-bit mask,
+the XOR only changes the within-row lane index and cannot leave the
+current 16-lane row.  The cross-widen rewrite therefore uses
+`srcWithinRow = withinRow ^ N`, `inRange = true`, and the same
+`rowBase | srcWithinRow` projection as other row-local controls.
+For DPP16 `row_mask` and `bank_mask`, the same manuals state that
+both masks apply to the destination write only, not to source fetch.
+The rewrite therefore evaluates mask bits from
+`sourceLane = lane_id & (W_s - 1)` while keeping the `ds_bpermute`
+source address target-row-based.  This preserves wave32 row-mask
+meaning across both source-wave replicas in a wave64 target wave.
+DPP16 FI (`fi:1`) remains refused: the AMDGPU
+`llvm.amdgcn.update.dpp` intrinsic has no FI operand, and the manual's
+Table 57 fetch-inactive behavior must be modelled explicitly before
+that encoding can be translated.
 
 **VCC is bi-modal** — per-lane `i1` for `v_cndmask`, wave-level `iN`
 for SALU. Reads into wave-level consumers route through
@@ -805,7 +822,7 @@ their handlers:
 | `ds_bpermute_b32` (C2) | `llvm.amdgcn.ds.bpermute`. | `DsBpermuteGather` / `P1_DsBpermute` |
 | `permlane16` / `permlanex16` (C2) | `ds_bpermute` emulation from selector nibbles. | `LaneGroupShuffle` / `P2_PermLane16` |
 | `permlane16_swap` (C2) | Paired `ds_bpermute`, partner `lane_id XOR 16`. | `LaneGroupShuffle` / `P4_PermLaneSwap` |
-| DPP16 modifiers (C2) | `llvm.amdgcn.update.dpp`. DPP8 is pending below. | `DppCrossLane` / `P5_DppModifier` |
+| DPP16 modifiers (C2) | `llvm.amdgcn.update.dpp` for non-FI forms; cross-widen i32 sites rewrite audited row-local controls (`quad_perm`, `row_shl`, `row_shr`, `row_xmask`) to `ds_bpermute`. DPP16 FI refuses until explicitly modelled; DPP8 remains a separate pending lift family. | `DppCrossLane` / `P5_DppModifier` |
 | `ds_swizzle_b32` with QUAD_PERM / BITMASK_PERM / valid FFT_MODE / valid ROTATE_MODE (C2) | `llvm.amdgcn.ds.swizzle` with validated imm. | `DsSwizzle` / `P6_DsSwizzle` |
 | Canonical `s_bfe_u32 sDST, ttmp8, 0x50019` + `v_writelane_b32` / `v_readlane_b32` with a cross-widen-divergent scalar feed + `v_wmma_*` (C1). **Opt-in rewrite**, gated on `--enable-writelane-rewrite`. Post-mem2reg pass (§5.6.3) replaces the divergent-feed writelane with a per-lane `select` and the divergent-feed readlane with a `ds_bpermute`; preserves the per-source-wave `wave_id` distinction that the backend's implicit `v_readfirstlane_b32` would otherwise collapse. Without the flag the same shape is refused below as `WaveIdLiftScalarized`. | `select` on per-lane `lane_id` equality (writelane half); `ds_bpermute` with target-wave-half-scoped index (readlane half). §5.6.3. | `WaveIdLiftScalarized` / `PostRaiseCrossLaneRewrite` |
 

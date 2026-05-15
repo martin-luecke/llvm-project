@@ -35,21 +35,19 @@ namespace transpiler {
 // The same cross-widen fault class extends to `@llvm.amdgcn.update.dpp`:
 // source gfx1250 (wave32) reduction trees encode their per-step
 // `dpp_ctrl` / `row_mask` / `bank_mask` / `bound_ctrl` assuming a
-// 32-lane wave topology (2 rows of 16 lanes).  Preserving the same
-// bits verbatim on wave64 (4 rows of 16 lanes) keeps within-16-lane-
-// row shifts semantically correct BUT leaves target-wave-specific
-// mask-write semantics divergent from the wave64-native reduction
-// tree Triton would have compiled at the target — producing byte-
-// different results on kernels whose reduction accumulators feed
-// downstream arithmetic (softmax, tl.sum(axis=1), every 32-col-or-
-// wider reduction; pinned by the `topk_forward_bisect_*` recipe
-// family in `compare_correctness`).  The DPP case is included in
-// this pass under the same rewrite invariant: under cross-widening,
-// every cross-lane primitive in the lifted IR is rewritten to an
-// ISA-neutral `ds_bpermute + select` form whose correctness depends
-// only on ds_bpermute's explicit per-lane read semantics (stable
-// across gfx9+) rather than on target ISA and source ISA sharing
-// the same mask-bit interpretation.
+// 32-lane wave topology (2 rows of 16 lanes).  Preserving the native
+// DPP op on wave64 (4 rows of 16 lanes) would let target-wave row
+// topology reinterpret the source's destination-write masks.  The
+// rewrite instead models DPP explicitly: source selection uses an
+// explicit target-lane `ds_bpermute` address, while row_mask /
+// bank_mask destination gating is evaluated in source-wave-local
+// coordinates.  The DPP case is included in this pass under the same
+// rewrite invariant: under cross-widening, covered DPP i32 sites are
+// rewritten to an ISA-neutral `ds_bpermute + select` form whose
+// correctness depends only on ds_bpermute's explicit per-lane read
+// semantics (stable across gfx9+) and on the documented DPP mask
+// semantics, not on target ISA and source ISA sharing the same native
+// DPP wave topology.
 //
 // REWRITE. Replace the cross-lane primitive with a per-source-wave
 // shape that keeps the scalar operand in a VGPR and preserves per-
@@ -77,8 +75,9 @@ namespace transpiler {
 //   * `update.dpp(old, src, dpp_ctrl, row_mask, bank_mask,
 //                 bound_ctrl)` ->
 //       per-lane `ds_bpermute(srcLaneAbs << 2, src)` + `select`
-//       chain.  Per-target-lane L, with row = (L >> 4) & 3, bank =
-//       (L >> 2) & 3, withinRow = L & 0xF:
+//       chain.  Per-target-lane L, source wave size W_s, with
+//       sourceLane = L & (W_s - 1), row = (sourceLane >> 4) & 3,
+//       bank = (sourceLane >> 2) & 3, withinRow = L & 0xF:
 //         srcWithinRow, inRange = decode(dpp_ctrl, withinRow)
 //         srcLaneAbs            = (L & ~0xF) | srcWithinRow
 //         bperm                 = ds_bpermute(srcLaneAbs << 2, src)
@@ -86,23 +85,27 @@ namespace transpiler {
 //         dppVal                = inRange ? bperm : oob
 //         laneActive            = rowMaskBit(row) & bankMaskBit(bank)
 //         result                = laneActive ? dppVal : old
+//     Per the ISA manuals, row_mask and bank_mask apply only to the
+//     destination write; they do not affect source fetch.  Evaluating
+//     their row/bank indices from `sourceLane` preserves the source
+//     wave's mask meaning across every replicated source wave in a
+//     wider target wave.
 //     Supported dpp_ctrl values (covers the observed Triton corpus):
 //     `quad_perm[*]` (0x000..0x0FF), `row_shl:1..15` (0x101..0x10F),
-//     `row_shr:1..15` (0x111..0x11F).  All three families stay within
-//     a 16-lane row, so the rewrite's srcLaneAbs computation is
-//     wave-size-oblivious — the source-wave boundary between row 0
-//     and row 1 (lanes 0..15 vs 16..31) is the same topological bit
-//     on wave32 and wave64.  Other dpp_ctrl families (row_rotate,
-//     row_mirror, row_half_mirror, row_share, row_xmask, and the
-//     wave-wide / bcast variants) DO shift across row-pair
-//     boundaries in a wave-size-dependent way; the rewrite refuses
-//     those loudly via `unsupportedDppDetail` rather than producing
-//     a silently-wrong `ds_bpermute` expansion.  The faithful lift
-//     path (`@llvm.amdgcn.update.dpp` passed through to the backend)
-//     remains for i64 DPP operands, which AMDGPU's backend splits
-//     into two i32 DPP ops internally — the rewrite's i32-only scope
-//     is intentional since every Triton reduction corpus we have
-//     uses i32 DPP exclusively.
+//     `row_shr:1..15` (0x111..0x11F), and `row_xmask:0..15`
+//     (0x160..0x16F).  All supported families stay within a 16-lane
+//     row, so the rewrite's srcLaneAbs computation is wave-size-
+//     oblivious — the source-wave boundary between row 0 and row 1
+//     (lanes 0..15 vs 16..31) is the same topological bit on wave32
+//     and wave64.  Other dpp_ctrl families (row_rotate, row_mirror,
+//     row_half_mirror, row_share, and the wave-wide / bcast variants)
+//     remain unsupported until they have their own per-control
+//     correctness argument; the rewrite refuses those loudly via
+//     `unsupportedDppDetail` rather than producing a silently-wrong
+//     `ds_bpermute` expansion.  i64 DPP operands are left outside this
+//     rewrite rollout; adding them would need an explicit split /
+//     recombine proof rather than relying on backend-native DPP
+//     lowering under cross-widening.
 //
 // WRITELANE / READLANE SYMMETRY. ALL writelane and ALL readlane sites
 // are rewritten under cross-widening, independent of whether operands
@@ -181,8 +184,8 @@ struct CrossLaneDivergentRewriteReport {
   // Number of `amdgcn.update.dpp` calls rewritten to a `ds_bpermute`
   // + `select` chain. Under cross-widening with a VGPR-safe use
   // chain AND all-supported dpp_ctrls this equals the total number
-  // of i32 DPP sites in the function. i64 DPP sites pass through
-  // unmodified (see the `@llvm.amdgcn.update.dpp` section of the
+  // of i32 DPP sites in the function. i64 DPP sites are outside this
+  // rewrite rollout (see the `@llvm.amdgcn.update.dpp` section of the
   // header comment above).
   unsigned dppRewritten = 0;
 
@@ -202,7 +205,8 @@ struct CrossLaneDivergentRewriteReport {
   bool sgprForcedThreadLoopEligible = false;
 
   // Non-empty iff the DPP-rewrite encountered a `dpp_ctrl` value
-  // outside the supported family (quad_perm / row_shl / row_shr).
+  // outside the supported family (quad_perm / row_shl / row_shr /
+  // row_xmask).
   // The detail string names the offending ctrl value. When
   // populated: no DPP sites were rewritten (refusal is all-or-nothing
   // across the pass's primitive families to preserve the symmetry
@@ -242,8 +246,9 @@ struct CrossLaneDivergentRewriteReport {
   }
 };
 
-// Rewrite every cross-lane primitive site in `F` under cross-widening
-// IF the forward use-chain classifier proves every site VGPR-safe.
+// Rewrite every covered cross-lane primitive site in `F` under
+// cross-widening IF the forward use-chain classifier proves every
+// collected site VGPR-safe.
 // Otherwise perform zero rewrites and return the refusal detail in
 // `sgprForcedDetail`. No-op when `targetWaveSize <= sourceWaveSize`.
 //

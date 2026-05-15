@@ -49,6 +49,11 @@ DecodeResult decodeKernel(const MCState &mc,
                           llvm::ArrayRef<uint8_t> textBytes,
                           uint64_t kernelOffset);
 
+// DPP16 / DPP8 decode helper shared with `decodeKernel`. Exposed for unit
+// tests; callers must populate `di.tsFlags` from the original MCInstrDesc and
+// `di.inst` before calling.
+void decodeDppModifiers(DecodedInst &di);
+
 } // namespace transpiler
 
 #endif

@@ -13,13 +13,12 @@
 ; A subsequent pass (`rewrite_cross_lane_divergent.cpp`) brought
 ; DPP under the same cross-widening rewrite invariant as
 ; writelane / readlane / permlane16 / permlanex16: under cross-
-; widening (wave32 -> wave64) every cross-lane primitive is
-; rewritten to a `ds_bpermute + select` shape whose correctness
-; depends only on ds_bpermute's explicit per-lane read semantics
-; (stable across gfx9+) rather than on target ISA and source ISA
-; sharing the same bank_mask / row_mask interpretation.  This
-; test's source kernel targets gfx1250 (wave32) and is raised
-; against gfx942 (wave64), so the rewrite fires.
+; widening (wave32 -> wave64), covered i32 DPP sites rewrite to a
+; `ds_bpermute + select` shape whose correctness depends only on
+; ds_bpermute's explicit per-lane read semantics (stable across gfx9+)
+; rather than on target ISA and source ISA sharing the same bank_mask /
+; row_mask interpretation.  This test's source kernel targets gfx1250
+; (wave32) and is raised against gfx942 (wave64), so the rewrite fires.
 ;
 ; The DPP modifier values in the fixture are
 ; `quad_perm:[1,0,3,2] row_mask:0xf bank_mask:0xf bound_ctrl:1` —

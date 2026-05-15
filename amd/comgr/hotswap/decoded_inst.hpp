@@ -50,9 +50,13 @@ struct DecodedInst {
   // opcode_map canonicalises the CanonicalOp down to the base op, so handlers
   // dispatched by CanonicalOp do not see the DPP variant directly.
   //
-  // `hasDpp` is set in decode.cpp exactly when `tsFlags & SIInstrFlags::DPP`
-  // is true; the modifier-operand fields below are populated by looking
-  // up their named-operand indices in the original (non-canonicalised)
+  // `hasDpp` is set in decode.cpp only for the DPP16 forms whose
+  // modifier operands can be represented by `llvm.amdgcn.update.dpp`;
+  // DPP8 also carries `TSFlags & SIInstrFlags::DPP`, but deliberately
+  // leaves `hasDpp` false so the obstruction classifier can refuse it
+  // as pending rather than routing it through the DPP16 intrinsic. The
+  // modifier-operand fields below are populated by looking up their
+  // named-operand indices in the original (non-canonicalised)
   // MCInstrDesc.
   //
   // Handler contract: `OpResolver::src(0)` / `srcF(0)` / `src64(0)`
@@ -61,15 +65,18 @@ struct DecodedInst {
   // `dpp_ctrl` / `row_mask` / `bank_mask` / `bound_ctrl` immediates.
   // Handlers therefore need no per-op DPP awareness.
   //
-  // `fi` (fetch-invalid) is an encoding-level flag on DPP8 (not DPP16);
-  // `llvm.amdgcn.update.dpp` exposes only the DPP16 operand set, so we
-  // do not surface `fi` here. A future DPP8 lift would extend this
-  // block.
+  // `fi` (fetch-inactive / fetch-invalid) is an encoding-level flag
+  // present on DPP16 and DPP8. `llvm.amdgcn.update.dpp` exposes the
+  // DPP16 operand set without FI, so DPP16 FI sites must refuse loudly
+  // before or during DPP wrapping rather than being silently lowered
+  // as ordinary bound_ctrl DPP. DPP8 remains pending as a separate
+  // lift family.
   bool hasDpp = false;
   uint16_t dppCtrl = 0;
   uint8_t dppRowMask = 0xF;
   uint8_t dppBankMask = 0xF;
   bool dppBoundCtrl = false;
+  bool dppFi = false;
 
   // ── ds_swizzle_b32 imm state (Class 2 DsSwizzle; see
   //    hotswap/docs/wave-size-translation.md §6) ──
