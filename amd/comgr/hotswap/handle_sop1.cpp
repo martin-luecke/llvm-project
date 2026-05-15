@@ -130,6 +130,16 @@ void emitEnumeratedDispatch(RaiseContext &ctx, Value *targetInt,
   B.CreateUnreachable();
 }
 
+void emitScalarF32Rounding(RaiseContext &Ctx, OpResolver &Op,
+                           Intrinsic::ID IntrinsicID, StringRef Name) {
+  Value *SourceF32 = Ctx.B.CreateBitCast(Op.src(0), Ctx.f32Ty);
+  Function *IntrinsicFn = Intrinsic::getOrInsertDeclaration(
+      &Ctx.M, IntrinsicID, {Ctx.f32Ty});
+  Value *ResultF32 = Ctx.B.CreateCall(IntrinsicFn, {SourceF32}, Name);
+  Ctx.regs.writeReg32(Ctx.B, Op.dst(),
+                      Ctx.B.CreateBitCast(ResultF32, Ctx.i32Ty));
+}
+
 } // namespace
 
 // SPE attribute registrations. Every CanonicalOp listed here has been audited
@@ -598,6 +608,26 @@ HandlerResult handleSOP1(RaiseContext &ctx, const DecodedInst &di,
     Value *s = ctx.B.CreateBitCast(op.src(0), ctx.f32Ty);
     ctx.regs.writeReg32(ctx.B, op.dst(),
                         ctx.B.CreateFPToSI(s, ctx.i32Ty, "s_cvt_i"));
+    hr.handled = true;
+    return hr;
+  }
+  if (sop == CanonicalOp::S_CEIL_F32) {
+    emitScalarF32Rounding(ctx, op, Intrinsic::ceil, "s_ceil");
+    hr.handled = true;
+    return hr;
+  }
+  if (sop == CanonicalOp::S_FLOOR_F32) {
+    emitScalarF32Rounding(ctx, op, Intrinsic::floor, "s_floor");
+    hr.handled = true;
+    return hr;
+  }
+  if (sop == CanonicalOp::S_TRUNC_F32) {
+    emitScalarF32Rounding(ctx, op, Intrinsic::trunc, "s_trunc");
+    hr.handled = true;
+    return hr;
+  }
+  if (sop == CanonicalOp::S_RNDNE_F32) {
+    emitScalarF32Rounding(ctx, op, Intrinsic::roundeven, "s_rndne");
     hr.handled = true;
     return hr;
   }

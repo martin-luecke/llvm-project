@@ -196,6 +196,11 @@ static const Entry kCanonTable[] = {
     E(S_SEXT_I32_I8, S_SEXT_I32_I8), E(S_SEXT_I32_I16, S_SEXT_I32_I16),
     E(S_CVT_F32_U32, S_CVT_F32_U32), E(S_CVT_F32_I32, S_CVT_F32_I32),
     E(S_CVT_U32_F32, S_CVT_U32_F32), E(S_CVT_I32_F32, S_CVT_I32_F32),
+    // Scalar F32-to-F32 integral rounding. LLVM TableGen declares these
+    // SOP1_F32_Inst forms with fceil/ffloor/ftrunc/froundeven, and the AMD ISA
+    // manual records 32-bit F32 source and destination operands.
+    E(S_CEIL_F32, S_CEIL_F32), E(S_FLOOR_F32, S_FLOOR_F32),
+    E(S_TRUNC_F32, S_TRUNC_F32), E(S_RNDNE_F32, S_RNDNE_F32),
     E(S_AND_SAVEEXEC_B32, S_AND_SAVEEXEC_B32),
     E(S_OR_SAVEEXEC_B32, S_OR_SAVEEXEC_B32),
     E(S_XOR_SAVEEXEC_B32, S_XOR_SAVEEXEC_B32),

@@ -107,6 +107,25 @@ TEST(OpcodeMap, Gfx1250AddSubNcI16RealOpcodesMapToSemOps) {
       transpiler::CanonicalOp::Unknown);
 }
 
+TEST(OpcodeMap, Gfx1250ScalarF32RoundingOpcodesMapToCanonicalOps) {
+  ensureAMDGPURegistered();
+
+  transpiler::MCState State;
+  ASSERT_TRUE(transpiler::initMCState(State, "gfx1250"));
+
+  transpiler::OpcodeMap Map;
+  Map.build(*State.instrInfo);
+
+  EXPECT_EQ(Map.lookup(llvm::AMDGPU::S_CEIL_F32),
+            transpiler::CanonicalOp::S_CEIL_F32);
+  EXPECT_EQ(Map.lookup(llvm::AMDGPU::S_FLOOR_F32),
+            transpiler::CanonicalOp::S_FLOOR_F32);
+  EXPECT_EQ(Map.lookup(llvm::AMDGPU::S_TRUNC_F32),
+            transpiler::CanonicalOp::S_TRUNC_F32);
+  EXPECT_EQ(Map.lookup(llvm::AMDGPU::S_RNDNE_F32),
+            transpiler::CanonicalOp::S_RNDNE_F32);
+}
+
 TEST(OpcodeMap, Gfx1250Min3RealOpcodeMapsToSemOp) {
   ensureAMDGPURegistered();
 
