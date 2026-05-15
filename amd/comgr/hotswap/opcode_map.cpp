@@ -468,12 +468,16 @@ static const Entry kCanonTable[] = {
     // gfx10+ ternary xor (VOP3Instructions.td:1348). VOP3
     // ternaries only have the e64 form.
     E(V_XOR3_B32_e64, V_XOR3_B32),
-    // gfx10+ VOP3 16-bit no-carry add (VOP3Instructions.td:1362,
-    // real opcode 0x303 at :1852/2016). The opcode_map's
-    // sameSemanticShape canonicalizer collapses
-    // V_ADD_NC_U16_t16_e64 and V_ADD_NC_U16_fake16_e64 onto this
-    // base entry automatically, so a single mapping suffices.
+    // VOP3 true16 16-bit no-carry add/sub. Unsigned reals keep the
+    // V_{ADD,SUB}_NC_U16 pseudo names; signed forms use LLVM's older
+    // V_{ADD,SUB}_I16 pseudos even when gfx10+ real mnemonics spell them
+    // v_{add,sub}_nc_i16. Older non-_nc signed real spellings share the same
+    // no-carry semantic shape through those pseudos. sameSemanticShape
+    // collapses true16/fake16 variants onto the base pseudo entries below.
     E(V_ADD_NC_U16_e64, V_ADD_NC_U16),
+    E(V_SUB_NC_U16_e64, V_SUB_NC_U16),
+    E(V_ADD_I16_e64, V_ADD_NC_I16),
+    E(V_SUB_I16_e64, V_SUB_NC_I16),
     // gfx1250 add-then-min VOP3. The real subtarget opcodes canonicalize
     // through this pseudo via AMDGPU::getMCOpcode-derived tables.
     E(V_ADD_MIN_U32_e64, V_ADD_MIN_U32),
