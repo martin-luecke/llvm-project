@@ -1286,6 +1286,8 @@ HandlerResult handleVALU(RaiseContext &ctx, const DecodedInst &di,
     return hr;
   }
   if (sop == CanonicalOp::V_MAXIMUM_F32) {
+    if (!requireDefaultVOP3FpValuOutputMods(di, hr, "v_maximum_f32"))
+      return hr;
     Value *s0 = op.srcF(0), *s1 = op.srcF(1);
     if (s0->getType() != ctx.f32Ty) s0 = ctx.B.CreateBitCast(s0, ctx.f32Ty);
     if (s1->getType() != ctx.f32Ty) s1 = ctx.B.CreateBitCast(s1, ctx.f32Ty);
@@ -1295,6 +1297,8 @@ HandlerResult handleVALU(RaiseContext &ctx, const DecodedInst &di,
     return hr;
   }
   if (sop == CanonicalOp::V_MINIMUM_F32) {
+    if (!requireDefaultVOP3FpValuOutputMods(di, hr, "v_minimum_f32"))
+      return hr;
     Value *s0 = op.srcF(0), *s1 = op.srcF(1);
     if (s0->getType() != ctx.f32Ty) s0 = ctx.B.CreateBitCast(s0, ctx.f32Ty);
     if (s1->getType() != ctx.f32Ty) s1 = ctx.B.CreateBitCast(s1, ctx.f32Ty);
@@ -1931,6 +1935,11 @@ HandlerResult handleVALU(RaiseContext &ctx, const DecodedInst &di,
   // the gfx12 v_maximum3_f32 / v_minimum3_f32 hardware semantics.
   if (sop == CanonicalOp::V_MAXIMUM3_F32 ||
       sop == CanonicalOp::V_MINIMUM3_F32) {
+    const char *OpName = (sop == CanonicalOp::V_MAXIMUM3_F32)
+                             ? "v_maximum3_f32"
+                             : "v_minimum3_f32";
+    if (!requireDefaultVOP3FpValuOutputMods(di, hr, OpName))
+      return hr;
     Value *s0 = op.srcF(0), *s1 = op.srcF(1), *s2 = op.srcF(2);
     if (s0->getType() != ctx.f32Ty) s0 = ctx.B.CreateBitCast(s0, ctx.f32Ty);
     if (s1->getType() != ctx.f32Ty) s1 = ctx.B.CreateBitCast(s1, ctx.f32Ty);
