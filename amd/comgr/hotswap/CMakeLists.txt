@@ -174,6 +174,7 @@ add_library(amd_codeobj_to_llvm STATIC
   handle_valu.cpp
   handle_valu_cross_lane.cpp
   handle_valu_small_ops.cpp
+  handle_valu_output_mods.cpp
   handle_valu_vcmp.cpp
   handle_valu_vop3p.cpp
   flat_addr.cpp

@@ -586,24 +586,23 @@ HandlerResult handleSOP1(RaiseContext &ctx, const DecodedInst &di,
     return hr;
   }
   if (sop == CanonicalOp::S_CVT_F16_F32) {
-    Value *Src = ctx.B.CreateBitCast(op.src(0), ctx.f32Ty);
-    Value *Half = ctx.B.CreateFPTrunc(Src, ctx.f16Ty, "s_cvt_h");
-    Value *Bits = ctx.B.CreateBitCast(Half, Type::getInt16Ty(ctx.C));
-    ctx.regs.writeReg32(ctx.B, op.dst(), ctx.B.CreateZExt(Bits, ctx.i32Ty));
+    Value *s = ctx.B.CreateBitCast(op.src(0), ctx.f32Ty);
+    Value *h = ctx.B.CreateFPTrunc(s, ctx.f16Ty, "s_cvt_h");
+    Value *bits = ctx.B.CreateBitCast(h, Type::getInt16Ty(ctx.C));
+    ctx.regs.writeReg32(ctx.B, op.dst(), ctx.B.CreateZExt(bits, ctx.i32Ty));
     hr.handled = true;
     return hr;
   }
   if (sop == CanonicalOp::S_CVT_F32_F16 ||
       sop == CanonicalOp::S_CVT_HI_F32_F16) {
-    Value *Src = op.src(0);
+    Value *s = op.src(0);
     if (sop == CanonicalOp::S_CVT_HI_F32_F16)
-      Src = ctx.B.CreateLShr(Src, ConstantInt::get(ctx.i32Ty, 16),
-                             "s_cvt_hi_f16_bits32");
-    Value *Bits = ctx.B.CreateTrunc(Src, Type::getInt16Ty(ctx.C),
-                                    "s_cvt_f16_bits");
-    Value *Half = ctx.B.CreateBitCast(Bits, ctx.f16Ty);
-    Value *Result = ctx.B.CreateFPExt(Half, ctx.f32Ty, "s_cvt_f");
-    ctx.regs.writeReg32(ctx.B, op.dst(), ctx.B.CreateBitCast(Result, ctx.i32Ty));
+      s = ctx.B.CreateLShr(s, ConstantInt::get(ctx.i32Ty, 16),
+                           "s_cvt_hi_f16_bits32");
+    Value *bits = ctx.B.CreateTrunc(s, Type::getInt16Ty(ctx.C), "s_cvt_f16_bits");
+    Value *h = ctx.B.CreateBitCast(bits, ctx.f16Ty);
+    Value *r = ctx.B.CreateFPExt(h, ctx.f32Ty, "s_cvt_f");
+    ctx.regs.writeReg32(ctx.B, op.dst(), ctx.B.CreateBitCast(r, ctx.i32Ty));
     hr.handled = true;
     return hr;
   }
