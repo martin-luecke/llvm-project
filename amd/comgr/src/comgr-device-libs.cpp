@@ -18,6 +18,7 @@
 #include "comgr-device-libs.h"
 #include "comgr.h"
 #include "llvm/ADT/StringSwitch.h"
+#include "llvm/ADT/Twine.h"
 #include <cstdint>
 
 using namespace llvm;
@@ -49,6 +50,42 @@ getDeviceLibraries() {
 #include "libraries_defs.inc"
   };
   return DeviceLibs;
+}
+
+bool getOCMLDeviceLibraryNames(llvm::StringRef TargetIsa,
+                               unsigned TargetWaveSize,
+                               llvm::SmallVectorImpl<std::string> &Names,
+                               std::string &Error) {
+  Names.clear();
+
+  if (!TargetIsa.consume_front("gfx")) {
+    Error = (Twine("target ISA '") + TargetIsa +
+             "' does not name a gfx processor").str();
+    return false;
+  }
+
+  if (TargetWaveSize != 32 && TargetWaveSize != 64) {
+    Error = (Twine("cannot select OCML wavefront-size control library for "
+                   "target wave size ") +
+             Twine(TargetWaveSize)).str();
+    return false;
+  }
+
+  std::string IsaSuffix = TargetIsa.str();
+  for (char &C : IsaSuffix) {
+    if (C == '-')
+      C = '_';
+  }
+
+  Names.push_back("ocml.bc");
+  Names.push_back("ockl.bc");
+  Names.push_back("oclc_abi_version_600.bc");
+  Names.push_back("oclc_isa_version_" + IsaSuffix + ".bc");
+  Names.push_back("oclc_finite_only_off.bc");
+  Names.push_back("oclc_unsafe_math_off.bc");
+  Names.push_back(TargetWaveSize == 64 ? "oclc_wavefrontsize64_on.bc"
+                                       : "oclc_wavefrontsize64_off.bc");
+  return true;
 }
 
 } // namespace COMGR

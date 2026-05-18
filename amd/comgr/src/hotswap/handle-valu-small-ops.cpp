@@ -10,6 +10,7 @@
 #include "handle-valu-output-mods.h"
 
 #include "canonical-op.h"
+#include "ocml-runtime.h"
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Twine.h"
@@ -463,6 +464,33 @@ HandlerResult handleValuSmallOps(RaiseContext &Ctx, const DecodedInst &Di,
     Ctx.writeReg32(Op.dst(),
                    Ctx.B.CreateBitCast(
                        Ctx.B.CreateCall(Log2Fn, {S}, "log"), Ctx.I32Ty));
+    Hr.Handled = true;
+    return Hr;
+  }
+  case CanonicalOp::V_TANH_F32: {
+    if (!requireDefaultOutputModsIfPresent(Di, Hr))
+      return Hr;
+    Value *S = Ctx.B.CreateBitCast(Op.srcF(0), Ctx.F32Ty);
+    if (Ctx.TargetIsa.HasTanhInsts) {
+      Function *TanhFn = Intrinsic::getOrInsertDeclaration(
+          &Ctx.M, Intrinsic::amdgcn_tanh, {Ctx.F32Ty});
+      Ctx.writeReg32(Op.dst(),
+                     Ctx.B.CreateBitCast(
+                         Ctx.B.CreateCall(TanhFn, {S}, "tanh"),
+                         Ctx.I32Ty));
+      Hr.Handled = true;
+      return Hr;
+    }
+
+    // Issue #66 policy for gfx1250 -> gfx942: recover the OCML source intent
+    // native Triton/gfx942 keeps as `__ocml_tanh_f32`. This is not a proof
+    // that OCML exactly matches the hardware TanhCubicApproximation, so targets
+    // that can lower the native intrinsic above keep the hardware path.
+    FunctionCallee TanhFn = declareOCMLTanhF32(Ctx.M);
+    Ctx.writeReg32(Op.dst(),
+                   Ctx.B.CreateBitCast(
+                       Ctx.B.CreateCall(TanhFn, {S}, "ocml.tanh"),
+                       Ctx.I32Ty));
     Hr.Handled = true;
     return Hr;
   }

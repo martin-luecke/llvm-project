@@ -396,6 +396,11 @@ static const Entry kCanonTable[] = {
     E(V_SQRT_F32_e64, V_SQRT_F32),
     E(V_EXP_F32_e64, V_EXP_F32),
     E(V_LOG_F32_e64, V_LOG_F32),
+    // gfx1250/gfx13 `v_tanh_f32` is selected from LLVM's
+    // `llvm.amdgcn.tanh` intrinsic, but cross-target HotSwap recovers the
+    // source OCML intent (`__ocml_tanh_f32`) instead of re-emitting the
+    // target-gated hardware intrinsic.
+    E(V_TANH_F32_e64, V_TANH_F32),
     E(V_S_EXP_F32_e64, V_S_EXP_F32),
     E(V_S_LOG_F32_e64, V_S_LOG_F32),
     E(V_S_RCP_F32_e64, V_S_RCP_F32),

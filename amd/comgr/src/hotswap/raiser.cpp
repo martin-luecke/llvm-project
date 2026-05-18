@@ -38,6 +38,7 @@
 #include "handlers.h"
 #include "rewrite-cross-lane-divergent.h"
 #include "c5-predicate-chain-classifier.h"
+#include "ocml-runtime.h"
 #include "tdm-runtime.h"
 
 #include "llvm/ADT/Twine.h"
@@ -1584,7 +1585,26 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
     }
   }
 
-  // ==== Phase 6.7: Link TDM emulation runtime ====
+  // ==== Phase 6.7: Link OCML / TDM helper runtimes ====
+  // `v_tanh_f32` is raised through the native gfx942 Triton policy: recover the
+  // OCML source intent (`__ocml_tanh_f32`) and link COMGR's embedded device
+  // libraries, rather than re-emitting gfx1250's target-gated
+  // `llvm.amdgcn.tanh` intrinsic or a hand-written approximation. The helper
+  // call chain is inlined here before verification/lowering so final IR has no
+  // unresolved OCML device-call ABI.
+  if (moduleUsesOCMLRuntime(M)) {
+    StringRef OCMLTargetCpu = TargetCpu.empty() ? SourceCpu : TargetCpu;
+    std::string OCMLLinkErr;
+    if (!linkOCMLRuntime(M, OCMLTargetCpu, TargetIsa.WaveSize, OCMLLinkErr)) {
+      errs() << "transpiler: OCML device-library link failed for kernel '"
+             << KernelName << "'\n";
+      Result.Failure =
+          RaiseFailure::deviceLibraryLinkFailed(KernelName, OCMLLinkErr);
+      return Result;
+    }
+  }
+
+  // TDM emulation runtime:
   // The cross-target VIMAGE handler emits calls to
   // `hotswap_tdm_load_to_lds` / `hotswap_tdm_store_from_lds` (declared,
   // no body) when the compilation target lacks the gfx1250 TENSORcnt

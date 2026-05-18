@@ -10,7 +10,9 @@
 #define COMGR_DEVICE_LIBS_H
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include <string>
 #include <tuple>
 
 namespace COMGR {
@@ -22,6 +24,22 @@ llvm::ArrayRef<unsigned char> getDeviceLibrariesIdentifier();
 llvm::StringRef getOpenCLCBaseHeaderContents();
 llvm::ArrayRef<std::tuple<llvm::StringRef, llvm::StringRef>>
 getDeviceLibraries();
+
+// Select the embedded device-library modules needed to resolve and inline OCML
+// math entry points for a target ISA using COMGR's default math-control
+// policy. The returned list is ordered for link-on-needed use: primary OCML /
+// OCKL libraries first, then OCLC control libraries that resolve
+// `__oclc_*` constants referenced by OCML.
+//
+// This mirrors the no-user-math-flags defaults used by COMGR's clang path:
+// ABI v6, finite-only off, unsafe-math off, target ISA control, and
+// target-wavefront-size control. Callers that need different math controls
+// should add explicit parameters here rather than selecting OCLC modules
+// ad hoc at the call site.
+bool getOCMLDeviceLibraryNames(llvm::StringRef TargetIsa,
+                               unsigned TargetWaveSize,
+                               llvm::SmallVectorImpl<std::string> &Names,
+                               std::string &Error);
 
 } // namespace COMGR
 
