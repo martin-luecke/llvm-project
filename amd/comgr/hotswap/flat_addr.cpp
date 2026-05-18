@@ -3,6 +3,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <string>
@@ -13,15 +14,27 @@ namespace transpiler {
 
 namespace {
 
+int64_t decodeGlobalFlatOffset(int64_t RawOffset) {
+  // LLVM's AMDGPU TableGen models these memory operands as `flat_offset`
+  // (FLATInstructions.td), which is the signed 24-bit offset field shared by
+  // gfx12 GLOBAL and FLAT/SADDR forms. The MC operand can arrive as the raw
+  // encoded field, so normalize it once at the shared address decoder.
+  constexpr unsigned GlobalFlatOffsetBits = 24;
+  return SignExtend64<GlobalFlatOffsetBits>(static_cast<uint64_t>(RawOffset));
+}
+
 // Scan the operand tail (at and after `immStart`) for the first immediate
 // and return its value. Any later imms are encoding flags (cpol, th,
-// scope) and are ignored. Signed 13-bit offset; already sign-extended
-// by the MC layer.
+// scope) and are ignored. GLOBAL/FLAT memory offsets are signed byte offsets,
+// but the MC operand can surface the encoded 24-bit field as an unsigned
+// bit-pattern (for example `offset:-19200` as `0xffb000`). Sign-extend here
+// before materialising the GEP; otherwise a negative source offset becomes a
+// huge positive target address and guarded loads can fault.
 int64_t firstImmOffset(const DecodedInst &di, OpResolver &op,
                        unsigned immStart) {
   for (unsigned k = immStart; k < op.nSrcs(); ++k) {
     if (di.isImm(op.srcIdx(k)))
-      return di.getImm(op.srcIdx(k));
+      return decodeGlobalFlatOffset(di.getImm(op.srcIdx(k)));
   }
   return 0;
 }
