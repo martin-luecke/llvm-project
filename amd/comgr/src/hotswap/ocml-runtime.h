@@ -22,11 +22,13 @@ namespace COMGR::hotswap {
 
 // Stable OCML symbol used by native gfx942 Triton/TorchInductor tanh lowering.
 inline constexpr llvm::StringRef kOCMLTanhF32Symbol = "__ocml_tanh_f32";
+inline constexpr llvm::StringRef kOCMLTanhF16Symbol = "__ocml_tanh_f16";
 
-// Declare the OCML f32 tanh helper in the raised module. The raiser resolves
-// this declaration by link-merging COMGR's embedded OCML bitcode before IR
+// Declare the OCML tanh helpers in the raised module. The raiser resolves
+// these declarations by link-merging COMGR's embedded OCML bitcode before IR
 // verification and codegen.
 llvm::FunctionCallee declareOCMLTanhF32(llvm::Module &M);
+llvm::FunctionCallee declareOCMLTanhF16(llvm::Module &M);
 
 // True iff the raised module references OCML helper calls that must be resolved
 // before final lowering.

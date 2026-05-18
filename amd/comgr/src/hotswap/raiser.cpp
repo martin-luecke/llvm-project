@@ -1302,6 +1302,24 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
     PromoteMemToReg(Allocas, DT, &AC);
   }
 
+  // ==== Phase 6.3: Link and inline OCML device-library helpers ====
+  // OCML-backed VALU lifts emit declared helper calls such as
+  // `__ocml_tanh_f32` / `__ocml_tanh_f16`.  Resolve and inline those calls
+  // before the cross-lane rewrite so the DPP/readlane/writelane use-chain
+  // classifier sees the actual arithmetic IR, not an unresolved ordinary call
+  // that must conservatively be treated as an SGPR-forced/unknown consumer.
+  if (moduleUsesOCMLRuntime(M)) {
+    StringRef OCMLTargetCpu = TargetCpu.empty() ? SourceCpu : TargetCpu;
+    std::string OCMLLinkErr;
+    if (!linkOCMLRuntime(M, OCMLTargetCpu, TargetIsa.WaveSize, OCMLLinkErr)) {
+      errs() << "transpiler: OCML device-library link failed for kernel '"
+             << KernelName << "'\n";
+      Result.Failure =
+          RaiseFailure::deviceLibraryLinkFailed(KernelName, OCMLLinkErr);
+      return Result;
+    }
+  }
+
   // (Former Phase 6.035 "permlane16-swap-selfpreserve" and Phase
   // 6.04 "permlane16-xor3-partner" rewrites were deleted after
   // the asymmetric `v_permlane16_swap_b32` lift landed -- see
@@ -1585,26 +1603,7 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
     }
   }
 
-  // ==== Phase 6.7: Link OCML / TDM helper runtimes ====
-  // `v_tanh_f32` is raised through the native gfx942 Triton policy: recover the
-  // OCML source intent (`__ocml_tanh_f32`) and link COMGR's embedded device
-  // libraries, rather than re-emitting gfx1250's target-gated
-  // `llvm.amdgcn.tanh` intrinsic or a hand-written approximation. The helper
-  // call chain is inlined here before verification/lowering so final IR has no
-  // unresolved OCML device-call ABI.
-  if (moduleUsesOCMLRuntime(M)) {
-    StringRef OCMLTargetCpu = TargetCpu.empty() ? SourceCpu : TargetCpu;
-    std::string OCMLLinkErr;
-    if (!linkOCMLRuntime(M, OCMLTargetCpu, TargetIsa.WaveSize, OCMLLinkErr)) {
-      errs() << "transpiler: OCML device-library link failed for kernel '"
-             << KernelName << "'\n";
-      Result.Failure =
-          RaiseFailure::deviceLibraryLinkFailed(KernelName, OCMLLinkErr);
-      return Result;
-    }
-  }
-
-  // TDM emulation runtime:
+  // ==== Phase 6.7: Link TDM emulation runtime ====
   // The cross-target VIMAGE handler emits calls to
   // `hotswap_tdm_load_to_lds` / `hotswap_tdm_store_from_lds` (declared,
   // no body) when the compilation target lacks the gfx1250 TENSORcnt

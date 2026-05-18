@@ -177,6 +177,21 @@ TEST(OpcodeMap, Gfx1250TanhF32RealOpcodeMapsToCanonicalOp) {
             COMGR::hotswap::CanonicalOp::V_TANH_F32);
 }
 
+TEST(OpcodeMap, Gfx1250TanhF16RealOpcodeMapsToCanonicalOp) {
+  ensureAMDGPURegistered();
+
+  COMGR::hotswap::MCState State;
+  llvm::cantFail(COMGR::hotswap::initMCState(State, "gfx1250"));
+
+  COMGR::hotswap::OpcodeMap Map;
+  Map.build(*State.InstrInfo);
+
+  EXPECT_EQ(Map.lookup(llvm::AMDGPU::V_TANH_F16V_TANH_F16_t16_e64_gfx1250),
+            COMGR::hotswap::CanonicalOp::V_TANH_F16);
+  EXPECT_EQ(Map.lookup(llvm::AMDGPU::V_TANH_F16V_TANH_F16_fake16_e64_gfx1250),
+            COMGR::hotswap::CanonicalOp::V_TANH_F16);
+}
+
 TEST(OpcodeMap, Gfx1250AddSubNcI16RealOpcodesMapToSemOps) {
   ensureAMDGPURegistered();
 

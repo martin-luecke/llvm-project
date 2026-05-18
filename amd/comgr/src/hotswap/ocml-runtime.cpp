@@ -47,6 +47,11 @@ llvm::FunctionType *ocmlTanhF32FnTy(llvm::LLVMContext &C) {
   return llvm::FunctionType::get(F32, {F32}, /*isVarArg=*/false);
 }
 
+llvm::FunctionType *ocmlTanhF16FnTy(llvm::LLVMContext &C) {
+  llvm::Type *F16 = llvm::Type::getHalfTy(C);
+  return llvm::FunctionType::get(F16, {F16}, /*isVarArg=*/false);
+}
+
 void setFailure(std::string &FailureDetail, const llvm::Twine &Detail) {
   FailureDetail = Detail.str();
 }
@@ -107,6 +112,9 @@ bool linkOCMLAndSupportLibraries(llvm::Module &M, llvm::StringRef TargetIsa,
                                  unsigned TargetWaveSize,
                                  DeviceLibLinkState &State,
                                  std::string &FailureDetail) {
+  const bool NeedsTanhF32 = M.getFunction(kOCMLTanhF32Symbol) != nullptr;
+  const bool NeedsTanhF16 = M.getFunction(kOCMLTanhF16Symbol) != nullptr;
+
   llvm::SmallVector<std::string, 8> DeviceLibNames;
   std::string SelectionError;
   if (!COMGR::getOCMLDeviceLibraryNames(TargetIsa, TargetWaveSize,
@@ -132,12 +140,22 @@ bool linkOCMLAndSupportLibraries(llvm::Module &M, llvm::StringRef TargetIsa,
       return false;
   }
 
-  llvm::Function *TanhFn = M.getFunction(kOCMLTanhF32Symbol);
-  if (!TanhFn || TanhFn->isDeclaration()) {
+  auto CheckResolved = [&](llvm::StringRef Symbol) {
+    llvm::Function *TanhFn = M.getFunction(Symbol);
+    return TanhFn && !TanhFn->isDeclaration();
+  };
+
+  if ((NeedsTanhF32 && !CheckResolved(kOCMLTanhF32Symbol)) ||
+      (NeedsTanhF16 && !CheckResolved(kOCMLTanhF16Symbol))) {
+    llvm::StringRef Missing =
+        NeedsTanhF32 && !CheckResolved(kOCMLTanhF32Symbol)
+            ? kOCMLTanhF32Symbol
+            : kOCMLTanhF16Symbol;
     setFailure(FailureDetail,
                llvm::Twine("embedded OCML bitcode does not define ") +
-                   kOCMLTanhF32Symbol +
-                   "; cannot lower v_tanh_f32 without a resolved OCML body");
+                   Missing +
+                   "; cannot lower requested OCML helper without a resolved "
+                   "device-library body");
     llvm::errs() << "transpiler: " << FailureDetail << "\n";
     return false;
   }
@@ -243,8 +261,14 @@ llvm::FunctionCallee declareOCMLTanhF32(llvm::Module &M) {
                                ocmlTanhF32FnTy(M.getContext()));
 }
 
+llvm::FunctionCallee declareOCMLTanhF16(llvm::Module &M) {
+  return M.getOrInsertFunction(kOCMLTanhF16Symbol,
+                               ocmlTanhF16FnTy(M.getContext()));
+}
+
 bool moduleUsesOCMLRuntime(const llvm::Module &M) {
-  return M.getFunction(kOCMLTanhF32Symbol) != nullptr;
+  return M.getFunction(kOCMLTanhF32Symbol) != nullptr ||
+         M.getFunction(kOCMLTanhF16Symbol) != nullptr;
 }
 
 bool linkOCMLRuntime(llvm::Module &M, llvm::StringRef TargetIsa,
@@ -259,10 +283,11 @@ bool linkOCMLRuntime(llvm::Module &M, llvm::StringRef TargetIsa,
 
   runGlobalDCE(M);
 
-  if (hasDirectCallTo(M, kOCMLTanhF32Symbol)) {
+  if (hasDirectCallTo(M, kOCMLTanhF32Symbol) ||
+      hasDirectCallTo(M, kOCMLTanhF16Symbol)) {
     setFailure(FailureDetail,
-               "OCML tanh helper call remained after inlining; refusing to "
-               "leave a device-call ABI for v_tanh_f32");
+               "OCML helper call remained after inlining; refusing to leave a "
+               "device-call ABI");
     llvm::errs() << "transpiler: " << FailureDetail << "\n";
     return false;
   }
@@ -271,7 +296,7 @@ bool linkOCMLRuntime(llvm::Module &M, llvm::StringRef TargetIsa,
   if (hasUnresolvedDeviceLibraryReference(M, Detail)) {
     setFailure(FailureDetail,
                llvm::Twine(Detail) +
-                   "; refusing to leave a device-library ABI for v_tanh_f32");
+                   "; refusing to leave a device-library ABI");
     llvm::errs() << "transpiler: " << FailureDetail << "\n";
     return false;
   }
