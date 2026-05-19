@@ -3,11 +3,9 @@
 ; RUN: raise_cli %t.hsaco --target-isa=gfx1250 --emit-ir=v_tanh_f32_kernel 2>&1 | %FileCheck %s --check-prefix=SAME
 ; RUN: %not %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_tanh_f32_omod_refuse_kernel 2>&1 | %FileCheck %s --check-prefix=MOD
 ;
-; Issue #66 policy: gfx1250 `v_tanh_f32` is supported by recovering the native
-; gfx942 Triton/OCML intent (`__ocml_tanh_f32`) and linking COMGR's embedded
-; OCML device library. This is not a claim that OCML exactly matches the
-; hardware TanhCubicApproximation. Non-default VOP3 output modifiers still
-; refuse until modeled exactly.
+; Targets with native tanh support keep the AMDGPU intrinsic path. Cross-target
+; lifts to targets without native tanh support use the matching OCML entry point
+; and inline the linked device-library body before final lowering.
 
 ; IR-LABEL: define amdgpu_kernel void @v_tanh_f32_kernel(
 ; IR: __ocml_tanh_f32.exit:

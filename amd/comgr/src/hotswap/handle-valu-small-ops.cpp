@@ -515,10 +515,9 @@ HandlerResult handleValuSmallOps(RaiseContext &Ctx, const DecodedInst &Di,
       return Hr;
     }
 
-    // Issue #66 policy for gfx1250 -> gfx942: recover the OCML source intent
-    // native Triton/gfx942 keeps as `__ocml_tanh_f32`. This is not a proof
-    // that OCML exactly matches the hardware TanhCubicApproximation, so targets
-    // that can lower the native intrinsic above keep the hardware path.
+    // Targets without a native tanh instruction lower through OCML rather than
+    // a local arithmetic approximation. Native-capable targets keep the
+    // intrinsic path above.
     FunctionCallee TanhFn = declareOCMLTanhF32(Ctx.M);
     Ctx.writeReg32(Op.dst(),
                    Ctx.B.CreateBitCast(

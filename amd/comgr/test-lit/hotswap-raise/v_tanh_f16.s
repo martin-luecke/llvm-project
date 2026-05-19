@@ -6,9 +6,10 @@
 ; RUN: raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_tanh_f16_dpp_kernel 2>&1 | %FileCheck %s --check-prefix=DPP
 ; RUN: %not %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_tanh_f16_omod_refuse_kernel 2>&1 | %FileCheck %s --check-prefix=MOD
 ;
-; OCML exposes `__ocml_tanh_f16`, so the cross-target policy mirrors
-; `v_tanh_f32`: recover the OCML-backed tanh intent, link COMGR's embedded
-; device library, inline it, and refuse non-default output modifiers.
+; F16 tanh uses the native AMDGPU intrinsic when the target can select it.
+; Cross-target lifts to targets without native tanh support use
+; `__ocml_tanh_f16`, then inline the linked device-library body before final
+; lowering.
 
 ; IR-LABEL: define amdgpu_kernel void @v_tanh_f16_kernel(
 ; IR-NOT: call {{.*}}@__ocml_tanh_f16
