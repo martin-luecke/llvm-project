@@ -20,7 +20,7 @@ class Module;
 
 namespace COMGR::hotswap {
 
-// Stable OCML symbol used by native gfx942 Triton/TorchInductor tanh lowering.
+// OCML entry points used by HotSwap tanh lowering.
 inline constexpr llvm::StringRef kOCMLTanhF32Symbol = "__ocml_tanh_f32";
 inline constexpr llvm::StringRef kOCMLTanhF16Symbol = "__ocml_tanh_f16";
 
@@ -37,7 +37,7 @@ bool moduleUsesOCMLRuntime(const llvm::Module &M);
 // Link the embedded OCML/device-library bitcode needed by the module, inline
 // the helper call chain, and DCE linked library bodies that are no longer
 // reachable. Returns false after printing a precise diagnostic on failure.
-bool linkOCMLRuntime(llvm::Module &M, llvm::StringRef TargetIsa,
+bool linkOCMLRuntime(llvm::Module &M, llvm::StringRef TargetProcessor,
                      unsigned TargetWaveSize, std::string &FailureDetail);
 
 } // namespace COMGR::hotswap

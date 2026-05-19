@@ -5,6 +5,14 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
+//
+// OCML-backed handlers initially emit declarations such as
+// `__ocml_tanh_f32`. This file resolves those declarations from COMGR's
+// embedded device-library bitcode, inlines the imported helper bodies, and
+// removes unused library code before later raise pipeline stages inspect the
+// IR. Final lowered IR must not depend on a device-call ABI for these helpers.
+//
+//===----------------------------------------------------------------------===//
 
 #include "ocml-runtime.h"
 
@@ -38,6 +46,10 @@ struct DeviceLibRef {
   llvm::StringRef Contents;
 };
 
+// `LinkOnlyNeeded` reports the globals imported from each device-library module
+// through an internalization callback. Keep that set so later inlining is
+// limited to linked device-library bodies, not arbitrary local functions in the
+// raised kernel module.
 struct DeviceLibLinkState {
   llvm::StringSet<> LinkedSymbols;
 };
@@ -108,7 +120,8 @@ bool linkDeviceLibrary(llvm::Module &M, DeviceLibRef Lib,
   return true;
 }
 
-bool linkOCMLAndSupportLibraries(llvm::Module &M, llvm::StringRef TargetIsa,
+bool linkOCMLAndSupportLibraries(llvm::Module &M,
+                                 llvm::StringRef TargetProcessor,
                                  unsigned TargetWaveSize,
                                  DeviceLibLinkState &State,
                                  std::string &FailureDetail) {
@@ -117,7 +130,7 @@ bool linkOCMLAndSupportLibraries(llvm::Module &M, llvm::StringRef TargetIsa,
 
   llvm::SmallVector<std::string, 8> DeviceLibNames;
   std::string SelectionError;
-  if (!COMGR::getOCMLDeviceLibraryNames(TargetIsa, TargetWaveSize,
+  if (!COMGR::getOCMLDeviceLibraryNames(TargetProcessor, TargetWaveSize,
                                         DeviceLibNames, SelectionError)) {
     setFailure(FailureDetail, SelectionError);
     llvm::errs() << "transpiler: " << FailureDetail << "\n";
@@ -178,6 +191,10 @@ bool isInlineableDeviceLibCallee(llvm::Function &F,
 bool inlineDeviceLibraryCallSites(llvm::Module &M,
                                   const DeviceLibLinkState &State,
                                   std::string &FailureDetail) {
+  // Inline imported helper calls explicitly instead of relying on a later
+  // optimizer pipeline: HotSwap needs a hard failure if a device-library call
+  // would remain in final IR, and `State` scopes the transformation to symbols
+  // imported by the linker above.
   bool Changed = true;
   while (Changed) {
     Changed = false;
@@ -271,10 +288,10 @@ bool moduleUsesOCMLRuntime(const llvm::Module &M) {
          M.getFunction(kOCMLTanhF16Symbol) != nullptr;
 }
 
-bool linkOCMLRuntime(llvm::Module &M, llvm::StringRef TargetIsa,
+bool linkOCMLRuntime(llvm::Module &M, llvm::StringRef TargetProcessor,
                      unsigned TargetWaveSize, std::string &FailureDetail) {
   DeviceLibLinkState State;
-  if (!linkOCMLAndSupportLibraries(M, TargetIsa, TargetWaveSize, State,
+  if (!linkOCMLAndSupportLibraries(M, TargetProcessor, TargetWaveSize, State,
                                    FailureDetail))
     return false;
 
