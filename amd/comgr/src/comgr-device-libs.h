@@ -36,7 +36,7 @@ getDeviceLibraries();
 // target-wavefront-size control. Callers that need different math controls
 // should add explicit parameters here rather than selecting OCLC modules
 // ad hoc at the call site.
-bool getOCMLDeviceLibraryNames(llvm::StringRef TargetIsa,
+bool getOCMLDeviceLibraryNames(llvm::StringRef TargetProcessor,
                                unsigned TargetWaveSize,
                                llvm::SmallVectorImpl<std::string> &Names,
                                std::string &Error);

@@ -71,7 +71,13 @@ TEST(DeviceLibs, SelectOCMLSupportLibrariesRejectsInvalidInputs) {
   std::string Error;
   EXPECT_FALSE(COMGR::getOCMLDeviceLibraryNames("amdgcn-amd-amdhsa--gfx942",
                                                 64, Names, Error));
-  EXPECT_NE(Error.find("does not name a gfx processor"), std::string::npos)
+  EXPECT_NE(Error.find("target processor"), std::string::npos)
+      << Error;
+
+  Error.clear();
+  EXPECT_FALSE(COMGR::getOCMLDeviceLibraryNames("gfx999", 64, Names, Error));
+  EXPECT_NE(Error.find("no embedded OCML ISA control library"),
+            std::string::npos)
       << Error;
 
   Error.clear();

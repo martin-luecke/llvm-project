@@ -20,6 +20,7 @@
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/Twine.h"
 #include <cstdint>
+#include <optional>
 
 using namespace llvm;
 
@@ -52,15 +53,74 @@ getDeviceLibraries() {
   return DeviceLibs;
 }
 
-bool getOCMLDeviceLibraryNames(llvm::StringRef TargetIsa,
+namespace {
+
+struct IsaLibraryEntry {
+  llvm::StringRef GfxIp;
+  llvm::StringRef Name;
+};
+
+llvm::ArrayRef<IsaLibraryEntry> getIsaLibraryEntries() {
+  static const IsaLibraryEntry Entries[] = {
+#define AMD_DEVICE_LIBS_TARGET(target)
+#define AMD_DEVICE_LIBS_GFXIP(target, gfxip)                                   \
+  {gfxip, #target ".bc"},
+#define AMD_DEVICE_LIBS_FUNCTION(target, function)
+#include "libraries_defs.inc"
+  };
+  return Entries;
+}
+
+std::optional<llvm::StringRef> selectIsaLibraryName(llvm::StringRef GfxIp) {
+  for (const IsaLibraryEntry &Entry : getIsaLibraryEntries()) {
+    if (Entry.GfxIp == GfxIp)
+      return Entry.Name;
+  }
+  return std::nullopt;
+}
+
+bool hasEmbeddedDeviceLibrary(llvm::StringRef Name) {
+  for (const auto &Lib : getDeviceLibraries()) {
+    if (std::get<0>(Lib) == Name)
+      return true;
+  }
+  return false;
+}
+
+bool validateSelectedDeviceLibraries(llvm::ArrayRef<llvm::StringRef> Names,
+                                     std::string &Error) {
+  for (llvm::StringRef Name : Names) {
+    if (hasEmbeddedDeviceLibrary(Name))
+      continue;
+    Error = (Twine("selected OCML device library '") + Name +
+             "' is not embedded in this COMGR build")
+                .str();
+    return false;
+  }
+  return true;
+}
+
+} // namespace
+
+bool getOCMLDeviceLibraryNames(llvm::StringRef TargetProcessor,
                                unsigned TargetWaveSize,
                                llvm::SmallVectorImpl<std::string> &Names,
                                std::string &Error) {
   Names.clear();
 
-  if (!TargetIsa.consume_front("gfx")) {
-    Error = (Twine("target ISA '") + TargetIsa +
+  llvm::StringRef GfxIp = TargetProcessor;
+  if (!GfxIp.consume_front("gfx") || GfxIp.empty()) {
+    Error = (Twine("target processor '") + TargetProcessor +
              "' does not name a gfx processor").str();
+    return false;
+  }
+
+  std::optional<llvm::StringRef> IsaLibraryName =
+      selectIsaLibraryName(GfxIp);
+  if (!IsaLibraryName) {
+    Error = (Twine("no embedded OCML ISA control library for target processor '") +
+             TargetProcessor + "'")
+                .str();
     return false;
   }
 
@@ -71,20 +131,21 @@ bool getOCMLDeviceLibraryNames(llvm::StringRef TargetIsa,
     return false;
   }
 
-  std::string IsaSuffix = TargetIsa.str();
-  for (char &C : IsaSuffix) {
-    if (C == '-')
-      C = '_';
-  }
+  llvm::SmallVector<llvm::StringRef, 8> Selected = {
+      "ocml.bc",
+      "ockl.bc",
+      "oclc_abi_version_600.bc",
+      *IsaLibraryName,
+      "oclc_finite_only_off.bc",
+      "oclc_unsafe_math_off.bc",
+      TargetWaveSize == 64 ? "oclc_wavefrontsize64_on.bc"
+                           : "oclc_wavefrontsize64_off.bc",
+  };
+  if (!validateSelectedDeviceLibraries(Selected, Error))
+    return false;
 
-  Names.push_back("ocml.bc");
-  Names.push_back("ockl.bc");
-  Names.push_back("oclc_abi_version_600.bc");
-  Names.push_back("oclc_isa_version_" + IsaSuffix + ".bc");
-  Names.push_back("oclc_finite_only_off.bc");
-  Names.push_back("oclc_unsafe_math_off.bc");
-  Names.push_back(TargetWaveSize == 64 ? "oclc_wavefrontsize64_on.bc"
-                                       : "oclc_wavefrontsize64_off.bc");
+  for (llvm::StringRef Name : Selected)
+    Names.push_back(Name.str());
   return true;
 }
 
