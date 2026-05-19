@@ -82,6 +82,14 @@ bool readOptionalVOP3F16SrcMods(const DecodedInst &Di, HandlerResult &Hr,
 
 Value *readOpSelF16FromMods(RaiseContext &Ctx, OpResolver &Op,
                             unsigned SrcIndex, unsigned Mods) {
+  // Modifier layout for decoded VOP3 F16 operands:
+  //   NEG       - negate the selected F16 value
+  //   ABS       - take fabs before negation, matching AMDGPU source-mod order
+  //   OP_SEL_0  - select bits [31:16] instead of bits [15:0]
+  //
+  // The containing register is still read as an i32 because the register file
+  // stores VGPR dwords. We select the requested half, bitcast those 16 bits to
+  // `half`, then apply arithmetic source modifiers.
   Type *I16Ty = Type::getInt16Ty(Ctx.C);
   Value *Raw = Op.src(SrcIndex);
   if ((Mods & SISrcMods::OP_SEL_0) != 0)
@@ -124,6 +132,9 @@ bool readVOP3F16DstHigh(const DecodedInst &Di, HandlerResult &Hr,
 void writeOpSelF16(RaiseContext &Ctx, OpResolver &Op, Value *Result,
                    bool DstHigh, StringRef MergeLoName,
                    StringRef MergeHiName) {
+  // True16 instructions write one 16-bit lane of a VGPR dword. LLVM IR has no
+  // partial-register write, so model it explicitly as a read/modify/write:
+  // preserve the old opposite half and OR in the new result bits.
   Type *I16Ty = Type::getInt16Ty(Ctx.C);
   Value *Bits =
       Ctx.B.CreateZExt(Ctx.B.CreateBitCast(Result, I16Ty), Ctx.I32Ty);
