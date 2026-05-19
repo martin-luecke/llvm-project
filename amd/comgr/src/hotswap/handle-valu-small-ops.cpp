@@ -7,10 +7,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "handle-valu-internal.h"
+#include "handle-valu-f16-utils.h"
 #include "handle-valu-output-mods.h"
 
 #include "canonical-op.h"
-#include "SIDefines.h"
 #include "ocml-runtime.h"
 
 #include "llvm/ADT/SmallVector.h"
@@ -25,76 +25,6 @@
 using namespace llvm;
 
 namespace COMGR::hotswap {
-
-namespace {
-
-bool readOptionalF16TanhMods(const DecodedInst &Di, HandlerResult &Hr,
-                             unsigned &Mods) {
-  Mods = 0;
-  if (Di.NumSrcs == 0)
-    return true;
-
-  unsigned ModIdx = Di.ModMap[0];
-  if (ModIdx == UINT_MAX)
-    return true;
-  if (!Di.isImm(ModIdx)) {
-    Hr.Failure = RaiseFailure::unsupportedShape(
-        Di, "VOP3",
-        "V_TANH_F16 has malformed source modifiers; operand table layout does "
-        "not match the expected VOP3 true16 profile");
-    return false;
-  }
-
-  int64_t Raw = Di.getImm(ModIdx);
-  constexpr unsigned AllowedMods =
-      SISrcMods::NEG | SISrcMods::ABS | SISrcMods::OP_SEL_0 |
-      SISrcMods::DST_OP_SEL;
-  if (Raw < 0 || (static_cast<unsigned>(Raw) & ~AllowedMods) != 0) {
-    Hr.Failure = RaiseFailure::unsupportedShape(
-        Di, "VOP3",
-        "V_TANH_F16 has unsupported source modifier bits; only neg/abs and "
-        "true16 op_sel are modeled");
-    return false;
-  }
-
-  Mods = static_cast<unsigned>(Raw);
-  return true;
-}
-
-Value *readF16TanhSource(RaiseContext &Ctx, OpResolver &Op, unsigned Mods) {
-  Type *I16Ty = Type::getInt16Ty(Ctx.C);
-  Value *Raw = Op.src(0);
-  if (Mods & SISrcMods::OP_SEL_0)
-    Raw = Ctx.B.CreateLShr(Raw, 16, "tanh_f16_src_hi");
-  Value *Bits = Ctx.B.CreateTrunc(Raw, I16Ty);
-  Value *Src = Ctx.B.CreateBitCast(Bits, Ctx.F16Ty);
-  if (Mods & SISrcMods::ABS)
-    Src = Ctx.B.CreateUnaryIntrinsic(Intrinsic::fabs, Src, nullptr,
-                                     "tanh_f16_abs");
-  if (Mods & SISrcMods::NEG)
-    Src = Ctx.B.CreateFNeg(Src, "tanh_f16_neg");
-  return Src;
-}
-
-void writeF16TanhResult(RaiseContext &Ctx, OpResolver &Op, Value *Result,
-                        bool DstHigh) {
-  Type *I16Ty = Type::getInt16Ty(Ctx.C);
-  Value *Bits =
-      Ctx.B.CreateZExt(Ctx.B.CreateBitCast(Result, I16Ty), Ctx.I32Ty);
-  Value *Old = Ctx.Regs.readReg32(Ctx.B, Op.dst());
-  if (!DstHigh) {
-    Value *High =
-        Ctx.B.CreateAnd(Old, ConstantInt::get(Ctx.I32Ty, 0xFFFF0000u));
-    Ctx.writeReg32(Op.dst(), Ctx.B.CreateOr(High, Bits, "tanh_f16_merge_lo"));
-    return;
-  }
-
-  Value *Low = Ctx.B.CreateAnd(Old, ConstantInt::get(Ctx.I32Ty, 0x0000FFFFu));
-  Value *Shifted = Ctx.B.CreateShl(Bits, 16);
-  Ctx.writeReg32(Op.dst(), Ctx.B.CreateOr(Low, Shifted, "tanh_f16_merge_hi"));
-}
-
-} // namespace
 
 // "Small ops": conversions (F32<->{U,I}32, F16<->F32, F16<->{U,I}16, byte
 // extract), F16 two-src arith (add/sub/mul/min/max/mac/fmac), packed
@@ -341,11 +271,16 @@ HandlerResult handleValuSmallOps(RaiseContext &Ctx, const DecodedInst &Di,
     if (!requireDefaultOutputModsIfPresent(Di, Hr))
       return Hr;
 
+    bool DstHigh = false;
     unsigned Mods = 0;
-    if (!readOptionalF16TanhMods(Di, Hr, Mods))
+    if (!readOptionalVOP3F16SrcMods(Di, Hr, 0, "V_TANH_F16", Mods))
+      return Hr;
+    DstHigh = (Mods & SISrcMods::DST_OP_SEL) != 0;
+
+    Value *Src = readOptionalOpSelF16(Ctx, Di, Op, Hr, 0, "V_TANH_F16");
+    if (!Src)
       return Hr;
 
-    Value *Src = readF16TanhSource(Ctx, Op, Mods);
     Value *Result = nullptr;
     if (Ctx.TargetIsa.HasTanhInsts) {
       Function *TanhFn = Intrinsic::getOrInsertDeclaration(
@@ -359,8 +294,8 @@ HandlerResult handleValuSmallOps(RaiseContext &Ctx, const DecodedInst &Di,
       Result = Ctx.B.CreateCall(TanhFn, {Src}, "ocml.tanh_f16");
     }
 
-    writeF16TanhResult(Ctx, Op, Result,
-                       (Mods & SISrcMods::DST_OP_SEL) != 0);
+    writeOpSelF16(Ctx, Op, Result, DstHigh, "tanh_f16_merge_lo",
+                  "tanh_f16_merge_hi");
     Hr.Handled = true;
     return Hr;
   }

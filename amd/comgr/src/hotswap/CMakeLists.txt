@@ -178,6 +178,7 @@ add_library(hotswap-transpiler OBJECT
   mubuf-addr.cpp
   handle-ds.cpp
   handle-valu.cpp
+  handle-valu-f16-utils.cpp
   handle-valu-output-mods.cpp
   handle-valu-small-ops.cpp
   handle-valu-cross-lane.cpp
