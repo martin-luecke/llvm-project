@@ -287,9 +287,8 @@ HandlerResult handleValuSmallOps(RaiseContext &Ctx, const DecodedInst &Di,
           &Ctx.M, Intrinsic::amdgcn_tanh, {Ctx.F16Ty});
       Result = Ctx.B.CreateCall(TanhFn, {Src}, "tanh_f16");
     } else {
-      // OCML exposes `__ocml_tanh_f16`, so this mirrors the F32 recovered
-      // source-intent policy without widening through f32 or inventing a
-      // software approximation.
+      // Targets without a native f16 tanh instruction lower through OCML
+      // rather than widening through f32 or inventing a local approximation.
       FunctionCallee TanhFn = declareOCMLTanhF16(Ctx.M);
       Result = Ctx.B.CreateCall(TanhFn, {Src}, "ocml.tanh_f16");
     }
