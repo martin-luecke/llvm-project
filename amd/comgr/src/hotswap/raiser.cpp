@@ -1302,12 +1302,12 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
     PromoteMemToReg(Allocas, DT, &AC);
   }
 
-  // ==== Phase 6.3: Link and inline OCML device-library helpers ====
-  // OCML-backed VALU lifts emit declared helper calls such as
-  // `__ocml_tanh_f32` / `__ocml_tanh_f16`.  Resolve and inline those calls
-  // before the cross-lane rewrite so the DPP/readlane/writelane use-chain
-  // classifier sees the actual arithmetic IR, not an unresolved ordinary call
-  // that must conservatively be treated as an SGPR-forced/unknown consumer.
+  // ==== Link and inline OCML device-library helpers ====
+  // OCML-backed VALU lifts emit declared helper calls into COMGR's embedded
+  // device libraries. Resolve and inline those calls before the cross-lane
+  // rewrite so the DPP/readlane/writelane use-chain classifier sees the actual
+  // arithmetic IR, not an unresolved ordinary call that must conservatively be
+  // treated as an SGPR-forced/unknown consumer.
   // Linked OCML math bodies are pure arithmetic for this lowering policy; they
   // should not introduce workitem-id predicate-chain structure before the C5
   // classifier below.
