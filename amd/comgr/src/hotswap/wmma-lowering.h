@@ -243,6 +243,117 @@ llvm::Value *emitWMMAScaleF8F6F4toMFMA(
     llvm::Value *matrixBScaleFmt, llvm::Value *scaleSrc1, unsigned aDwords,
     unsigned bDwords);
 
+/// Cross-target gfx1250 -> gfx942 lowering for
+/// `v_wmma_scale_f32_16x16x128_f8f6f4`.
+///
+/// Background
+/// ----------
+/// gfx942 (CDNA3) has neither the scaled-WMMA family (gfx1250-only,
+/// `int_amdgcn_wmma_scale_f32_16x16x128_f8f6f4`) nor the scaled-MFMA
+/// family (gfx950-only, `int_amdgcn_mfma_scale_f32_16x16x128_f8f6f4`).
+/// What gfx942 DOES have is the unscaled K=32 8-bit MFMA family
+/// `int_amdgcn_mfma_f32_16x16x32_{fp8,bf8}_{fp8,bf8}` (declared in
+/// `llvm/include/llvm/IR/IntrinsicsAMDGPU.td:3594` as
+/// `defm int_amdgcn_mfma_f32_16x16x32 : AMDGPUMFp8MfmaIntrinsic<llvm_v4f32_ty>`,
+/// guarded by `FeatureMAIInsts` + `FeatureFP8Insts` -- both present on
+/// the gfx942 ISA in `AMDGPU.td:1813-1821`).
+///
+/// The lowering therefore is a **K-decomposition with software scale
+/// application**: split the K=128 WMMA into 4 chained K=32 MFMAs and
+/// apply the per-K-block UE8M0 scale exponents in IR via `ldexp.f32`
+/// on the accumulator after each MFMA call.
+///
+/// Scope of this draft
+/// -------------------
+///   * Implemented end-to-end for the **f8 x f8** ADwords/BDwords ==
+///     16/16 case (matrix_a_fmt / matrix_b_fmt = FP8 or BF8 only).
+///     The four (FP8|BF8) x (FP8|BF8) combinations dispatch to the
+///     matching `int_amdgcn_mfma_f32_16x16x32_*_*` intrinsic.
+///   * **NOT YET** implemented for fragments whose A or B side is f6
+///     or f4 (ADwords / BDwords in {12, 8}). gfx942 MFMA has no
+///     packed f6 / f4 input, so cross-target lowering would have to
+///     bit-unpack the source fragment in IR, widen each element to
+///     the FP8 binary representation (handling FP6 E2M3 / BF6 E3M2 /
+///     FP4 E2M1 subnormals and exponent-bias re-biasing), then
+///     re-pack as fp8. A skeleton is sketched below behind a
+///     `WIDEN_F6F4_TO_FP8` block, but it returns `nullptr` so the
+///     caller produces a clean unsupportedShape refusal.
+///
+/// Scale interpretation (UE8M0 / MXFP convention)
+/// ----------------------------------------------
+/// The two named-register operands `scale_src0` (matrix A side) and
+/// `scale_src1` (matrix B side) hold 4 packed UE8M0 bytes each (one
+/// per K=32 K-block of the K=128 dimension). For K-block `k` in 0..3:
+///
+///   scaleAByte_k = (scaleSrc0 >> (8 * k)) & 0xFF
+///   scaleBByte_k = (scaleSrc1 >> (8 * k)) & 0xFF
+///   factor_k     = 2 ^ ((scaleAByte_k - 127) + (scaleBByte_k - 127))
+///                = 2 ^ (scaleAByte_k + scaleBByte_k - 254)
+///
+/// We apply `factor_k` by calling `@llvm.ldexp.f32` on the K-block's
+/// MFMA result before adding it to the running f32 accumulator. The
+/// `matrix_a_scale` / `matrix_b_scale` byte-position selectors on
+/// gfx1250 WMMA-scale (i32 operand, 2 bits each, picks WHICH of the
+/// four bytes in `scale_src0` / `scale_src1` corresponds to K-block
+/// 0) and the `matrix_a_scale_fmt` / `matrix_b_scale_fmt` selectors
+/// (3 bits, picks UE8M0 vs the FP8 scale variants) are read at IR-
+/// emission time from the ConstantInt-wrapped named-immediate args.
+/// **First-cut policy** (matches `emitWMMAScaleF8F6F4toMFMA`'s
+/// op_sel = 0 default): assume both scale selectors are 0 (K-block i
+/// reads byte i, scale format is UE8M0). Loud refusal for any other
+/// combination so we never silently mis-apply a scale.
+///
+/// UE8M0 special encodings: 0xFF is the NaN-scale sentinel (the
+/// K-block's contribution must propagate NaN to the result). 0x00
+/// encodes a normal scale of 2^-127. We don't special-case 0xFF in
+/// this draft; `ldexp.f32(x, -127 + 0 ... -127 + 254)` covers all
+/// finite cases and `ldexp` of any finite value with exponent < -127
+/// flushes to 0 (which is correct for normal MXFP values). The 0xFF
+/// NaN propagation is a TODO.
+///
+/// Lane redistribution
+/// -------------------
+/// WMMA is wave32, MFMA is wave64. Per K-block, we extract the
+/// K-block's worth of A and B dwords from the wave32 source layout,
+/// bpermute them into the wave64 MFMA layout (2 dwords per wave64
+/// lane for K=32 8-bit MFMA -- packed as i64), and run one MFMA.
+/// The accumulator stays in wave64 layout across all 4 K-blocks and
+/// is gathered back to the wave32 output layout exactly once at the
+/// end.
+///
+/// **Lane-layout caveat (sketch-grade).** The byte-exact wave32 -> wave64
+/// redistribution for K=128 8-bit WMMA is not the same as the K=64 8-bit
+/// case handled by `runGroupPass`'s `redistributeInput` (K-stripe doubles
+/// again; the per-GPR K-range goes 0..7 / 8..15 / .. on wave32 vs the
+/// MFMA's per-lane K-stripe of 8). This draft reuses the same
+/// 4-lane-group + AddrLo / AddrHi address pattern but does NOT claim
+/// byte-exact correctness for K=128 -- see the `// TODO(K=128 layout)`
+/// markers in `redistributeF8F6F4InputForK128` for the spec gaps that
+/// need pinning by the AMD Matrix Instruction Calculator before this
+/// can be promoted out of draft status.
+///
+/// EXEC handling
+/// -------------
+/// Same as `emitWMMAtoMFMA` / `emitWMMAScaleF8F6F4toMFMA` -- the chain
+/// runs under the kernel-wide HW EXEC = -1 ambient that
+/// `WaveNativeProjection::emitInitialExec` sets via
+/// `@llvm.amdgcn.init_whole_wave`; under MODREP `wrapAsWWMValue`
+/// keeps the MFMA outputs and the collect-stage bpermutes inside
+/// `SIWholeQuadMode`'s WWM bracket. No change vs the existing
+/// helpers.
+///
+/// \returns  `<8 x float>` in wave32 D-layout, or `nullptr` if the
+///           fragment widths or scale selectors are outside the
+///           supported draft scope (caller emits an unsupportedShape
+///           refusal naming the unsupported configuration).
+llvm::Value *emitWMMAScaleF8F6F4toMFMAGfx942(
+    RaiseContext &ctx, llvm::Value *a, llvm::Value *b, llvm::Value *c,
+    llvm::Value *matrixAFmt, llvm::Value *matrixBFmt, llvm::Value *cMod,
+    llvm::Value *matrixAScale, llvm::Value *matrixAScaleFmt,
+    llvm::Value *scaleSrc0, llvm::Value *matrixBScale,
+    llvm::Value *matrixBScaleFmt, llvm::Value *scaleSrc1, unsigned aDwords,
+    unsigned bDwords);
+
 } // namespace COMGR::hotswap
 
 #endif

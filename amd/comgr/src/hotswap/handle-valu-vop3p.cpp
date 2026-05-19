@@ -1187,17 +1187,38 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
             "(ADwords/BDwords outside f8/f6/f4 set)");
         return Hr;
       }
+    } else if (Ctx.TargetIsa.HasMfma) {
+      // Cross-target gfx1250 -> gfx942 (or any HasMfma target without
+      // gfx950 scaled-F8F6F4 family): K-decomposed unscaled K=32 8-bit
+      // MFMA chain with software UE8M0 scale application. See
+      // `wmma-lowering.h::emitWMMAScaleF8F6F4toMFMAGfx942` for the design
+      // and the open verification items (K=128 lane layout, UE8M0 NaN
+      // propagation, f6 / f4 widening).
+      ResultVal = emitWMMAScaleF8F6F4toMFMAGfx942(
+          Ctx, A, B, C, MatrixAFmt, MatrixBFmt, CMod, MatrixAScale,
+          MatrixAScaleFmt, ScaleSrc0, MatrixBScale, MatrixBScaleFmt,
+          ScaleSrc1, ADwords, BDwords);
+      (void)MatrixAReuse;
+      (void)MatrixBReuse;
+      if (!ResultVal) {
+        Hr.Failure = RaiseFailure::unsupportedShape(
+            Di, "VOP3P",
+            "emitWMMAScaleF8F6F4toMFMAGfx942 refused this configuration. "
+            "Supported in this draft: matrix_a_fmt / matrix_b_fmt in "
+            "{FP8, BF8} (ADwords == BDwords == 16), matrix_*_scale == "
+            "matrix_*_scale_fmt == 0 (canonical UE8M0), single-source-wave "
+            "projection. f6 / f4 fragment widths and non-canonical scale "
+            "selectors are not yet supported.");
+        return Hr;
+      }
     } else {
       Hr.Failure = RaiseFailure::unsupportedInstructionForm(
           Di, "VOP3P",
-          "v_wmma_scale_f32_16x16x128_f8f6f4 requires either hasTensorOps "
-          "(gfx1250 native scaled WMMA, "
-          "int_amdgcn_wmma_scale_f32_16x16x128_f8f6f4) or hasGfx950Insts "
-          "(gfx950 scaled-MFMA F8F6F4, "
-          "int_amdgcn_mfma_scale_f32_16x16x128_f8f6f4 via "
-          "emitWMMAScaleF8F6F4toMFMA); this target has neither.  "
-          "(gfx942 has hasMFMA == true but no scaled-F8F6F4 family; a "
-          "software decomposition is not yet implemented.)");
+          "v_wmma_scale_f32_16x16x128_f8f6f4 requires one of: hasTensorOps "
+          "(gfx1250 native scaled WMMA), hasGfx950Insts (gfx950 scaled-"
+          "MFMA F8F6F4 via emitWMMAScaleF8F6F4toMFMA), or hasMFMA (gfx942 "
+          "K-decomposed unscaled MFMA via emitWMMAScaleF8F6F4toMFMAGfx942)"
+          "; this target has none.");
       return Hr;
     }
 

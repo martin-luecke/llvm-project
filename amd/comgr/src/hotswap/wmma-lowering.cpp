@@ -1083,4 +1083,321 @@ llvm::Value *emitWMMAScaleF8F6F4toMFMA(
                     FixedVectorType::get(ctx.F32Ty, 8));
 }
 
+// ============================================================================
+// gfx1250 v_wmma_scale_f32_16x16x128_f8f6f4 -> gfx942 K-decomposed unscaled
+// fp8/bf8 MFMA chain with software UE8M0 scale application on the result.
+//
+// Design:
+//   1. Dispatch on (matrix_a_fmt, matrix_b_fmt) in {FP8, BF8}^2 to the
+//      matching unscaled gfx942 MFMA intrinsic from the family
+//      `int_amdgcn_mfma_f32_16x16x32_{fp8,bf8}_{fp8,bf8}` (K=32 per call,
+//      `<8 x f32>` partial output, i64 packed A/B inputs --
+//      IntrinsicsAMDGPU.td:3594, defm under FeatureMAIInsts + FeatureFP8Insts
+//      which are both set on gfx942's `FeatureISAVersion9_4_2`).
+//   2. Per K-block (K=128 / K=32 = 4 K-blocks), redistribute the K-block's
+//      slice of A and B from wave32 WMMA layout to wave64 MFMA layout and
+//      call the chosen MFMA with a ZERO accumulator -> unscaled K-block
+//      partial.
+//   3. Apply the combined UE8M0 scale `2^(sA + sB - 254)` to that partial
+//      via a single `<4 x f32>` fmul, then fadd into the running output
+//      accumulator.
+//   4. Repeat for the next K-block; gather wave64 -> wave32 once at end.
+//
+// Why scale the result rather than the inputs?
+//   Within one K-block the per-block UE8M0 scale is constant in K, so it
+//   factors out of the inner sum exactly:
+//     sum_k (A_ik * 2^(sA-127)) * (B_kj * 2^(sB-127))
+//       = 2^(sA + sB - 254) * sum_k A_ik * B_kj.
+//   `ldexp` on f32 is bit-exact (pure exponent shift), so applying the
+//   scale once on the K-block's `<4 x f32>` partial is precision-
+//   equivalent to applying it on every input element -- and far cheaper.
+//
+// Per K=128: 4 MFMA calls + 4 vec fmul + 4 vec fadd + 4 ldexp + 2 scale-
+// src bpermutes + accumulator redistribute + final wave64->wave32 collect.
+// Uses the native fp8/bf8 MFMA family directly, so no input widening and
+// no per-input scale -- the K-block's i64-packed A/B feeds straight into
+// the hardware MFMA.
+//
+// Scope of this draft: fp8 x fp8, fp8 x bf8, bf8 x fp8, bf8 x bf8 (the
+// four (FP8|BF8)^2 combinations supported by the gfx942 MFMA family).
+// f6 / f4 inputs are refused -- gfx942 has no packed-f6 / packed-f4
+// MFMA, and a software widen-to-fp8 lookup table is deferred.
+// ============================================================================
+
+namespace {
+
+// Reuse the same MatrixFMT enum values that SIDefines.h:1052-1058 declares
+// (FP8=0, BF8=1, FP6=2, BF6=3, FP4=4). We cite the values rather than
+// `#include`ing SIDefines.h to keep the hotswap layer's LLVM-internal
+// header surface tight.
+constexpr int FmtFP8 = 0;
+constexpr int FmtBF8 = 1;
+constexpr int FmtFP6 = 2;
+constexpr int FmtBF6 = 3;
+constexpr int FmtFP4 = 4;
+
+// Pick the gfx942 unscaled K=32 8-bit MFMA intrinsic for an (A_fmt, B_fmt)
+// combination of FP8 / BF8. Returns Intrinsic::not_intrinsic for any
+// combination involving f6 / f4 (caller refuses).
+//
+// All four entries in the table are declared together in
+// IntrinsicsAMDGPU.td:3594 (`defm int_amdgcn_mfma_f32_16x16x32 :
+// AMDGPUMFp8MfmaIntrinsic<llvm_v4f32_ty>` which expands to the four
+// `_{bf8,fp8}_{bf8,fp8}` variants -- see the multiclass at
+// IntrinsicsAMDGPU.td:3566). They share the per-lane shape:
+//   (i64 A, i64 B, <4 x f32> Acc, i32 cbsz, i32 abid, i32 blgp) -> <4 x f32>
+Intrinsic::ID pickGfx942F8MfmaIntrinsic(int aFmt, int bFmt) {
+  const bool aIsFp8 = (aFmt == FmtFP8);
+  const bool aIsBf8 = (aFmt == FmtBF8);
+  const bool bIsFp8 = (bFmt == FmtFP8);
+  const bool bIsBf8 = (bFmt == FmtBF8);
+  if (aIsFp8 && bIsFp8) return Intrinsic::amdgcn_mfma_f32_16x16x32_fp8_fp8;
+  if (aIsFp8 && bIsBf8) return Intrinsic::amdgcn_mfma_f32_16x16x32_fp8_bf8;
+  if (aIsBf8 && bIsFp8) return Intrinsic::amdgcn_mfma_f32_16x16x32_bf8_fp8;
+  if (aIsBf8 && bIsBf8) return Intrinsic::amdgcn_mfma_f32_16x16x32_bf8_bf8;
+  return Intrinsic::not_intrinsic;
+}
+
+// Extract byte `k` (0..3) from a 32-bit value as a zero-extended i32.
+// Per-K-block UE8M0 scale extraction.
+Value *extractScaleByte(IRBuilder<> &B, Value *Scale32, unsigned k) {
+  Value *Shifted = B.CreateLShr(Scale32, B.getInt32(8 * k), "scale_shr");
+  return B.CreateAnd(Shifted, B.getInt32(0xFF), "scale_byte");
+}
+
+// Build a `<4 x float>` splat of `2^(scaleAByte + scaleBByte - 254)` for
+// the K-block's combined UE8M0 scale factor.
+//
+// UE8M0 bias: scale_value = 2^(byte - 127). Combined factor for A * B is
+// `2^(byteA + byteB - 254)`. We build it once via scalar `ldexp(1.0, e)`
+// and broadcast for the per-element fmul. `ldexp` on f32 is bit-exact
+// (pure exponent shift), so no precision is lost vs folding the scale
+// into each widened input.
+//
+// NOTE: byteA == 0xFF (UE8M0 NaN sentinel) is NOT special-cased here.
+// Hardware-scaled MFMA on gfx950 propagates NaN to the K-block's
+// contribution; reproducing that requires an explicit
+// `select(byte == 0xFF, NaN_splat, ...)`. Marked TODO in the header.
+Value *buildScaleFactorVec(IRBuilder<> &B, Module &M, Type *F32Ty,
+                            Value *ScaleAByte, Value *ScaleBByte) {
+  Value *Sum = B.CreateAdd(ScaleAByte, ScaleBByte, "scale_sum");
+  Value *Biased = B.CreateSub(Sum, B.getInt32(254), "scale_exp");
+  Function *LdexpFn = Intrinsic::getOrInsertDeclaration(
+      &M, Intrinsic::ldexp, {F32Ty, B.getInt32Ty()});
+  Value *Factor = B.CreateCall(LdexpFn, {ConstantFP::get(F32Ty, 1.0),
+                                          Biased},
+                                "scale_factor");
+  auto *Vec4 = FixedVectorType::get(F32Ty, 4);
+  Value *Splat = B.CreateInsertElement(PoisonValue::get(Vec4), Factor,
+                                       B.getInt32(0), "factor_lane0");
+  return B.CreateShuffleVector(Splat, PoisonValue::get(Vec4),
+                                ArrayRef<int>{0, 0, 0, 0}, "factor_v4");
+}
+
+// Per-K-block redistribution of an 8-bit WMMA fragment (16 i32 dwords /
+// wave32 lane for K=128 fp8/bf8) into the gfx942 MFMA K=32 8-bit per-
+// wave64-lane shape (2 i32 dwords / lane, packed by the caller as i64).
+//
+// K-block-per-dword assumption: wave32 dwords `[4k .. 4k+4)` carry the
+// K-block `k`'s share of the lane's elements. This is the natural
+// extension of the existing K=64 layout (`redistributeInput` block
+// comment, lines 51-65) doubled along K: the K-stripe doubles each time
+// we go from K=32 -> K=64 -> K=128, but the per-K-block dword count
+// per wave32 lane stays at 4. The 4-way LG select / AddrLo+AddrHi
+// pattern below mirrors the existing helper exactly.
+//
+// **DRAFT-GRADE**: the byte-exact wave32 K=128 -> wave64 K=32 mapping
+// needs pinning against the AMD Matrix Instruction Calculator output
+// before promoting out of draft. The implementation assumes a uniform
+// 4x extension of the K=64 layout, which is a reasonable hypothesis
+// but not verified by spec.
+void redistributeF8F6F4InputForK128KBlock(
+    IRBuilder<> &B, Module &M, Value *LaneId,
+    ArrayRef<Value *> WmmaDwords, unsigned kBlock,
+    Value *MfmaOut[2]) {
+  // TODO(K=128 layout): pin against the Matrix Instruction Calculator.
+  Value *LaneMod16 = B.CreateAnd(LaneId, B.getInt32(15), "lane16");
+  Value *LoLane = LaneMod16;
+  Value *HiLane = B.CreateAdd(LaneMod16, B.getInt32(16), "hi_lane");
+  Value *AddrLo = B.CreateShl(LoLane, B.getInt32(2), "addr_lo");
+  Value *AddrHi = B.CreateShl(HiLane, B.getInt32(2), "addr_hi");
+  Value *LaneGroup = B.CreateLShr(LaneId, B.getInt32(4), "lane_grp");
+
+  const unsigned KBase = kBlock * 4;  // 4 wave32 dwords per K-block
+  for (unsigned G = 0; G < 2; ++G) {
+    // 4-way select indexed by lane group (LG0..3); see
+    // `redistributeInput`'s comment for the rationale.
+    Value *V0 = emitDSBpermute(B, M, AddrLo, WmmaDwords[KBase + G]);
+    Value *V1 = emitDSBpermute(B, M, AddrHi, WmmaDwords[KBase + G]);
+    Value *V2 = emitDSBpermute(B, M, AddrLo, WmmaDwords[KBase + 2 + G]);
+    Value *V3 = emitDSBpermute(B, M, AddrHi, WmmaDwords[KBase + 2 + G]);
+    MfmaOut[G] = selectByLaneGroup(B, LaneGroup, V0, V1, V2, V3);
+  }
+}
+
+} // namespace
+
+Value *emitWMMAScaleF8F6F4toMFMAGfx942(
+    RaiseContext &ctx, Value *a, Value *b, Value *c, Value *matrixAFmt,
+    Value *matrixBFmt, Value *cMod, Value *matrixAScale, Value *matrixAScaleFmt,
+    Value *scaleSrc0, Value *matrixBScale, Value *matrixBScaleFmt,
+    Value *scaleSrc1, unsigned aDwords, unsigned bDwords) {
+  IRBuilder<> &B = ctx.B;
+  Module &M = ctx.M;
+
+  // Draft-scope guard: only ADwords == BDwords == 16 (fp8 or bf8) is
+  // supported. f6 / f4 paths need a software widen-to-fp8 lookup table;
+  // refuse with nullptr so the caller emits a clean unsupportedShape
+  // failure.
+  if (aDwords != 16 || bDwords != 16) {
+    // WIDEN_F6F4_TO_FP8: not implemented in this draft.
+    //
+    // For aDwords / bDwords in {12 (f6), 8 (f4)} the per-lane bit
+    // representation is:
+    //   FP6 (E2M3) / BF6 (E3M2): 6 bits per element, packed 4-per-3-bytes.
+    //     Wave32 lane carries 12 dwords = 48 bytes -> 64 fp6 elements.
+    //   FP4 (E2M1): 4 bits per element, 8 per dword. Wave32 lane carries
+    //     8 dwords = 32 bytes -> 64 fp4 elements.
+    //
+    // Widening to fp8 requires:
+    //   1. bit-unpack each element from its packed slot.
+    //   2. lookup table (16 entries for FP4, 64 each for FP6 / BF6) that
+    //      maps the source bit pattern to an FP8 (E4M3 / E5M2) byte,
+    //      handling FP6 / FP4 subnormals and exponent re-biasing.
+    //   3. re-pack 8 fp8 bytes per wave64 lane into i64 for the K=32
+    //      MFMA -- same shape as the fp8/bf8 path below.
+    // Follow-up patch.
+    return nullptr;
+  }
+
+  // Scale-selector draft-scope guard. matrix_*_scale (2-bit byte index)
+  // and matrix_*_scale_fmt (3-bit UE8M0 / FP8 scale-format selector) are
+  // both assumed 0 in this draft. Non-zero values would require a different
+  // byte index per K-block or a non-UE8M0 unbias formula.
+  auto AsConstInt = [](Value *V) -> int64_t {
+    return cast<ConstantInt>(V)->getZExtValue();
+  };
+  if (AsConstInt(matrixAScale) != 0 || AsConstInt(matrixBScale) != 0 ||
+      AsConstInt(matrixAScaleFmt) != 0 || AsConstInt(matrixBScaleFmt) != 0)
+    return nullptr;
+
+  // Format dispatch -- pick the matching fp8/bf8 MFMA intrinsic. f6 / f4
+  // (FmtFP6 / FmtBF6 / FmtFP4) yield Intrinsic::not_intrinsic and are
+  // gated out here (gfx942 has no packed-f6 / packed-f4 MFMA).
+  int aFmt = static_cast<int>(AsConstInt(matrixAFmt));
+  int bFmt = static_cast<int>(AsConstInt(matrixBFmt));
+  Intrinsic::ID MfmaId = pickGfx942F8MfmaIntrinsic(aFmt, bFmt);
+  if (MfmaId == Intrinsic::not_intrinsic)
+    return nullptr;
+
+  // Unpack the wave32-layout WMMA fragments into per-dword arrays.
+  SmallVector<Value *, 16> aDwordsArr(aDwords);
+  SmallVector<Value *, 16> bDwordsArr(bDwords);
+  Value *cDwords[8];
+  unpackDwords(B, a, aDwords, ctx.I32Ty, aDwordsArr.data());
+  unpackDwords(B, b, bDwords, ctx.I32Ty, bDwordsArr.data());
+  unpackDwords(B, c, 8, ctx.I32Ty, cDwords);
+
+  Value *LaneId = emitLaneId(B, M, ctx.I32Ty);
+
+  // Multi-source-wave projection (WaveNative cross-widen) needs two
+  // independent K-decomposed passes mirroring `emitWMMAScaleF8F6F4toMFMA`;
+  // out of scope for the initial draft.
+  const unsigned numSrcWaves = ctx.Projection.numSourceWavesPerTarget();
+  if (numSrcWaves != 1)
+    return nullptr;
+
+  // Redistribute scale_src0 / scale_src1 from `addrLo` so each wave64
+  // lane reads the source-wave32 lane's scale value at the right virtual-
+  // W32 group position. Same pattern as the gfx950 `runScaledPass`. One
+  // bpermute per scale src; all 4 K-block scale bytes ride inside the
+  // same i32 (UE8M0 byte k -> K-block k).
+  Value *LaneMod16 = B.CreateAnd(LaneId, B.getInt32(15), "lane16");
+  Value *AddrLo = B.CreateShl(LaneMod16, B.getInt32(2), "addr_lo");
+  Value *AddrHi = B.CreateShl(
+      B.CreateAdd(LaneMod16, B.getInt32(16)), B.getInt32(2), "addr_hi");
+  Value *LaneGroup = B.CreateLShr(LaneId, B.getInt32(4), "lane_grp");
+
+  Value *ScaleSrc0Pass = emitDSBpermute(B, M, AddrLo, scaleSrc0);
+  Value *ScaleSrc1Pass = emitDSBpermute(B, M, AddrLo, scaleSrc1);
+
+  // Redistribute the accumulator ONCE (wave32 -> wave64). The accumulator
+  // layout is K-invariant (16x16 f32 -> 4 dwords per wave64 lane), so the
+  // existing redistributeAcc helper applies as-is.
+  Value *MfmaC[4];
+  redistributeAcc(B, M, cDwords, AddrLo, AddrHi, LaneGroup, MfmaC);
+
+  auto *AccTy = FixedVectorType::get(ctx.F32Ty, 4);
+  Value *Acc = packDwords(B, MfmaC, 4, ctx.I32Ty, AccTy);
+
+  // Apply C_mod (neg / abs / neg(abs)) on the redistributed accumulator.
+  int64_t cModVal = cast<ConstantInt>(cMod)->getZExtValue();
+  if (cModVal & 2)
+    Acc = B.CreateUnaryIntrinsic(Intrinsic::fabs, Acc, nullptr, "c_abs");
+  if (cModVal & 1)
+    Acc = B.CreateFNeg(Acc, "c_neg");
+
+  // K-loop: 4 K-blocks of K=32 each.
+  //
+  // For each K-block:
+  //   1. Redistribute the K-block's 4 wave32 dwords of A and B into
+  //      2 wave64 dwords per lane (packed as i64).
+  //   2. Call the chosen fp8/bf8 MFMA with a ZERO accumulator to get
+  //      the unscaled K-block partial (`<4 x f32>` per wave64 lane).
+  //   3. Multiply the partial by the combined UE8M0 scale factor
+  //      `2^(sA + sB - 254)` for this K-block.
+  //   4. fadd the scaled partial into the running output accumulator.
+  //
+  // gfx942 fp8/bf8 MFMA signature (IntrinsicsAMDGPU.td:3594):
+  //   (i64 A, i64 B, <4 x f32> Acc, i32 cbsz, i32 abid, i32 blgp) -> <4 x f32>
+  // cbsz / abid / blgp = 0 (no broadcast, no A-id, no neg).
+  Function *MfmaFn = Intrinsic::getOrInsertDeclaration(&M, MfmaId);
+  Value *Cbsz = B.getInt32(0);
+  Value *Abid = B.getInt32(0);
+  Value *Blgp = B.getInt32(0);
+  Value *ZeroAcc = ConstantAggregateZero::get(AccTy);
+
+  for (unsigned kBlock = 0; kBlock < 4; ++kBlock) {
+    Value *MfmaADw[2], *MfmaBDw[2];
+    redistributeF8F6F4InputForK128KBlock(B, M, LaneId, aDwordsArr, kBlock,
+                                          MfmaADw);
+    redistributeF8F6F4InputForK128KBlock(B, M, LaneId, bDwordsArr, kBlock,
+                                          MfmaBDw);
+
+    // The fp8/bf8 MFMA intrinsics take packed i64 A/B (predates first-
+    // class fp8 vector types). Same convention as `runGroupPass`.
+    Value *SrcA = packDwords(B, MfmaADw, 2, ctx.I32Ty, ctx.I64Ty);
+    Value *SrcB = packDwords(B, MfmaBDw, 2, ctx.I32Ty, ctx.I64Ty);
+
+    Value *Partial = ctx.Projection.wrapAsWWMValue(
+        B,
+        B.CreateCall(MfmaFn, {SrcA, SrcB, ZeroAcc, Cbsz, Abid, Blgp},
+                     "kblock_partial"),
+        "kblock_partial_wwm");
+
+    Value *ScaleAByte = extractScaleByte(B, ScaleSrc0Pass, kBlock);
+    Value *ScaleBByte = extractScaleByte(B, ScaleSrc1Pass, kBlock);
+    Value *FactorVec =
+        buildScaleFactorVec(B, M, ctx.F32Ty, ScaleAByte, ScaleBByte);
+    Value *Scaled = B.CreateFMul(Partial, FactorVec, "kblock_scaled");
+
+    Acc = B.CreateFAdd(Acc, Scaled, "kblock_accum");
+  }
+
+  // Gather the wave64-layout accumulator back to wave32 layout.
+  Value *MfmaDst[4];
+  unpackDwords(B, Acc, 4, ctx.I32Ty, MfmaDst);
+
+  Value *W32Lane = B.CreateAnd(LaneId, B.getInt32(31), "w32_lane");
+  Value *ResultDwords[8];
+  collectResult(B, M, MfmaDst, W32Lane, ResultDwords);
+
+  for (unsigned i = 0; i < 8; ++i)
+    ResultDwords[i] = ctx.Projection.wrapAsWWMValue(
+        B, ResultDwords[i], "wmma_scale_gfx942_collect_wwm");
+
+  return packDwords(B, ResultDwords, 8, ctx.I32Ty,
+                    FixedVectorType::get(ctx.F32Ty, 8));
+}
+
 } // namespace COMGR::hotswap

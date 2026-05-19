@@ -1,61 +1,108 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && %not raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=wmma_scale_f32_16x16x128_f8f6f4_kernel 2>&1 | %FileCheck %s --check-prefix=STDERR
+; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=wmma_scale_f32_16x16x128_f8f6f4_kernel 2>&1 | %FileCheck %s --check-prefix=IR_GFX942
 ;
-; Lift refusal test for v_wmma_scale_f32_16x16x128_f8f6f4 (gfx1250
-; RDNA4 VOP3PX2 opcode 0x033, ScaledWMMA family). Pins the contractual
-; cross-target loud-failure behaviour of
-; transpiler/handle_valu_vop3p.cpp under
-; CanonicalOp::V_WMMA_SCALE_F32_16x16x128_F8F6F4. Companion fixture to
-; `wmma_scale_f32_16x16x128_f8f6f4_same_target.ll`, which pins the
-; same-target (gfx1250 -> gfx1250) intrinsic-emit path.
+; Cross-target lift fixture for v_wmma_scale_f32_16x16x128_f8f6f4
+; (gfx1250 RDNA4 source) -> gfx942 (CDNA3 target). Pins the
+; `emitWMMAScaleF8F6F4toMFMAGfx942` path in `wmma_lowering.cpp`
+; dispatched by `ctx.targetIsa.hasMfma && !hasGfx950Insts` in
+; `handle_valu_vop3p.cpp` under
+; `CanonicalOp::V_WMMA_SCALE_F32_16x16x128_F8F6F4`.
 ;
-; gfx942 has no scaled-WMMA hardware AND no scaled-F8F6F4 MFMA family
-; (gfx942's MFMA stops at the non-scaled `mfma_f32_16x16x32_*` shapes;
-; the scaled `int_amdgcn_mfma_scale_f32_16x16x128_f8f6f4`, IntrinsicsAMDGPU.td:3694,
-; is gated on the `FeatureGFX950Insts` subtarget feature and is gfx950+
-; only). The dispatch in `handle_valu_vop3p.cpp` therefore admits two
-; targets and refuses the rest:
+; gfx942 has neither the scaled-WMMA family (gfx1250-only) nor the
+; scaled-MFMA F8F6F4 family (gfx950+, gated on `FeatureGFX950Insts`).
+; The lowering decomposes the K=128 WMMA-scale into 4 chained K=32
+; unscaled fp8/bf8 MFMA calls from the family
+; `int_amdgcn_mfma_f32_16x16x32_{fp8,bf8}_{fp8,bf8}` (IntrinsicsAMDGPU.td:3594,
+; multiclass `AMDGPUMFp8MfmaIntrinsic`, gated on `FeatureMAIInsts` +
+; `FeatureFP8Insts` which are both set on gfx942's `FeatureISAVersion9_4_2`,
+; AMDGPU.td:1813-1821) and applies the per-K-block UE8M0 scale
+; `2^(sA + sB - 254)` on each MFMA's `<4 x f32>` partial via one
+; `llvm.ldexp.f32` + fmul + fadd before accumulating into the running
+; output. The scale-on-output design is precision-equivalent to per-
+; input scaling because UE8M0 is constant in K within a K-block --
+; `ldexp` on f32 is bit-exact, so the per-block exponent factors out
+; of the inner sum.
 ;
-;   - gfx1250 (`hasTensorOps`): emit the native
-;     `int_amdgcn_wmma_scale_f32_16x16x128_f8f6f4` intrinsic.
-;   - gfx950  (`hasGfx950Insts`): rewrite to the gfx950 scaled MFMA via
-;     `wmma_lowering.cpp::emitWMMAScaleF8F6F4toMFMA` (Wave32→Wave64
-;     redistribution + intrinsic swap; no software scale-exponent emul).
-;   - Everything else (gfx942 with `hasMFMA == true` but
-;     `hasGfx950Insts == false`, gfx900, gfx10/11 base, ...): refuse
-;     loudly via `RaiseFailure::unsupportedInstructionForm`.
+; The fixture kernel has `matrix_a_fmt:MATRIX_FMT_BF8` and default
+; `matrix_b_fmt:MATRIX_FMT_FP8`, so the dispatched MFMA intrinsic
+; is `mfma.f32.16x16x32.bf8.fp8`. The matrix_*_scale / matrix_*_scale_fmt
+; immediates default to 0 (canonical UE8M0, byte index k == K-block k).
 ;
-; A WMMA-scale → multi-MFMA decomposition with software scale-exponent
-; application is *possible* on gfx942 but not implemented; per the
-; user-rules (no silent fallbacks), the handler surfaces the capability
-; gap rather than guessing.  The companion gfx950-acceptance RUN line
-; at the bottom of this fixture pins the gfx950 cross-target path; the
-; same-target gfx1250 → gfx1250 RUN line below pins the native-emit
-; path.
+; INVARIANTS PINNED:
 ;
-; We assert two things:
+;   1. Exactly 4 calls to `@llvm.amdgcn.mfma.f32.16x16x32.bf8.fp8`,
+;      one per K-block (K=128 / K=32 = 4). Each call passes a
+;      ZERO `<4 x f32>` accumulator (we accumulate at IR level
+;      after applying the per-K-block scale, not via MFMA chaining,
+;      so each K-block's partial is independent and scale-clean).
 ;
-;   1. The raiser exits non-zero (`%not` inverts the exit code —
-;      the test passes only when raise_cli actually failed).
-;   2. The stderr diagnostic names the offending mnemonic
-;      (`v_wmma_scale_f32_16x16x128_f8f6f4`), the encoding format
-;      (`VOP3P`), and the architectural-mismatch detail. The handler
-;      routes the failure through
-;      `RaiseFailure::unsupportedInstructionForm(di, "VOP3P", detail)`, which
-;      raise_cli then formats as `raise_cli: kernel '<name>' failed
-;      to raise: <mnemonic> [<format>] @offset=0x... :: <detail>`
-;      (raise_cli.cpp). Both the format bucket and the detail text
-;      are pinned so that drift in either surfaces a meaningful
-;      FileCheck failure pointing at the exact change.
+;   2. Per-K-block scale machinery: 4 calls to `llvm.ldexp.f32.i32`
+;      (one per K-block, builds `2^(sA + sB - 254)` from the
+;      `extractScaleByte` outputs). The unbiasing arithmetic uses
+;      `add` + `sub i32 ..., 254`.
+;
+;   3. Per-K-block fmul + fadd on `<4 x f32>` -- 4 fmuls (the
+;      `kblock_scaled` step) and 4 fadds (the `kblock_accum` step).
+;      These are the ONLY application of the UE8M0 scale -- no
+;      per-input fmul/ldexp on widened f32 values.
+;
+;   4. Lane redistribution via `llvm.amdgcn.ds.bpermute` for the
+;      wave32 -> wave64 wave-projection (scale_src0/1 redistribution
+;      + accumulator redistribute + per-K-block A/B redistribution
+;      + final collect). The presence of bpermute is the marker that
+;      we ran the cross-wave-size lowering, not a same-wave-size
+;      shortcut.
+;
+; NEGATIVE PINS:
+;
+;   * NO call to `llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4` --
+;     would mean the gfx942 path silently fell through to the
+;     gfx1250 same-target arm.
+;   * NO call to `llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4` --
+;     would mean the gfx942 path mis-dispatched to the gfx950
+;     cross-target arm (whose intrinsic gfx942 cannot lower).
+;   * NO call to other fp8/bf8 MFMA combinations (fp8.fp8 /
+;     fp8.bf8 / bf8.bf8) -- would mean the (aFmt, bFmt) dispatch
+;     in `pickGfx942F8MfmaIntrinsic` got the wrong intrinsic.
 
-; STDERR: raise_cli: kernel 'wmma_scale_f32_16x16x128_f8f6f4_kernel' failed to raise:
-; STDERR-SAME: v_wmma_scale_f32_16x16x128_f8f6f4
-; STDERR-SAME: [VOP3P]
-; STDERR-SAME: hasTensorOps
-; STDERR-SAME: int_amdgcn_wmma_scale_f32_16x16x128_f8f6f4
-; STDERR-SAME: hasGfx950Insts
-; STDERR-SAME: int_amdgcn_mfma_scale_f32_16x16x128_f8f6f4
-; STDERR-SAME: gfx942
+; IR_GFX942-LABEL: define amdgpu_kernel void @wmma_scale_f32_16x16x128_f8f6f4_kernel(
+
+; The 4 K-block MFMA calls. aFmt = MATRIX_FMT_BF8 (1), bFmt =
+; MATRIX_FMT_FP8 (0, default) -> bf8 x fp8 MFMA family.
+; Zero `<4 x f32>` accumulator per call (we accumulate at IR level
+; after applying the per-K-block scale, NOT via MFMA chaining).
+; IR_GFX942-COUNT-4: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.bf8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
+
+; Per-K-block UE8M0 unbias: `2^(sA + sB - 254)` built via scalar ldexp.
+; IR_GFX942-COUNT-4: call float @llvm.ldexp.f32.i32(float 1.000000e+00, i32 %{{[^)]+}})
+
+; Per-K-block scale-on-output: 4 fmuls (kblock_scaled) + 4 fadds
+; (kblock_accum). No per-input fmul of widened f32 (we never widen).
+; IR_GFX942-COUNT-4: fmul <4 x float>
+; IR_GFX942-COUNT-4: fadd <4 x float>
+
+; UE8M0 byte-extraction arithmetic: per-K-block `sub i32 ..., 254` for
+; the combined biased exponent.
+; IR_GFX942: sub i32 %{{[^,]+}}, 254
+
+; Lane redistribution via ds.bpermute (wave32 -> wave64 cross-wave-size
+; lowering marker).
+; IR_GFX942: call i32 @llvm.amdgcn.ds.bpermute(
+
+; Negative: no native scaled-WMMA intrinsic (would mean the gfx942
+; cross-target dispatch fell through to the gfx1250 same-target arm).
+; IR_GFX942-NOT: @llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4
+
+; Negative: no scaled-MFMA F8F6F4 intrinsic (would mean we
+; mis-dispatched to the gfx950 cross-target arm; gfx942 has no
+; codegen for that intrinsic and llc would crash at lowering).
+; IR_GFX942-NOT: @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4
+
+; Negative: no MFMA combinations other than bf8.fp8 (would mean the
+; (aFmt, bFmt) dispatch in `pickGfx942F8MfmaIntrinsic` is wrong).
+; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.fp8.fp8
+; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.fp8.bf8
+; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.bf8.bf8
 
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx1250 --emit-ir=wmma_scale_f32_16x16x128_f8f6f4_kernel 2>&1 | %FileCheck %s --check-prefix=IR
