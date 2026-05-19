@@ -152,6 +152,7 @@ set(HOTSWAP_HAVE_TDM_RUNTIME ${HOTSWAP_HAVE_TDM_RUNTIME} CACHE INTERNAL
 add_library(hotswap-transpiler OBJECT
   raiser.cpp
   code-object-utils.cpp
+  debug-info.cpp
   mc-state.cpp
   hotswap-error.cpp
   canonical-op.cpp

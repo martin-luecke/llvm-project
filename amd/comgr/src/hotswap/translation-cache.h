@@ -57,6 +57,9 @@ struct TranslationCacheRequest {
   bool EnableWritelaneRewrite = true;
   bool EnableWaveNative = true;
   bool StrictMode = false;
+  /// Folded into the cache key so debug-info and non-debug-info
+  /// translations hash distinctly.
+  bool PreserveDebugInfo = false;
   bool CacheDisabled = true;
   bool CacheReadonly = false;
   bool CollectTimings = false;

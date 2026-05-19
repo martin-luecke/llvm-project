@@ -286,6 +286,7 @@ KeyData buildKeyData(const TranslationCacheRequest &request,
   appendKeyField(material, "enable_writelane_rewrite",
                  request.EnableWritelaneRewrite);
   appendKeyField(material, "enable_wave_native", request.EnableWaveNative);
+  appendKeyField(material, "preserve_debug_info", request.PreserveDebugInfo);
   appendKeyField(material, "hotswap_build_identity", data.buildIdentity);
   appendKeyField(material, "llc_identity", data.llcIdentity);
   appendKeyField(material, "llvm_mc_identity", data.llvmMcIdentity);
@@ -493,6 +494,7 @@ llvm::json::Object metadataObject(const TranslationCacheRequest &request,
       {"strict_mode", request.StrictMode},
       {"enable_writelane_rewrite", request.EnableWritelaneRewrite},
       {"enable_wave_native", request.EnableWaveNative},
+      {"preserve_debug_info", request.PreserveDebugInfo},
       {"hotswap_build_identity", keyData.buildIdentity},
       {"llc_identity", keyData.llcIdentity},
       {"llvm_mc_identity", keyData.llvmMcIdentity},
@@ -539,6 +541,8 @@ bool validateMetadata(const TranslationCacheRequest &request,
       !requireEqualBool(obj, "enable_writelane_rewrite",
                         request.EnableWritelaneRewrite, Reason) ||
       !requireEqualBool(obj, "enable_wave_native", request.EnableWaveNative,
+                        Reason) ||
+      !requireEqualBool(obj, "preserve_debug_info", request.PreserveDebugInfo,
                         Reason) ||
       !requireEqualString(obj, "hotswap_build_identity",
                           keyData.buildIdentity, Reason) ||

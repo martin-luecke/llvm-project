@@ -23,6 +23,7 @@
 #include "parsed-reg.h"
 
 #include "../comgr.h"
+#include "debug-info.h"
 #include "mc-state.h"
 #include "opcode-map.h"
 #include "Utils/AMDGPUBaseInfo.h"
@@ -199,7 +200,8 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
                                  bool EnableWritelaneRewrite,
                                  bool EnableWaveNative,
                                  bool ForceThreadLoopProjection,
-                                 bool SuppressC5ForThreadLoopRoute) {
+                                 bool SuppressC5ForThreadLoopRoute,
+                                 const KernelDwarfSource *DebugSource) {
   RaiseResult Result;
 
   // Reject obviously-bad ISA inputs before reaching the MC stack -- an
@@ -642,6 +644,15 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   Function *F =
       Function::Create(FuncTy, GlobalValue::ExternalLinkage, KernelName, &M);
   F->setCallingConv(CallingConv::AMDGPU_KERNEL);
+
+  // Optional DWARF preservation. Null unless the caller passed a source
+  // whose DWARF has a subprogram covering this kernel. Read throughout the
+  // dispatch loop and finalised just before return.
+  std::unique_ptr<DebugInfoBuilder> DIB;
+  if (DebugSource)
+    DIB = DebugInfoBuilder::create(M, *DebugSource, KernelName);
+  if (DIB)
+    DIB->attachSubprogramTo(*F);
 
   // Attach `byref([N x i8])` + `align(16)` to the placeholder kernarg
   // pointer. AMDGPULowerKernelArguments only honours param-align on
@@ -1117,6 +1128,13 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
     }
 
     Ctx.computeVGPRAdjust(Di);
+
+    // Tag every `B.Create*` for this MCInst with its DWARF location.
+    // A null location (PC has no line-table row) leaves prologue /
+    // synthetic IR unattributed, matching frontend behaviour.
+    if (DIB)
+      B.SetCurrentDebugLocation(DIB->locationFor(Di.Offset));
+
     // Invalidate the SPE lane_active memoisation at every instruction
     // boundary. Any instruction is a potential EXEC writer (either through
     // our modeled CanonicalOp allow-list, or through a path we haven't yet
@@ -1393,7 +1411,8 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
                              /*enableWritelaneRewrite=*/false,
                              /*enableWaveNative=*/false,
                              /*forceThreadLoopProjection=*/true,
-                             /*suppressC5ForThreadLoopRoute=*/true);
+                             /*suppressC5ForThreadLoopRoute=*/true,
+                             DebugSource);
       }
       if (!ForceThreadLoopProjection &&
           TlDecision.Decision == ThreadLoopDecision::EligibleButGateOff) {
@@ -1578,7 +1597,8 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
                              /*enableWritelaneRewrite=*/false,
                              /*enableWaveNative=*/false,
                              /*forceThreadLoopProjection=*/true,
-                             /*suppressC5ForThreadLoopRoute=*/true);
+                             /*suppressC5ForThreadLoopRoute=*/true,
+                             DebugSource);
       }
       RaiseFailure F = RaiseFailure::crossWavePredicateChain(
           KernelName, PredReport.RefusalDetail);
@@ -1611,6 +1631,11 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
     }
   }
 
+  // Must run before the verifier, which requires the DI module flags and
+  // finalized retained-nodes once any DI metadata is attached.
+  if (DIB)
+    DIB->finalize();
+
   // ==== Phase 7: Verify IR ====
   std::string VerifyErr;
   raw_string_ostream VerifyOs(VerifyErr);
@@ -1638,12 +1663,13 @@ RaiseResult raiseToIR(llvm::ArrayRef<uint8_t> TextBytes,
                       uint64_t KernelOffset,
                       llvm::StringRef CompilationTargetIsa,
                       bool EnableWritelaneRewrite,
-                      bool EnableWaveNative) {
+                      bool EnableWaveNative,
+                      const KernelDwarfSource *DebugSource) {
   return raiseToIRImpl(TextBytes, SourceIsa, KernelName, Meta, KernelOffset,
                        CompilationTargetIsa, EnableWritelaneRewrite,
                        EnableWaveNative,
                        /*forceThreadLoopProjection=*/false,
-                       /*suppressC5ForThreadLoopRoute=*/false);
+                       /*suppressC5ForThreadLoopRoute=*/false, DebugSource);
 }
 
 } // namespace COMGR::hotswap

@@ -2900,6 +2900,16 @@ typedef enum amd_comgr_hotswap_transpile_option_flags_s {
    * Enable HotSwap strict mode for unsafe lowering refusals.
    */
   AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_STRICT = 1u << 2,
+  /**
+   * Preserve DWARF debug information from the input HSACO on the
+   * regenerated LLVM IR. Source-level line tables map 1:1 from each
+   * AMDGPU instruction PC to (file, line, column); a DICompileUnit and
+   * DISubprogram are emitted per kernel, mirrored from the input's
+   * compile unit. Best-effort -- variable bindings to raised storage
+   * are not yet emitted (variable names appear as "optimized out"). No
+   * effect if the input has no .debug_info section.
+   */
+  AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_PRESERVE_DEBUG_INFO = 1u << 3,
 } amd_comgr_hotswap_transpile_option_flags_t;
 
 /**

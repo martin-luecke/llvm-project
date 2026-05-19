@@ -343,6 +343,21 @@ target_include_directories(TranslationCacheTests PRIVATE
 
 comgr_configure_test_target(TranslationCacheTests)
 
+# -- DebugInfoTests -----------------------------------------------------------------
+
+add_executable(DebugInfoTests
+  DebugInfoTest.cpp)
+
+target_link_libraries(DebugInfoTests PRIVATE
+  ${COMGR_GTEST_LIBS}
+  ${LLVM_PTHREAD_LIB})
+comgr_link_hotswap_transpiler(DebugInfoTests)
+
+target_include_directories(DebugInfoTests PRIVATE
+  ${COMGR_GTEST_INCLUDE_DIRS})
+
+comgr_configure_test_target(DebugInfoTests)
+
 # Register every test binary with the test-unit / check-comgr plumbing.
 add_custom_target(test-unit
   COMMAND $<TARGET_FILE:HotswapElfTests>
@@ -356,7 +371,8 @@ add_custom_target(test-unit
   COMMAND $<TARGET_FILE:SourceHiddenArgsTests>
   COMMAND $<TARGET_FILE:MXFP4DequantTests>
   COMMAND $<TARGET_FILE:C5PredicateChainTests>
-  COMMAND $<TARGET_FILE:TranslationCacheTests>)
+  COMMAND $<TARGET_FILE:TranslationCacheTests>
+  COMMAND $<TARGET_FILE:DebugInfoTests>)
 add_dependencies(test-unit HotswapElfTests HotswapMCTests
   RaiserScaffoldingTests
   CodeObjectUtilsTests
@@ -367,5 +383,6 @@ add_dependencies(test-unit HotswapElfTests HotswapMCTests
   SourceHiddenArgsTests
   MXFP4DequantTests
   C5PredicateChainTests
-  TranslationCacheTests)
+  TranslationCacheTests
+  DebugInfoTests)
 add_dependencies(check-comgr test-unit)

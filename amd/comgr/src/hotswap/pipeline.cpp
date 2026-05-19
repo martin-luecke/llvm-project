@@ -1,5 +1,6 @@
 #include "pipeline.h"
 #include "code-object-utils.h"
+#include "debug-info.h"
 #include "raiser.h"
 
 #include "llvm/IR/LLVMContext.h"
@@ -254,7 +255,8 @@ static bool raiseAndCompileKernel(const TextSection &text,
                                   const DumpDir &tmpDir,
                                   llvm::StringRef objPath,
                                   PipelineResult &result,
-                                  const PipelineOptions &options) {
+                                  const PipelineOptions &options,
+                                  const KernelDwarfSource *debugSource) {
   auto raiseStart = timingStart(options.CollectTimings);
   llvm::Expected<KernelMeta> metaOrErr =
       extractKernelMeta(codeObjectData, kernelName);
@@ -289,7 +291,7 @@ static bool raiseAndCompileKernel(const TextSection &text,
 
   auto raised = raiseToIR(text.Bytes, sourceISA, kernelName, meta, kernelOffset,
                            targetISA, options.EnableWritelaneRewrite,
-                           options.EnableWaveNative);
+                           options.EnableWaveNative, debugSource);
   if (!raised.Success) {
     llvm::errs() << "transpiler: Raising '" << kernelName << "' to LLVM IR failed";
     result.FailKernel = kernelName;
@@ -476,9 +478,14 @@ PipelineResult runPipeline(llvm::MemoryBufferRef codeObjectData,
   std::string objPath   = tmpDir.filePath("kernel.o");
   std::string hsacoPath = tmpDir.filePath("kernel.Hsaco");
 
+  // Null unless enabled and the input is an ELF carrying DWARF.
+  std::unique_ptr<KernelDwarfSource> debugSource;
+  if (options.PreserveDebugInfo)
+    debugSource = KernelDwarfSource::create(codeObjectData);
+
   if (!raiseAndCompileKernel(text, codeObjectData, kernelName,
                              sourceISA, targetISA, tmpDir, objPath, result,
-                             options))
+                             options, debugSource.get()))
     return finish();
 
   auto linkStart = timingStart(options.CollectTimings);
@@ -568,6 +575,10 @@ PipelineResult runPipelineAllKernels(llvm::MemoryBufferRef codeObjectData,
                                  codeObjectData.getBufferStart()),
                              codeObjectData.getBufferSize()));
 
+  std::unique_ptr<KernelDwarfSource> debugSource;
+  if (options.PreserveDebugInfo)
+    debugSource = KernelDwarfSource::create(codeObjectData);
+
   std::vector<std::string> objPaths;
   for (size_t i = 0; i < kernelNames.size(); ++i) {
     const auto &kName = kernelNames[i];
@@ -578,7 +589,7 @@ PipelineResult runPipelineAllKernels(llvm::MemoryBufferRef codeObjectData,
 
     if (!raiseAndCompileKernel(text, codeObjectData, kName,
                                sourceISA, targetISA, tmpDir, objPath, result,
-                               options)) {
+                               options, debugSource.get())) {
       LLVM_DEBUG(llvm::dbgs() << "FAILED\n");
       result.Success = false;
       return finish();

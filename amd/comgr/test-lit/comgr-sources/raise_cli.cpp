@@ -99,6 +99,7 @@
 #include "comgr-metadata.h"
 #include "comgr.h"
 #include "hotswap/code-object-utils.h"
+#include "hotswap/debug-info.h"
 #include "hotswap/pipeline.h"
 #include "hotswap/raiser.h"
 
@@ -116,6 +117,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
+#include <memory>
 #include <string>
 #include <sys/mman.h>
 #include <sys/wait.h>
@@ -231,6 +233,7 @@ int main(int argc, char **argv) {
   // REFUSE / UNCHANGED sibling contracts.
   bool EnableWritelaneRewrite = true;
   bool EnableWaveNative = true;
+  bool PreserveDebugInfo = false;
   std::string emitIrKernel;
   std::string writeHsacoPath;
   std::string writeHsacoKernel;
@@ -277,6 +280,9 @@ int main(int argc, char **argv) {
       // "independent halves" throughput on pointwise kernels. See
       // this file's top-of-file comment.
       EnableWaveNative = false;
+    } else if (a == "--preserve-debug-info") {
+      // Thread DWARF from the input HSACO into the raised IR.
+      PreserveDebugInfo = true;
     } else if (!a.empty() && a[0] == '-') {
       llvm::errs() << "raise_cli: unknown flag: " << a << "\n";
       return usage();
@@ -379,10 +385,14 @@ int main(int argc, char **argv) {
       return 1;
     }
     uint64_t kernelOffset = *kernelOffsetOrErr;
+    std::unique_ptr<COMGR::hotswap::KernelDwarfSource> debugSource;
+    if (PreserveDebugInfo)
+      debugSource = COMGR::hotswap::KernelDwarfSource::create(coData);
     auto raised = COMGR::hotswap::raiseToIR(text.Bytes, isa, target, meta,
                                         kernelOffset, targetIsa,
                                         EnableWritelaneRewrite,
-                                        EnableWaveNative);
+                                        EnableWaveNative,
+                                        debugSource.get());
     if (!raised.Success) {
       // Contract: raiseToIR only populates RaiseResult::IrText on the
       // success path (the last write before setting `success = true`),
@@ -441,6 +451,7 @@ int main(int argc, char **argv) {
     COMGR::hotswap::PipelineOptions pipelineOptions;
     pipelineOptions.EnableWritelaneRewrite = EnableWritelaneRewrite;
     pipelineOptions.EnableWaveNative = EnableWaveNative;
+    pipelineOptions.PreserveDebugInfo = PreserveDebugInfo;
     auto pipe = COMGR::hotswap::runPipeline(coData, isa, effectiveTargetIsa,
                                         target, pipelineOptions);
     if (!pipe.Success) {

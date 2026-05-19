@@ -25,6 +25,8 @@ class Module;
 
 namespace COMGR::hotswap {
 
+class KernelDwarfSource;
+
 struct RaiseResult {
   std::unique_ptr<llvm::LLVMContext> Ctx;
   std::unique_ptr<llvm::Module> Module;
@@ -58,7 +60,8 @@ RaiseResult raiseToIR(llvm::ArrayRef<uint8_t> TextBytes,
                       uint64_t KernelOffset = 0,
                       llvm::StringRef CompilationTargetIsa = "",
                       bool EnableWritelaneRewrite = true,
-                      bool EnableWaveNative = true);
+                      bool EnableWaveNative = true,
+                      const KernelDwarfSource *DebugSource = nullptr);
 
 } // namespace COMGR::hotswap
 

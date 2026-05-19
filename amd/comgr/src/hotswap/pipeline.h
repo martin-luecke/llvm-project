@@ -29,6 +29,10 @@ struct PipelineOptions {
   bool EnableWritelaneRewrite = true;
   bool EnableWaveNative = true;
   bool CollectTimings = false;
+  /// Re-emit `!dbg` metadata from the input HSACO's `.debug_info` onto the
+  /// raised IR. No-ops when the input has no DWARF, so safe to enable
+  /// unconditionally. See `hotswap/debug-info.h`.
+  bool PreserveDebugInfo = false;
 };
 
 struct PipelineResult {

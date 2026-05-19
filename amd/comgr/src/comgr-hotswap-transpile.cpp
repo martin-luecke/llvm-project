@@ -468,6 +468,11 @@ amd_comgr_status_t AMD_COMGR_API amd_comgr_hotswap_transpile_with_options(
       options && options->cache_skip_kernels ? options->cache_skip_kernels : "";
   CacheRequest.StrictMode =
       hasFlag(options, AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_STRICT);
+  // Threaded into PipelineOptions::PreserveDebugInfo below; also
+  // contributes to the translation-cache key so a cached non-debug
+  // build cannot be served against a debug-info request.
+  CacheRequest.PreserveDebugInfo = hasFlag(
+      options, AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_PRESERVE_DEBUG_INFO);
   CacheRequest.CacheDisabled =
       !options || hasFlag(options,
                           AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_CACHE_DISABLE) ||
@@ -548,6 +553,7 @@ amd_comgr_status_t AMD_COMGR_API amd_comgr_hotswap_transpile_with_options(
     PipelineOptions.EnableWritelaneRewrite =
         CacheRequest.EnableWritelaneRewrite;
     PipelineOptions.EnableWaveNative = CacheRequest.EnableWaveNative;
+    PipelineOptions.PreserveDebugInfo = CacheRequest.PreserveDebugInfo;
     PipelineOptions.CollectTimings = CollectTimings;
     Pipeline = COMGR::hotswap::runPipelineAllKernels(InputBuf,
                                                  SourceIdent.Processor.str(),
