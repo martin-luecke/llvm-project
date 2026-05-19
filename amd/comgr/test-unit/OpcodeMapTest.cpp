@@ -66,18 +66,28 @@ TEST(DeviceLibs, SelectOCMLSupportLibrariesForGfx942) {
   }
 }
 
+TEST(DeviceLibs, SelectOCMLSupportLibrariesForGenericGfx) {
+  llvm::SmallVector<std::string, 8> Names;
+  std::string Error;
+  ASSERT_TRUE(
+      COMGR::getOCMLDeviceLibraryNames("gfx9-generic", 64, Names, Error))
+      << Error;
+
+  ASSERT_EQ(Names.size(), 7u);
+  EXPECT_EQ(Names[3], "oclc_isa_version_9_generic.bc");
+}
+
 TEST(DeviceLibs, SelectOCMLSupportLibrariesRejectsInvalidInputs) {
   llvm::SmallVector<std::string, 8> Names;
   std::string Error;
   EXPECT_FALSE(COMGR::getOCMLDeviceLibraryNames("amdgcn-amd-amdhsa--gfx942",
                                                 64, Names, Error));
-  EXPECT_NE(Error.find("target processor"), std::string::npos)
+  EXPECT_NE(Error.find("known AMDGPU processor"), std::string::npos)
       << Error;
 
   Error.clear();
   EXPECT_FALSE(COMGR::getOCMLDeviceLibraryNames("gfx999", 64, Names, Error));
-  EXPECT_NE(Error.find("no embedded OCML ISA control library"),
-            std::string::npos)
+  EXPECT_NE(Error.find("known AMDGPU processor"), std::string::npos)
       << Error;
 
   Error.clear();

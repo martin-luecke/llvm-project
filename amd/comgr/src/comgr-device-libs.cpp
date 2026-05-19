@@ -19,8 +19,8 @@
 #include "comgr.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/TargetParser/TargetParser.h"
 #include <cstdint>
-#include <optional>
 
 using namespace llvm;
 
@@ -55,30 +55,6 @@ getDeviceLibraries() {
 
 namespace {
 
-struct IsaLibraryEntry {
-  llvm::StringRef GfxIp;
-  llvm::StringRef Name;
-};
-
-llvm::ArrayRef<IsaLibraryEntry> getIsaLibraryEntries() {
-  static const IsaLibraryEntry Entries[] = {
-#define AMD_DEVICE_LIBS_TARGET(target)
-#define AMD_DEVICE_LIBS_GFXIP(target, gfxip)                                   \
-  {gfxip, #target ".bc"},
-#define AMD_DEVICE_LIBS_FUNCTION(target, function)
-#include "libraries_defs.inc"
-  };
-  return Entries;
-}
-
-std::optional<llvm::StringRef> selectIsaLibraryName(llvm::StringRef GfxIp) {
-  for (const IsaLibraryEntry &Entry : getIsaLibraryEntries()) {
-    if (Entry.GfxIp == GfxIp)
-      return Entry.Name;
-  }
-  return std::nullopt;
-}
-
 bool hasEmbeddedDeviceLibrary(llvm::StringRef Name) {
   for (const auto &Lib : getDeviceLibraries()) {
     if (std::get<0>(Lib) == Name)
@@ -108,21 +84,25 @@ bool getOCMLDeviceLibraryNames(llvm::StringRef TargetProcessor,
                                std::string &Error) {
   Names.clear();
 
-  llvm::StringRef GfxIp = TargetProcessor;
-  if (!GfxIp.consume_front("gfx") || GfxIp.empty()) {
+  AMDGPU::GPUKind Kind = AMDGPU::parseArchAMDGCN(TargetProcessor);
+  if (Kind == AMDGPU::GK_NONE) {
     Error = (Twine("target processor '") + TargetProcessor +
-             "' does not name a gfx processor").str();
+             "' does not name a known AMDGPU processor").str();
     return false;
   }
 
-  std::optional<llvm::StringRef> IsaLibraryName =
-      selectIsaLibraryName(GfxIp);
-  if (!IsaLibraryName) {
-    Error = (Twine("no embedded OCML ISA control library for target processor '") +
-             TargetProcessor + "'")
+  StringRef CanonicalProcessor = AMDGPU::getArchNameAMDGCN(Kind);
+  if (!CanonicalProcessor.consume_front("gfx")) {
+    Error = (Twine("LLVM returned non-gfx AMDGPU processor name '") +
+             AMDGPU::getArchNameAMDGCN(Kind) + "'")
                 .str();
     return false;
   }
+  std::string IsaSuffix = CanonicalProcessor.str();
+  for (char &C : IsaSuffix)
+    if (C == '-')
+      C = '_';
+  std::string IsaLibraryName = "oclc_isa_version_" + IsaSuffix + ".bc";
 
   if (TargetWaveSize != 32 && TargetWaveSize != 64) {
     Error = (Twine("cannot select OCML wavefront-size control library for "
@@ -135,7 +115,7 @@ bool getOCMLDeviceLibraryNames(llvm::StringRef TargetProcessor,
       "ocml.bc",
       "ockl.bc",
       "oclc_abi_version_600.bc",
-      *IsaLibraryName,
+      IsaLibraryName,
       "oclc_finite_only_off.bc",
       "oclc_unsafe_math_off.bc",
       TargetWaveSize == 64 ? "oclc_wavefrontsize64_on.bc"

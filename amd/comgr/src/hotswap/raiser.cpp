@@ -1308,6 +1308,9 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   // before the cross-lane rewrite so the DPP/readlane/writelane use-chain
   // classifier sees the actual arithmetic IR, not an unresolved ordinary call
   // that must conservatively be treated as an SGPR-forced/unknown consumer.
+  // Linked OCML math bodies are pure arithmetic for this lowering policy; they
+  // should not introduce workitem-id predicate-chain structure before the C5
+  // classifier below.
   if (moduleUsesOCMLRuntime(M)) {
     StringRef OCMLTargetCpu = TargetCpu.empty() ? SourceCpu : TargetCpu;
     std::string OCMLLinkErr;
