@@ -1083,88 +1083,26 @@ llvm::Value *emitWMMAScaleF8F6F4toScaledMFMA(
                     FixedVectorType::get(ctx.F32Ty, 8));
 }
 
-// ============================================================================
-// gfx1250 v_wmma_scale_f32_16x16x128_f8f6f4 -> gfx942 K-decomposed unscaled
-// fp8/bf8 MFMA chain with software UE8M0 scale application on the result.
+// gfx1250 v_wmma_scale_f32_16x16x128_f8f6f4 -> gfx942.
 //
-// Design:
-//   1. Dispatch on (matrix_a_fmt, matrix_b_fmt) in {FP8, BF8}^2 to the
-//      matching unscaled gfx942 MFMA intrinsic from the family
-//      `int_amdgcn_mfma_f32_16x16x32_{fp8,bf8}_{fp8,bf8}` (K=32 per call,
-//      `<8 x f32>` partial output, i64 packed A/B inputs --
-//      IntrinsicsAMDGPU.td:3594, defm under FeatureMAIInsts + FeatureFP8Insts
-//      which are both set on gfx942's `FeatureISAVersion9_4_2`).
-//   2. Redistribute A and B from wave32 WMMA layout to wave64 MFMA layout
-//      for all 4 K-blocks up front by reusing `redistributeInput` (the
-//      K=32 16-bit / K=64 8-bit helper) twice per matrix: K-blocks {0,1}
-//      from wave32 dwords [0..7], K-blocks {2,3} from [8..15]. The
-//      8-dword -> 4-dword fan-in produced by each `redistributeInput`
-//      call is bit-identical to two K-blocks' worth of MFMA inputs under
-//      the K=128 8-bit layout extrapolation.
-//   3. K-loop (4 iterations): pack the K-block's two wave64 dwords of A
-//      and B as i64, call the MFMA with a ZERO accumulator -> unscaled
-//      K-block partial, multiply by the combined UE8M0 scale
-//      `2^(sA + sB - 254)` via a single `<4 x f32>` fmul, fadd into the
-//      running output accumulator.
-//   4. Gather wave64 -> wave32 once at end via the existing `collectResult`.
+// Decompose K=128 into 4 K=32 MFMAs from
+// `int_amdgcn_mfma_f32_16x16x32_{fp8,bf8}_{fp8,bf8}`. Each K-block:
+// zero-acc MFMA -> unscaled partial, scaled by `factor_A * factor_B`
+// (from per-format `decodeScaleByte`), fmuladd into running output. The
+// per-block UE8M0 scale is K-constant so it factors out of the dot
+// product exactly -- scaling the result is precision-equivalent to
+// scaling each input but cheaper.
 //
-// Why scale the result rather than the inputs?
-//   Within one K-block the per-block UE8M0 scale is constant in K, so it
-//   factors out of the inner sum exactly:
-//     sum_k (A_ik * 2^(sA-127)) * (B_kj * 2^(sB-127))
-//       = 2^(sA + sB - 254) * sum_k A_ik * B_kj.
-//   `ldexp` on f32 is bit-exact (pure exponent shift), so applying the
-//   scale once on the K-block's `<4 x f32>` partial is precision-
-//   equivalent to applying it on every input element -- and far cheaper.
+// Coverage: any (aFmt, bFmt) in {FP8, BF8, FP6, BF6, FP4}^2; scale in
+// {E8M0, E4M3} (E5M3 deferred). FP6/BF6/FP4 widen in-line to FP8/BF8
+// via branchless ALU bit-math; FP8/BF8 pass through. After widening
+// every fragment is 16 fp8/bf8 dwords / wave32 lane, so the
+// redistribute + MFMA + scale + collect pipeline is format-agnostic.
 //
-// Per source-wave pass: 4 K-block MFMA calls + 4 vec fmuladd + 4 ldexp
-// + 2 scale-src bpermutes + accumulator redistribute + final
-// wave64->wave32 collect. Uses the native fp8/bf8 MFMA family directly,
-// so no input widening and no per-input scale -- the K-block's i64-packed
-// A/B feeds straight into the hardware MFMA.
-//
-// Source-wave dispatch (mirrors `runScaledPass` in the gfx950 emitter):
-//   * MODREP / numSrcWaves == 1: one pass with GroupBase = 0.
-//   * WaveNative cross-widen / numSrcWaves == 2: two passes (GroupBase = 0
-//     for source wave 0 -> target lanes 0..31, GroupBase = 32 for source
-//     wave 1 -> target lanes 32..63), final `select(laneId >= 32, ...)`
-//     per output dword.
-//
-// Scope of this draft: any (aFmt, bFmt) combination over {FP8, BF8, FP6,
-// BF6, FP4} with scale formats in {E8M0, E4M3} (E5M3 deferred). Each
-// data side widens independently in-line via branchless ALU bit-
-// arithmetic helpers -- no LUTs, no memory access:
-//   FP4 (E2M1) -> FP8 (E4M3) via `widenF4NibbleToFP8`
-//   FP6 (E2M3) -> FP8 (E4M3) via `widenFP6NibbleToFP8`
-//   BF6 (E3M2) -> BF8 (E5M2) via `widenBF6NibbleToBF8`
-// FP8 / BF8 fragments pass through unchanged. The widened fragment is
-// always 16 dwords / wave32 lane, exactly matching a native fp8 / bf8
-// fragment, so the downstream redistribute + MFMA + scale + collect
-// pipeline is format-agnostic from this point on.
-//
-// Scale decoding (`decodeScaleByte` / `buildScaleFactorVec`):
-//   E8M0 (UE8M0):   `ldexp(1.0, byte - 127)` + select-to-qNaN at 0xFF.
-//                   For E8M0 x E8M0 specifically we use the fast path
-//                   `2^(byteA + byteB - 254)` (one combined ldexp).
-//   E4M3 (SE4M3):   hw `int_amdgcn_cvt_f32_fp8` (gfx942 native cvt).
-//                   The E4M3 scale format is bit-identical to the FP8
-//                   E4M3 data format, so the existing cvt handles
-//                   normals, subnormals, signs, and NaN propagation.
-//   E5M3:           NOT implemented (refused) -- no gfx942 hw cvt
-//                   matches the 5-exp + 3-mant unsigned layout, so
-//                   it would need a bit-math decoder similar to
-//                   `widenFP6NibbleToFP8`.
-// `matrix_*_scale` is a 2-bit ROW selector (ROW0 = 0, ROW1 = 1, others
-// reserved). For SCALE (K=32 / 4 K-blocks / 1 row) only ROW0 is
-// meaningful, so non-zero values are refused. ROW1 is for the K=16
-// SCALE16 variant (separate intrinsic, not yet supported).
-// Legal (data, scale) combinations are enforced by `isLegalScaleDataCombo`
-// per the spec table (non-E8M0 scales require F4 data on that side).
-//
-// The MFMA dispatch uses `effectiveFmtAfterWiden` to map source format
-// to its post-widen destination, then picks the matching gfx942 MFMA
-// intrinsic from the (FP8|BF8)^2 family.
-// ============================================================================
+// Source-wave dispatch mirrors `runScaledPass` in the gfx950 emitter:
+// MODREP (numSrcWaves == 1) runs one pass with GroupBase=0; WaveNative
+// cross-widen (numSrcWaves == 2) runs two passes (GroupBase 0 and 32)
+// with a `select(laneId >= 32, ...)` combine.
 
 namespace {
 
@@ -1178,16 +1116,9 @@ constexpr int FmtFP6 = 2;
 constexpr int FmtBF6 = 3;
 constexpr int FmtFP4 = 4;
 
-// Pick the gfx942 unscaled K=32 8-bit MFMA intrinsic for an (A_fmt, B_fmt)
-// combination of FP8 / BF8. Returns Intrinsic::not_intrinsic for any
-// combination involving f6 / f4 (caller refuses).
-//
-// All four entries in the table are declared together in
-// IntrinsicsAMDGPU.td:3594 (`defm int_amdgcn_mfma_f32_16x16x32 :
-// AMDGPUMFp8MfmaIntrinsic<llvm_v4f32_ty>` which expands to the four
-// `_{bf8,fp8}_{bf8,fp8}` variants -- see the multiclass at
-// IntrinsicsAMDGPU.td:3566). They share the per-lane shape:
-//   (i64 A, i64 B, <4 x f32> Acc, i32 cbsz, i32 abid, i32 blgp) -> <4 x f32>
+// gfx942 unscaled K=32 fp8/bf8 MFMA intrinsic family
+// (IntrinsicsAMDGPU.td:3594). Caller must have already mapped any
+// FP6/BF6/FP4 inputs to FP8/BF8 via `effectiveFmtAfterWiden`.
 Intrinsic::ID pickGfx942F8MfmaIntrinsic(int aFmt, int bFmt) {
   const bool aIsFp8 = (aFmt == FmtFP8);
   const bool aIsBf8 = (aFmt == FmtBF8);
@@ -1200,15 +1131,9 @@ Intrinsic::ID pickGfx942F8MfmaIntrinsic(int aFmt, int bFmt) {
   return Intrinsic::not_intrinsic;
 }
 
-// Post-widen "effective" matrix format used to pick the gfx942 MFMA
-// intrinsic. The OCP MX format naturally pairs with the FP8 variant whose
-// mantissa width matches:
-//   FP8 (E4M3)   -> FP8 (no widen)
-//   BF8 (E5M2)   -> BF8 (no widen)
-//   FP6 (E2M3)   -> FP8 (E4M3): same mantissa width
-//   BF6 (E3M2)   -> BF8 (E5M2): same mantissa width
-//   FP4 (E2M1)   -> FP8 (E4M3): mantissa pads 1 -> 3 bits, exponent fits
-// Returns -1 for unknown formats.
+// Post-widen format: each source format pairs with the FP8 variant whose
+// mantissa width matches (FP6/FP4 -> FP8 E4M3, BF6 -> BF8 E5M2; FP8/BF8
+// pass through). Returns -1 for unknown formats.
 int effectiveFmtAfterWiden(int srcFmt) {
   switch (srcFmt) {
   case FmtFP8: return FmtFP8;
@@ -1220,30 +1145,9 @@ int effectiveFmtAfterWiden(int srcFmt) {
   }
 }
 
-// Widen one FP4 (E2M1) nibble (low 4 bits of `Nibble`, held in i32) to
-// an FP8 E4M3 byte (low 8 bits of returned i32).
-//
-// Branchless: shifts + masks + 2 selects, no memory access, no LUT.
-//
-//   FP4 layout: S EE M  (bias = 1, mantissa width = 1)
-//   FP8 layout: S EEEE MMM  (bias = 7, mantissa width = 3)
-//
-// FP4 has exactly two special encodings: ±0 (E=0, M=0) and the single
-// subnormal value ±0.5 (E=0, M=1). All other encodings (E in 1..3) are
-// ordinary normals.
-//
-// Conversion (per element):
-//   sign = bit 3
-//   normExp  = (E + 6),   normMant = M << 2     (pad to 3 bits)
-//   subExp   = 6,         subMant  = 0          (FP4 ±0.5 -> 1.000 * 2^-1)
-//   exp  = (E == 0) ? subExp : normExp
-//   mant = (E == 0) ? subMant : normMant
-//   fp8  = (sign << 7) | (exp << 3) | mant      -- and override to
-//                                                 `sign << 7` if M==0 too
-//                                                 (preserves the sign of
-//                                                 ±0; the subnormal path
-//                                                 would otherwise emit
-//                                                 0x30 / 0xB0 for ±0).
+// FP4 (E2M1, S EE M, bias 1) -> FP8 E4M3 (S EEEE MMM, bias 7). FP4 has
+// only one subnormal (±0.5 -> 1.000 * 2^-1, biased exp 6); the ±0
+// override avoids the subnormal path emitting 0x30 / 0xB0.
 Value *widenF4NibbleToFP8(IRBuilder<> &B, Value *Nibble) {
   Value *Sign = B.CreateAnd(B.CreateLShr(Nibble, B.getInt32(3)),
                             B.getInt32(1), "fp4_sign");
@@ -1274,14 +1178,8 @@ Value *widenF4NibbleToFP8(IRBuilder<> &B, Value *Nibble) {
                         FP8WithSign, "fp8_or_zero");
 }
 
-// Vectorized counterpart of `widenF4NibbleToFP8`: widens a vector of
-// FP4 nibbles to a vector of FP8 E4M3 bytes (each in the low 8 bits of
-// an i32 lane), using LLVM IR vector ops throughout. The per-lane
-// algorithm is bit-identical to the scalar version; vectorizing it lets
-// the AMDGPU backend pattern-match packed instructions (`v_pk_*_b16`,
-// `v_perm_b32`) for the 2-wide subsets and avoids per-nibble scalar
-// dispatch in the IR. Caller passes `Nibbles` as `<N x i32>` with the
-// FP4 4-bit value in the low 4 bits of each lane (upper bits ignored).
+// Vectorized `widenF4NibbleToFP8` over `<N x i32>` (FP4 nibble in low 4
+// bits of each lane). Enables packed-instruction pattern matching.
 Value *widenF4NibbleVecToFP8(IRBuilder<> &B, Value *Nibbles) {
   auto *VecTy = cast<FixedVectorType>(Nibbles->getType());
   unsigned N = VecTy->getNumElements();
@@ -1314,17 +1212,10 @@ Value *widenF4NibbleVecToFP8(IRBuilder<> &B, Value *Nibbles) {
   return B.CreateSelect(IsZero, SignShifted, FP8WithSign, "fp8_or_zero");
 }
 
-// Widen a full FP4 fragment (8 i32 dwords per wave32 lane, 8 nibbles per
-// dword = 64 fp4 elements total) to an FP8 fragment (16 i32 dwords per
-// wave32 lane, 4 fp8 bytes per dword = 64 fp8 elements). Element k of the
-// source (k in 0..63) maps to byte k of the destination, preserving the
-// K-dimension layout that the rest of the pipeline expects.
-//
-// Vectorized per source dword: each of the 8 source dwords is processed
-// as an `<8 x i32>` vector (one lane per nibble), widened in parallel
-// by `widenF4NibbleVecToFP8`, then truncated to `<8 x i8>` and bitcast
-// to `<2 x i32>` to produce the 2 destination dwords. The AMDGPU
-// backend pattern-matches v_pk_* for the 2-wide subsets that fit.
+// Widen a full FP4 fragment (8 dwords / 64 nibbles per wave32 lane) to
+// an FP8 fragment (16 dwords / 64 bytes). Element k -> byte k preserves
+// the K-dimension layout. Per source dword: extract 8 nibbles as
+// `<8 x i32>`, widen, trunc to `<8 x i8>`, bitcast to `<2 x i32>`.
 void widenF4FragmentToFP8(IRBuilder<> &B, Module &M,
                            ArrayRef<Value *> SrcDwords,
                            SmallVectorImpl<Value *> &DstDwords) {
@@ -1404,24 +1295,9 @@ Value *extractF6Nibble(IRBuilder<> &B, ArrayRef<Value *> Dwords,
   return B.CreateAnd(Trunc, B.getInt32(0x3F), "f6_nib");
 }
 
-// Widen one FP6 (E2M3) value (low 6 bits of `Nibble`, held in i32) to
-// an FP8 E4M3 byte (low 8 bits of returned i32).
-//
-//   FP6 (E2M3, bias=1, mw=3): S EE MMM
-//   FP8 (E4M3, bias=7, mw=3): S EEEE MMM
-//
-// Same mantissa width -> no padding needed. Exp bias diff = 7 - 1 = 6.
-//
-// Subnormal renormalization (E=0, M in 1..7):
-//   value = M * 2^-3 (E2M3 emin = 0, mw=3 -> M / 8)
-//   lz = ctlz_3bit(M) in {0, 1, 2}
-//   biased_FP8_exp = 6 - lz
-//   FP8 mant = (M << (lz + 1)) & 0b111
-//
-// `ctlz_3bit(M)` for M in [1, 7] is computed via `@llvm.ctlz.i32(M)
-// - 29` since ctlz on i32 returns 32 - log2_floor(M) - 1 = (31 -
-// log2_floor(M)); for M=1 -> 31, M=2 -> 30, ..., M=4..7 -> 29. Subtract
-// 29 to get the 3-bit lz value 2, 1, 0 respectively.
+// FP6 (E2M3, S EE MMM, bias 1) -> FP8 E4M3 (S EEEE MMM, bias 7).
+// Same mantissa width; exp bias diff 6. Subnormals (E=0, M in 1..7)
+// renormalize via ctlz: `lz_3bit = ctlz_i32(M) - 29` gives 0..2.
 Value *widenFP6NibbleToFP8(IRBuilder<> &B, Module &M, Value *Nibble) {
   Value *Sign = B.CreateAnd(B.CreateLShr(Nibble, B.getInt32(5)),
                             B.getInt32(1), "fp6_sign");
@@ -1429,11 +1305,9 @@ Value *widenFP6NibbleToFP8(IRBuilder<> &B, Module &M, Value *Nibble) {
                            B.getInt32(3), "fp6_exp");
   Value *Mant = B.CreateAnd(Nibble, B.getInt32(7), "fp6_mant");
 
-  // Normal: biased_exp = E + 6, mant unchanged.
   Value *NormExp = B.CreateAdd(Exp, B.getInt32(6), "norm_exp");
   Value *NormMant = Mant;
 
-  // Subnormal renormalization via ctlz.
   Function *CtlzFn = Intrinsic::getOrInsertDeclaration(
       &M, Intrinsic::ctlz, {B.getInt32Ty()});
   Value *Ctlz =
@@ -1461,21 +1335,9 @@ Value *widenFP6NibbleToFP8(IRBuilder<> &B, Module &M, Value *Nibble) {
                         FP8, "fp8_or_zero");
 }
 
-// Widen one BF6 (E3M2) value (low 6 bits of `Nibble`, held in i32) to
-// a BF8 E5M2 byte (low 8 bits of returned i32).
-//
-//   BF6 (E3M2, bias=3, mw=2): S EEE MM
-//   BF8 (E5M2, bias=15, mw=2): S EEEEE MM
-//
-// Same mantissa width -> no padding. Exp bias diff = 15 - 3 = 12.
-//
-// Subnormal renormalization (E=0, M in 1..3):
-//   value = M * 2^-4 (E3M2 emin = -2, mw=2 -> M / 16)
-//   lz = ctlz_2bit(M) in {0, 1}
-//   biased_BF8_exp = 12 - lz
-//   BF8 mant = (M << (lz + 1)) & 0b11
-//
-// `ctlz_2bit(M)` for M in [1, 3] is `@llvm.ctlz.i32(M) - 30`.
+// BF6 (E3M2, S EEE MM, bias 3) -> BF8 E5M2 (S EEEEE MM, bias 15).
+// Same mantissa width; exp bias diff 12. Subnormals (E=0, M in 1..3)
+// renormalize via ctlz: `lz_2bit = ctlz_i32(M) - 30` gives 0..1.
 Value *widenBF6NibbleToBF8(IRBuilder<> &B, Module &M, Value *Nibble) {
   Value *Sign = B.CreateAnd(B.CreateLShr(Nibble, B.getInt32(5)),
                             B.getInt32(1), "bf6_sign");
@@ -1483,7 +1345,6 @@ Value *widenBF6NibbleToBF8(IRBuilder<> &B, Module &M, Value *Nibble) {
                            B.getInt32(7), "bf6_exp");
   Value *Mant = B.CreateAnd(Nibble, B.getInt32(3), "bf6_mant");
 
-  // Normal: biased_exp = E + 12, mant unchanged.
   Value *NormExp = B.CreateAdd(Exp, B.getInt32(12), "norm_exp");
   Value *NormMant = Mant;
 
@@ -1503,7 +1364,7 @@ Value *widenBF6NibbleToBF8(IRBuilder<> &B, Module &M, Value *Nibble) {
   Value *BF8Mant =
       B.CreateSelect(IsSubnormal, SubMant, NormMant, "bf8_mant");
 
-  // BF8 has mantissa width 2: exp shifted by 2, not 3.
+  // BF8 mw=2 -> exp shifts by 2 (not 3 like FP8).
   Value *BF8 = B.CreateOr(
       B.CreateShl(Sign, B.getInt32(7)),
       B.CreateOr(B.CreateShl(BF8Exp, B.getInt32(2)), BF8Mant), "bf8");
@@ -1514,10 +1375,7 @@ Value *widenBF6NibbleToBF8(IRBuilder<> &B, Module &M, Value *Nibble) {
                         BF8, "bf8_or_zero");
 }
 
-// Vectorized FP6 -> FP8 widening over a `<N x i32>` of source nibbles
-// (low 6 bits used in each lane). Same bit-math as `widenFP6NibbleToFP8`
-// expressed as vector IR so the AMDGPU backend can pattern-match packed
-// ops and the optimizer can coalesce across lanes.
+// Vectorized `widenFP6NibbleToFP8` over `<N x i32>`.
 Value *widenFP6NibbleVecToFP8(IRBuilder<> &B, Module &M, Value *Nibbles) {
   auto *VecTy = cast<FixedVectorType>(Nibbles->getType());
   unsigned N = VecTy->getNumElements();
@@ -1560,12 +1418,7 @@ Value *widenFP6NibbleVecToFP8(IRBuilder<> &B, Module &M, Value *Nibbles) {
   return B.CreateSelect(IsZero, SignShifted, FP8, "fp8_or_zero");
 }
 
-// Vectorized BF6 -> BF8 widening over a `<N x i32>` of source nibbles.
-// Counterpart of `widenBF6NibbleToBF8` -- differs from
-// `widenFP6NibbleVecToFP8` in the exp/mant bit positions (3-exp + 2-mant
-// vs 2-exp + 3-mant), the bias diff (12 vs 6), the ctlz adjustment
-// (-30 for 2-bit mantissa vs -29 for 3-bit), and the final exp shift
-// position (2 for BF8 vs 3 for FP8).
+// Vectorized `widenBF6NibbleToBF8` over `<N x i32>`.
 Value *widenBF6NibbleVecToBF8(IRBuilder<> &B, Module &M, Value *Nibbles) {
   auto *VecTy = cast<FixedVectorType>(Nibbles->getType());
   unsigned N = VecTy->getNumElements();
@@ -1608,15 +1461,9 @@ Value *widenBF6NibbleVecToBF8(IRBuilder<> &B, Module &M, Value *Nibbles) {
   return B.CreateSelect(IsZero, SignShifted, BF8, "bf8_or_zero");
 }
 
-// Widen a full FP6 fragment (12 i32 dwords / wave32 lane, 64 elements
-// packed at 6 bits each) to an FP8 fragment (16 i32 dwords / lane).
-// Element k of the source -> byte k of the destination, preserving the
-// K-dimension layout (same convention as `widenF4FragmentToFP8`).
-//
-// Vectorized over 4 super-chunks of 16 elements each (3 source dwords
-// per super-chunk = 96 bits = 16 elements exactly): per super-chunk
-// build a `<16 x i32>` of extracted nibbles, run the vectorized
-// widener, repack via trunc + bitcast.
+// Widen a full FP6 fragment (12 dwords / 64 elements per wave32 lane)
+// to an FP8 fragment (16 dwords). Element k -> byte k. Vectorized over
+// 4 super-chunks of 16 elements (3 source dwords each).
 void widenFP6FragmentToFP8(IRBuilder<> &B, Module &M,
                            ArrayRef<Value *> SrcDwords,
                            SmallVectorImpl<Value *> &DstDwords) {
@@ -1629,9 +1476,6 @@ void widenFP6FragmentToFP8(IRBuilder<> &B, Module &M,
   DstDwords.assign(16, nullptr);
 
   for (unsigned s = 0; s < 4; ++s) {
-    // Per-element extract (scalar; each element has a unique constant
-    // shift amount). 14 of 16 elements fit in one dword, 2 cross --
-    // `extractF6Nibble` handles the boundary cases.
     Value *NibbleVec = PoisonValue::get(Vec16I32);
     for (unsigned i = 0; i < 16; ++i) {
       Value *Nibble = extractF6Nibble(B, SrcDwords, 16 * s + i);
@@ -1649,11 +1493,7 @@ void widenFP6FragmentToFP8(IRBuilder<> &B, Module &M,
   }
 }
 
-// Widen a full BF6 fragment to a BF8 fragment. Same fragment-level
-// shape as `widenFP6FragmentToFP8` (the bit-unpacking via
-// `extractF6Nibble` is identical across 6-bit-element formats); the
-// per-element widening differs by format (`widenBF6NibbleVecToBF8`
-// rather than `widenFP6NibbleVecToFP8`).
+// Counterpart of `widenFP6FragmentToFP8` for BF6 -> BF8.
 void widenBF6FragmentToBF8(IRBuilder<> &B, Module &M,
                            ArrayRef<Value *> SrcDwords,
                            SmallVectorImpl<Value *> &DstDwords) {
@@ -1683,46 +1523,22 @@ void widenBF6FragmentToBF8(IRBuilder<> &B, Module &M,
   }
 }
 
-// Scale-format selector values for `matrix_*_scale_fmt`. Per the AMD
-// gfx1250 WMMA-scale ISA, the immediate field NEG[1:0] / NEG_HI[1:0] is
-// 2 bits and selects:
-//   0 = E8M0 (unsigned, 8-bit pure exponent; the canonical MXFP UE8M0)
-//   1 = E5M3 (unsigned 8-bit FP, bias 15; same NaN encoding as UE8M0
-//             at 0xFF -- not yet supported in this draft, refused above)
-//   2 = E4M3 (signed 8-bit FP, bias 7; bit-identical to the FP8 E4M3
-//             data format -- decoded via hw `cvt_f32_fp8`)
+// `matrix_*_scale_fmt` selector values (gfx1250 NEG[1:0] / NEG_HI[1:0]).
 constexpr int ScaleFmtE8M0 = 0;
 constexpr int ScaleFmtE5M3 = 1;
 constexpr int ScaleFmtE4M3 = 2;
 
-// Extract byte `k` (in 0..3 for the SCALE variant's 4-byte i32 source)
-// from a 32-bit scale-source value. Byte k corresponds to K-block k
-// directly under MATRIX_SCALE_ROW0 (the only valid `matrix_*_scale`
-// value for SCALE; see caller's gating).
+// Byte k of the 4-byte i32 scale source (assumes MATRIX_SCALE_ROW0;
+// other ROW values are gated out by the caller).
 Value *extractScaleByte(IRBuilder<> &B, Value *Scale32, unsigned k) {
   Value *Shifted =
       B.CreateLShr(Scale32, B.getInt32(8 * k), "scale_shr");
   return B.CreateAnd(Shifted, B.getInt32(0xFF), "scale_byte");
 }
 
-// Decode one scale byte (low 8 bits of `Byte`) into an f32 multiplier.
-// Branchless ALU dispatch on the compile-time `Fmt`:
-//
-//   ScaleFmtE8M0: `ldexp(1.0, byte - 127)` + select-to-qNaN at byte=0xFF.
-//                 Pure exponent format; no mantissa or sign.
-//   ScaleFmtE4M3: `@llvm.amdgcn.cvt.f32.fp8(byte, byte_sel=0)` -- gfx942
-//                 native cvt. The E4M3 scale format is bit-identical to
-//                 the FP8 E4M3 data format, so the cvt's existing
-//                 handling of sign, normals, subnormals, and NaN
-//                 (`S.1111.111`) all apply directly. No explicit
-//                 NaN-sentinel select needed.
-//   ScaleFmtE5M3: not implemented; returns nullptr. E5M3 has 5 exp +
-//                 3 mant unsigned bits with bias 15; no gfx942 hw cvt
-//                 matches that layout, so the decode would be ALU
-//                 bit-math similar to `widenFP6NibbleToFP8` parameterized
-//                 for E5M3's bit positions.
-//
-// Returns nullptr for ScaleFmtE5M3 or unknown formats; caller refuses.
+// Decode one scale byte to f32. E8M0 via `ldexp(1.0, byte - 127)` with
+// 0xFF -> qNaN. E4M3 via hw `cvt_f32_fp8` (same bit layout as the FP8
+// E4M3 data format, including NaN). E5M3 not yet implemented.
 Value *decodeScaleByte(IRBuilder<> &B, Module &M, Type *F32Ty,
                         Value *Byte, int Fmt) {
   switch (Fmt) {
@@ -1737,37 +1553,20 @@ Value *decodeScaleByte(IRBuilder<> &B, Module &M, Type *F32Ty,
                           "e8m0_decoded");
   }
   case ScaleFmtE4M3: {
-    // gfx942 `cvt_f32_fp8` takes an i32 source + a 2-bit byte selector
-    // (which byte of the i32 to decode). We put the scale byte in the
-    // low byte (byte_sel = 0) -- the caller's `extractScaleByte`
-    // already returns the byte in the low 8 bits with zero upper bits,
-    // so the cvt sees the byte at position 0 and ignores the rest.
     Function *CvtFn = Intrinsic::getOrInsertDeclaration(
         &M, Intrinsic::amdgcn_cvt_f32_fp8);
     return B.CreateCall(CvtFn, {Byte, B.getInt32(0)}, "e4m3_decoded");
   }
   case ScaleFmtE5M3:
-    // TODO: implement via ALU bit-math. Same shape as widenFP6NibbleToFP8
-    // but unsigned 5-exp + 3-mant, bias 15.
+    // TODO: ALU bit-math (5 exp + 3 mant unsigned, bias 15).
     return nullptr;
   }
   return nullptr;
 }
 
-// Check whether (aFmt, aScaleFmt, bFmt, bScaleFmt) is a legal combination
-// per the AMD WMMA-scale spec's legal-combinations table:
-//
-//   A data       A scale       B data       B scale
-//   F8, F6, F4   E8M0          F8, F6, F4   E8M0
-//   F8, F6       E8M0          F4           E5M3, E4M3
-//   F4           E5M3, E4M3    F8, F6       E8M0
-//   F4           E5M3          F4           E5M3
-//   F4           E4M3          F4           E4M3
-//
-// Rules in shorthand:
-//   * Non-E8M0 scale on a side REQUIRES F4 data on that side.
-//   * F4 x F4 with non-E8M0 scales REQUIRES matching scale formats on
-//     both sides (no cross-mantissa-width F4 x F4 mixing).
+// Spec legal-combinations rules:
+//   * Non-E8M0 scale on a side requires F4 data on that side.
+//   * F4 x F4 with non-E8M0 scales requires matching scale formats.
 bool isLegalScaleDataCombo(int aFmt, int aScaleFmt, int bFmt,
                             int bScaleFmt) {
   if (aScaleFmt != ScaleFmtE8M0 && aFmt != FmtFP4)
@@ -1779,32 +1578,15 @@ bool isLegalScaleDataCombo(int aFmt, int aScaleFmt, int bFmt,
   return true;
 }
 
-// Build a `<4 x float>` splat of the K-block's combined scale factor
-// `factor_A * factor_B`, where each side's factor is decoded from a
-// scale byte per the per-side scale-format selector.
-//
-// Fast path: when BOTH sides are E8M0, the combined factor reduces to
-// `2^(byteA + byteB - 254)` because E8M0 is pure exponent and 2^a *
-// 2^b = 2^(a+b). One `ldexp` for the combined exponent, with a single
-// NaN-sentinel guard checking either byte against 0xFF. This is the
-// pre-extension fast path and matches the hot kernel corpus (MXFP
-// attention) which uses E8M0 across the board.
-//
-// Slow path: any other (E8M0 | E5M3 | E4M3) combination. Decode each
-// side independently to an f32, then `fmul`. NaN propagates through
-// `fmul` naturally so no explicit NaN select is needed at the combine
-// step (each decoder handles its own NaN sentinel).
-//
-// `ldexp` on f32 is bit-exact (pure exponent shift), so applying the
-// combined factor once on the K-block's `<4 x f32>` partial is
-// precision-equivalent to folding the scale into each widened input.
+// `<4 x float>` splat of `factor_A * factor_B`. The E8M0 x E8M0 path
+// uses the combined-exponent shortcut `2^(byteA + byteB - 254)` (one
+// ldexp); other combinations decode each side independently and fmul.
 Value *buildScaleFactorVec(IRBuilder<> &B, Module &M, Type *F32Ty,
                             Value *ScaleAByte, Value *ScaleBByte,
                             int AScaleFmt, int BScaleFmt) {
   Value *Factor = nullptr;
 
   if (AScaleFmt == ScaleFmtE8M0 && BScaleFmt == ScaleFmtE8M0) {
-    // Optimized E8M0 x E8M0 path: combined exponent, single ldexp.
     Value *AIsNaN =
         B.CreateICmpEQ(ScaleAByte, B.getInt32(0xFF), "scale_a_is_nan");
     Value *BIsNaN =
@@ -1883,22 +1665,16 @@ Value *emitWMMAScaleF8F6F4toMFMA(
     return nullptr;
 
   // Scale-format support: E8M0 (always) and E4M3 (via hw cvt_f32_fp8).
-  // E5M3 is not implemented yet -- refuse rather than miscompile.
+  // E5M3 not yet implemented.
   auto SupportedScaleFmt = [](int fmt) {
     return fmt == ScaleFmtE8M0 || fmt == ScaleFmtE4M3;
   };
   if (!SupportedScaleFmt(aScaleFmt) || !SupportedScaleFmt(bScaleFmt))
     return nullptr;
 
-  // Legal data x scale combinations per the WMMA-scale spec table.
-  // Non-E8M0 scale requires F4 data on that side; F4 x F4 with
-  // non-E8M0 scales requires both sides to share the same scale format.
   if (!isLegalScaleDataCombo(aFmt, aScaleFmt, bFmt, bScaleFmt))
     return nullptr;
 
-  // Format dispatch -- after any required widening (FP4 -> FP8) the
-  // effective format pair must match a gfx942 MFMA intrinsic. f6 / bf6
-  // are gated out at the dword-count check above.
   int aFmtEff = effectiveFmtAfterWiden(aFmt);
   int bFmtEff = effectiveFmtAfterWiden(bFmt);
   if (aFmtEff < 0 || bFmtEff < 0)
@@ -1907,7 +1683,6 @@ Value *emitWMMAScaleF8F6F4toMFMA(
   if (MfmaId == Intrinsic::not_intrinsic)
     return nullptr;
 
-  // Unpack the wave32-layout WMMA fragments into per-dword arrays.
   SmallVector<Value *, 16> aSrcDwords(aDwords);
   SmallVector<Value *, 16> bSrcDwords(bDwords);
   Value *cDwords[8];
@@ -1915,28 +1690,17 @@ Value *emitWMMAScaleF8F6F4toMFMA(
   unpackDwords(B, b, bDwords, ctx.I32Ty, bSrcDwords.data());
   unpackDwords(B, c, 8, ctx.I32Ty, cDwords);
 
-  // Widen FP4 fragments in-line so the downstream redistribution + MFMA
-  // pipeline sees a uniform 16-dword fp8 layout regardless of source
-  // format. Sequenced before the K-loop so the widened bytes can be
-  // pre-redistributed once and reused across all K-blocks of both passes.
+  // Widen FP6 / BF6 / FP4 in-line so the downstream pipeline sees a
+  // uniform 16-dword fp8/bf8 fragment regardless of source format.
   SmallVector<Value *, 16> aDwordsArr;
   SmallVector<Value *, 16> bDwordsArr;
   auto WidenFragment = [&](int Fmt, ArrayRef<Value *> Src,
                             SmallVectorImpl<Value *> &Dst) {
     switch (Fmt) {
-    case FmtFP4:
-      widenF4FragmentToFP8(B, M, Src, Dst);
-      break;
-    case FmtFP6:
-      widenFP6FragmentToFP8(B, M, Src, Dst);
-      break;
-    case FmtBF6:
-      widenBF6FragmentToBF8(B, M, Src, Dst);
-      break;
-    default:
-      // FP8 / BF8: pass-through, no widening.
-      Dst.assign(Src.begin(), Src.end());
-      break;
+    case FmtFP4: widenF4FragmentToFP8(B, M, Src, Dst); break;
+    case FmtFP6: widenFP6FragmentToFP8(B, M, Src, Dst); break;
+    case FmtBF6: widenBF6FragmentToBF8(B, M, Src, Dst); break;
+    default:     Dst.assign(Src.begin(), Src.end()); break;  // FP8 / BF8
     }
   };
   WidenFragment(aFmt, aSrcDwords, aDwordsArr);
@@ -1946,9 +1710,7 @@ Value *emitWMMAScaleF8F6F4toMFMA(
 
   Value *LaneId = emitLaneId(B, M, ctx.I32Ty);
 
-  // Projection's wave count is 1 (MODREP / single source wave per target)
-  // or 2 (WaveNative cross-widen: two source wave32s per target wave64).
-  // Anything else would be a new projection type we haven't designed for.
+  // 1 source wave (MODREP) or 2 (WaveNative cross-widen).
   const unsigned numSrcWaves = ctx.Projection.numSourceWavesPerTarget();
   if (numSrcWaves != 1 && numSrcWaves != 2)
     return nullptr;
@@ -1961,21 +1723,9 @@ Value *emitWMMAScaleF8F6F4toMFMA(
   Value *ZeroAcc = ConstantAggregateZero::get(AccTy);
   int64_t cModVal = cast<ConstantInt>(cMod)->getZExtValue();
 
-  // One pass per virtual W32 group: groupBase in {0, 32}.
-  //
-  // Each pass redistributes the source-wave32 fragments at the lane
-  // positions `[GroupBase .. GroupBase+32)` into the full wave64 MFMA
-  // layout, runs the 4-K-block MFMA chain with software UE8M0 scale on
-  // the result, and produces 8 wave32-layout result dwords. Under
-  // MODREP (numSrcWaves == 1) we only need pass 0; under WaveNative
-  // cross-widen (numSrcWaves == 2) we need both passes -- pass 0 for
-  // source wave 0 (target lanes 0..31) and pass 32 for source wave 1
-  // (target lanes 32..63) -- with a final per-lane select picking the
-  // right pass's output. Mirrors `runScaledPass` in the gfx950 emitter.
+  // One pass per virtual W32 group (GroupBase 0 / 32). MODREP uses just
+  // pass 0; WaveNative cross-widen uses both with a per-lane select.
   auto runPass = [&](unsigned GroupBase, Value *Result[8]) {
-    // Per-pass virtual W32 group: LoLane = LaneMod16 + GroupBase,
-    // HiLane = LoLane + 16. AddrLo / AddrHi are the byte addresses
-    // (lane * 4) that `ds_bpermute` consumes.
     Value *LaneMod16 = B.CreateAnd(LaneId, B.getInt32(15), "lane16");
     Value *LoLane = B.CreateAdd(LaneMod16, B.getInt32(GroupBase), "lo_lane");
     Value *HiLane =
@@ -1984,29 +1734,23 @@ Value *emitWMMAScaleF8F6F4toMFMA(
     Value *AddrHi = B.CreateShl(HiLane, B.getInt32(2), "addr_hi");
     Value *LaneGroup = B.CreateLShr(LaneId, B.getInt32(4), "lane_grp");
 
-    // Redistribute scale_src0 / scale_src1 from `AddrLo` so each wave64
-    // lane reads the source-wave32 lane's scale value at the right
-    // virtual-W32 group position. All 4 K-block scale bytes ride inside
-    // the same i32 (UE8M0 byte k -> K-block k), so one bpermute per
+    // All 4 K-block scale bytes ride inside one i32, so one bpermute per
     // scale src per pass suffices.
     Value *ScaleSrc0Pass = emitDSBpermute(B, M, AddrLo, scaleSrc0);
     Value *ScaleSrc1Pass = emitDSBpermute(B, M, AddrLo, scaleSrc1);
 
-    // Redistribute the accumulator (wave32 -> wave64). Layout is K-
-    // invariant; reuse `redistributeAcc`.
     Value *MfmaC[4];
     redistributeAcc(B, M, cDwords, AddrLo, AddrHi, LaneGroup, MfmaC);
     Value *Acc = packDwords(B, MfmaC, 4, ctx.I32Ty, AccTy);
 
-    // C_mod (neg / abs / neg(abs)) on the redistributed accumulator.
+    // C_mod: 0=none, 1=neg, 2=abs, 3=neg(abs).
     if (cModVal & 2)
       Acc = B.CreateUnaryIntrinsic(Intrinsic::fabs, Acc, nullptr, "c_abs");
     if (cModVal & 1)
       Acc = B.CreateFNeg(Acc, "c_neg");
 
-    // Pre-redistribute A and B for all 4 K-blocks via two
-    // `redistributeInput` calls per matrix (8 wave32 dwords -> 4 wave64
-    // dwords each, organised as 2 K-blocks worth of MFMA inputs).
+    // Pre-redistribute A and B for all 4 K-blocks (two redistributeInput
+    // calls per matrix: each produces inputs for 2 K-blocks).
     Value *aPerKBlock[4][2];
     Value *bPerKBlock[4][2];
     redistributeInput(B, M, aDwordsArr.data(), AddrLo, AddrHi, LaneGroup,
@@ -2018,8 +1762,6 @@ Value *emitWMMAScaleF8F6F4toMFMA(
     redistributeInput(B, M, bDwordsArr.data() + 8, AddrLo, AddrHi, LaneGroup,
                       bPerKBlock[2], bPerKBlock[3]);
 
-    // K-loop: per K-block, pack -> MFMA(zero acc) -> per-block scale
-    // -> fadd into accumulator.
     for (unsigned kBlock = 0; kBlock < 4; ++kBlock) {
       Value *SrcA = packDwords(B, aPerKBlock[kBlock], 2, ctx.I32Ty, ctx.I64Ty);
       Value *SrcB = packDwords(B, bPerKBlock[kBlock], 2, ctx.I32Ty, ctx.I64Ty);
@@ -2035,22 +1777,12 @@ Value *emitWMMAScaleF8F6F4toMFMA(
       Value *FactorVec = buildScaleFactorVec(
           B, M, ctx.F32Ty, ScaleAByte, ScaleBByte, aScaleFmt, bScaleFmt);
 
-      // Fused multiply-add: `Acc = Partial * FactorVec + Acc`. Use
-      // `llvm.fmuladd` (rather than `fmul` + `fadd` or `llvm.fma`) so
-      // the AMDGPU backend selects the native `v_fma_f32` on gfx942
-      // (single SIMD instruction, single-rounded) but a hypothetical
-      // FMA-less target would fall back to mul + add cleanly. Default
-      // IR fp-contract does NOT fuse plain `fmul` + `fadd`, so being
-      // explicit here is required to get the FMA codegen.
       Acc = B.CreateIntrinsic(Intrinsic::fmuladd, {AccTy},
                               {Partial, FactorVec, Acc}, nullptr,
                               "kblock_fmuladd");
     }
 
     // Collect the wave64-layout accumulator back to wave32 layout.
-    // W32Lane is the per-wave32 lane index (laneId & 31) -- the same
-    // for both passes; collectResult's output dwords land in the wave32
-    // C/D layout regardless of which pass produced them.
     Value *MfmaDst[4];
     unpackDwords(B, Acc, 4, ctx.I32Ty, MfmaDst);
     Value *W32Lane = B.CreateAnd(LaneId, B.getInt32(31), "w32_lane");
@@ -2061,13 +1793,9 @@ Value *emitWMMAScaleF8F6F4toMFMA(
           B, Result[i], "wmma_scale_collect_wwm");
   };
 
-  // Run pass 0 (target lanes 0..31's view of source data) unconditionally.
   Value *Result0[8];
   runPass(0, Result0);
 
-  // Under WaveNative cross-widen, run pass 1 (target lanes 32..63's view
-  // = source wave 1) and select per lane. Under MODREP, the single pass
-  // is the full result.
   Value *FinalDwords[8];
   if (numSrcWaves == 1) {
     for (unsigned i = 0; i < 8; ++i)
