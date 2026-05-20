@@ -1117,11 +1117,18 @@ llvm::Value *emitWMMAScaleF8F6F4toScaledMFMA(
 //   scale once on the K-block's `<4 x f32>` partial is precision-
 //   equivalent to applying it on every input element -- and far cheaper.
 //
-// Per K=128: 4 MFMA calls + 4 vec fmul + 4 vec fadd + 4 ldexp + 2 scale-
-// src bpermutes + accumulator redistribute + final wave64->wave32 collect.
-// Uses the native fp8/bf8 MFMA family directly, so no input widening and
-// no per-input scale -- the K-block's i64-packed A/B feeds straight into
-// the hardware MFMA.
+// Per K=128 per source-wave pass: 4 MFMA calls + 4 vec fmul + 4 vec fadd
+// + 4 ldexp + 2 scale-src bpermutes + accumulator redistribute + final
+// wave64->wave32 collect. Uses the native fp8/bf8 MFMA family directly,
+// so no input widening and no per-input scale -- the K-block's i64-packed
+// A/B feeds straight into the hardware MFMA.
+//
+// Source-wave dispatch (mirrors `runScaledPass` in the gfx950 emitter):
+//   * MODREP / numSrcWaves == 1: one pass with GroupBase = 0.
+//   * WaveNative cross-widen / numSrcWaves == 2: two passes (GroupBase = 0
+//     for source wave 0 -> target lanes 0..31, GroupBase = 32 for source
+//     wave 1 -> target lanes 32..63), final `select(laneId >= 32, ...)`
+//     per output dword.
 //
 // Scope of this draft: fp8 x fp8, fp8 x bf8, bf8 x fp8, bf8 x bf8 (the
 // four (FP8|BF8)^2 combinations supported by the gfx942 MFMA family).
@@ -1264,125 +1271,134 @@ Value *emitWMMAScaleF8F6F4toMFMA(
 
   Value *LaneId = emitLaneId(B, M, ctx.I32Ty);
 
-  // Multi-source-wave projection (WaveNative cross-widen) needs two
-  // independent K-decomposed passes mirroring `emitWMMAScaleF8F6F4toScaledMFMA`;
-  // out of scope for the initial draft.
+  // Projection's wave count is 1 (MODREP / single source wave per target)
+  // or 2 (WaveNative cross-widen: two source wave32s per target wave64).
+  // Anything else would be a new projection type we haven't designed for.
   const unsigned numSrcWaves = ctx.Projection.numSourceWavesPerTarget();
-  if (numSrcWaves != 1)
+  if (numSrcWaves != 1 && numSrcWaves != 2)
     return nullptr;
 
-  // Virtual W32 group select. Single source wave -> single pass with
-  // GroupBase = 0. Adding WaveNative cross-widen (2 source waves) means
-  // looping this over GroupBase in {0, 32}, mirroring `runGroupPass` --
-  // currently gated out by the `numSrcWaves != 1` refusal above.
-  const unsigned GroupBase = 0;
-  Value *LaneMod16 = B.CreateAnd(LaneId, B.getInt32(15), "lane16");
-  Value *LoLane = B.CreateAdd(LaneMod16, B.getInt32(GroupBase), "lo_lane");
-  Value *HiLane =
-      B.CreateAdd(LaneMod16, B.getInt32(GroupBase + 16), "hi_lane");
-  Value *AddrLo = B.CreateShl(LoLane, B.getInt32(2), "addr_lo");
-  Value *AddrHi = B.CreateShl(HiLane, B.getInt32(2), "addr_hi");
-  Value *LaneGroup = B.CreateLShr(LaneId, B.getInt32(4), "lane_grp");
-
-  // Redistribute scale_src0 / scale_src1 from `addrLo` so each wave64
-  // lane reads the source-wave32 lane's scale value at the right virtual-
-  // W32 group position. Same pattern as the gfx950 `runScaledPass`. One
-  // bpermute per scale src; all 4 K-block scale bytes ride inside the
-  // same i32 (UE8M0 byte k -> K-block k).
-  Value *ScaleSrc0Pass = emitDSBpermute(B, M, AddrLo, scaleSrc0);
-  Value *ScaleSrc1Pass = emitDSBpermute(B, M, AddrLo, scaleSrc1);
-
-  // Redistribute the accumulator ONCE (wave32 -> wave64). The accumulator
-  // layout is K-invariant (16x16 f32 -> 4 dwords per wave64 lane), so the
-  // existing redistributeAcc helper applies as-is.
-  Value *MfmaC[4];
-  redistributeAcc(B, M, cDwords, AddrLo, AddrHi, LaneGroup, MfmaC);
-
   auto *AccTy = FixedVectorType::get(ctx.F32Ty, 4);
-  Value *Acc = packDwords(B, MfmaC, 4, ctx.I32Ty, AccTy);
-
-  // Apply C_mod (neg / abs / neg(abs)) on the redistributed accumulator.
-  int64_t cModVal = cast<ConstantInt>(cMod)->getZExtValue();
-  if (cModVal & 2)
-    Acc = B.CreateUnaryIntrinsic(Intrinsic::fabs, Acc, nullptr, "c_abs");
-  if (cModVal & 1)
-    Acc = B.CreateFNeg(Acc, "c_neg");
-
-  // Redistribute A and B for all 4 K-blocks up front.
-  //
-  // `redistributeInput` consumes 8 wave32 dwords and produces 4 wave64
-  // dwords -- structured as 2 K-stripes of 2 dwords each -- exactly the
-  // shape we need for TWO K-blocks (each K-block = 2 wave64 dwords on
-  // each side). K-blocks {0,1} share wave32 dwords [0..7]; K-blocks
-  // {2,3} share wave32 dwords [8..15]. Two helper calls per matrix
-  // suffice, and the redistribution work happens once outside the
-  // K-loop. The byte-exact dword-indexing math (`wmma[KBase+G]` /
-  // `wmma[KBase+2+G]` for K-block KBase, where KBase = 0 or 4) is
-  // bit-identical to `redistributeInput`'s `MfmaLo` / `MfmaHi` math
-  // applied with the array sliced at offset 0 or 8.
-  Value *aPerKBlock[4][2];
-  Value *bPerKBlock[4][2];
-  redistributeInput(B, M, aDwordsArr.data(), AddrLo, AddrHi, LaneGroup,
-                    aPerKBlock[0], aPerKBlock[1]);
-  redistributeInput(B, M, aDwordsArr.data() + 8, AddrLo, AddrHi, LaneGroup,
-                    aPerKBlock[2], aPerKBlock[3]);
-  redistributeInput(B, M, bDwordsArr.data(), AddrLo, AddrHi, LaneGroup,
-                    bPerKBlock[0], bPerKBlock[1]);
-  redistributeInput(B, M, bDwordsArr.data() + 8, AddrLo, AddrHi, LaneGroup,
-                    bPerKBlock[2], bPerKBlock[3]);
-
-  // K-loop: 4 K-blocks of K=32 each.
-  //
-  // For each K-block:
-  //   1. Pack the K-block's 2 pre-redistributed wave64 dwords of A and B
-  //      as i64 (the fp8/bf8 MFMA intrinsic A/B pack convention).
-  //   2. Call the chosen fp8/bf8 MFMA with a ZERO accumulator to get
-  //      the unscaled K-block partial (`<4 x f32>` per wave64 lane).
-  //   3. Multiply the partial by the combined UE8M0 scale factor
-  //      `2^(sA + sB - 254)` for this K-block.
-  //   4. fadd the scaled partial into the running output accumulator.
-  //
-  // gfx942 fp8/bf8 MFMA signature (IntrinsicsAMDGPU.td:3594):
-  //   (i64 A, i64 B, <4 x f32> Acc, i32 cbsz, i32 abid, i32 blgp) -> <4 x f32>
-  // cbsz / abid / blgp = 0 (no broadcast, no A-id, no neg).
   Function *MfmaFn = Intrinsic::getOrInsertDeclaration(&M, MfmaId);
   Value *Cbsz = B.getInt32(0);
   Value *Abid = B.getInt32(0);
   Value *Blgp = B.getInt32(0);
   Value *ZeroAcc = ConstantAggregateZero::get(AccTy);
+  int64_t cModVal = cast<ConstantInt>(cMod)->getZExtValue();
 
-  for (unsigned kBlock = 0; kBlock < 4; ++kBlock) {
-    Value *SrcA = packDwords(B, aPerKBlock[kBlock], 2, ctx.I32Ty, ctx.I64Ty);
-    Value *SrcB = packDwords(B, bPerKBlock[kBlock], 2, ctx.I32Ty, ctx.I64Ty);
+  // One pass per virtual W32 group: groupBase in {0, 32}.
+  //
+  // Each pass redistributes the source-wave32 fragments at the lane
+  // positions `[GroupBase .. GroupBase+32)` into the full wave64 MFMA
+  // layout, runs the 4-K-block MFMA chain with software UE8M0 scale on
+  // the result, and produces 8 wave32-layout result dwords. Under
+  // MODREP (numSrcWaves == 1) we only need pass 0; under WaveNative
+  // cross-widen (numSrcWaves == 2) we need both passes -- pass 0 for
+  // source wave 0 (target lanes 0..31) and pass 32 for source wave 1
+  // (target lanes 32..63) -- with a final per-lane select picking the
+  // right pass's output. Mirrors `runScaledPass` in the gfx950 emitter.
+  auto runPass = [&](unsigned GroupBase, Value *Result[8]) {
+    // Per-pass virtual W32 group: LoLane = LaneMod16 + GroupBase,
+    // HiLane = LoLane + 16. AddrLo / AddrHi are the byte addresses
+    // (lane * 4) that `ds_bpermute` consumes.
+    Value *LaneMod16 = B.CreateAnd(LaneId, B.getInt32(15), "lane16");
+    Value *LoLane = B.CreateAdd(LaneMod16, B.getInt32(GroupBase), "lo_lane");
+    Value *HiLane =
+        B.CreateAdd(LaneMod16, B.getInt32(GroupBase + 16), "hi_lane");
+    Value *AddrLo = B.CreateShl(LoLane, B.getInt32(2), "addr_lo");
+    Value *AddrHi = B.CreateShl(HiLane, B.getInt32(2), "addr_hi");
+    Value *LaneGroup = B.CreateLShr(LaneId, B.getInt32(4), "lane_grp");
 
-    Value *Partial = ctx.Projection.wrapAsWWMValue(
-        B,
-        B.CreateCall(MfmaFn, {SrcA, SrcB, ZeroAcc, Cbsz, Abid, Blgp},
-                     "kblock_partial"),
-        "kblock_partial_wwm");
+    // Redistribute scale_src0 / scale_src1 from `AddrLo` so each wave64
+    // lane reads the source-wave32 lane's scale value at the right
+    // virtual-W32 group position. All 4 K-block scale bytes ride inside
+    // the same i32 (UE8M0 byte k -> K-block k), so one bpermute per
+    // scale src per pass suffices.
+    Value *ScaleSrc0Pass = emitDSBpermute(B, M, AddrLo, scaleSrc0);
+    Value *ScaleSrc1Pass = emitDSBpermute(B, M, AddrLo, scaleSrc1);
 
-    Value *ScaleAByte = extractScaleByte(B, ScaleSrc0Pass, kBlock);
-    Value *ScaleBByte = extractScaleByte(B, ScaleSrc1Pass, kBlock);
-    Value *FactorVec =
-        buildScaleFactorVec(B, M, ctx.F32Ty, ScaleAByte, ScaleBByte);
-    Value *Scaled = B.CreateFMul(Partial, FactorVec, "kblock_scaled");
+    // Redistribute the accumulator (wave32 -> wave64). Layout is K-
+    // invariant; reuse `redistributeAcc`.
+    Value *MfmaC[4];
+    redistributeAcc(B, M, cDwords, AddrLo, AddrHi, LaneGroup, MfmaC);
+    Value *Acc = packDwords(B, MfmaC, 4, ctx.I32Ty, AccTy);
 
-    Acc = B.CreateFAdd(Acc, Scaled, "kblock_accum");
+    // C_mod (neg / abs / neg(abs)) on the redistributed accumulator.
+    if (cModVal & 2)
+      Acc = B.CreateUnaryIntrinsic(Intrinsic::fabs, Acc, nullptr, "c_abs");
+    if (cModVal & 1)
+      Acc = B.CreateFNeg(Acc, "c_neg");
+
+    // Pre-redistribute A and B for all 4 K-blocks via two
+    // `redistributeInput` calls per matrix (8 wave32 dwords -> 4 wave64
+    // dwords each, organised as 2 K-blocks worth of MFMA inputs).
+    Value *aPerKBlock[4][2];
+    Value *bPerKBlock[4][2];
+    redistributeInput(B, M, aDwordsArr.data(), AddrLo, AddrHi, LaneGroup,
+                      aPerKBlock[0], aPerKBlock[1]);
+    redistributeInput(B, M, aDwordsArr.data() + 8, AddrLo, AddrHi, LaneGroup,
+                      aPerKBlock[2], aPerKBlock[3]);
+    redistributeInput(B, M, bDwordsArr.data(), AddrLo, AddrHi, LaneGroup,
+                      bPerKBlock[0], bPerKBlock[1]);
+    redistributeInput(B, M, bDwordsArr.data() + 8, AddrLo, AddrHi, LaneGroup,
+                      bPerKBlock[2], bPerKBlock[3]);
+
+    // K-loop: per K-block, pack -> MFMA(zero acc) -> per-block scale
+    // -> fadd into accumulator.
+    for (unsigned kBlock = 0; kBlock < 4; ++kBlock) {
+      Value *SrcA = packDwords(B, aPerKBlock[kBlock], 2, ctx.I32Ty, ctx.I64Ty);
+      Value *SrcB = packDwords(B, bPerKBlock[kBlock], 2, ctx.I32Ty, ctx.I64Ty);
+
+      Value *Partial = ctx.Projection.wrapAsWWMValue(
+          B,
+          B.CreateCall(MfmaFn, {SrcA, SrcB, ZeroAcc, Cbsz, Abid, Blgp},
+                       "kblock_partial"),
+          "kblock_partial_wwm");
+
+      Value *ScaleAByte = extractScaleByte(B, ScaleSrc0Pass, kBlock);
+      Value *ScaleBByte = extractScaleByte(B, ScaleSrc1Pass, kBlock);
+      Value *FactorVec =
+          buildScaleFactorVec(B, M, ctx.F32Ty, ScaleAByte, ScaleBByte);
+      Value *Scaled = B.CreateFMul(Partial, FactorVec, "kblock_scaled");
+
+      Acc = B.CreateFAdd(Acc, Scaled, "kblock_accum");
+    }
+
+    // Collect the wave64-layout accumulator back to wave32 layout.
+    // W32Lane is the per-wave32 lane index (laneId & 31) -- the same
+    // for both passes; collectResult's output dwords land in the wave32
+    // C/D layout regardless of which pass produced them.
+    Value *MfmaDst[4];
+    unpackDwords(B, Acc, 4, ctx.I32Ty, MfmaDst);
+    Value *W32Lane = B.CreateAnd(LaneId, B.getInt32(31), "w32_lane");
+    collectResult(B, M, MfmaDst, W32Lane, Result);
+
+    for (unsigned i = 0; i < 8; ++i)
+      Result[i] = ctx.Projection.wrapAsWWMValue(
+          B, Result[i], "wmma_scale_collect_wwm");
+  };
+
+  // Run pass 0 (target lanes 0..31's view of source data) unconditionally.
+  Value *Result0[8];
+  runPass(0, Result0);
+
+  // Under WaveNative cross-widen, run pass 1 (target lanes 32..63's view
+  // = source wave 1) and select per lane. Under MODREP, the single pass
+  // is the full result.
+  Value *FinalDwords[8];
+  if (numSrcWaves == 1) {
+    for (unsigned i = 0; i < 8; ++i)
+      FinalDwords[i] = Result0[i];
+  } else {
+    Value *Result1[8];
+    runPass(32, Result1);
+    Value *IsGroup1 = B.CreateICmpUGE(LaneId, B.getInt32(32), "is_group1");
+    for (unsigned i = 0; i < 8; ++i)
+      FinalDwords[i] =
+          B.CreateSelect(IsGroup1, Result1[i], Result0[i], "sel");
   }
 
-  // Gather the wave64-layout accumulator back to wave32 layout.
-  Value *MfmaDst[4];
-  unpackDwords(B, Acc, 4, ctx.I32Ty, MfmaDst);
-
-  Value *W32Lane = B.CreateAnd(LaneId, B.getInt32(31), "w32_lane");
-  Value *ResultDwords[8];
-  collectResult(B, M, MfmaDst, W32Lane, ResultDwords);
-
-  for (unsigned i = 0; i < 8; ++i)
-    ResultDwords[i] = ctx.Projection.wrapAsWWMValue(
-        B, ResultDwords[i], "wmma_scale_gfx942_collect_wwm");
-
-  return packDwords(B, ResultDwords, 8, ctx.I32Ty,
+  return packDwords(B, FinalDwords, 8, ctx.I32Ty,
                     FixedVectorType::get(ctx.F32Ty, 8));
 }
 

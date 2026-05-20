@@ -1,5 +1,5 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --disable-wave-native --emit-ir=wmma_scale_f32_16x16x128_f8f6f4_kernel 2>&1 | %FileCheck %s --check-prefix=IR_GFX942
+; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=wmma_scale_f32_16x16x128_f8f6f4_kernel 2>&1 | %FileCheck %s --check-prefix=IR_GFX942
 ;
 ; Cross-target lift fixture for v_wmma_scale_f32_16x16x128_f8f6f4
 ; (gfx1250 RDNA4 source) -> gfx942 (CDNA3 target). Pins the
@@ -8,10 +8,14 @@
 ; `handle_valu_vop3p.cpp` under
 ; `CanonicalOp::V_WMMA_SCALE_F32_16x16x128_F8F6F4`.
 ;
-; `--disable-wave-native` selects the MODREP projection (one source
-; wave per target wave64) because this draft only covers
-; numSrcWaves == 1; the WaveNative cross-widen path (numSrcWaves == 2,
-; GroupBase looped over {0, 32}) is a noted follow-up.
+; Default projection is WaveNative cross-widen (numSrcWaves == 2: one
+; target wave64 absorbs two source wave32s). The emitter runs two
+; passes -- GroupBase = 0 for source wave 0 (target lanes 0..31),
+; GroupBase = 32 for source wave 1 (target lanes 32..63) -- and selects
+; per-lane between the two passes' output dwords. Each pass issues 4
+; K-block MFMA calls, for a total of 8 bf8.fp8 MFMA calls under
+; WaveNative (vs 4 under MODREP). The companion MODREP RUN line below
+; pins the single-pass path via `--disable-wave-native`.
 ;
 ; gfx942 has neither the scaled-WMMA family (gfx1250-only) nor the
 ; scaled-MFMA F8F6F4 family (gfx950+, gated on `FeatureGFX950Insts`).
@@ -72,26 +76,33 @@
 
 ; IR_GFX942-LABEL: define amdgpu_kernel void @wmma_scale_f32_16x16x128_f8f6f4_kernel(
 
-; The K-loop emits 4 iterations, each producing in interleaved order:
+; Under WaveNative, the K-loop runs TWICE (pass 0 + pass 32) for a
+; total of 8 K-block MFMA iterations. Each iteration emits in order:
 ;   MFMA partial (bf8.fp8 -- aFmt = MATRIX_FMT_BF8 (1), bFmt =
 ;   MATRIX_FMT_FP8 (0, default)), ldexp scale factor, fmul scaled,
 ;   fadd into the running accumulator. The MFMA accumulator argument
 ;   is `zeroinitializer` per call -- we accumulate at IR level after
 ;   applying the per-K-block scale, NOT via MFMA chaining.
 ;
-; First K-block pins the per-iteration emission order:
+; First K-block of pass 0 pins the per-iteration emission order:
 ; IR_GFX942: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.bf8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
 ; IR_GFX942: sub i32 %{{[^,]+}}, 254
 ; IR_GFX942: call float @llvm.ldexp.f32.i32(float 1.000000e+00, i32 %{{[^)]+}})
 ; IR_GFX942: fmul <4 x float>
 ; IR_GFX942: fadd <4 x float>
 ;
-; The remaining 3 K-blocks: 3 more bf8.fp8 MFMA calls. The intervening
-; ldexp / fmul / fadd are required by the K-loop structure; only the
-; MFMA count is asserted directly here (4 total = 1 above + 3 below)
-; because the per-iteration emission order is already pinned for
-; iteration 0 and the loop body is deterministic.
-; IR_GFX942-COUNT-3: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.bf8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
+; The remaining 7 K-blocks (3 in pass 0, 4 in pass 1): 7 more bf8.fp8
+; MFMA calls. The intervening ldexp / fmul / fadd / per-pass redistribute
+; are required by the K-loop structure; only the MFMA count is asserted
+; directly because the per-iteration emission order is pinned above
+; and the loop body is deterministic.
+; IR_GFX942-COUNT-7: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.bf8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
+
+; WaveNative final per-lane select: target lanes 0..31 take pass 0's
+; output, target lanes 32..63 take pass 1's. The `select i1 %is_group1`
+; pattern below is the marker that the two-pass dispatch ran.
+; IR_GFX942-DAG: icmp uge i32 %{{[^,]+}}, 32
+; IR_GFX942-DAG: select i1 %{{[^,]+}}, i32 %{{[^,]+}}, i32 %{{[^,]+}}
 
 ; Lane redistribution via ds.bpermute (wave32 -> wave64 cross-wave-size
 ; lowering marker -- many bpermute calls; one is enough to pin presence).
@@ -111,6 +122,18 @@
 ; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.fp8.fp8
 ; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.fp8.bf8
 ; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.bf8.bf8
+
+; MODREP fallback: pin the single-pass path via `--disable-wave-native`.
+; Same emitter, numSrcWaves == 1 -> only pass 0 runs -> 4 MFMA calls
+; total and no per-pass select diamond.
+; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
+; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --disable-wave-native --emit-ir=wmma_scale_f32_16x16x128_f8f6f4_kernel 2>&1 | %FileCheck %s --check-prefix=IR_GFX942_MODREP
+
+; IR_GFX942_MODREP-LABEL: define amdgpu_kernel void @wmma_scale_f32_16x16x128_f8f6f4_kernel(
+; IR_GFX942_MODREP-COUNT-4: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.bf8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
+; IR_GFX942_MODREP-NOT: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.bf8.fp8(
+; IR_GFX942_MODREP-NOT: @llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4
+; IR_GFX942_MODREP-NOT: @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4
 
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx1250 --emit-ir=wmma_scale_f32_16x16x128_f8f6f4_kernel 2>&1 | %FileCheck %s --check-prefix=IR

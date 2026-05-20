@@ -1206,9 +1206,9 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
             "emitWMMAScaleF8F6F4toMFMA refused this configuration. "
             "Supported in this draft: matrix_a_fmt / matrix_b_fmt in "
             "{FP8, BF8} (ADwords == BDwords == 16), matrix_*_scale == "
-            "matrix_*_scale_fmt == 0 (canonical UE8M0), single-source-wave "
-            "projection. f6 / f4 fragment widths and non-canonical scale "
-            "selectors are not yet supported.");
+            "matrix_*_scale_fmt == 0 (canonical UE8M0). f6 / f4 fragment "
+            "widths and non-canonical scale selectors are not yet "
+            "supported.");
         return Hr;
       }
     } else {
