@@ -1130,15 +1130,26 @@ llvm::Value *emitWMMAScaleF8F6F4toScaledMFMA(
 //     wave 1 -> target lanes 32..63), final `select(laneId >= 32, ...)`
 //     per output dword.
 //
-// Scope of this draft: (FP8 | BF8 | FP4)^2 with each side independently
-// widened if it is FP4. FP4 (E2M1) widens to FP8 (E4M3) via a branchless
-// per-nibble bit-arithmetic helper (`widenF4NibbleToFP8`) -- no LUT, no
-// memory access, ~10 IR ops per element. The widened fragment is laid
-// out exactly like a native FP8 fragment (16 dwords / wave32 lane), so
-// the downstream redistribute + MFMA + scale + collect pipeline is
-// unchanged. FP6 / BF6 inputs are still refused -- the per-element bit
-// math is the same shape but the 6-bit-element unpack across byte / dword
-// boundaries is gnarly enough to want a separate patch.
+// Scope of this draft: any (aFmt, bFmt) combination over {FP8, BF8, FP6,
+// BF6, FP4}. Each side widens independently in-line via branchless ALU
+// bit-arithmetic helpers -- no LUTs, no memory access:
+//   FP4 (E2M1) -> FP8 (E4M3) via `widenF4NibbleToFP8`
+//   FP6 (E2M3) -> FP8 (E4M3) via `widenFP6NibbleToFP8`
+//   BF6 (E3M2) -> BF8 (E5M2) via `widenBF6NibbleToBF8`
+// FP8 / BF8 fragments pass through unchanged. The widened fragment is
+// always 16 dwords / wave32 lane, exactly matching a native fp8 / bf8
+// fragment, so the downstream redistribute + MFMA + scale + collect
+// pipeline is format-agnostic from this point on.
+//
+// The MFMA dispatch uses `effectiveFmtAfterWiden` to map source format
+// to its post-widen destination, then picks the matching gfx942 MFMA
+// intrinsic from the (FP8|BF8)^2 family.
+//
+// Cost per widening (per wave32 lane, all branchless ALU):
+//   FP4: ~640 IR ops (8 dwords x 8 nibbles x 10 ops/nibble)
+//   FP6: ~960 IR ops (12 dwords / 64 elements; unpack 2-6 ops + widen
+//                     ~15 ops + pack ~3 ops per element)
+//   BF6: ~960 IR ops (same shape as FP6)
 // ============================================================================
 
 namespace {
@@ -1296,6 +1307,197 @@ void widenF4FragmentToFP8(IRBuilder<> &B, Module &M,
   }
 }
 
+// Extract the k-th 6-bit element from a 12-dword (384-bit) wave32-lane
+// fragment. 6-bit elements are packed contiguously across byte / dword
+// boundaries -- the alignment period is 24 bits (= 4 elements per 3
+// bytes); within a single 32-bit dword the layout misaligns at the
+// fifth-element boundary (k = 5, 10, 16, 21, 26, ...).
+//
+// Per-element cost: 2 IR ops if the element fits in one dword
+// (bit_offset % 32 + 6 <= 32, 53 of 64 elements), 6 ops if it crosses
+// a dword boundary (11 of 64 elements). Bit_offset, dw_idx, and the
+// crossing predicate are all compile-time constants.
+Value *extractF6Nibble(IRBuilder<> &B, ArrayRef<Value *> Dwords,
+                       unsigned k) {
+  const unsigned bitOffset = 6 * k;
+  const unsigned dwIdx = bitOffset / 32;
+  const unsigned bitInDw = bitOffset % 32;
+  const bool crosses = (bitInDw + 6) > 32;
+
+  if (!crosses) {
+    Value *Shifted =
+        B.CreateLShr(Dwords[dwIdx], B.getInt32(bitInDw), "f6_shr");
+    return B.CreateAnd(Shifted, B.getInt32(0x3F), "f6_nib");
+  }
+  // Element straddles the dword boundary. Combine two consecutive
+  // dwords as i64, shift right by `bitInDw`, mask 6 bits, truncate
+  // back to i32.
+  Type *I64Ty = B.getInt64Ty();
+  Type *I32Ty = B.getInt32Ty();
+  Value *Lo = B.CreateZExt(Dwords[dwIdx], I64Ty, "f6_lo");
+  Value *Hi = B.CreateZExt(Dwords[dwIdx + 1], I64Ty, "f6_hi");
+  Value *Combined = B.CreateOr(
+      Lo, B.CreateShl(Hi, B.getInt64(32)), "f6_pair");
+  Value *Shifted =
+      B.CreateLShr(Combined, B.getInt64(bitInDw), "f6_shr64");
+  Value *Trunc = B.CreateTrunc(Shifted, I32Ty, "f6_trunc");
+  return B.CreateAnd(Trunc, B.getInt32(0x3F), "f6_nib");
+}
+
+// Widen one FP6 (E2M3) value (low 6 bits of `Nibble`, held in i32) to
+// an FP8 E4M3 byte (low 8 bits of returned i32).
+//
+//   FP6 (E2M3, bias=1, mw=3): S EE MMM
+//   FP8 (E4M3, bias=7, mw=3): S EEEE MMM
+//
+// Same mantissa width -> no padding needed. Exp bias diff = 7 - 1 = 6.
+//
+// Subnormal renormalization (E=0, M in 1..7):
+//   value = M * 2^-3 (E2M3 emin = 0, mw=3 -> M / 8)
+//   lz = ctlz_3bit(M) in {0, 1, 2}
+//   biased_FP8_exp = 6 - lz
+//   FP8 mant = (M << (lz + 1)) & 0b111
+//
+// `ctlz_3bit(M)` for M in [1, 7] is computed via `@llvm.ctlz.i32(M)
+// - 29` since ctlz on i32 returns 32 - log2_floor(M) - 1 = (31 -
+// log2_floor(M)); for M=1 -> 31, M=2 -> 30, ..., M=4..7 -> 29. Subtract
+// 29 to get the 3-bit lz value 2, 1, 0 respectively.
+Value *widenFP6NibbleToFP8(IRBuilder<> &B, Module &M, Value *Nibble) {
+  Value *Sign = B.CreateAnd(B.CreateLShr(Nibble, B.getInt32(5)),
+                            B.getInt32(1), "fp6_sign");
+  Value *Exp = B.CreateAnd(B.CreateLShr(Nibble, B.getInt32(3)),
+                           B.getInt32(3), "fp6_exp");
+  Value *Mant = B.CreateAnd(Nibble, B.getInt32(7), "fp6_mant");
+
+  // Normal: biased_exp = E + 6, mant unchanged.
+  Value *NormExp = B.CreateAdd(Exp, B.getInt32(6), "norm_exp");
+  Value *NormMant = Mant;
+
+  // Subnormal renormalization via ctlz.
+  Function *CtlzFn = Intrinsic::getOrInsertDeclaration(
+      &M, Intrinsic::ctlz, {B.getInt32Ty()});
+  Value *Ctlz =
+      B.CreateCall(CtlzFn, {Mant, B.getInt1(true)}, "fp6_ctlz");
+  Value *LZ = B.CreateSub(Ctlz, B.getInt32(29), "fp6_lz");
+  Value *SubExp = B.CreateSub(B.getInt32(6), LZ, "sub_exp");
+  Value *MantShifted = B.CreateShl(
+      Mant, B.CreateAdd(LZ, B.getInt32(1)), "sub_mant_shl");
+  Value *SubMant = B.CreateAnd(MantShifted, B.getInt32(7), "sub_mant");
+
+  Value *IsSubnormal = B.CreateICmpEQ(Exp, B.getInt32(0), "is_sub");
+  Value *FP8Exp =
+      B.CreateSelect(IsSubnormal, SubExp, NormExp, "fp8_exp");
+  Value *FP8Mant =
+      B.CreateSelect(IsSubnormal, SubMant, NormMant, "fp8_mant");
+
+  Value *FP8 = B.CreateOr(
+      B.CreateShl(Sign, B.getInt32(7)),
+      B.CreateOr(B.CreateShl(FP8Exp, B.getInt32(3)), FP8Mant), "fp8");
+
+  // +-0 override (subnormal-path otherwise emits 0x30/0xB0 for M=0).
+  Value *IsZero = B.CreateAnd(IsSubnormal,
+                              B.CreateICmpEQ(Mant, B.getInt32(0)));
+  return B.CreateSelect(IsZero, B.CreateShl(Sign, B.getInt32(7)),
+                        FP8, "fp8_or_zero");
+}
+
+// Widen one BF6 (E3M2) value (low 6 bits of `Nibble`, held in i32) to
+// a BF8 E5M2 byte (low 8 bits of returned i32).
+//
+//   BF6 (E3M2, bias=3, mw=2): S EEE MM
+//   BF8 (E5M2, bias=15, mw=2): S EEEEE MM
+//
+// Same mantissa width -> no padding. Exp bias diff = 15 - 3 = 12.
+//
+// Subnormal renormalization (E=0, M in 1..3):
+//   value = M * 2^-4 (E3M2 emin = -2, mw=2 -> M / 16)
+//   lz = ctlz_2bit(M) in {0, 1}
+//   biased_BF8_exp = 12 - lz
+//   BF8 mant = (M << (lz + 1)) & 0b11
+//
+// `ctlz_2bit(M)` for M in [1, 3] is `@llvm.ctlz.i32(M) - 30`.
+Value *widenBF6NibbleToBF8(IRBuilder<> &B, Module &M, Value *Nibble) {
+  Value *Sign = B.CreateAnd(B.CreateLShr(Nibble, B.getInt32(5)),
+                            B.getInt32(1), "bf6_sign");
+  Value *Exp = B.CreateAnd(B.CreateLShr(Nibble, B.getInt32(2)),
+                           B.getInt32(7), "bf6_exp");
+  Value *Mant = B.CreateAnd(Nibble, B.getInt32(3), "bf6_mant");
+
+  // Normal: biased_exp = E + 12, mant unchanged.
+  Value *NormExp = B.CreateAdd(Exp, B.getInt32(12), "norm_exp");
+  Value *NormMant = Mant;
+
+  Function *CtlzFn = Intrinsic::getOrInsertDeclaration(
+      &M, Intrinsic::ctlz, {B.getInt32Ty()});
+  Value *Ctlz =
+      B.CreateCall(CtlzFn, {Mant, B.getInt1(true)}, "bf6_ctlz");
+  Value *LZ = B.CreateSub(Ctlz, B.getInt32(30), "bf6_lz");
+  Value *SubExp = B.CreateSub(B.getInt32(12), LZ, "sub_exp");
+  Value *MantShifted = B.CreateShl(
+      Mant, B.CreateAdd(LZ, B.getInt32(1)), "sub_mant_shl");
+  Value *SubMant = B.CreateAnd(MantShifted, B.getInt32(3), "sub_mant");
+
+  Value *IsSubnormal = B.CreateICmpEQ(Exp, B.getInt32(0), "is_sub");
+  Value *BF8Exp =
+      B.CreateSelect(IsSubnormal, SubExp, NormExp, "bf8_exp");
+  Value *BF8Mant =
+      B.CreateSelect(IsSubnormal, SubMant, NormMant, "bf8_mant");
+
+  // BF8 has mantissa width 2: exp shifted by 2, not 3.
+  Value *BF8 = B.CreateOr(
+      B.CreateShl(Sign, B.getInt32(7)),
+      B.CreateOr(B.CreateShl(BF8Exp, B.getInt32(2)), BF8Mant), "bf8");
+
+  Value *IsZero = B.CreateAnd(IsSubnormal,
+                              B.CreateICmpEQ(Mant, B.getInt32(0)));
+  return B.CreateSelect(IsZero, B.CreateShl(Sign, B.getInt32(7)),
+                        BF8, "bf8_or_zero");
+}
+
+// Widen a full FP6 fragment (12 i32 dwords / wave32 lane, 64 elements
+// packed at 6 bits each) to an FP8 fragment (16 i32 dwords / lane).
+// Element k of the source -> byte k of the destination, preserving the
+// K-dimension layout (same convention as `widenF4FragmentToFP8`).
+void widenFP6FragmentToFP8(IRBuilder<> &B, Module &M,
+                           ArrayRef<Value *> SrcDwords,
+                           SmallVectorImpl<Value *> &DstDwords) {
+  assert(SrcDwords.size() == 12 &&
+         "FP6 fragment is 12 i32 dwords / lane");
+  DstDwords.assign(16, B.getInt32(0));
+  for (unsigned k = 0; k < 64; ++k) {
+    Value *Nibble = extractF6Nibble(B, SrcDwords, k);
+    Value *FP8 = widenFP6NibbleToFP8(B, M, Nibble);
+    unsigned dstDw = k / 4;
+    unsigned bytePos = k % 4;
+    Value *Placed = B.CreateShl(FP8, B.getInt32(8 * bytePos),
+                                "fp8_placed");
+    DstDwords[dstDw] =
+        B.CreateOr(DstDwords[dstDw], Placed, "fp8_pack");
+  }
+}
+
+// Widen a full BF6 fragment to a BF8 fragment. Same shape as
+// `widenFP6FragmentToFP8`; differs only in the per-element widener
+// (BF6 -> BF8 vs FP6 -> FP8) since the bit-unpacking is identical
+// across 6-bit-element formats.
+void widenBF6FragmentToBF8(IRBuilder<> &B, Module &M,
+                           ArrayRef<Value *> SrcDwords,
+                           SmallVectorImpl<Value *> &DstDwords) {
+  assert(SrcDwords.size() == 12 &&
+         "BF6 fragment is 12 i32 dwords / lane");
+  DstDwords.assign(16, B.getInt32(0));
+  for (unsigned k = 0; k < 64; ++k) {
+    Value *Nibble = extractF6Nibble(B, SrcDwords, k);
+    Value *BF8 = widenBF6NibbleToBF8(B, M, Nibble);
+    unsigned dstDw = k / 4;
+    unsigned bytePos = k % 4;
+    Value *Placed = B.CreateShl(BF8, B.getInt32(8 * bytePos),
+                                "bf8_placed");
+    DstDwords[dstDw] =
+        B.CreateOr(DstDwords[dstDw], Placed, "bf8_pack");
+  }
+}
+
 // Extract byte `k` (0..3) from a 32-bit value as a zero-extended i32.
 // Per-K-block UE8M0 scale extraction.
 Value *extractScaleByte(IRBuilder<> &B, Value *Scale32, unsigned k) {
@@ -1344,15 +1546,20 @@ Value *emitWMMAScaleF8F6F4toMFMA(
 
   // Fragment-width guard. Supported in this draft:
   //   * aDwords == 16 (FP8 or BF8): native fp8/bf8 fragment, used as-is.
-  //   * aDwords == 8  (FP4): 4-bit-packed; widened in-line to a 16-dword
-  //                          fp8 fragment via `widenF4FragmentToFP8`.
-  //   * aDwords == 12 (FP6 / BF6): 6-bit-packed; NOT YET wired (follow-up
-  //                                patch -- the sub-byte unpack needs a
-  //                                misaligned-bit shifter).
-  // Same set for bDwords. The per-element bit arithmetic for f6 widening
-  // is identical in shape to the f4 case (see `widenF4NibbleToFP8`);
-  // only the unpack changes.
-  auto SupportedDwords = [](unsigned dw) { return dw == 16 || dw == 8; };
+  //   * aDwords == 12 (FP6 / BF6): 6-bit-packed; widened in-line via
+  //                                `widenFP6FragmentToFP8` (E2M3 -> E4M3)
+  //                                or `widenBF6FragmentToBF8` (E3M2 ->
+  //                                E5M2). The 6-bit unpack uses cross-
+  //                                dword shifts on the 11 boundary
+  //                                elements (53 of 64 elements fit in
+  //                                one dword).
+  //   * aDwords == 8  (FP4):       4-bit-packed; widened in-line to a
+  //                                16-dword fp8 fragment via
+  //                                `widenF4FragmentToFP8`.
+  // Same set for bDwords. Each side widens independently of the other.
+  auto SupportedDwords = [](unsigned dw) {
+    return dw == 16 || dw == 12 || dw == 8;
+  };
   if (!SupportedDwords(aDwords) || !SupportedDwords(bDwords))
     return nullptr;
 
@@ -1394,16 +1601,26 @@ Value *emitWMMAScaleF8F6F4toMFMA(
   // pre-redistributed once and reused across all K-blocks of both passes.
   SmallVector<Value *, 16> aDwordsArr;
   SmallVector<Value *, 16> bDwordsArr;
-  if (aFmt == FmtFP4) {
-    widenF4FragmentToFP8(B, M, aSrcDwords, aDwordsArr);
-  } else {
-    aDwordsArr.assign(aSrcDwords.begin(), aSrcDwords.end());
-  }
-  if (bFmt == FmtFP4) {
-    widenF4FragmentToFP8(B, M, bSrcDwords, bDwordsArr);
-  } else {
-    bDwordsArr.assign(bSrcDwords.begin(), bSrcDwords.end());
-  }
+  auto WidenFragment = [&](int Fmt, ArrayRef<Value *> Src,
+                            SmallVectorImpl<Value *> &Dst) {
+    switch (Fmt) {
+    case FmtFP4:
+      widenF4FragmentToFP8(B, M, Src, Dst);
+      break;
+    case FmtFP6:
+      widenFP6FragmentToFP8(B, M, Src, Dst);
+      break;
+    case FmtBF6:
+      widenBF6FragmentToBF8(B, M, Src, Dst);
+      break;
+    default:
+      // FP8 / BF8: pass-through, no widening.
+      Dst.assign(Src.begin(), Src.end());
+      break;
+    }
+  };
+  WidenFragment(aFmt, aSrcDwords, aDwordsArr);
+  WidenFragment(bFmt, bSrcDwords, bDwordsArr);
   assert(aDwordsArr.size() == 16 && bDwordsArr.size() == 16 &&
          "post-widen fragments must be 16 fp8 dwords / lane");
 

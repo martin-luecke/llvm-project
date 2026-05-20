@@ -1205,10 +1205,10 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
             Di, "VOP3P",
             "emitWMMAScaleF8F6F4toMFMA refused this configuration. "
             "Supported in this draft: matrix_a_fmt / matrix_b_fmt in "
-            "{FP8, BF8, FP4} (ADwords / BDwords in {16, 8}; FP4 widens "
-            "in-line to FP8 via bit-arithmetic), matrix_*_scale == "
-            "matrix_*_scale_fmt == 0 (canonical UE8M0). f6 / bf6 "
-            "fragment widths and non-canonical scale selectors are not "
+            "{FP8, BF8, FP6, BF6, FP4} (ADwords / BDwords in {16, 12, "
+            "8}; FP6 / BF6 / FP4 widen in-line to FP8 / BF8 via bit-"
+            "arithmetic), matrix_*_scale == matrix_*_scale_fmt == 0 "
+            "(canonical UE8M0). Non-canonical scale selectors are not "
             "yet supported.");
         return Hr;
       }
