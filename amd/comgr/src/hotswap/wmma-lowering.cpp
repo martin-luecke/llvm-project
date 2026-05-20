@@ -1131,8 +1131,9 @@ llvm::Value *emitWMMAScaleF8F6F4toScaledMFMA(
 //     per output dword.
 //
 // Scope of this draft: any (aFmt, bFmt) combination over {FP8, BF8, FP6,
-// BF6, FP4}. Each side widens independently in-line via branchless ALU
-// bit-arithmetic helpers -- no LUTs, no memory access:
+// BF6, FP4} with scale formats in {E8M0, E4M3} (E5M3 deferred). Each
+// data side widens independently in-line via branchless ALU bit-
+// arithmetic helpers -- no LUTs, no memory access:
 //   FP4 (E2M1) -> FP8 (E4M3) via `widenF4NibbleToFP8`
 //   FP6 (E2M3) -> FP8 (E4M3) via `widenFP6NibbleToFP8`
 //   BF6 (E3M2) -> BF8 (E5M2) via `widenBF6NibbleToBF8`
@@ -1140,6 +1141,25 @@ llvm::Value *emitWMMAScaleF8F6F4toScaledMFMA(
 // always 16 dwords / wave32 lane, exactly matching a native fp8 / bf8
 // fragment, so the downstream redistribute + MFMA + scale + collect
 // pipeline is format-agnostic from this point on.
+//
+// Scale decoding (`decodeScaleByte` / `buildScaleFactorVec`):
+//   E8M0 (UE8M0):   `ldexp(1.0, byte - 127)` + select-to-qNaN at 0xFF.
+//                   For E8M0 x E8M0 specifically we use the fast path
+//                   `2^(byteA + byteB - 254)` (one combined ldexp).
+//   E4M3 (SE4M3):   hw `int_amdgcn_cvt_f32_fp8` (gfx942 native cvt).
+//                   The E4M3 scale format is bit-identical to the FP8
+//                   E4M3 data format, so the existing cvt handles
+//                   normals, subnormals, signs, and NaN propagation.
+//   E5M3:           NOT implemented (refused) -- no gfx942 hw cvt
+//                   matches the 5-exp + 3-mant unsigned layout, so
+//                   it would need a bit-math decoder similar to
+//                   `widenFP6NibbleToFP8`.
+// `matrix_*_scale` is a 2-bit ROW selector (ROW0 = 0, ROW1 = 1, others
+// reserved). For SCALE (K=32 / 4 K-blocks / 1 row) only ROW0 is
+// meaningful, so non-zero values are refused. ROW1 is for the K=16
+// SCALE16 variant (separate intrinsic, not yet supported).
+// Legal (data, scale) combinations are enforced by `isLegalScaleDataCombo`
+// per the spec table (non-E8M0 scales require F4 data on that side).
 //
 // The MFMA dispatch uses `effectiveFmtAfterWiden` to map source format
 // to its post-widen destination, then picks the matching gfx942 MFMA
@@ -1498,53 +1518,150 @@ void widenBF6FragmentToBF8(IRBuilder<> &B, Module &M,
   }
 }
 
-// Extract byte `k` (0..3) from a 32-bit value as a zero-extended i32.
-// Per-K-block UE8M0 scale extraction.
+// Scale-format selector values for `matrix_*_scale_fmt`. Per the AMD
+// gfx1250 WMMA-scale ISA, the immediate field NEG[1:0] / NEG_HI[1:0] is
+// 2 bits and selects:
+//   0 = E8M0 (unsigned, 8-bit pure exponent; the canonical MXFP UE8M0)
+//   1 = E5M3 (unsigned 8-bit FP, bias 15; same NaN encoding as UE8M0
+//             at 0xFF -- not yet supported in this draft, refused above)
+//   2 = E4M3 (signed 8-bit FP, bias 7; bit-identical to the FP8 E4M3
+//             data format -- decoded via hw `cvt_f32_fp8`)
+constexpr int ScaleFmtE8M0 = 0;
+constexpr int ScaleFmtE5M3 = 1;
+constexpr int ScaleFmtE4M3 = 2;
+
+// Extract byte `k` (in 0..3 for the SCALE variant's 4-byte i32 source)
+// from a 32-bit scale-source value. Byte k corresponds to K-block k
+// directly under MATRIX_SCALE_ROW0 (the only valid `matrix_*_scale`
+// value for SCALE; see caller's gating).
 Value *extractScaleByte(IRBuilder<> &B, Value *Scale32, unsigned k) {
-  Value *Shifted = B.CreateLShr(Scale32, B.getInt32(8 * k), "scale_shr");
+  Value *Shifted =
+      B.CreateLShr(Scale32, B.getInt32(8 * k), "scale_shr");
   return B.CreateAnd(Shifted, B.getInt32(0xFF), "scale_byte");
 }
 
-// Build a `<4 x float>` splat of the K-block's combined UE8M0 scale
-// factor.
+// Decode one scale byte (low 8 bits of `Byte`) into an f32 multiplier.
+// Branchless ALU dispatch on the compile-time `Fmt`:
 //
-// UE8M0 encoding:
-//   byte in [0, 254]: scale_value = 2^(byte - 127)
-//   byte == 0xFF:     NaN sentinel (the K-block's contribution to the
-//                     output must be NaN; matches gfx950 hardware-scaled
-//                     MFMA semantics).
+//   ScaleFmtE8M0: `ldexp(1.0, byte - 127)` + select-to-qNaN at byte=0xFF.
+//                 ~5 IR ops. Pure exponent format; no mantissa or sign.
+//   ScaleFmtE4M3: `@llvm.amdgcn.cvt.f32.fp8(byte, byte_sel=0)`. ONE hw
+//                 instruction (gfx942 native). The E4M3 scale format is
+//                 bit-identical to the FP8 E4M3 data format, so the
+//                 cvt's existing handling of sign, normals, subnormals,
+//                 and NaN (`S.1111.111`) all apply directly. No explicit
+//                 NaN-sentinel select needed.
+//   ScaleFmtE5M3: not implemented in this commit; returns nullptr.
+//                 (E5M3 has 5 exp + 3 mant unsigned bits with bias 15;
+//                 no gfx942 hw cvt matches that layout, so the decode
+//                 would be ALU bit-math similar to `widenFP6NibbleToFP8`
+//                 parameterized for E5M3's bit positions.)
 //
-// Combined factor for A * B is `2^(byteA + byteB - 254)` for finite
-// bytes. If either byte is the 0xFF NaN sentinel, the combined factor
-// is NaN -- select replaces the finite ldexp result with a canonical
-// qNaN before the splat. `Partial * NaN` is NaN, and `Acc + NaN` is
-// NaN, so the fmuladd naturally propagates the sentinel through the
-// K-block's accumulator update without any further intervention.
+// Returns nullptr for ScaleFmtE5M3 or unknown formats; caller refuses.
+Value *decodeScaleByte(IRBuilder<> &B, Module &M, Type *F32Ty,
+                        Value *Byte, int Fmt) {
+  switch (Fmt) {
+  case ScaleFmtE8M0: {
+    Value *IsNaN = B.CreateICmpEQ(Byte, B.getInt32(0xFF), "e8m0_is_nan");
+    Value *Biased = B.CreateSub(Byte, B.getInt32(127), "e8m0_exp");
+    Function *LdexpFn = Intrinsic::getOrInsertDeclaration(
+        &M, Intrinsic::ldexp, {F32Ty, B.getInt32Ty()});
+    Value *Finite = B.CreateCall(
+        LdexpFn, {ConstantFP::get(F32Ty, 1.0), Biased}, "e8m0_finite");
+    return B.CreateSelect(IsNaN, ConstantFP::getQNaN(F32Ty), Finite,
+                          "e8m0_decoded");
+  }
+  case ScaleFmtE4M3: {
+    // gfx942 `cvt_f32_fp8` takes an i32 source + a 2-bit byte selector
+    // (which byte of the i32 to decode). We put the scale byte in the
+    // low byte (byte_sel = 0) -- the caller's `extractScaleByte`
+    // already returns the byte in the low 8 bits with zero upper bits,
+    // so the cvt sees the byte at position 0 and ignores the rest.
+    Function *CvtFn = Intrinsic::getOrInsertDeclaration(
+        &M, Intrinsic::amdgcn_cvt_f32_fp8);
+    return B.CreateCall(CvtFn, {Byte, B.getInt32(0)}, "e4m3_decoded");
+  }
+  case ScaleFmtE5M3:
+    // TODO: implement via ALU bit-math. Same shape as widenFP6NibbleToFP8
+    // but unsigned 5-exp + 3-mant, bias 15.
+    return nullptr;
+  }
+  return nullptr;
+}
+
+// Check whether (aFmt, aScaleFmt, bFmt, bScaleFmt) is a legal combination
+// per the AMD WMMA-scale spec's legal-combinations table:
+//
+//   A data       A scale       B data       B scale
+//   F8, F6, F4   E8M0          F8, F6, F4   E8M0
+//   F8, F6       E8M0          F4           E5M3, E4M3
+//   F4           E5M3, E4M3    F8, F6       E8M0
+//   F4           E5M3          F4           E5M3
+//   F4           E4M3          F4           E4M3
+//
+// Rules in shorthand:
+//   * Non-E8M0 scale on a side REQUIRES F4 data on that side.
+//   * F4 x F4 with non-E8M0 scales REQUIRES matching scale formats on
+//     both sides (no cross-mantissa-width F4 x F4 mixing).
+bool isLegalScaleDataCombo(int aFmt, int aScaleFmt, int bFmt,
+                            int bScaleFmt) {
+  if (aScaleFmt != ScaleFmtE8M0 && aFmt != FmtFP4)
+    return false;
+  if (bScaleFmt != ScaleFmtE8M0 && bFmt != FmtFP4)
+    return false;
+  if (aFmt == FmtFP4 && bFmt == FmtFP4 && aScaleFmt != bScaleFmt)
+    return false;
+  return true;
+}
+
+// Build a `<4 x float>` splat of the K-block's combined scale factor
+// `factor_A * factor_B`, where each side's factor is decoded from a
+// scale byte per the per-side scale-format selector.
+//
+// Fast path: when BOTH sides are E8M0, the combined factor reduces to
+// `2^(byteA + byteB - 254)` because E8M0 is pure exponent and 2^a *
+// 2^b = 2^(a+b). One `ldexp` for the combined exponent, with a single
+// NaN-sentinel guard checking either byte against 0xFF. This is the
+// pre-extension fast path and matches the hot kernel corpus (MXFP
+// attention) which uses E8M0 across the board.
+//
+// Slow path: any other (E8M0 | E5M3 | E4M3) combination. Decode each
+// side independently to an f32, then `fmul`. NaN propagates through
+// `fmul` naturally so no explicit NaN select is needed at the combine
+// step (each decoder handles its own NaN sentinel).
 //
 // `ldexp` on f32 is bit-exact (pure exponent shift), so applying the
-// finite-path factor once on the K-block's `<4 x f32>` partial is
+// combined factor once on the K-block's `<4 x f32>` partial is
 // precision-equivalent to folding the scale into each widened input.
 Value *buildScaleFactorVec(IRBuilder<> &B, Module &M, Type *F32Ty,
-                            Value *ScaleAByte, Value *ScaleBByte) {
-  // UE8M0 NaN sentinel guard: 0xFF on either side -> NaN factor.
-  Value *AIsNaN =
-      B.CreateICmpEQ(ScaleAByte, B.getInt32(0xFF), "scale_a_is_nan");
-  Value *BIsNaN =
-      B.CreateICmpEQ(ScaleBByte, B.getInt32(0xFF), "scale_b_is_nan");
-  Value *AnyIsNaN = B.CreateOr(AIsNaN, BIsNaN, "scale_is_nan");
+                            Value *ScaleAByte, Value *ScaleBByte,
+                            int AScaleFmt, int BScaleFmt) {
+  Value *Factor = nullptr;
 
-  // Finite path: factor = 2^(byteA + byteB - 254).
-  Value *Sum = B.CreateAdd(ScaleAByte, ScaleBByte, "scale_sum");
-  Value *Biased = B.CreateSub(Sum, B.getInt32(254), "scale_exp");
-  Function *LdexpFn = Intrinsic::getOrInsertDeclaration(
-      &M, Intrinsic::ldexp, {F32Ty, B.getInt32Ty()});
-  Value *FiniteFactor = B.CreateCall(
-      LdexpFn, {ConstantFP::get(F32Ty, 1.0), Biased}, "finite_factor");
+  if (AScaleFmt == ScaleFmtE8M0 && BScaleFmt == ScaleFmtE8M0) {
+    // Optimized E8M0 x E8M0 path: combined exponent, single ldexp.
+    Value *AIsNaN =
+        B.CreateICmpEQ(ScaleAByte, B.getInt32(0xFF), "scale_a_is_nan");
+    Value *BIsNaN =
+        B.CreateICmpEQ(ScaleBByte, B.getInt32(0xFF), "scale_b_is_nan");
+    Value *AnyIsNaN = B.CreateOr(AIsNaN, BIsNaN, "scale_is_nan");
 
-  Value *NaNFactor =
-      ConstantFP::getQNaN(F32Ty); // canonical qNaN bit pattern
-  Value *Factor =
-      B.CreateSelect(AnyIsNaN, NaNFactor, FiniteFactor, "scale_factor");
+    Value *Sum = B.CreateAdd(ScaleAByte, ScaleBByte, "scale_sum");
+    Value *Biased = B.CreateSub(Sum, B.getInt32(254), "scale_exp");
+    Function *LdexpFn = Intrinsic::getOrInsertDeclaration(
+        &M, Intrinsic::ldexp, {F32Ty, B.getInt32Ty()});
+    Value *FiniteFactor = B.CreateCall(
+        LdexpFn, {ConstantFP::get(F32Ty, 1.0), Biased}, "finite_factor");
+    Factor = B.CreateSelect(AnyIsNaN, ConstantFP::getQNaN(F32Ty),
+                            FiniteFactor, "scale_factor");
+  } else {
+    // General path: decode each side to f32 and multiply.
+    Value *FactorA = decodeScaleByte(B, M, F32Ty, ScaleAByte, AScaleFmt);
+    Value *FactorB = decodeScaleByte(B, M, F32Ty, ScaleBByte, BScaleFmt);
+    if (!FactorA || !FactorB)
+      return nullptr;
+    Factor = B.CreateFMul(FactorA, FactorB, "scale_factor");
+  }
 
   auto *Vec4 = FixedVectorType::get(F32Ty, 4);
   Value *Splat = B.CreateInsertElement(PoisonValue::get(Vec4), Factor,
@@ -1582,22 +1699,44 @@ Value *emitWMMAScaleF8F6F4toMFMA(
   if (!SupportedDwords(aDwords) || !SupportedDwords(bDwords))
     return nullptr;
 
-  // Scale-selector draft-scope guard. matrix_*_scale (2-bit byte index)
-  // and matrix_*_scale_fmt (3-bit UE8M0 / FP8 scale-format selector) are
-  // both assumed 0 in this draft. Non-zero values would require a different
-  // byte index per K-block or a non-UE8M0 unbias formula.
+  // Read compile-time-constant operand values.
   auto AsConstInt = [](Value *V) -> int64_t {
     return cast<ConstantInt>(V)->getZExtValue();
   };
-  if (AsConstInt(matrixAScale) != 0 || AsConstInt(matrixBScale) != 0 ||
-      AsConstInt(matrixAScaleFmt) != 0 || AsConstInt(matrixBScaleFmt) != 0)
+  int aFmt = static_cast<int>(AsConstInt(matrixAFmt));
+  int bFmt = static_cast<int>(AsConstInt(matrixBFmt));
+  int aScaleFmt = static_cast<int>(AsConstInt(matrixAScaleFmt));
+  int bScaleFmt = static_cast<int>(AsConstInt(matrixBScaleFmt));
+  int aScaleSel = static_cast<int>(AsConstInt(matrixAScale));
+  int bScaleSel = static_cast<int>(AsConstInt(matrixBScale));
+
+  // matrix_*_scale is a 2-bit ROW selector (MATRIX_SCALE_ROW0 = 0,
+  // MATRIX_SCALE_ROW1 = 1) -- see AMDGPUAsmUtils.h `ModMatrixScale[]`
+  // and SIDefines.h `MATRIX_SCALE_ROW0/1`. For the SCALE variant
+  // (K=32 granularity, scale_src is i32 = 4 bytes covering 4 K-blocks
+  // = 1 row), only ROW0 is meaningful. ROW1 is for SCALE16 (K=16
+  // granularity, i64 scale_src = 8 bytes = 2 rows) which is not yet
+  // supported.
+  if (aScaleSel != 0 || bScaleSel != 0)
+    return nullptr;
+
+  // Scale-format support: E8M0 (always) and E4M3 (via hw cvt_f32_fp8).
+  // E5M3 is not implemented yet -- refuse rather than miscompile.
+  auto SupportedScaleFmt = [](int fmt) {
+    return fmt == ScaleFmtE8M0 || fmt == ScaleFmtE4M3;
+  };
+  if (!SupportedScaleFmt(aScaleFmt) || !SupportedScaleFmt(bScaleFmt))
+    return nullptr;
+
+  // Legal data x scale combinations per the WMMA-scale spec table.
+  // Non-E8M0 scale requires F4 data on that side; F4 x F4 with
+  // non-E8M0 scales requires both sides to share the same scale format.
+  if (!isLegalScaleDataCombo(aFmt, aScaleFmt, bFmt, bScaleFmt))
     return nullptr;
 
   // Format dispatch -- after any required widening (FP4 -> FP8) the
   // effective format pair must match a gfx942 MFMA intrinsic. f6 / bf6
   // are gated out at the dword-count check above.
-  int aFmt = static_cast<int>(AsConstInt(matrixAFmt));
-  int bFmt = static_cast<int>(AsConstInt(matrixBFmt));
   int aFmtEff = effectiveFmtAfterWiden(aFmt);
   int bFmtEff = effectiveFmtAfterWiden(bFmt);
   if (aFmtEff < 0 || bFmtEff < 0)
@@ -1731,8 +1870,8 @@ Value *emitWMMAScaleF8F6F4toMFMA(
 
       Value *ScaleAByte = extractScaleByte(B, ScaleSrc0Pass, kBlock);
       Value *ScaleBByte = extractScaleByte(B, ScaleSrc1Pass, kBlock);
-      Value *FactorVec =
-          buildScaleFactorVec(B, M, ctx.F32Ty, ScaleAByte, ScaleBByte);
+      Value *FactorVec = buildScaleFactorVec(
+          B, M, ctx.F32Ty, ScaleAByte, ScaleBByte, aScaleFmt, bScaleFmt);
 
       // Fused multiply-add: `Acc = Partial * FactorVec + Acc`. Use
       // `llvm.fmuladd` (rather than `fmul` + `fadd` or `llvm.fma`) so
