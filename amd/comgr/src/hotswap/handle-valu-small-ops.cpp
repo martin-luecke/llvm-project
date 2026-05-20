@@ -273,11 +273,11 @@ HandlerResult handleValuSmallOps(RaiseContext &Ctx, const DecodedInst &Di,
 
     bool DstHigh = false;
     unsigned Mods = 0;
-    if (!readOptionalVOP3F16SrcMods(Di, Hr, 0, "V_TANH_F16", Mods))
+    if (!readOptionalVOP3F16SrcMods(Di, Hr, 0, "v_tanh_f16", Mods))
       return Hr;
     DstHigh = (Mods & SISrcMods::DST_OP_SEL) != 0;
 
-    Value *Src = readOptionalOpSelF16(Ctx, Di, Op, Hr, 0, "V_TANH_F16");
+    Value *Src = readOptionalOpSelF16(Ctx, Di, Op, Hr, 0, "v_tanh_f16");
     if (!Src)
       return Hr;
 
