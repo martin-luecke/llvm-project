@@ -1359,9 +1359,17 @@ Value *emitWMMAScaleF8F6F4toMFMA(
       Value *ScaleBByte = extractScaleByte(B, ScaleSrc1Pass, kBlock);
       Value *FactorVec =
           buildScaleFactorVec(B, M, ctx.F32Ty, ScaleAByte, ScaleBByte);
-      Value *Scaled = B.CreateFMul(Partial, FactorVec, "kblock_scaled");
 
-      Acc = B.CreateFAdd(Acc, Scaled, "kblock_accum");
+      // Fused multiply-add: `Acc = Partial * FactorVec + Acc`. Use
+      // `llvm.fmuladd` (rather than `fmul` + `fadd` or `llvm.fma`) so
+      // the AMDGPU backend selects the native `v_fma_f32` on gfx942
+      // (single SIMD instruction, single-rounded) but a hypothetical
+      // FMA-less target would fall back to mul + add cleanly. Default
+      // IR fp-contract does NOT fuse plain `fmul` + `fadd`, so being
+      // explicit here is required to get the FMA codegen.
+      Acc = B.CreateIntrinsic(Intrinsic::fmuladd, {AccTy},
+                              {Partial, FactorVec, Acc}, nullptr,
+                              "kblock_fmuladd");
     }
 
     // Collect the wave64-layout accumulator back to wave32 layout.

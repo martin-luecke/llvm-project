@@ -79,24 +79,31 @@
 ; Under WaveNative, the K-loop runs TWICE (pass 0 + pass 32) for a
 ; total of 8 K-block MFMA iterations. Each iteration emits in order:
 ;   MFMA partial (bf8.fp8 -- aFmt = MATRIX_FMT_BF8 (1), bFmt =
-;   MATRIX_FMT_FP8 (0, default)), ldexp scale factor, fmul scaled,
-;   fadd into the running accumulator. The MFMA accumulator argument
-;   is `zeroinitializer` per call -- we accumulate at IR level after
-;   applying the per-K-block scale, NOT via MFMA chaining.
+;   MATRIX_FMT_FP8 (0, default)), ldexp scale factor, fmuladd of
+;   `Partial * Factor + Acc` (lowers to native v_fma_f32 on gfx942).
+;   The MFMA accumulator argument is `zeroinitializer` per call -- we
+;   accumulate at IR level via the fmuladd, NOT via MFMA chaining.
 ;
 ; First K-block of pass 0 pins the per-iteration emission order:
 ; IR_GFX942: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.bf8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
 ; IR_GFX942: sub i32 %{{[^,]+}}, 254
 ; IR_GFX942: call float @llvm.ldexp.f32.i32(float 1.000000e+00, i32 %{{[^)]+}})
-; IR_GFX942: fmul <4 x float>
-; IR_GFX942: fadd <4 x float>
+; IR_GFX942: call <4 x float> @llvm.fmuladd.v4f32(
 ;
 ; The remaining 7 K-blocks (3 in pass 0, 4 in pass 1): 7 more bf8.fp8
-; MFMA calls. The intervening ldexp / fmul / fadd / per-pass redistribute
+; MFMA calls. The intervening ldexp / fmuladd / per-pass redistribute
 ; are required by the K-loop structure; only the MFMA count is asserted
 ; directly because the per-iteration emission order is pinned above
 ; and the loop body is deterministic.
 ; IR_GFX942-COUNT-7: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.bf8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
+
+; Negative: NO separate fmul/fadd pair on the K-loop accumulator --
+; we fold scale-and-accumulate into a single fmuladd. (A plain
+; `fmul <4 x float>` would mean someone reintroduced the un-fused
+; form, losing both the throughput win and the single-rounding
+; precision win.)
+; IR_GFX942-NOT: fmul <4 x float>
+; IR_GFX942-NOT: fadd <4 x float>
 
 ; WaveNative final per-lane select: target lanes 0..31 take pass 0's
 ; output, target lanes 32..63 take pass 1's. The `select i1 %is_group1`
