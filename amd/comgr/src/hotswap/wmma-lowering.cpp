@@ -1145,41 +1145,10 @@ int effectiveFmtAfterWiden(int srcFmt) {
   }
 }
 
-// FP4 (E2M1, S EE M, bias 1) -> FP8 E4M3 (S EEEE MMM, bias 7). FP4 has
-// only one subnormal (±0.5 -> 1.000 * 2^-1, biased exp 6); the ±0
-// override avoids the subnormal path emitting 0x30 / 0xB0.
-Value *widenF4NibbleToFP8(IRBuilder<> &B, Value *Nibble) {
-  Value *Sign = B.CreateAnd(B.CreateLShr(Nibble, B.getInt32(3)),
-                            B.getInt32(1), "fp4_sign");
-  Value *Exp = B.CreateAnd(B.CreateLShr(Nibble, B.getInt32(1)),
-                           B.getInt32(3), "fp4_exp");
-  Value *Mant = B.CreateAnd(Nibble, B.getInt32(1), "fp4_mant");
-
-  Value *NormExp = B.CreateAdd(Exp, B.getInt32(6), "norm_exp");
-  Value *NormMant = B.CreateShl(Mant, B.getInt32(2), "norm_mant");
-
-  // FP4 subnormal: only one value (±0.5) -> biased FP8 exp = 6, mant = 0.
-  Value *IsSubnormal = B.CreateICmpEQ(Exp, B.getInt32(0), "is_subnormal");
-  Value *FP8Exp =
-      B.CreateSelect(IsSubnormal, B.getInt32(6), NormExp, "fp8_exp");
-  Value *FP8Mant =
-      B.CreateSelect(IsSubnormal, B.getInt32(0), NormMant, "fp8_mant");
-
-  Value *FP8WithSign =
-      B.CreateOr(B.CreateShl(Sign, B.getInt32(7)),
-                  B.CreateOr(B.CreateShl(FP8Exp, B.getInt32(3)), FP8Mant),
-                  "fp8");
-
-  // ±0 (E=0, M=0): override the subnormal-path's 0x30 / 0xB0 with
-  // sign-extended zero.
-  Value *IsZero = B.CreateAnd(IsSubnormal,
-                              B.CreateICmpEQ(Mant, B.getInt32(0)));
-  return B.CreateSelect(IsZero, B.CreateShl(Sign, B.getInt32(7)),
-                        FP8WithSign, "fp8_or_zero");
-}
-
-// Vectorized `widenF4NibbleToFP8` over `<N x i32>` (FP4 nibble in low 4
-// bits of each lane). Enables packed-instruction pattern matching.
+// FP4 (E2M1, S EE M, bias 1) -> FP8 E4M3 (S EEEE MMM, bias 7) over
+// `<N x i32>` of nibbles. FP4 has only one subnormal (±0.5 -> 1.000 *
+// 2^-1, biased exp 6); the ±0 override avoids the subnormal path
+// emitting 0x30 / 0xB0.
 Value *widenF4NibbleVecToFP8(IRBuilder<> &B, Value *Nibbles) {
   auto *VecTy = cast<FixedVectorType>(Nibbles->getType());
   unsigned N = VecTy->getNumElements();
@@ -1216,17 +1185,16 @@ Value *widenF4NibbleVecToFP8(IRBuilder<> &B, Value *Nibbles) {
 // an FP8 fragment (16 dwords / 64 bytes). Element k -> byte k preserves
 // the K-dimension layout. Per source dword: extract 8 nibbles as
 // `<8 x i32>`, widen, trunc to `<8 x i8>`, bitcast to `<2 x i32>`.
-void widenF4FragmentToFP8(IRBuilder<> &B, Module &M,
+// `Module &M` kept for signature uniformity with `widenFP6/BF6FragmentTo*`
+// (those need it for `ctlz` declaration); the F4 path doesn't.
+void widenF4FragmentToFP8(IRBuilder<> &B, Module & /*M*/,
                            ArrayRef<Value *> SrcDwords,
                            SmallVectorImpl<Value *> &DstDwords) {
-  (void)M;
   assert(SrcDwords.size() == 8 && "FP4 fragment is 8 i32 dwords / lane");
   DstDwords.assign(16, nullptr);
 
   auto *I32Ty = B.getInt32Ty();
-  auto *I8Ty = B.getInt8Ty();
-  auto *Vec8I32 = FixedVectorType::get(I32Ty, 8);
-  auto *Vec8I8 = FixedVectorType::get(I8Ty, 8);
+  auto *Vec8I8 = FixedVectorType::get(B.getInt8Ty(), 8);
   auto *Vec2I32 = FixedVectorType::get(I32Ty, 2);
 
   // Per-lane shift amounts {0, 4, 8, 12, 16, 20, 24, 28} to spread the
@@ -1295,87 +1263,10 @@ Value *extractF6Nibble(IRBuilder<> &B, ArrayRef<Value *> Dwords,
   return B.CreateAnd(Trunc, B.getInt32(0x3F), "f6_nib");
 }
 
-// FP6 (E2M3, S EE MMM, bias 1) -> FP8 E4M3 (S EEEE MMM, bias 7).
-// Same mantissa width; exp bias diff 6. Subnormals (E=0, M in 1..7)
-// renormalize via ctlz: `lz_3bit = ctlz_i32(M) - 29` gives 0..2.
-Value *widenFP6NibbleToFP8(IRBuilder<> &B, Module &M, Value *Nibble) {
-  Value *Sign = B.CreateAnd(B.CreateLShr(Nibble, B.getInt32(5)),
-                            B.getInt32(1), "fp6_sign");
-  Value *Exp = B.CreateAnd(B.CreateLShr(Nibble, B.getInt32(3)),
-                           B.getInt32(3), "fp6_exp");
-  Value *Mant = B.CreateAnd(Nibble, B.getInt32(7), "fp6_mant");
-
-  Value *NormExp = B.CreateAdd(Exp, B.getInt32(6), "norm_exp");
-  Value *NormMant = Mant;
-
-  Function *CtlzFn = Intrinsic::getOrInsertDeclaration(
-      &M, Intrinsic::ctlz, {B.getInt32Ty()});
-  Value *Ctlz =
-      B.CreateCall(CtlzFn, {Mant, B.getInt1(true)}, "fp6_ctlz");
-  Value *LZ = B.CreateSub(Ctlz, B.getInt32(29), "fp6_lz");
-  Value *SubExp = B.CreateSub(B.getInt32(6), LZ, "sub_exp");
-  Value *MantShifted = B.CreateShl(
-      Mant, B.CreateAdd(LZ, B.getInt32(1)), "sub_mant_shl");
-  Value *SubMant = B.CreateAnd(MantShifted, B.getInt32(7), "sub_mant");
-
-  Value *IsSubnormal = B.CreateICmpEQ(Exp, B.getInt32(0), "is_sub");
-  Value *FP8Exp =
-      B.CreateSelect(IsSubnormal, SubExp, NormExp, "fp8_exp");
-  Value *FP8Mant =
-      B.CreateSelect(IsSubnormal, SubMant, NormMant, "fp8_mant");
-
-  Value *FP8 = B.CreateOr(
-      B.CreateShl(Sign, B.getInt32(7)),
-      B.CreateOr(B.CreateShl(FP8Exp, B.getInt32(3)), FP8Mant), "fp8");
-
-  // +-0 override (subnormal-path otherwise emits 0x30/0xB0 for M=0).
-  Value *IsZero = B.CreateAnd(IsSubnormal,
-                              B.CreateICmpEQ(Mant, B.getInt32(0)));
-  return B.CreateSelect(IsZero, B.CreateShl(Sign, B.getInt32(7)),
-                        FP8, "fp8_or_zero");
-}
-
-// BF6 (E3M2, S EEE MM, bias 3) -> BF8 E5M2 (S EEEEE MM, bias 15).
-// Same mantissa width; exp bias diff 12. Subnormals (E=0, M in 1..3)
-// renormalize via ctlz: `lz_2bit = ctlz_i32(M) - 30` gives 0..1.
-Value *widenBF6NibbleToBF8(IRBuilder<> &B, Module &M, Value *Nibble) {
-  Value *Sign = B.CreateAnd(B.CreateLShr(Nibble, B.getInt32(5)),
-                            B.getInt32(1), "bf6_sign");
-  Value *Exp = B.CreateAnd(B.CreateLShr(Nibble, B.getInt32(2)),
-                           B.getInt32(7), "bf6_exp");
-  Value *Mant = B.CreateAnd(Nibble, B.getInt32(3), "bf6_mant");
-
-  Value *NormExp = B.CreateAdd(Exp, B.getInt32(12), "norm_exp");
-  Value *NormMant = Mant;
-
-  Function *CtlzFn = Intrinsic::getOrInsertDeclaration(
-      &M, Intrinsic::ctlz, {B.getInt32Ty()});
-  Value *Ctlz =
-      B.CreateCall(CtlzFn, {Mant, B.getInt1(true)}, "bf6_ctlz");
-  Value *LZ = B.CreateSub(Ctlz, B.getInt32(30), "bf6_lz");
-  Value *SubExp = B.CreateSub(B.getInt32(12), LZ, "sub_exp");
-  Value *MantShifted = B.CreateShl(
-      Mant, B.CreateAdd(LZ, B.getInt32(1)), "sub_mant_shl");
-  Value *SubMant = B.CreateAnd(MantShifted, B.getInt32(3), "sub_mant");
-
-  Value *IsSubnormal = B.CreateICmpEQ(Exp, B.getInt32(0), "is_sub");
-  Value *BF8Exp =
-      B.CreateSelect(IsSubnormal, SubExp, NormExp, "bf8_exp");
-  Value *BF8Mant =
-      B.CreateSelect(IsSubnormal, SubMant, NormMant, "bf8_mant");
-
-  // BF8 mw=2 -> exp shifts by 2 (not 3 like FP8).
-  Value *BF8 = B.CreateOr(
-      B.CreateShl(Sign, B.getInt32(7)),
-      B.CreateOr(B.CreateShl(BF8Exp, B.getInt32(2)), BF8Mant), "bf8");
-
-  Value *IsZero = B.CreateAnd(IsSubnormal,
-                              B.CreateICmpEQ(Mant, B.getInt32(0)));
-  return B.CreateSelect(IsZero, B.CreateShl(Sign, B.getInt32(7)),
-                        BF8, "bf8_or_zero");
-}
-
-// Vectorized `widenFP6NibbleToFP8` over `<N x i32>`.
+// FP6 (E2M3, S EE MMM, bias 1) -> FP8 E4M3 (S EEEE MMM, bias 7) over
+// `<N x i32>` of nibbles. Same mantissa width; exp bias diff 6.
+// Subnormals (E=0, M in 1..7) renormalize via ctlz: `lz_3bit =
+// ctlz_i32(M) - 29` gives 0..2.
 Value *widenFP6NibbleVecToFP8(IRBuilder<> &B, Module &M, Value *Nibbles) {
   auto *VecTy = cast<FixedVectorType>(Nibbles->getType());
   unsigned N = VecTy->getNumElements();
@@ -1418,7 +1309,10 @@ Value *widenFP6NibbleVecToFP8(IRBuilder<> &B, Module &M, Value *Nibbles) {
   return B.CreateSelect(IsZero, SignShifted, FP8, "fp8_or_zero");
 }
 
-// Vectorized `widenBF6NibbleToBF8` over `<N x i32>`.
+// BF6 (E3M2, S EEE MM, bias 3) -> BF8 E5M2 (S EEEEE MM, bias 15) over
+// `<N x i32>` of nibbles. Same mantissa width; exp bias diff 12.
+// Subnormals (E=0, M in 1..3) renormalize via ctlz: `lz_2bit =
+// ctlz_i32(M) - 30` gives 0..1.
 Value *widenBF6NibbleVecToBF8(IRBuilder<> &B, Module &M, Value *Nibbles) {
   auto *VecTy = cast<FixedVectorType>(Nibbles->getType());
   unsigned N = VecTy->getNumElements();
@@ -1721,18 +1615,21 @@ Value *emitWMMAScaleF8F6F4toMFMA(
   Value *Abid = B.getInt32(0);
   Value *Blgp = B.getInt32(0);
   Value *ZeroAcc = ConstantAggregateZero::get(AccTy);
-  int64_t cModVal = cast<ConstantInt>(cMod)->getZExtValue();
+  int64_t cModVal = AsConstInt(cMod);
+
+  // GroupBase-invariant lane indices: shared across both passes.
+  Value *LaneMod16 = B.CreateAnd(LaneId, B.getInt32(15), "lane16");
+  Value *LaneGroup = B.CreateLShr(LaneId, B.getInt32(4), "lane_grp");
+  Value *W32Lane = B.CreateAnd(LaneId, B.getInt32(31), "w32_lane");
 
   // One pass per virtual W32 group (GroupBase 0 / 32). MODREP uses just
   // pass 0; WaveNative cross-widen uses both with a per-lane select.
   auto runPass = [&](unsigned GroupBase, Value *Result[8]) {
-    Value *LaneMod16 = B.CreateAnd(LaneId, B.getInt32(15), "lane16");
     Value *LoLane = B.CreateAdd(LaneMod16, B.getInt32(GroupBase), "lo_lane");
     Value *HiLane =
         B.CreateAdd(LaneMod16, B.getInt32(GroupBase + 16), "hi_lane");
     Value *AddrLo = B.CreateShl(LoLane, B.getInt32(2), "addr_lo");
     Value *AddrHi = B.CreateShl(HiLane, B.getInt32(2), "addr_hi");
-    Value *LaneGroup = B.CreateLShr(LaneId, B.getInt32(4), "lane_grp");
 
     // All 4 K-block scale bytes ride inside one i32, so one bpermute per
     // scale src per pass suffices.
@@ -1785,7 +1682,6 @@ Value *emitWMMAScaleF8F6F4toMFMA(
     // Collect the wave64-layout accumulator back to wave32 layout.
     Value *MfmaDst[4];
     unpackDwords(B, Acc, 4, ctx.I32Ty, MfmaDst);
-    Value *W32Lane = B.CreateAnd(LaneId, B.getInt32(31), "w32_lane");
     collectResult(B, M, MfmaDst, W32Lane, Result);
 
     for (unsigned i = 0; i < 8; ++i)
