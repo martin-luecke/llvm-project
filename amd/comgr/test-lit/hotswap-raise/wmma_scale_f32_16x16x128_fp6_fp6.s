@@ -37,13 +37,14 @@
 ; surfaces for the 11 boundary elements.
 ; IR_GFX942-DAG: lshr i64
 
-; Subnormal renormalization via ctlz on the 3-bit mantissa.
-; IR_GFX942-DAG: call i32 @llvm.ctlz.i32(
+; Subnormal renormalization via ctlz on the 3-bit mantissa, vectorized
+; across 16 elements per super-chunk (`<16 x i32>` lane vector).
+; IR_GFX942-DAG: call <16 x i32> @llvm.ctlz.v16i32(
 
 ; Subnormal biased exponent: `6 - lz` from ctlz output (ctlz returns
 ; 29 for the smallest mantissa = 4, etc; we subtract 29 to get lz in
-; [0..2]).
-; IR_GFX942-DAG: sub i32 %{{[^,]+}}, 29
+; [0..2]). Vectorized: `sub <16 x i32> ..., splat (i32 29)`.
+; IR_GFX942-DAG: sub <16 x i32> %{{[^,]+}}, {{(splat \(i32 29\)|<i32 29)}}
 
 ; FP6 -> fp8.fp8 MFMA dispatch.
 ; IR_GFX942: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.fp8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)

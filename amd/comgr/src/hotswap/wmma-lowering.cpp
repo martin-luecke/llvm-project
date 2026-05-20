@@ -1117,8 +1117,8 @@ llvm::Value *emitWMMAScaleF8F6F4toScaledMFMA(
 //   scale once on the K-block's `<4 x f32>` partial is precision-
 //   equivalent to applying it on every input element -- and far cheaper.
 //
-// Per K=128 per source-wave pass: 4 MFMA calls + 4 vec fmul + 4 vec fadd
-// + 4 ldexp + 2 scale-src bpermutes + accumulator redistribute + final
+// Per source-wave pass: 4 K-block MFMA calls + 4 vec fmuladd + 4 ldexp
+// + 2 scale-src bpermutes + accumulator redistribute + final
 // wave64->wave32 collect. Uses the native fp8/bf8 MFMA family directly,
 // so no input widening and no per-input scale -- the K-block's i64-packed
 // A/B feeds straight into the hardware MFMA.
@@ -1164,12 +1164,6 @@ llvm::Value *emitWMMAScaleF8F6F4toScaledMFMA(
 // The MFMA dispatch uses `effectiveFmtAfterWiden` to map source format
 // to its post-widen destination, then picks the matching gfx942 MFMA
 // intrinsic from the (FP8|BF8)^2 family.
-//
-// Cost per widening (per wave32 lane, all branchless ALU):
-//   FP4: ~640 IR ops (8 dwords x 8 nibbles x 10 ops/nibble)
-//   FP6: ~960 IR ops (12 dwords / 64 elements; unpack 2-6 ops + widen
-//                     ~15 ops + pack ~3 ops per element)
-//   BF6: ~960 IR ops (same shape as FP6)
 // ============================================================================
 
 namespace {
@@ -1250,12 +1244,6 @@ int effectiveFmtAfterWiden(int srcFmt) {
 //                                                 ±0; the subnormal path
 //                                                 would otherwise emit
 //                                                 0x30 / 0xB0 for ±0).
-//
-// Verified by hand against all 8 positive FP4 encodings:
-//   0x0 -> 0x00 (0)     0x4 -> 0x40 (2)
-//   0x1 -> 0x30 (0.5)   0x5 -> 0x44 (3)
-//   0x2 -> 0x38 (1)     0x6 -> 0x48 (4)
-//   0x3 -> 0x3C (1.5)   0x7 -> 0x4C (6)
 Value *widenF4NibbleToFP8(IRBuilder<> &B, Value *Nibble) {
   Value *Sign = B.CreateAnd(B.CreateLShr(Nibble, B.getInt32(3)),
                             B.getInt32(1), "fp4_sign");
@@ -1286,15 +1274,57 @@ Value *widenF4NibbleToFP8(IRBuilder<> &B, Value *Nibble) {
                         FP8WithSign, "fp8_or_zero");
 }
 
+// Vectorized counterpart of `widenF4NibbleToFP8`: widens a vector of
+// FP4 nibbles to a vector of FP8 E4M3 bytes (each in the low 8 bits of
+// an i32 lane), using LLVM IR vector ops throughout. The per-lane
+// algorithm is bit-identical to the scalar version; vectorizing it lets
+// the AMDGPU backend pattern-match packed instructions (`v_pk_*_b16`,
+// `v_perm_b32`) for the 2-wide subsets and avoids per-nibble scalar
+// dispatch in the IR. Caller passes `Nibbles` as `<N x i32>` with the
+// FP4 4-bit value in the low 4 bits of each lane (upper bits ignored).
+Value *widenF4NibbleVecToFP8(IRBuilder<> &B, Value *Nibbles) {
+  auto *VecTy = cast<FixedVectorType>(Nibbles->getType());
+  unsigned N = VecTy->getNumElements();
+  auto *I32Ty = cast<IntegerType>(VecTy->getElementType());
+  auto Splat = [&](uint64_t Val) -> Constant * {
+    return ConstantVector::getSplat(ElementCount::getFixed(N),
+                                     ConstantInt::get(I32Ty, Val));
+  };
+
+  Value *Sign = B.CreateAnd(B.CreateLShr(Nibbles, Splat(3)), Splat(1),
+                            "fp4_sign");
+  Value *Exp = B.CreateAnd(B.CreateLShr(Nibbles, Splat(1)), Splat(3),
+                           "fp4_exp");
+  Value *Mant = B.CreateAnd(Nibbles, Splat(1), "fp4_mant");
+
+  Value *NormExp = B.CreateAdd(Exp, Splat(6), "norm_exp");
+  Value *NormMant = B.CreateShl(Mant, Splat(2), "norm_mant");
+
+  Value *IsSubnormal = B.CreateICmpEQ(Exp, Splat(0), "is_subnormal");
+  Value *FP8Exp = B.CreateSelect(IsSubnormal, Splat(6), NormExp, "fp8_exp");
+  Value *FP8Mant =
+      B.CreateSelect(IsSubnormal, Splat(0), NormMant, "fp8_mant");
+
+  Value *SignShifted = B.CreateShl(Sign, Splat(7), "fp8_sign_pos");
+  Value *FP8WithSign = B.CreateOr(
+      SignShifted, B.CreateOr(B.CreateShl(FP8Exp, Splat(3)), FP8Mant), "fp8");
+
+  Value *IsZero = B.CreateAnd(IsSubnormal,
+                              B.CreateICmpEQ(Mant, Splat(0)), "is_zero");
+  return B.CreateSelect(IsZero, SignShifted, FP8WithSign, "fp8_or_zero");
+}
+
 // Widen a full FP4 fragment (8 i32 dwords per wave32 lane, 8 nibbles per
 // dword = 64 fp4 elements total) to an FP8 fragment (16 i32 dwords per
 // wave32 lane, 4 fp8 bytes per dword = 64 fp8 elements). Element k of the
 // source (k in 0..63) maps to byte k of the destination, preserving the
 // K-dimension layout that the rest of the pipeline expects.
 //
-// Per-element cost: ~10 IR ops (extract nibble + widen + insert byte).
-// Total per matrix: 640 IR ops; the AMDGPU backend coalesces most of the
-// shift/mask chains within a dword.
+// Vectorized per source dword: each of the 8 source dwords is processed
+// as an `<8 x i32>` vector (one lane per nibble), widened in parallel
+// by `widenF4NibbleVecToFP8`, then truncated to `<8 x i8>` and bitcast
+// to `<2 x i32>` to produce the 2 destination dwords. The AMDGPU
+// backend pattern-matches v_pk_* for the 2-wide subsets that fit.
 void widenF4FragmentToFP8(IRBuilder<> &B, Module &M,
                            ArrayRef<Value *> SrcDwords,
                            SmallVectorImpl<Value *> &DstDwords) {
@@ -1302,28 +1332,41 @@ void widenF4FragmentToFP8(IRBuilder<> &B, Module &M,
   assert(SrcDwords.size() == 8 && "FP4 fragment is 8 i32 dwords / lane");
   DstDwords.assign(16, nullptr);
 
-  // Extract each fp4 nibble, widen it, and OR the fp8 byte into the
-  // destination dword at the right byte slot. Element k -> source dword
-  // k/8, nibble (k%8); -> destination dword k/4, byte (k%4).
-  Value *Zero = B.getInt32(0);
-  for (unsigned d = 0; d < 16; ++d)
-    DstDwords[d] = Zero;
+  auto *I32Ty = B.getInt32Ty();
+  auto *I8Ty = B.getInt8Ty();
+  auto *Vec8I32 = FixedVectorType::get(I32Ty, 8);
+  auto *Vec8I8 = FixedVectorType::get(I8Ty, 8);
+  auto *Vec2I32 = FixedVectorType::get(I32Ty, 2);
 
-  for (unsigned k = 0; k < 64; ++k) {
-    unsigned srcDw = k / 8;
-    unsigned nibblePos = k % 8;
-    Value *Nibble = B.CreateAnd(
-        B.CreateLShr(SrcDwords[srcDw], B.getInt32(4 * nibblePos),
-                     "fp4_shr"),
-        B.getInt32(0xF), "fp4_nib");
-    Value *FP8 = widenF4NibbleToFP8(B, Nibble);
+  // Per-lane shift amounts {0, 4, 8, 12, 16, 20, 24, 28} to spread the
+  // 8 nibbles of a source dword across the 8 vector lanes.
+  SmallVector<Constant *, 8> ShiftAmtsElts;
+  for (unsigned i = 0; i < 8; ++i)
+    ShiftAmtsElts.push_back(ConstantInt::get(I32Ty, 4 * i));
+  Constant *ShiftAmts = ConstantVector::get(ShiftAmtsElts);
+  Constant *NibbleMask = ConstantVector::getSplat(
+      ElementCount::getFixed(8), ConstantInt::get(I32Ty, 0xF));
 
-    unsigned dstDw = k / 4;
-    unsigned bytePos = k % 4;
-    Value *FP8Placed = B.CreateShl(FP8, B.getInt32(8 * bytePos),
-                                    "fp8_placed");
-    DstDwords[dstDw] = B.CreateOr(DstDwords[dstDw], FP8Placed,
-                                   "fp8_pack");
+  for (unsigned d = 0; d < 8; ++d) {
+    // Splat the source dword across <8 x i32>, per-lane shift, mask
+    // to isolate the nibble in each lane.
+    Value *DwSplat = B.CreateVectorSplat(8, SrcDwords[d], "fp4_splat");
+    Value *Shifted = B.CreateLShr(DwSplat, ShiftAmts, "fp4_shifted");
+    Value *Nibbles = B.CreateAnd(Shifted, NibbleMask, "fp4_nibs");
+
+    // Widen all 8 nibbles in parallel.
+    Value *FP8Vec = widenF4NibbleVecToFP8(B, Nibbles);
+
+    // Each FP8 result fits in a byte (low 8 bits of the i32 lane); a
+    // single trunc compacts to <8 x i8> and a bitcast packs as <2 x i32>
+    // = 2 destination dwords. No per-byte shift/OR chain.
+    Value *FP8Bytes = B.CreateTrunc(FP8Vec, Vec8I8, "fp4_bytes");
+    Value *DwordPair = B.CreateBitCast(FP8Bytes, Vec2I32, "fp4_dw_pair");
+
+    DstDwords[2 * d] = B.CreateExtractElement(DwordPair, B.getInt32(0),
+                                              "fp8_dw_lo");
+    DstDwords[2 * d + 1] = B.CreateExtractElement(
+        DwordPair, B.getInt32(1), "fp8_dw_hi");
   }
 }
 
@@ -1331,12 +1374,9 @@ void widenF4FragmentToFP8(IRBuilder<> &B, Module &M,
 // fragment. 6-bit elements are packed contiguously across byte / dword
 // boundaries -- the alignment period is 24 bits (= 4 elements per 3
 // bytes); within a single 32-bit dword the layout misaligns at the
-// fifth-element boundary (k = 5, 10, 16, 21, 26, ...).
-//
-// Per-element cost: 2 IR ops if the element fits in one dword
-// (bit_offset % 32 + 6 <= 32, 53 of 64 elements), 6 ops if it crosses
-// a dword boundary (11 of 64 elements). Bit_offset, dw_idx, and the
-// crossing predicate are all compile-time constants.
+// fifth-element boundary (k = 5, 10, 16, 21, 26, ...). For elements
+// that straddle a dword boundary, two consecutive dwords are combined
+// as an i64, shifted, masked, and truncated.
 Value *extractF6Nibble(IRBuilder<> &B, ArrayRef<Value *> Dwords,
                        unsigned k) {
   const unsigned bitOffset = 6 * k;
@@ -1474,47 +1514,172 @@ Value *widenBF6NibbleToBF8(IRBuilder<> &B, Module &M, Value *Nibble) {
                         BF8, "bf8_or_zero");
 }
 
+// Vectorized FP6 -> FP8 widening over a `<N x i32>` of source nibbles
+// (low 6 bits used in each lane). Same bit-math as `widenFP6NibbleToFP8`
+// expressed as vector IR so the AMDGPU backend can pattern-match packed
+// ops and the optimizer can coalesce across lanes.
+Value *widenFP6NibbleVecToFP8(IRBuilder<> &B, Module &M, Value *Nibbles) {
+  auto *VecTy = cast<FixedVectorType>(Nibbles->getType());
+  unsigned N = VecTy->getNumElements();
+  auto *I32Ty = cast<IntegerType>(VecTy->getElementType());
+  auto Splat = [&](uint64_t Val) -> Constant * {
+    return ConstantVector::getSplat(ElementCount::getFixed(N),
+                                     ConstantInt::get(I32Ty, Val));
+  };
+
+  Value *Sign = B.CreateAnd(B.CreateLShr(Nibbles, Splat(5)), Splat(1),
+                            "fp6_sign");
+  Value *Exp = B.CreateAnd(B.CreateLShr(Nibbles, Splat(3)), Splat(3),
+                           "fp6_exp");
+  Value *Mant = B.CreateAnd(Nibbles, Splat(7), "fp6_mant");
+
+  Value *NormExp = B.CreateAdd(Exp, Splat(6), "norm_exp");
+
+  // ctlz operates per vector lane.
+  Function *CtlzFn = Intrinsic::getOrInsertDeclaration(
+      &M, Intrinsic::ctlz, {VecTy});
+  Value *Ctlz =
+      B.CreateCall(CtlzFn, {Mant, B.getInt1(true)}, "fp6_ctlz");
+  Value *LZ = B.CreateSub(Ctlz, Splat(29), "fp6_lz");
+  Value *SubExp = B.CreateSub(Splat(6), LZ, "sub_exp");
+  Value *MantShifted =
+      B.CreateShl(Mant, B.CreateAdd(LZ, Splat(1)), "sub_mant_shl");
+  Value *SubMant = B.CreateAnd(MantShifted, Splat(7), "sub_mant");
+
+  Value *IsSubnormal = B.CreateICmpEQ(Exp, Splat(0), "is_sub");
+  Value *FP8Exp = B.CreateSelect(IsSubnormal, SubExp, NormExp, "fp8_exp");
+  Value *FP8Mant =
+      B.CreateSelect(IsSubnormal, SubMant, Mant, "fp8_mant");
+
+  Value *SignShifted = B.CreateShl(Sign, Splat(7), "fp8_sign_pos");
+  Value *FP8 = B.CreateOr(
+      SignShifted, B.CreateOr(B.CreateShl(FP8Exp, Splat(3)), FP8Mant), "fp8");
+
+  Value *IsZero = B.CreateAnd(IsSubnormal,
+                              B.CreateICmpEQ(Mant, Splat(0)), "is_zero");
+  return B.CreateSelect(IsZero, SignShifted, FP8, "fp8_or_zero");
+}
+
+// Vectorized BF6 -> BF8 widening over a `<N x i32>` of source nibbles.
+// Counterpart of `widenBF6NibbleToBF8` -- differs from
+// `widenFP6NibbleVecToFP8` in the exp/mant bit positions (3-exp + 2-mant
+// vs 2-exp + 3-mant), the bias diff (12 vs 6), the ctlz adjustment
+// (-30 for 2-bit mantissa vs -29 for 3-bit), and the final exp shift
+// position (2 for BF8 vs 3 for FP8).
+Value *widenBF6NibbleVecToBF8(IRBuilder<> &B, Module &M, Value *Nibbles) {
+  auto *VecTy = cast<FixedVectorType>(Nibbles->getType());
+  unsigned N = VecTy->getNumElements();
+  auto *I32Ty = cast<IntegerType>(VecTy->getElementType());
+  auto Splat = [&](uint64_t Val) -> Constant * {
+    return ConstantVector::getSplat(ElementCount::getFixed(N),
+                                     ConstantInt::get(I32Ty, Val));
+  };
+
+  Value *Sign = B.CreateAnd(B.CreateLShr(Nibbles, Splat(5)), Splat(1),
+                            "bf6_sign");
+  Value *Exp = B.CreateAnd(B.CreateLShr(Nibbles, Splat(2)), Splat(7),
+                           "bf6_exp");
+  Value *Mant = B.CreateAnd(Nibbles, Splat(3), "bf6_mant");
+
+  Value *NormExp = B.CreateAdd(Exp, Splat(12), "norm_exp");
+
+  Function *CtlzFn = Intrinsic::getOrInsertDeclaration(
+      &M, Intrinsic::ctlz, {VecTy});
+  Value *Ctlz =
+      B.CreateCall(CtlzFn, {Mant, B.getInt1(true)}, "bf6_ctlz");
+  Value *LZ = B.CreateSub(Ctlz, Splat(30), "bf6_lz");
+  Value *SubExp = B.CreateSub(Splat(12), LZ, "sub_exp");
+  Value *MantShifted =
+      B.CreateShl(Mant, B.CreateAdd(LZ, Splat(1)), "sub_mant_shl");
+  Value *SubMant = B.CreateAnd(MantShifted, Splat(3), "sub_mant");
+
+  Value *IsSubnormal = B.CreateICmpEQ(Exp, Splat(0), "is_sub");
+  Value *BF8Exp = B.CreateSelect(IsSubnormal, SubExp, NormExp, "bf8_exp");
+  Value *BF8Mant =
+      B.CreateSelect(IsSubnormal, SubMant, Mant, "bf8_mant");
+
+  // BF8 mantissa width = 2 -> exp shifts by 2 (not 3).
+  Value *SignShifted = B.CreateShl(Sign, Splat(7), "bf8_sign_pos");
+  Value *BF8 = B.CreateOr(
+      SignShifted, B.CreateOr(B.CreateShl(BF8Exp, Splat(2)), BF8Mant), "bf8");
+
+  Value *IsZero = B.CreateAnd(IsSubnormal,
+                              B.CreateICmpEQ(Mant, Splat(0)), "is_zero");
+  return B.CreateSelect(IsZero, SignShifted, BF8, "bf8_or_zero");
+}
+
 // Widen a full FP6 fragment (12 i32 dwords / wave32 lane, 64 elements
 // packed at 6 bits each) to an FP8 fragment (16 i32 dwords / lane).
 // Element k of the source -> byte k of the destination, preserving the
 // K-dimension layout (same convention as `widenF4FragmentToFP8`).
+//
+// Vectorized over 4 super-chunks of 16 elements each (3 source dwords
+// per super-chunk = 96 bits = 16 elements exactly): per super-chunk
+// build a `<16 x i32>` of extracted nibbles, run the vectorized
+// widener, repack via trunc + bitcast.
 void widenFP6FragmentToFP8(IRBuilder<> &B, Module &M,
                            ArrayRef<Value *> SrcDwords,
                            SmallVectorImpl<Value *> &DstDwords) {
   assert(SrcDwords.size() == 12 &&
          "FP6 fragment is 12 i32 dwords / lane");
-  DstDwords.assign(16, B.getInt32(0));
-  for (unsigned k = 0; k < 64; ++k) {
-    Value *Nibble = extractF6Nibble(B, SrcDwords, k);
-    Value *FP8 = widenFP6NibbleToFP8(B, M, Nibble);
-    unsigned dstDw = k / 4;
-    unsigned bytePos = k % 4;
-    Value *Placed = B.CreateShl(FP8, B.getInt32(8 * bytePos),
-                                "fp8_placed");
-    DstDwords[dstDw] =
-        B.CreateOr(DstDwords[dstDw], Placed, "fp8_pack");
+  auto *I32Ty = B.getInt32Ty();
+  auto *Vec16I32 = FixedVectorType::get(I32Ty, 16);
+  auto *Vec16I8 = FixedVectorType::get(B.getInt8Ty(), 16);
+  auto *Vec4I32 = FixedVectorType::get(I32Ty, 4);
+  DstDwords.assign(16, nullptr);
+
+  for (unsigned s = 0; s < 4; ++s) {
+    // Per-element extract (scalar; each element has a unique constant
+    // shift amount). 14 of 16 elements fit in one dword, 2 cross --
+    // `extractF6Nibble` handles the boundary cases.
+    Value *NibbleVec = PoisonValue::get(Vec16I32);
+    for (unsigned i = 0; i < 16; ++i) {
+      Value *Nibble = extractF6Nibble(B, SrcDwords, 16 * s + i);
+      NibbleVec = B.CreateInsertElement(NibbleVec, Nibble,
+                                         B.getInt32(i), "f6_lane");
+    }
+
+    Value *FP8Vec = widenFP6NibbleVecToFP8(B, M, NibbleVec);
+
+    Value *FP8Bytes = B.CreateTrunc(FP8Vec, Vec16I8, "f6_bytes");
+    Value *DwordVec = B.CreateBitCast(FP8Bytes, Vec4I32, "f6_dwords");
+    for (unsigned i = 0; i < 4; ++i)
+      DstDwords[4 * s + i] = B.CreateExtractElement(
+          DwordVec, B.getInt32(i), "f6_dw");
   }
 }
 
-// Widen a full BF6 fragment to a BF8 fragment. Same shape as
-// `widenFP6FragmentToFP8`; differs only in the per-element widener
-// (BF6 -> BF8 vs FP6 -> FP8) since the bit-unpacking is identical
-// across 6-bit-element formats.
+// Widen a full BF6 fragment to a BF8 fragment. Same fragment-level
+// shape as `widenFP6FragmentToFP8` (the bit-unpacking via
+// `extractF6Nibble` is identical across 6-bit-element formats); the
+// per-element widening differs by format (`widenBF6NibbleVecToBF8`
+// rather than `widenFP6NibbleVecToFP8`).
 void widenBF6FragmentToBF8(IRBuilder<> &B, Module &M,
                            ArrayRef<Value *> SrcDwords,
                            SmallVectorImpl<Value *> &DstDwords) {
   assert(SrcDwords.size() == 12 &&
          "BF6 fragment is 12 i32 dwords / lane");
-  DstDwords.assign(16, B.getInt32(0));
-  for (unsigned k = 0; k < 64; ++k) {
-    Value *Nibble = extractF6Nibble(B, SrcDwords, k);
-    Value *BF8 = widenBF6NibbleToBF8(B, M, Nibble);
-    unsigned dstDw = k / 4;
-    unsigned bytePos = k % 4;
-    Value *Placed = B.CreateShl(BF8, B.getInt32(8 * bytePos),
-                                "bf8_placed");
-    DstDwords[dstDw] =
-        B.CreateOr(DstDwords[dstDw], Placed, "bf8_pack");
+  auto *I32Ty = B.getInt32Ty();
+  auto *Vec16I32 = FixedVectorType::get(I32Ty, 16);
+  auto *Vec16I8 = FixedVectorType::get(B.getInt8Ty(), 16);
+  auto *Vec4I32 = FixedVectorType::get(I32Ty, 4);
+  DstDwords.assign(16, nullptr);
+
+  for (unsigned s = 0; s < 4; ++s) {
+    Value *NibbleVec = PoisonValue::get(Vec16I32);
+    for (unsigned i = 0; i < 16; ++i) {
+      Value *Nibble = extractF6Nibble(B, SrcDwords, 16 * s + i);
+      NibbleVec = B.CreateInsertElement(NibbleVec, Nibble,
+                                         B.getInt32(i), "f6_lane");
+    }
+
+    Value *BF8Vec = widenBF6NibbleVecToBF8(B, M, NibbleVec);
+
+    Value *BF8Bytes = B.CreateTrunc(BF8Vec, Vec16I8, "f6_bytes");
+    Value *DwordVec = B.CreateBitCast(BF8Bytes, Vec4I32, "f6_dwords");
+    for (unsigned i = 0; i < 4; ++i)
+      DstDwords[4 * s + i] = B.CreateExtractElement(
+          DwordVec, B.getInt32(i), "f6_dw");
   }
 }
 
@@ -1544,18 +1709,18 @@ Value *extractScaleByte(IRBuilder<> &B, Value *Scale32, unsigned k) {
 // Branchless ALU dispatch on the compile-time `Fmt`:
 //
 //   ScaleFmtE8M0: `ldexp(1.0, byte - 127)` + select-to-qNaN at byte=0xFF.
-//                 ~5 IR ops. Pure exponent format; no mantissa or sign.
-//   ScaleFmtE4M3: `@llvm.amdgcn.cvt.f32.fp8(byte, byte_sel=0)`. ONE hw
-//                 instruction (gfx942 native). The E4M3 scale format is
-//                 bit-identical to the FP8 E4M3 data format, so the
-//                 cvt's existing handling of sign, normals, subnormals,
-//                 and NaN (`S.1111.111`) all apply directly. No explicit
+//                 Pure exponent format; no mantissa or sign.
+//   ScaleFmtE4M3: `@llvm.amdgcn.cvt.f32.fp8(byte, byte_sel=0)` -- gfx942
+//                 native cvt. The E4M3 scale format is bit-identical to
+//                 the FP8 E4M3 data format, so the cvt's existing
+//                 handling of sign, normals, subnormals, and NaN
+//                 (`S.1111.111`) all apply directly. No explicit
 //                 NaN-sentinel select needed.
-//   ScaleFmtE5M3: not implemented in this commit; returns nullptr.
-//                 (E5M3 has 5 exp + 3 mant unsigned bits with bias 15;
-//                 no gfx942 hw cvt matches that layout, so the decode
-//                 would be ALU bit-math similar to `widenFP6NibbleToFP8`
-//                 parameterized for E5M3's bit positions.)
+//   ScaleFmtE5M3: not implemented; returns nullptr. E5M3 has 5 exp +
+//                 3 mant unsigned bits with bias 15; no gfx942 hw cvt
+//                 matches that layout, so the decode would be ALU
+//                 bit-math similar to `widenFP6NibbleToFP8` parameterized
+//                 for E5M3's bit positions.
 //
 // Returns nullptr for ScaleFmtE5M3 or unknown formats; caller refuses.
 Value *decodeScaleByte(IRBuilder<> &B, Module &M, Type *F32Ty,
@@ -1680,15 +1845,12 @@ Value *emitWMMAScaleF8F6F4toMFMA(
   IRBuilder<> &B = ctx.B;
   Module &M = ctx.M;
 
-  // Fragment-width guard. Supported in this draft:
+  // Fragment-width guard. Supported source widths:
   //   * aDwords == 16 (FP8 or BF8): native fp8/bf8 fragment, used as-is.
   //   * aDwords == 12 (FP6 / BF6): 6-bit-packed; widened in-line via
   //                                `widenFP6FragmentToFP8` (E2M3 -> E4M3)
   //                                or `widenBF6FragmentToBF8` (E3M2 ->
-  //                                E5M2). The 6-bit unpack uses cross-
-  //                                dword shifts on the 11 boundary
-  //                                elements (53 of 64 elements fit in
-  //                                one dword).
+  //                                E5M2).
   //   * aDwords == 8  (FP4):       4-bit-packed; widened in-line to a
   //                                16-dword fp8 fragment via
   //                                `widenF4FragmentToFP8`.

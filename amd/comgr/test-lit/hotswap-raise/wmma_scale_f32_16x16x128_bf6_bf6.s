@@ -32,13 +32,14 @@
 ; Cross-dword bit unpack: i64 shift right for the boundary elements.
 ; IR_GFX942-DAG: lshr i64
 
-; Subnormal renormalization via ctlz on the 2-bit mantissa.
-; IR_GFX942-DAG: call i32 @llvm.ctlz.i32(
+; Subnormal renormalization via ctlz on the 2-bit mantissa, vectorized
+; across 16 elements per super-chunk (`<16 x i32>` lane vector).
+; IR_GFX942-DAG: call <16 x i32> @llvm.ctlz.v16i32(
 
-; BF6-specific arithmetic: `sub i32 12, ...` (biased BF8 exp from lz)
-; and `sub i32 ..., 30` (lz_2bit adjustment from ctlz output).
-; IR_GFX942-DAG: sub i32 12, %{{[^,]+}}
-; IR_GFX942-DAG: sub i32 %{{[^,]+}}, 30
+; BF6-specific arithmetic: `sub 12, ...` (biased BF8 exp from lz) and
+; `sub ..., 30` (lz_2bit adjustment from ctlz output). Both vectorized.
+; IR_GFX942-DAG: sub <16 x i32> {{(splat \(i32 12\)|<i32 12)}}
+; IR_GFX942-DAG: sub <16 x i32> %{{[^,]+}}, {{(splat \(i32 30\)|<i32 30)}}
 
 ; BF6 -> bf8.bf8 MFMA dispatch.
 ; IR_GFX942: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.bf8.bf8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)

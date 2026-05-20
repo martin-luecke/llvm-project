@@ -32,15 +32,14 @@
 
 ; IR_GFX942-LABEL: define amdgpu_kernel void @wmma_scale_f32_16x16x128_fp4_fp4_kernel(
 
-; The widening core: subnormal-vs-normal select on the exp produces
-; `select i1 %{{[^,]+}}, i32 6, i32 %{{[^,]+}}` for each nibble. Pin
-; one occurrence (the pattern is heavily replicated; checking
-; presence is enough).
-; IR_GFX942-DAG: select i1 %{{[^,]+}}, i32 6, i32
+; The widening core: vectorized per source dword, so the subnormal-
+; vs-normal select appears as `select <8 x i1>` over <8 x i32> with a
+; splat of <i32 6, ...> as the subnormal-exp constant.
+; IR_GFX942-DAG: select <8 x i1>
 
-; Mantissa pad: `shl i32 %{{[^,]+}}, 2` places the single FP4 mantissa
-; bit into FP8 bit 2.
-; IR_GFX942-DAG: shl i32 %{{[^,]+}}, 2
+; Mantissa pad: `shl <8 x i32> %{{[^,]+}}, splat (i32 2)` places the
+; single FP4 mantissa bit into FP8 bit 2 across all 8 vector lanes.
+; IR_GFX942-DAG: shl <8 x i32>
 
 ; FP4 -> fp8.fp8 MFMA dispatch. Both sides widen to E4M3.
 ; IR_GFX942: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.fp8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
