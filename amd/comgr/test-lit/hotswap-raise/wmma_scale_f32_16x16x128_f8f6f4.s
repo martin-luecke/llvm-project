@@ -97,6 +97,14 @@
 ; and the loop body is deterministic.
 ; IR_GFX942-COUNT-7: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.bf8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
 
+; UE8M0 0xFF NaN-sentinel guard: each K-block checks both scale bytes
+; against 0xFF (= 255) and selects qNaN (printed as `+qnan` in LLVM IR
+; text form) for the factor when either byte is the sentinel. The
+; select replaces the finite ldexp result before the splat / fmuladd,
+; so `Partial * NaN + Acc = NaN` propagates the sentinel.
+; IR_GFX942-DAG: icmp eq i32 %{{[^,]+}}, 255
+; IR_GFX942-DAG: select i1 %{{[^,]+}}, float +qnan, float %{{[^,]+}}
+
 ; Negative: NO separate fmul/fadd pair on the K-loop accumulator --
 ; we fold scale-and-accumulate into a single fmuladd. (A plain
 ; `fmul <4 x float>` would mean someone reintroduced the un-fused

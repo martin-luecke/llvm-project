@@ -1505,28 +1505,47 @@ Value *extractScaleByte(IRBuilder<> &B, Value *Scale32, unsigned k) {
   return B.CreateAnd(Shifted, B.getInt32(0xFF), "scale_byte");
 }
 
-// Build a `<4 x float>` splat of `2^(scaleAByte + scaleBByte - 254)` for
-// the K-block's combined UE8M0 scale factor.
+// Build a `<4 x float>` splat of the K-block's combined UE8M0 scale
+// factor.
 //
-// UE8M0 bias: scale_value = 2^(byte - 127). Combined factor for A * B is
-// `2^(byteA + byteB - 254)`. We build it once via scalar `ldexp(1.0, e)`
-// and broadcast for the per-element fmul. `ldexp` on f32 is bit-exact
-// (pure exponent shift), so no precision is lost vs folding the scale
-// into each widened input.
+// UE8M0 encoding:
+//   byte in [0, 254]: scale_value = 2^(byte - 127)
+//   byte == 0xFF:     NaN sentinel (the K-block's contribution to the
+//                     output must be NaN; matches gfx950 hardware-scaled
+//                     MFMA semantics).
 //
-// NOTE: byteA == 0xFF (UE8M0 NaN sentinel) is NOT special-cased here.
-// Hardware-scaled MFMA on gfx950 propagates NaN to the K-block's
-// contribution; reproducing that requires an explicit
-// `select(byte == 0xFF, NaN_splat, ...)`. Marked TODO in the header.
+// Combined factor for A * B is `2^(byteA + byteB - 254)` for finite
+// bytes. If either byte is the 0xFF NaN sentinel, the combined factor
+// is NaN -- select replaces the finite ldexp result with a canonical
+// qNaN before the splat. `Partial * NaN` is NaN, and `Acc + NaN` is
+// NaN, so the fmuladd naturally propagates the sentinel through the
+// K-block's accumulator update without any further intervention.
+//
+// `ldexp` on f32 is bit-exact (pure exponent shift), so applying the
+// finite-path factor once on the K-block's `<4 x f32>` partial is
+// precision-equivalent to folding the scale into each widened input.
 Value *buildScaleFactorVec(IRBuilder<> &B, Module &M, Type *F32Ty,
                             Value *ScaleAByte, Value *ScaleBByte) {
+  // UE8M0 NaN sentinel guard: 0xFF on either side -> NaN factor.
+  Value *AIsNaN =
+      B.CreateICmpEQ(ScaleAByte, B.getInt32(0xFF), "scale_a_is_nan");
+  Value *BIsNaN =
+      B.CreateICmpEQ(ScaleBByte, B.getInt32(0xFF), "scale_b_is_nan");
+  Value *AnyIsNaN = B.CreateOr(AIsNaN, BIsNaN, "scale_is_nan");
+
+  // Finite path: factor = 2^(byteA + byteB - 254).
   Value *Sum = B.CreateAdd(ScaleAByte, ScaleBByte, "scale_sum");
   Value *Biased = B.CreateSub(Sum, B.getInt32(254), "scale_exp");
   Function *LdexpFn = Intrinsic::getOrInsertDeclaration(
       &M, Intrinsic::ldexp, {F32Ty, B.getInt32Ty()});
-  Value *Factor = B.CreateCall(LdexpFn, {ConstantFP::get(F32Ty, 1.0),
-                                          Biased},
-                                "scale_factor");
+  Value *FiniteFactor = B.CreateCall(
+      LdexpFn, {ConstantFP::get(F32Ty, 1.0), Biased}, "finite_factor");
+
+  Value *NaNFactor =
+      ConstantFP::getQNaN(F32Ty); // canonical qNaN bit pattern
+  Value *Factor =
+      B.CreateSelect(AnyIsNaN, NaNFactor, FiniteFactor, "scale_factor");
+
   auto *Vec4 = FixedVectorType::get(F32Ty, 4);
   Value *Splat = B.CreateInsertElement(PoisonValue::get(Vec4), Factor,
                                        B.getInt32(0), "factor_lane0");
