@@ -1130,10 +1130,15 @@ llvm::Value *emitWMMAScaleF8F6F4toScaledMFMA(
 //     wave 1 -> target lanes 32..63), final `select(laneId >= 32, ...)`
 //     per output dword.
 //
-// Scope of this draft: fp8 x fp8, fp8 x bf8, bf8 x fp8, bf8 x bf8 (the
-// four (FP8|BF8)^2 combinations supported by the gfx942 MFMA family).
-// f6 / f4 inputs are refused -- gfx942 has no packed-f6 / packed-f4
-// MFMA, and a software widen-to-fp8 lookup table is deferred.
+// Scope of this draft: (FP8 | BF8 | FP4)^2 with each side independently
+// widened if it is FP4. FP4 (E2M1) widens to FP8 (E4M3) via a branchless
+// per-nibble bit-arithmetic helper (`widenF4NibbleToFP8`) -- no LUT, no
+// memory access, ~10 IR ops per element. The widened fragment is laid
+// out exactly like a native FP8 fragment (16 dwords / wave32 lane), so
+// the downstream redistribute + MFMA + scale + collect pipeline is
+// unchanged. FP6 / BF6 inputs are still refused -- the per-element bit
+// math is the same shape but the 6-bit-element unpack across byte / dword
+// boundaries is gnarly enough to want a separate patch.
 // ============================================================================
 
 namespace {
@@ -1168,6 +1173,127 @@ Intrinsic::ID pickGfx942F8MfmaIntrinsic(int aFmt, int bFmt) {
   if (aIsBf8 && bIsFp8) return Intrinsic::amdgcn_mfma_f32_16x16x32_bf8_fp8;
   if (aIsBf8 && bIsBf8) return Intrinsic::amdgcn_mfma_f32_16x16x32_bf8_bf8;
   return Intrinsic::not_intrinsic;
+}
+
+// Post-widen "effective" matrix format used to pick the gfx942 MFMA
+// intrinsic. The OCP MX format naturally pairs with the FP8 variant whose
+// mantissa width matches:
+//   FP8 (E4M3)   -> FP8 (no widen)
+//   BF8 (E5M2)   -> BF8 (no widen)
+//   FP6 (E2M3)   -> FP8 (E4M3): same mantissa width
+//   BF6 (E3M2)   -> BF8 (E5M2): same mantissa width
+//   FP4 (E2M1)   -> FP8 (E4M3): mantissa pads 1 -> 3 bits, exponent fits
+// Returns -1 for unknown formats.
+int effectiveFmtAfterWiden(int srcFmt) {
+  switch (srcFmt) {
+  case FmtFP8: return FmtFP8;
+  case FmtBF8: return FmtBF8;
+  case FmtFP6: return FmtFP8;
+  case FmtBF6: return FmtBF8;
+  case FmtFP4: return FmtFP8;
+  default: return -1;
+  }
+}
+
+// Widen one FP4 (E2M1) nibble (low 4 bits of `Nibble`, held in i32) to
+// an FP8 E4M3 byte (low 8 bits of returned i32).
+//
+// Branchless: shifts + masks + 2 selects, no memory access, no LUT.
+//
+//   FP4 layout: S EE M  (bias = 1, mantissa width = 1)
+//   FP8 layout: S EEEE MMM  (bias = 7, mantissa width = 3)
+//
+// FP4 has exactly two special encodings: ±0 (E=0, M=0) and the single
+// subnormal value ±0.5 (E=0, M=1). All other encodings (E in 1..3) are
+// ordinary normals.
+//
+// Conversion (per element):
+//   sign = bit 3
+//   normExp  = (E + 6),   normMant = M << 2     (pad to 3 bits)
+//   subExp   = 6,         subMant  = 0          (FP4 ±0.5 -> 1.000 * 2^-1)
+//   exp  = (E == 0) ? subExp : normExp
+//   mant = (E == 0) ? subMant : normMant
+//   fp8  = (sign << 7) | (exp << 3) | mant      -- and override to
+//                                                 `sign << 7` if M==0 too
+//                                                 (preserves the sign of
+//                                                 ±0; the subnormal path
+//                                                 would otherwise emit
+//                                                 0x30 / 0xB0 for ±0).
+//
+// Verified by hand against all 8 positive FP4 encodings:
+//   0x0 -> 0x00 (0)     0x4 -> 0x40 (2)
+//   0x1 -> 0x30 (0.5)   0x5 -> 0x44 (3)
+//   0x2 -> 0x38 (1)     0x6 -> 0x48 (4)
+//   0x3 -> 0x3C (1.5)   0x7 -> 0x4C (6)
+Value *widenF4NibbleToFP8(IRBuilder<> &B, Value *Nibble) {
+  Value *Sign = B.CreateAnd(B.CreateLShr(Nibble, B.getInt32(3)),
+                            B.getInt32(1), "fp4_sign");
+  Value *Exp = B.CreateAnd(B.CreateLShr(Nibble, B.getInt32(1)),
+                           B.getInt32(3), "fp4_exp");
+  Value *Mant = B.CreateAnd(Nibble, B.getInt32(1), "fp4_mant");
+
+  Value *NormExp = B.CreateAdd(Exp, B.getInt32(6), "norm_exp");
+  Value *NormMant = B.CreateShl(Mant, B.getInt32(2), "norm_mant");
+
+  // FP4 subnormal: only one value (±0.5) -> biased FP8 exp = 6, mant = 0.
+  Value *IsSubnormal = B.CreateICmpEQ(Exp, B.getInt32(0), "is_subnormal");
+  Value *FP8Exp =
+      B.CreateSelect(IsSubnormal, B.getInt32(6), NormExp, "fp8_exp");
+  Value *FP8Mant =
+      B.CreateSelect(IsSubnormal, B.getInt32(0), NormMant, "fp8_mant");
+
+  Value *FP8WithSign =
+      B.CreateOr(B.CreateShl(Sign, B.getInt32(7)),
+                  B.CreateOr(B.CreateShl(FP8Exp, B.getInt32(3)), FP8Mant),
+                  "fp8");
+
+  // ±0 (E=0, M=0): override the subnormal-path's 0x30 / 0xB0 with
+  // sign-extended zero.
+  Value *IsZero = B.CreateAnd(IsSubnormal,
+                              B.CreateICmpEQ(Mant, B.getInt32(0)));
+  return B.CreateSelect(IsZero, B.CreateShl(Sign, B.getInt32(7)),
+                        FP8WithSign, "fp8_or_zero");
+}
+
+// Widen a full FP4 fragment (8 i32 dwords per wave32 lane, 8 nibbles per
+// dword = 64 fp4 elements total) to an FP8 fragment (16 i32 dwords per
+// wave32 lane, 4 fp8 bytes per dword = 64 fp8 elements). Element k of the
+// source (k in 0..63) maps to byte k of the destination, preserving the
+// K-dimension layout that the rest of the pipeline expects.
+//
+// Per-element cost: ~10 IR ops (extract nibble + widen + insert byte).
+// Total per matrix: 640 IR ops; the AMDGPU backend coalesces most of the
+// shift/mask chains within a dword.
+void widenF4FragmentToFP8(IRBuilder<> &B, Module &M,
+                           ArrayRef<Value *> SrcDwords,
+                           SmallVectorImpl<Value *> &DstDwords) {
+  (void)M;
+  assert(SrcDwords.size() == 8 && "FP4 fragment is 8 i32 dwords / lane");
+  DstDwords.assign(16, nullptr);
+
+  // Extract each fp4 nibble, widen it, and OR the fp8 byte into the
+  // destination dword at the right byte slot. Element k -> source dword
+  // k/8, nibble (k%8); -> destination dword k/4, byte (k%4).
+  Value *Zero = B.getInt32(0);
+  for (unsigned d = 0; d < 16; ++d)
+    DstDwords[d] = Zero;
+
+  for (unsigned k = 0; k < 64; ++k) {
+    unsigned srcDw = k / 8;
+    unsigned nibblePos = k % 8;
+    Value *Nibble = B.CreateAnd(
+        B.CreateLShr(SrcDwords[srcDw], B.getInt32(4 * nibblePos),
+                     "fp4_shr"),
+        B.getInt32(0xF), "fp4_nib");
+    Value *FP8 = widenF4NibbleToFP8(B, Nibble);
+
+    unsigned dstDw = k / 4;
+    unsigned bytePos = k % 4;
+    Value *FP8Placed = B.CreateShl(FP8, B.getInt32(8 * bytePos),
+                                    "fp8_placed");
+    DstDwords[dstDw] = B.CreateOr(DstDwords[dstDw], FP8Placed,
+                                   "fp8_pack");
+  }
 }
 
 // Extract byte `k` (0..3) from a 32-bit value as a zero-extended i32.
@@ -1216,30 +1342,19 @@ Value *emitWMMAScaleF8F6F4toMFMA(
   IRBuilder<> &B = ctx.B;
   Module &M = ctx.M;
 
-  // Draft-scope guard: only ADwords == BDwords == 16 (fp8 or bf8) is
-  // supported. f6 / f4 paths need a software widen-to-fp8 lookup table;
-  // refuse with nullptr so the caller emits a clean unsupportedShape
-  // failure.
-  if (aDwords != 16 || bDwords != 16) {
-    // WIDEN_F6F4_TO_FP8: not implemented in this draft.
-    //
-    // For aDwords / bDwords in {12 (f6), 8 (f4)} the per-lane bit
-    // representation is:
-    //   FP6 (E2M3) / BF6 (E3M2): 6 bits per element, packed 4-per-3-bytes.
-    //     Wave32 lane carries 12 dwords = 48 bytes -> 64 fp6 elements.
-    //   FP4 (E2M1): 4 bits per element, 8 per dword. Wave32 lane carries
-    //     8 dwords = 32 bytes -> 64 fp4 elements.
-    //
-    // Widening to fp8 requires:
-    //   1. bit-unpack each element from its packed slot.
-    //   2. lookup table (16 entries for FP4, 64 each for FP6 / BF6) that
-    //      maps the source bit pattern to an FP8 (E4M3 / E5M2) byte,
-    //      handling FP6 / FP4 subnormals and exponent re-biasing.
-    //   3. re-pack 8 fp8 bytes per wave64 lane into i64 for the K=32
-    //      MFMA -- same shape as the fp8/bf8 path below.
-    // Follow-up patch.
+  // Fragment-width guard. Supported in this draft:
+  //   * aDwords == 16 (FP8 or BF8): native fp8/bf8 fragment, used as-is.
+  //   * aDwords == 8  (FP4): 4-bit-packed; widened in-line to a 16-dword
+  //                          fp8 fragment via `widenF4FragmentToFP8`.
+  //   * aDwords == 12 (FP6 / BF6): 6-bit-packed; NOT YET wired (follow-up
+  //                                patch -- the sub-byte unpack needs a
+  //                                misaligned-bit shifter).
+  // Same set for bDwords. The per-element bit arithmetic for f6 widening
+  // is identical in shape to the f4 case (see `widenF4NibbleToFP8`);
+  // only the unpack changes.
+  auto SupportedDwords = [](unsigned dw) { return dw == 16 || dw == 8; };
+  if (!SupportedDwords(aDwords) || !SupportedDwords(bDwords))
     return nullptr;
-  }
 
   // Scale-selector draft-scope guard. matrix_*_scale (2-bit byte index)
   // and matrix_*_scale_fmt (3-bit UE8M0 / FP8 scale-format selector) are
@@ -1252,22 +1367,45 @@ Value *emitWMMAScaleF8F6F4toMFMA(
       AsConstInt(matrixAScaleFmt) != 0 || AsConstInt(matrixBScaleFmt) != 0)
     return nullptr;
 
-  // Format dispatch -- pick the matching fp8/bf8 MFMA intrinsic. f6 / f4
-  // (FmtFP6 / FmtBF6 / FmtFP4) yield Intrinsic::not_intrinsic and are
-  // gated out here (gfx942 has no packed-f6 / packed-f4 MFMA).
+  // Format dispatch -- after any required widening (FP4 -> FP8) the
+  // effective format pair must match a gfx942 MFMA intrinsic. f6 / bf6
+  // are gated out at the dword-count check above.
   int aFmt = static_cast<int>(AsConstInt(matrixAFmt));
   int bFmt = static_cast<int>(AsConstInt(matrixBFmt));
-  Intrinsic::ID MfmaId = pickGfx942F8MfmaIntrinsic(aFmt, bFmt);
+  int aFmtEff = effectiveFmtAfterWiden(aFmt);
+  int bFmtEff = effectiveFmtAfterWiden(bFmt);
+  if (aFmtEff < 0 || bFmtEff < 0)
+    return nullptr;
+  Intrinsic::ID MfmaId = pickGfx942F8MfmaIntrinsic(aFmtEff, bFmtEff);
   if (MfmaId == Intrinsic::not_intrinsic)
     return nullptr;
 
   // Unpack the wave32-layout WMMA fragments into per-dword arrays.
-  SmallVector<Value *, 16> aDwordsArr(aDwords);
-  SmallVector<Value *, 16> bDwordsArr(bDwords);
+  SmallVector<Value *, 16> aSrcDwords(aDwords);
+  SmallVector<Value *, 16> bSrcDwords(bDwords);
   Value *cDwords[8];
-  unpackDwords(B, a, aDwords, ctx.I32Ty, aDwordsArr.data());
-  unpackDwords(B, b, bDwords, ctx.I32Ty, bDwordsArr.data());
+  unpackDwords(B, a, aDwords, ctx.I32Ty, aSrcDwords.data());
+  unpackDwords(B, b, bDwords, ctx.I32Ty, bSrcDwords.data());
   unpackDwords(B, c, 8, ctx.I32Ty, cDwords);
+
+  // Widen FP4 fragments in-line so the downstream redistribution + MFMA
+  // pipeline sees a uniform 16-dword fp8 layout regardless of source
+  // format. Sequenced before the K-loop so the widened bytes can be
+  // pre-redistributed once and reused across all K-blocks of both passes.
+  SmallVector<Value *, 16> aDwordsArr;
+  SmallVector<Value *, 16> bDwordsArr;
+  if (aFmt == FmtFP4) {
+    widenF4FragmentToFP8(B, M, aSrcDwords, aDwordsArr);
+  } else {
+    aDwordsArr.assign(aSrcDwords.begin(), aSrcDwords.end());
+  }
+  if (bFmt == FmtFP4) {
+    widenF4FragmentToFP8(B, M, bSrcDwords, bDwordsArr);
+  } else {
+    bDwordsArr.assign(bSrcDwords.begin(), bSrcDwords.end());
+  }
+  assert(aDwordsArr.size() == 16 && bDwordsArr.size() == 16 &&
+         "post-widen fragments must be 16 fp8 dwords / lane");
 
   Value *LaneId = emitLaneId(B, M, ctx.I32Ty);
 
