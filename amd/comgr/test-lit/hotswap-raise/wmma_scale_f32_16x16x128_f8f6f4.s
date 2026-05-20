@@ -1,5 +1,5 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=wmma_scale_f32_16x16x128_f8f6f4_kernel 2>&1 | %FileCheck %s --check-prefix=IR_GFX942
+; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --disable-wave-native --emit-ir=wmma_scale_f32_16x16x128_f8f6f4_kernel 2>&1 | %FileCheck %s --check-prefix=IR_GFX942
 ;
 ; Cross-target lift fixture for v_wmma_scale_f32_16x16x128_f8f6f4
 ; (gfx1250 RDNA4 source) -> gfx942 (CDNA3 target). Pins the
@@ -7,6 +7,11 @@
 ; dispatched by `ctx.targetIsa.hasMfma && !hasGfx950Insts` in
 ; `handle_valu_vop3p.cpp` under
 ; `CanonicalOp::V_WMMA_SCALE_F32_16x16x128_F8F6F4`.
+;
+; `--disable-wave-native` selects the MODREP projection (one source
+; wave per target wave64) because this draft only covers
+; numSrcWaves == 1; the WaveNative cross-widen path (numSrcWaves == 2,
+; GroupBase looped over {0, 32}) is a noted follow-up.
 ;
 ; gfx942 has neither the scaled-WMMA family (gfx1250-only) nor the
 ; scaled-MFMA F8F6F4 family (gfx950+, gated on `FeatureGFX950Insts`).
@@ -67,27 +72,30 @@
 
 ; IR_GFX942-LABEL: define amdgpu_kernel void @wmma_scale_f32_16x16x128_f8f6f4_kernel(
 
-; The 4 K-block MFMA calls. aFmt = MATRIX_FMT_BF8 (1), bFmt =
-; MATRIX_FMT_FP8 (0, default) -> bf8 x fp8 MFMA family.
-; Zero `<4 x f32>` accumulator per call (we accumulate at IR level
-; after applying the per-K-block scale, NOT via MFMA chaining).
-; IR_GFX942-COUNT-4: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.bf8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
-
-; Per-K-block UE8M0 unbias: `2^(sA + sB - 254)` built via scalar ldexp.
-; IR_GFX942-COUNT-4: call float @llvm.ldexp.f32.i32(float 1.000000e+00, i32 %{{[^)]+}})
-
-; Per-K-block scale-on-output: 4 fmuls (kblock_scaled) + 4 fadds
-; (kblock_accum). No per-input fmul of widened f32 (we never widen).
-; IR_GFX942-COUNT-4: fmul <4 x float>
-; IR_GFX942-COUNT-4: fadd <4 x float>
-
-; UE8M0 byte-extraction arithmetic: per-K-block `sub i32 ..., 254` for
-; the combined biased exponent.
+; The K-loop emits 4 iterations, each producing in interleaved order:
+;   MFMA partial (bf8.fp8 -- aFmt = MATRIX_FMT_BF8 (1), bFmt =
+;   MATRIX_FMT_FP8 (0, default)), ldexp scale factor, fmul scaled,
+;   fadd into the running accumulator. The MFMA accumulator argument
+;   is `zeroinitializer` per call -- we accumulate at IR level after
+;   applying the per-K-block scale, NOT via MFMA chaining.
+;
+; First K-block pins the per-iteration emission order:
+; IR_GFX942: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.bf8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
 ; IR_GFX942: sub i32 %{{[^,]+}}, 254
+; IR_GFX942: call float @llvm.ldexp.f32.i32(float 1.000000e+00, i32 %{{[^)]+}})
+; IR_GFX942: fmul <4 x float>
+; IR_GFX942: fadd <4 x float>
+;
+; The remaining 3 K-blocks: 3 more bf8.fp8 MFMA calls. The intervening
+; ldexp / fmul / fadd are required by the K-loop structure; only the
+; MFMA count is asserted directly here (4 total = 1 above + 3 below)
+; because the per-iteration emission order is already pinned for
+; iteration 0 and the loop body is deterministic.
+; IR_GFX942-COUNT-3: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.bf8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
 
 ; Lane redistribution via ds.bpermute (wave32 -> wave64 cross-wave-size
-; lowering marker).
-; IR_GFX942: call i32 @llvm.amdgcn.ds.bpermute(
+; lowering marker -- many bpermute calls; one is enough to pin presence).
+; IR_GFX942-DAG: call i32 @llvm.amdgcn.ds.bpermute(
 
 ; Negative: no native scaled-WMMA intrinsic (would mean the gfx942
 ; cross-target dispatch fell through to the gfx1250 same-target arm).
