@@ -889,7 +889,7 @@ Value *emitWmmAtoMfmaF3216x16x4(RaiseContext &Ctx, Value *A, Value *Vb,
 //   init_whole_wave; under MODREP the wrapAsWWMValue calls keep the chain
 //   inside SIWholeQuadMode's WWM region.
 
-llvm::Value *emitWMMAScaleF8F6F4toMFMA(
+llvm::Value *emitWMMAScaleF8F6F4toScaledMFMA(
     RaiseContext &ctx, Value *a, Value *b, Value *c, Value *matrixAFmt,
     Value *matrixBFmt, Value *cMod, Value *matrixAScale, Value *matrixAScaleFmt,
     Value *scaleSrc0, Value *matrixBScale, Value *matrixBScaleFmt,
@@ -1201,7 +1201,7 @@ Value *buildScaleFactorVec(IRBuilder<> &B, Module &M, Type *F32Ty,
 
 } // namespace
 
-Value *emitWMMAScaleF8F6F4toMFMAGfx942(
+Value *emitWMMAScaleF8F6F4toMFMA(
     RaiseContext &ctx, Value *a, Value *b, Value *c, Value *matrixAFmt,
     Value *matrixBFmt, Value *cMod, Value *matrixAScale, Value *matrixAScaleFmt,
     Value *scaleSrc0, Value *matrixBScale, Value *matrixBScaleFmt,
@@ -1265,7 +1265,7 @@ Value *emitWMMAScaleF8F6F4toMFMAGfx942(
   Value *LaneId = emitLaneId(B, M, ctx.I32Ty);
 
   // Multi-source-wave projection (WaveNative cross-widen) needs two
-  // independent K-decomposed passes mirroring `emitWMMAScaleF8F6F4toMFMA`;
+  // independent K-decomposed passes mirroring `emitWMMAScaleF8F6F4toScaledMFMA`;
   // out of scope for the initial draft.
   const unsigned numSrcWaves = ctx.Projection.numSourceWavesPerTarget();
   if (numSrcWaves != 1)

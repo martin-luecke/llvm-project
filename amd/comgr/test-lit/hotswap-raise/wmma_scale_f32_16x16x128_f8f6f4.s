@@ -3,7 +3,7 @@
 ;
 ; Cross-target lift fixture for v_wmma_scale_f32_16x16x128_f8f6f4
 ; (gfx1250 RDNA4 source) -> gfx942 (CDNA3 target). Pins the
-; `emitWMMAScaleF8F6F4toMFMAGfx942` path in `wmma_lowering.cpp`
+; `emitWMMAScaleF8F6F4toMFMA` path in `wmma_lowering.cpp`
 ; dispatched by `ctx.targetIsa.hasMfma && !hasGfx950Insts` in
 ; `handle_valu_vop3p.cpp` under
 ; `CanonicalOp::V_WMMA_SCALE_F32_16x16x128_F8F6F4`.
@@ -221,7 +221,7 @@
 ;
 ; Cross-target lift fixture for v_wmma_scale_f32_16x16x128_f8f6f4
 ; (gfx1250 RDNA4 source) → gfx950 (CDNA4 target). Pins the
-; `emitWMMAScaleF8F6F4toMFMA` path in `wmma_lowering.cpp` dispatched
+; `emitWMMAScaleF8F6F4toScaledMFMA` path in `wmma_lowering.cpp` dispatched
 ; by `ctx.targetIsa.hasGfx950Insts` in `handle_valu_vop3p.cpp` under
 ; `CanonicalOp::V_WMMA_SCALE_F32_16x16x128_F8F6F4`. The lift runs Wave32 →
 ; Wave64 lane redistribution, applies C_mod via IR fneg/fabs on the
@@ -242,7 +242,7 @@
 ;
 ; The gfx950 cross-target MFMA-scaled intrinsic. Mangled types
 ; reflect the `<8 x i32>` A/B fragment width chosen by
-; `emitWMMAScaleF8F6F4toMFMA` (widest case; `cbsz`/`blgp` narrow
+; `emitWMMAScaleF8F6F4toScaledMFMA` (widest case; `cbsz`/`blgp` narrow
 ; the active subset for f6/f4) and the `<4 x f32>` accumulator.
 ; IR_GFX950: call <4 x float> @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4.
 

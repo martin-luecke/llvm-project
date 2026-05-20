@@ -1035,7 +1035,7 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
   //     `int_amdgcn_wmma_scale_f32_16x16x128_f8f6f4` intrinsic in place
   //     (14-arg fast path below).
   //   * gfx950 (hasGfx950Insts): rewrite to the gfx950 scaled MFMA via
-  //     `emitWMMAScaleF8F6F4toMFMA` in `wmma-lowering.cpp`, which does
+  //     `emitWMMAScaleF8F6F4toScaledMFMA` in `wmma-lowering.cpp`, which does
   //     the wave32->wave64 lane redistribution and lowers to
   //     `int_amdgcn_mfma_scale_f32_16x16x128_f8f6f4` (the gfx950 has
   //     a near-1:1 MFMA equivalent for this WMMA, in the same K=128
@@ -1165,11 +1165,11 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
       // as the gfx1250 WMMA, so the lowering is a pure wave32->wave64
       // lane redistribution + intrinsic swap (no K-decomposition, no
       // software scale emulation).  Implementation in
-      // `wmma-lowering.cpp::emitWMMAScaleF8F6F4toMFMA`.
+      // `wmma-lowering.cpp::emitWMMAScaleF8F6F4toScaledMFMA`.
       //
       // matrix_a_reuse / matrix_b_reuse are perf hints (not correctness)
       // and have no MFMA equivalent; the helper drops them.
-      ResultVal = emitWMMAScaleF8F6F4toMFMA(
+      ResultVal = emitWMMAScaleF8F6F4toScaledMFMA(
           Ctx, A, B, C, MatrixAFmt, MatrixBFmt, CMod, MatrixAScale,
           MatrixAScaleFmt, ScaleSrc0, MatrixBScale, MatrixBScaleFmt, ScaleSrc1,
           ADwords, BDwords);
@@ -1183,7 +1183,7 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
       if (!ResultVal) {
         Hr.Failure = RaiseFailure::unsupportedInstructionForm(
             Di, "VOP3P",
-            "emitWMMAScaleF8F6F4toMFMA refused this fragment width "
+            "emitWMMAScaleF8F6F4toScaledMFMA refused this fragment width "
             "(ADwords/BDwords outside f8/f6/f4 set)");
         return Hr;
       }
@@ -1191,10 +1191,10 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
       // Cross-target gfx1250 -> gfx942 (or any HasMfma target without
       // gfx950 scaled-F8F6F4 family): K-decomposed unscaled K=32 8-bit
       // MFMA chain with software UE8M0 scale application. See
-      // `wmma-lowering.h::emitWMMAScaleF8F6F4toMFMAGfx942` for the design
+      // `wmma-lowering.h::emitWMMAScaleF8F6F4toMFMA` for the design
       // and the open verification items (K=128 lane layout, UE8M0 NaN
       // propagation, f6 / f4 widening).
-      ResultVal = emitWMMAScaleF8F6F4toMFMAGfx942(
+      ResultVal = emitWMMAScaleF8F6F4toMFMA(
           Ctx, A, B, C, MatrixAFmt, MatrixBFmt, CMod, MatrixAScale,
           MatrixAScaleFmt, ScaleSrc0, MatrixBScale, MatrixBScaleFmt,
           ScaleSrc1, ADwords, BDwords);
@@ -1203,7 +1203,7 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
       if (!ResultVal) {
         Hr.Failure = RaiseFailure::unsupportedShape(
             Di, "VOP3P",
-            "emitWMMAScaleF8F6F4toMFMAGfx942 refused this configuration. "
+            "emitWMMAScaleF8F6F4toMFMA refused this configuration. "
             "Supported in this draft: matrix_a_fmt / matrix_b_fmt in "
             "{FP8, BF8} (ADwords == BDwords == 16), matrix_*_scale == "
             "matrix_*_scale_fmt == 0 (canonical UE8M0), single-source-wave "
@@ -1216,8 +1216,8 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
           Di, "VOP3P",
           "v_wmma_scale_f32_16x16x128_f8f6f4 requires one of: hasTensorOps "
           "(gfx1250 native scaled WMMA), hasGfx950Insts (gfx950 scaled-"
-          "MFMA F8F6F4 via emitWMMAScaleF8F6F4toMFMA), or hasMFMA (gfx942 "
-          "K-decomposed unscaled MFMA via emitWMMAScaleF8F6F4toMFMAGfx942)"
+          "MFMA F8F6F4 via emitWMMAScaleF8F6F4toScaledMFMA), or hasMFMA (gfx942 "
+          "K-decomposed unscaled MFMA via emitWMMAScaleF8F6F4toMFMA)"
           "; this target has none.");
       return Hr;
     }

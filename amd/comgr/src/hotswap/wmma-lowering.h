@@ -235,7 +235,7 @@ llvm::Value *emitWmmAtoMfmaF3216x16x4(RaiseContext &Ctx,
 /// \param aDwords, bDwords   per-Wave32-lane WMMA dword counts (16/12/8)
 /// \returns       `<8 x float>` in Wave32 D-layout (caller writes back via
 ///                ctx.writeRegVec); nullptr on unrecoverable shape error.
-llvm::Value *emitWMMAScaleF8F6F4toMFMA(
+llvm::Value *emitWMMAScaleF8F6F4toScaledMFMA(
     RaiseContext &ctx, llvm::Value *a, llvm::Value *b, llvm::Value *c,
     llvm::Value *matrixAFmt, llvm::Value *matrixBFmt, llvm::Value *cMod,
     llvm::Value *matrixAScale, llvm::Value *matrixAScaleFmt,
@@ -298,7 +298,7 @@ llvm::Value *emitWMMAScaleF8F6F4toMFMA(
 /// 0) and the `matrix_a_scale_fmt` / `matrix_b_scale_fmt` selectors
 /// (3 bits, picks UE8M0 vs the FP8 scale variants) are read at IR-
 /// emission time from the ConstantInt-wrapped named-immediate args.
-/// **First-cut policy** (matches `emitWMMAScaleF8F6F4toMFMA`'s
+/// **First-cut policy** (matches `emitWMMAScaleF8F6F4toScaledMFMA`'s
 /// op_sel = 0 default): assume both scale selectors are 0 (K-block i
 /// reads byte i, scale format is UE8M0). Loud refusal for any other
 /// combination so we never silently mis-apply a scale.
@@ -334,7 +334,7 @@ llvm::Value *emitWMMAScaleF8F6F4toMFMA(
 ///
 /// EXEC handling
 /// -------------
-/// Same as `emitWMMAtoMFMA` / `emitWMMAScaleF8F6F4toMFMA` -- the chain
+/// Same as `emitWMMAtoMFMA` / `emitWMMAScaleF8F6F4toScaledMFMA` -- the chain
 /// runs under the kernel-wide HW EXEC = -1 ambient that
 /// `WaveNativeProjection::emitInitialExec` sets via
 /// `@llvm.amdgcn.init_whole_wave`; under MODREP `wrapAsWWMValue`
@@ -346,7 +346,7 @@ llvm::Value *emitWMMAScaleF8F6F4toMFMA(
 ///           fragment widths or scale selectors are outside the
 ///           supported draft scope (caller emits an unsupportedShape
 ///           refusal naming the unsupported configuration).
-llvm::Value *emitWMMAScaleF8F6F4toMFMAGfx942(
+llvm::Value *emitWMMAScaleF8F6F4toMFMA(
     RaiseContext &ctx, llvm::Value *a, llvm::Value *b, llvm::Value *c,
     llvm::Value *matrixAFmt, llvm::Value *matrixBFmt, llvm::Value *cMod,
     llvm::Value *matrixAScale, llvm::Value *matrixAScaleFmt,
