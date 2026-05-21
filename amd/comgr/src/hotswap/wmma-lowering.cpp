@@ -1422,8 +1422,8 @@ constexpr int ScaleFmtE8M0 = 0;
 constexpr int ScaleFmtE5M3 = 1;
 constexpr int ScaleFmtE4M3 = 2;
 
-// Byte k of the 4-byte i32 scale source (assumes MATRIX_SCALE_ROW0;
-// other ROW values are gated out by the caller).
+// Byte k of the 4-byte i32 scale source (assumes the ROW0 selector
+// form of SCL_OPSEL / SCL_OPSEL_HI; ROW1 is gated out by the caller).
 Value *extractScaleByte(IRBuilder<> &B, Value *Scale32, unsigned k) {
   Value *Shifted =
       B.CreateLShr(Scale32, B.getInt32(8 * k), "scale_shr");
@@ -1548,13 +1548,12 @@ Value *emitWMMAScaleF8F6F4toMFMA(
   int aScaleSel = static_cast<int>(AsConstInt(matrixAScale));
   int bScaleSel = static_cast<int>(AsConstInt(matrixBScale));
 
-  // matrix_*_scale is a 2-bit ROW selector (MATRIX_SCALE_ROW0 = 0,
-  // MATRIX_SCALE_ROW1 = 1) -- see AMDGPUAsmUtils.h `ModMatrixScale[]`
-  // and SIDefines.h `MATRIX_SCALE_ROW0/1`. For the SCALE variant
-  // (K=32 granularity, scale_src is i32 = 4 bytes covering 4 K-blocks
-  // = 1 row), only ROW0 is meaningful. ROW1 is for SCALE16 (K=16
-  // granularity, i64 scale_src = 8 bytes = 2 rows) which is not yet
-  // supported.
+  // matrix_*_scale is the SCL_OPSEL[0] / SCL_OPSEL_HI[0] selector
+  // (MATRIX_SCALE_ROW0 = 0, MATRIX_SCALE_ROW1 = 1) per the gfx1250
+  // programming guide -- it picks which lane range (0..15 vs 16..31)
+  // the per-K-block scale bytes come from. This lowering only models
+  // the ROW0 selector; the ROW1 form (and any future SCL_OPSEL bit
+  // extensions) is not implemented and is rejected here.
   if (aScaleSel != 0 || bScaleSel != 0)
     return nullptr;
 

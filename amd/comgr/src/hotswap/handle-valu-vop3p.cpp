@@ -1216,11 +1216,14 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
             "{FP8, BF8, FP6, BF6, FP4} (ADwords / BDwords in {16, 12, "
             "8}; FP6 / BF6 / FP4 widen in-line to FP8 / BF8 via bit-"
             "arithmetic). matrix_*_scale_fmt in {E8M0 (0), E4M3 (2)}; "
-            "E5M3 (1) is not yet supported. matrix_*_scale byte-offset "
-            "is honoured for E8M0; the (data, scale) combination must "
-            "be legal per the WMMA-scale spec (non-E8M0 scales require "
-            "F4 data on that side; F4 x F4 with non-E8M0 scales "
-            "requires matching scale formats).");
+            "E5M3 (1) is not yet supported. matrix_*_scale must be "
+            "MATRIX_SCALE_ROW0; the ROW1 selector form "
+            "(SCL_OPSEL[0] / SCL_OPSEL_HI[0] = 1, selecting lanes "
+            "16..31 instead of 0..15 for scale values) is not yet "
+            "implemented. The (data, scale) combination must be legal "
+            "per the WMMA-scale spec (non-E8M0 scales require F4 data "
+            "on that side; F4 x F4 with non-E8M0 scales requires "
+            "matching scale formats).");
         return Hr;
       }
     } else {
