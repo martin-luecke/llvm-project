@@ -246,23 +246,12 @@ llvm::Value *emitWMMAScaleF8F6F4toScaledMFMA(
 /// Cross-target gfx1250 -> gfx942 lowering for
 /// `v_wmma_scale_f32_16x16x128_f8f6f4`.
 ///
-/// gfx942 has neither the scaled-WMMA family (gfx1250) nor the scaled-
-/// MFMA F8F6F4 family (gfx950). It does have the unscaled K=32 8-bit
-/// MFMA family `int_amdgcn_mfma_f32_16x16x32_{fp8,bf8}_{fp8,bf8}`
-/// (IntrinsicsAMDGPU.td:3594). The emitter decomposes the K=128 WMMA
-/// into 4 K=32 MFMAs, widens any FP6/BF6/FP4 inputs to FP8/BF8 in-line
-/// via branchless ALU bit-math, and applies the per-K-block UE8M0
-/// scale on each MFMA partial via `ldexp.f32` + fmuladd before
-/// accumulating into the wave64-layout running output.
-///
-/// Coverage: any (aFmt, bFmt) over {FP8, BF8, FP6, BF6, FP4}^2, with
-/// scale formats E8M0 / E4M3 (E5M3 deferred). UE8M0 0xFF NaN sentinel
-/// propagates to the K-block's contribution.
-///
-/// EXEC handling matches the other gfx942 emitters: under WaveNative
-/// the kernel runs with HW EXEC=-1, under MODREP `wrapAsWWMValue`
-/// keeps the MFMA outputs + collect bpermutes inside SIWholeQuadMode's
-/// WWM bracket.
+/// gfx942 has neither the scaled-WMMA (gfx1250) nor scaled-MFMA F8F6F4
+/// (gfx950) family, only the unscaled K=32 fp8/bf8 MFMA family. The emitter
+/// decomposes the K=128 WMMA into 4 K=32 MFMAs, widens FP6/BF6/FP4 inputs to
+/// FP8/BF8 in-line, and applies the per-K-block scale on each partial via
+/// fmuladd. Covers {FP8,BF8,FP6,BF6,FP4}^2 with scale formats E8M0 / E4M3
+/// (E5M3 deferred).
 ///
 /// \returns `<8 x float>` in wave32 D-layout, or `nullptr` for
 ///          unsupported configurations (caller emits unsupportedShape).

@@ -1,51 +1,27 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=wmma_scale_f32_16x16x128_fp6_bf6_kernel 2>&1 | %FileCheck %s --check-prefix=IR_GFX942
 ;
-; Mixed-format cross-target lift fixture: matrix A is FP6 (E2M3), matrix
-; B is BF6 (E3M2). Both sides widen, but to DIFFERENT FP8 variants:
-;   A: FP6 (E2M3, mw=3) -> FP8 (E4M3, mw=3) via `widenFP6FragmentToFP8`
-;   B: BF6 (E3M2, mw=2) -> BF8 (E5M2, mw=2) via `widenBF6FragmentToBF8`
-; So `effectiveFmtAfterWiden` gives FP8 for A and BF8 for B, and
-; `pickGfx942F8MfmaIntrinsic` dispatches to `mfma_f32_16x16x32_fp8_bf8`
-; (the cross-typed variant, neither fp8.fp8 nor bf8.bf8).
-;
-; Both scales are E8M0 -- the simple (and most-common) case. The E8M0 x
-; E8M0 fast path in `buildScaleFactorVec` kicks in: combined exponent
-; `2^(byteA + byteB - 254)` via one ldexp instead of two decodes + fmul.
-;
-; INVARIANTS PINNED:
-;
-;   1. Dispatch to fp8.bf8 MFMA -- the asymmetric mantissa-width pairing
-;      ends in this cell of the (post-widen) MFMA dispatch table.
-;
-;   2. E8M0 x E8M0 fast path retained for mixed DATA formats with the
-;      same scale format: `sub i32 ..., 254` for the combined exponent
-;      (NOT a per-side decode + fmul).
+; Mixed-format cross-target lift: A is FP6 (-> FP8), B is BF6 (-> BF8),
+; so the post-widen dispatch lands on the cross-typed fp8.bf8 MFMA. Both
+; scales are E8M0, so buildScaleFactorVec takes the combined-exponent
+; fast path (one ldexp on sum-of-bytes - 254, not per-side decode + fmul).
 
 ; IR_GFX942-LABEL: define amdgpu_kernel void @wmma_scale_f32_16x16x128_fp6_bf6_kernel(
 
-; FP6 x BF6 dispatches to fp8.bf8 (A widens to FP8, B widens to BF8).
+; FP6 x BF6 -> fp8.bf8 dispatch, 8 K-blocks total under WaveNative.
 ; IR_GFX942: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.fp8.bf8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
 ; IR_GFX942-COUNT-7: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.fp8.bf8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
 
-; E8M0 x E8M0 fast path: combined biased exponent (single ldexp on
-; sum-of-bytes - 254), not per-side decode + fmul.
+; E8M0 x E8M0 fast path: combined biased exponent, no per-side decode.
 ; IR_GFX942-DAG: sub i32 %{{[^,]+}}, 254
-
-; Negative: no mantissa-side cvt or fmul-of-floats -- the fast path
-; avoids decoding each side to f32.
 ; IR_GFX942-NOT: call float @llvm.amdgcn.cvt.f32.fp8(
 ; IR_GFX942-NOT: fmul float
 
-; Negative: no LUT.
+; Negatives: no LUT, no other MFMA combo, no scaled WMMA/MFMA fallback.
 ; IR_GFX942-NOT: @__const.
-
-; Negative: no other MFMA combinations.
 ; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.fp8.fp8
 ; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.bf8.fp8
 ; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.bf8.bf8
-
-; Negative: no native-scaled WMMA/MFMA fallback.
 ; IR_GFX942-NOT: @llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4
 ; IR_GFX942-NOT: @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4
 

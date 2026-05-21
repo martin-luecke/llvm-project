@@ -1,52 +1,25 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=wmma_scale_f32_16x16x128_fp8_fp4_kernel 2>&1 | %FileCheck %s --check-prefix=IR_GFX942
 ;
-; Mixed-format cross-target lift fixture for v_wmma_scale_f32_16x16x128_f8f6f4:
-; matrix A is FP8 E4M3 (16 dwords, no widening), matrix B is FP4 E2M1
-; (8 dwords, widens to FP8 E4M3 via `widenF4FragmentToFP8`). Both
-; matrices dispatch to the `mfma_f32_16x16x32_fp8_fp8` intrinsic on the
-; gfx942 side.
-;
-; Scale formats: A uses E8M0 (the canonical MXFP convention), B uses
-; E4M3 (the per-byte SE4M3 FP8 format). This is row 2 of the spec's
-; legal-combinations table (F8 x E8M0, F4 x E5M3/E4M3) -- non-E8M0
-; scale on B requires F4 data on B, which we satisfy.
-;
-; INVARIANTS PINNED:
-;
-;   1. Asymmetric data widening: A is pass-through (no widening IR
-;      for the A side), B widens FP4 -> FP8 via the `select i1
-;      %{{...}}, i32 6, i32 ...` subnormal-vs-normal pattern.
-;
-;   2. Scale path is the MIXED-format branch of `buildScaleFactorVec`:
-;      side A decoded via the E8M0 fast-component (ldexp + NaN select),
-;      side B decoded via `@llvm.amdgcn.cvt.f32.fp8` (hw cvt, single
-;      instruction). Result combined via `fmul`.
-;
-;   3. Dispatch reaches `mfma_f32_16x16x32_fp8_fp8` (both sides end as
-;      FP8 E4M3 after widening).
+; Mixed-format cross-target lift (gfx1250 -> gfx942): A is FP8 E4M3
+; (pass-through), B is FP4 (widens to FP8), both dispatching to fp8.fp8.
+; Scale formats differ -- A is E8M0, B is E4M3 -- exercising the mixed
+; branch of buildScaleFactorVec: A via ldexp + NaN select, B via hw
+; cvt_f32_fp8, combined with fmul (no E8M0 sum-of-exponents shortcut).
 
 ; IR_GFX942-LABEL: define amdgpu_kernel void @wmma_scale_f32_16x16x128_fp8_fp4_kernel(
 
-; FP8 x FP4 dispatches to fp8.fp8 (both widen to E4M3 -- A is pass-
-; through native FP8, B widens FP4 -> FP8 via `widenF4FragmentToFP8`).
-; The widening IR appears upfront before any MFMA call; that surface
-; is already pinned in the `*_fp4_fp4.s` fixture so we don't re-pin
-; it here. This fixture focuses on the MIXED scale-format path.
+; FP8 x FP4 -> fp8.fp8 dispatch, 8 K-blocks under WaveNative. (The FP4
+; widening surface is pinned in the fp4_fp4 fixture.)
 ; IR_GFX942: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.fp8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
 ; IR_GFX942-COUNT-7: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.fp8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
 
-; Mixed-scale path: E4M3 hw cvt for the B side. Inside the K-loop,
-; emitted per K-block alongside the MFMA call; the 8th iteration's
-; cvt lives after the last MFMA where the DAG can find it.
+; B side: UE4M3 hw cvt (sign bit masked off first).
+; IR_GFX942-DAG: and i32 %{{[^,]+}}, 127
 ; IR_GFX942-DAG: call float @llvm.amdgcn.cvt.f32.fp8(
 
-; E8M0 path on the A side: per-K-block `ldexp(1.0, byte - 127)` + NaN
-; select. The `sub i32 ..., 127` is the E8M0 unbiasing arithmetic.
+; A side: E8M0 ldexp(1.0, byte - 127). Combine via fmul.
 ; IR_GFX942-DAG: sub i32 %{{[^,]+}}, 127
-
-; Mixed-format combine: factorA (E8M0) and factorB (E4M3) combined
-; via fmul, NOT the optimized E8M0 x E8M0 sum-of-exponents shortcut.
 ; IR_GFX942-DAG: fmul float
 
 ; Negative: no LUT, no cross-target dispatch, no other MFMA combos.

@@ -1,68 +1,33 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=wmma_scale_f32_16x16x128_fp4_fp4_kernel 2>&1 | %FileCheck %s --check-prefix=IR_GFX942
 ;
-; Cross-target lift fixture for v_wmma_scale_f32_16x16x128_f8f6f4 with
-; FP4 (E2M1) fragments on BOTH sides. Pins the FP4 -> FP8 (E4M3)
-; widening branch of `emitWMMAScaleF8F6F4toMFMA` in `wmma_lowering.cpp`.
-;
-; FP4 widening is branchless bit-arithmetic (`widenF4NibbleToFP8`):
-; sign << 7 | exp << 3 | mant << 2, with a select for the single
-; subnormal value (E=00, M=1 -> ±0.5 -> biased FP8 exp = 6, mant = 0)
-; and an override for ±0. No LUT, no memory access; per element ~10 IR
-; ops, all ALU. After widening, the fragment is 16 fp8 dwords / wave32
-; lane (same shape as a native fp8 fragment), so the downstream
-; redistribute / MFMA / scale / fadd pipeline is unchanged.
-;
-; INVARIANTS PINNED:
-;
-;   1. The widening emits no `load` / no constant-pool ref / no LUT-
-;      shaped GEP -- guards the "GPU shouldn't LUT" property.
-;
-;   2. Per-nibble widening core: an `and ..., 1` (mantissa) combined
-;      with `shl ..., 7` (sign placement) and `select i1 ..., i32 6,
-;      i32 ...` (subnormal vs normal exp). One of each per nibble; with
-;      64 nibbles per lane and 2 matrices, the widening is heavily
-;      replicated.
-;
-;   3. After widening, the K-loop dispatches to the fp8.fp8 MFMA
-;      family (both sides widen FP4 -> FP8 E4M3 by mantissa-width match).
-;
-;   4. Under WaveNative (default), the K-loop runs twice for 8 total
-;      bf8.fp8 MFMA calls -- same structure as the f8/bf8 fixture.
+; Cross-target lift (gfx1250 -> gfx942) with FP4 (E2M1) on both sides,
+; pinning the FP4 -> FP8 (E4M3) widening branch of
+; emitWMMAScaleF8F6F4toMFMA. Widening is branchless bit-arithmetic
+; (sign << 7 | exp << 3 | mant << 2) with selects for the single
+; subnormal (±0.5) and ±0; no LUT or memory access. After widening the
+; fragment is 16 fp8 dwords / lane, so the downstream pipeline is unchanged.
 
 ; IR_GFX942-LABEL: define amdgpu_kernel void @wmma_scale_f32_16x16x128_fp4_fp4_kernel(
 
-; The widening core: vectorized per source dword, so the subnormal-
-; vs-normal select appears as `select <8 x i1>` over <8 x i32> with a
-; splat of <i32 6, ...> as the subnormal-exp constant.
+; Widening core, vectorized per source dword: subnormal-vs-normal select
+; and the mantissa-pad shift.
 ; IR_GFX942-DAG: select <8 x i1>
-
-; Mantissa pad: `shl <8 x i32> %{{[^,]+}}, splat (i32 2)` places the
-; single FP4 mantissa bit into FP8 bit 2 across all 8 vector lanes.
 ; IR_GFX942-DAG: shl <8 x i32>
 
-; FP4 -> fp8.fp8 MFMA dispatch. Both sides widen to E4M3.
+; FP4 -> fp8.fp8 MFMA dispatch, 8 K-blocks total under WaveNative.
 ; IR_GFX942: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.fp8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
-
-; 8 K-block MFMAs total under WaveNative (4 per pass * 2 passes).
 ; IR_GFX942-COUNT-7: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.fp8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
 
-; Scale-on-output fmuladd (same as the f8/bf8 path).
+; Scale-on-output fmuladd.
 ; IR_GFX942-DAG: call <4 x float> @llvm.fmuladd.v4f32(
 
-; Negative: no LUT / constant-pool load for the per-element widening.
-; A constant-pool reference would surface as `@__const.` or a `load`
-; with an attribute that names the constant array; with bit-arithmetic
-; only, no such symbol appears.
+; Negatives: no LUT/load, no other MFMA combo, no gfx950/gfx1250 dispatch.
 ; IR_GFX942-NOT: @__const.
 ; IR_GFX942-NOT: load i8
-
-; Negative: no other MFMA combinations.
 ; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.fp8.bf8
 ; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.bf8.fp8
 ; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.bf8.bf8
-
-; Negative: no cross-target dispatch to gfx950 / gfx1250 paths.
 ; IR_GFX942-NOT: @llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4
 ; IR_GFX942-NOT: @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4
 

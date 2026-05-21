@@ -1,53 +1,27 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=wmma_scale_f32_16x16x128_fp4_fp4_e4m3_kernel 2>&1 | %FileCheck %s --check-prefix=IR_GFX942
 ;
-; FP4 x FP4 with E4M3 (SE4M3) scales on BOTH sides. This exercises the
-; bottom row of the WMMA-scale legal-combinations table:
-;
-;   A data   A scale     B data   B scale
-;   F4       E4M3        F4       E4M3
-;
-; The "F4 x F4 with non-E8M0 scales requires matching scale formats"
-; rule applies. (F4 x F4 with E5M3 x E4M3 mixed would be refused; this
-; fixture covers the matching case.)
-;
-; INVARIANTS PINNED:
-;
-;   1. BOTH sides hit the FP4 -> FP8 widening (`widenF4NibbleToFP8`
-;      surface).
-;
-;   2. BOTH sides decode their scale via the gfx942 hw `cvt_f32_fp8`
-;      intrinsic (E4M3 scale = FP8 E4M3 bit layout; no ALU bit-math).
-;      Two cvt calls per K-block * 8 K-blocks = 16 cvt calls total under
-;      WaveNative.
-;
-;   3. Combined factor via `fmul float` (no E8M0-sum-of-exponents fast
-;      path because neither side is E8M0).
-;
-;   4. Dispatches to fp8.fp8 MFMA (both widen to E4M3).
+; FP4 x FP4 with matching E4M3 (UE4M3) scales on both sides -- the
+; "F4 x F4 with non-E8M0 scales requires matching scale formats" rule.
+; Both sides widen FP4 -> FP8 and decode the scale via hw cvt_f32_fp8,
+; combining via fmul (no E8M0 sum-of-exponents fast path).
 
 ; IR_GFX942-LABEL: define amdgpu_kernel void @wmma_scale_f32_16x16x128_fp4_fp4_e4m3_kernel(
 
-; FP4 x FP4 -> fp8.fp8 MFMA dispatch (both widen to E4M3).
+; FP4 x FP4 -> fp8.fp8 MFMA dispatch, 8 K-blocks total under WaveNative.
 ; IR_GFX942: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.fp8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
 ; IR_GFX942-COUNT-7: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.fp8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
 
-; E4M3 scale decode via the hw cvt. With both sides E4M3, two cvts
-; per K-block; the last K-block's are post-COUNT-7 where DAG can find
-; them.
+; UE4M3 scale decode: sign bit masked off before the signed-E4M3 cvt.
+; IR_GFX942-DAG: and i32 %{{[^,]+}}, 127
 ; IR_GFX942-DAG: call float @llvm.amdgcn.cvt.f32.fp8(
 
-; Mixed-format combine via `fmul float` (no E8M0-fast-path).
+; Combine via fmul; no E8M0 sum-of-exponents fast path.
 ; IR_GFX942-DAG: fmul float
-
-; Negative: no E8M0 `sub i32 ..., 254` (sum-of-exponents) fast path --
-; neither side is E8M0.
 ; IR_GFX942-NOT: sub i32 %{{[^,]+}}, 254
 
-; Negative: no LUT.
+; Negatives: no LUT, no other MFMA combo, no cross-target dispatch.
 ; IR_GFX942-NOT: @__const.
-
-; Negative: no other MFMA combinations or cross-target dispatch.
 ; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.fp8.bf8
 ; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.bf8.fp8
 ; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.bf8.bf8

@@ -1,27 +1,17 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=wmma_scale_inline0_kernel 2>&1 | %FileCheck %s --check-prefix=IR_GFX942
 ;
-; Inline-constant 0 scale-source fixture for
-; v_wmma_scale_f32_16x16x128_f8f6f4. Per the gfx1250 programming
-; guide, an inline 0 for scale_src0 / scale_src1 means "scale = 1.0
-; per K-block", which is encoded as packed 0x7f bytes (E8M0 byte
-; 0x7f = bias-127 + 0 = 2^0). The gfx942 software-scale lowering
-; must materialize 0x7f7f7f7f as the bpermute payload rather than
-; the raw i32 0 (which would decode as 4x E8M0 byte 0 = 2^-127 per
-; block).
+; Inline-0 scale-source fixture. An inline 0 for scale_src0 / scale_src1
+; means "scale = 1.0 per K-block", encoded as packed 0x7f bytes (E8M0
+; 0x7f = 2^0), not the raw i32 0 (which would decode as 2^-127). The
+; constant short-circuits the per-pass bpermute and folds through the
+; E8M0 decode to ldexp(1.0, 0).
 
 ; IR_GFX942-LABEL: define amdgpu_kernel void @wmma_scale_inline0_kernel(
 
-; Inline-0 scale source materializes as the i32 constant 0x7f7f7f7f
-; ("scale = 1.0" per K-block per the WMMA-scale programming guide).
-; The emitter short-circuits the per-pass bpermute on constant scale
-; sources, so the constant flows directly into `extractScaleByte` and
-; folds end-to-end through the E8M0 decode (`scale_byte - 127 = 0`)
-; into `ldexp(1.0, 0)` = scale factor 1.0.
 ; IR_GFX942-DAG: call float @llvm.ldexp.f32.i32(float 1.000000e+00, i32 0)
 
-; Negative: no bpermute carries a constant scale payload. A bpermute
-; of a uniform value is the identity; the short-circuit removes it.
+; Negative: no bpermute carries a constant scale payload.
 ; IR_GFX942-NOT: call i32 @llvm.amdgcn.ds.bpermute(i32 %{{[^,]+}}, i32 2139062143)
 ; IR_GFX942-NOT: call i32 @llvm.amdgcn.ds.bpermute(i32 %{{[^,]+}}, i32 0)
 ; IR_GFX942-NOT: call i32 @llvm.amdgcn.ds.bpermute(i32 %{{[^,]+}}, i32 -16843010)

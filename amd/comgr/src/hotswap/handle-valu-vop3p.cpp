@@ -1090,11 +1090,8 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
 
     Value *A = Ctx.Regs.readRegVec(Ctx.B, SrcA, ATy);
     Value *B = Ctx.Regs.readRegVec(Ctx.B, SrcB, BTy);
-    // src2 may be an inline-0 (zero accumulator) on the threeaddr-imm-0
-    // encoding; the gfx942 path accumulates in software from C, so
-    // reading the destination VGPR as a fallback would seed the chain
-    // with stale contents. `readWMMAAccumC` materializes a zero
-    // accumulator for inline-0 and refuses other inline constants.
+    // readWMMAAccumC materializes a zero accumulator for an inline-0 src2
+    // and refuses other inline constants.
     Value *C = readWMMAAccumC(Ctx, Di, Op, Dest, CdTy, Hr);
     if (!C)
       return Hr;
@@ -1118,14 +1115,9 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
         return ConstantInt::get(Ctx.I32Ty, 0);
       return Ctx.Regs.readReg32(Ctx.B, Pr);
     };
-    // scale_src0 / scale_src1 carry packed E8M0 (or other) scale bytes;
-    // when the operand is encoded as an inline constant 0, the gfx1250
-    // programming guide says the hardware substitutes 0x7f per byte
-    // (scale = 1.0 per K-block) rather than treating the raw i32 0 as
-    // packed scale bytes (which would decode to E8M0 byte 0 = 2^-127
-    // per block in the gfx942 software-scale path). Return nullptr +
-    // populate Hr for other inline constants -- no documented semantics
-    // and no corpus surfaces them.
+    // scale_src0 / scale_src1 carry packed scale bytes. An inline-0 means
+    // 0x7f per byte (scale = 1.0 per K-block), not a raw i32 0; other inline
+    // constants have no documented semantics and fail.
     bool ScaleSrcFailed = false;
     auto NamedScaleSrc32 = [&](AMDGPU::OpName Name) -> Value * {
       int Idx = AMDGPU::getNamedOperandIdx(Di.Inst.getOpcode(), Name);
@@ -1212,11 +1204,7 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
           Ctx, A, B, C, MatrixAFmt, MatrixBFmt, CMod, MatrixAScale,
           MatrixAScaleFmt, ScaleSrc0, MatrixBScale, MatrixBScaleFmt, ScaleSrc1,
           ADwords, BDwords);
-      // Reference reuse hints so -Wunused-variable doesn't flag them
-      // when this branch is taken.  (The hints are extracted up-top and
-      // the gfx1250 arm above passes them through, so they always have
-      // a use at the IR level; this is purely about the compiler's view
-      // of this scope.)
+      // reuse hints have no MFMA equivalent; silence -Wunused-variable.
       (void)MatrixAReuse;
       (void)MatrixBReuse;
       if (!ResultVal) {
@@ -1227,14 +1215,10 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
         return Hr;
       }
     } else if (Ctx.TargetIsa.HasFP8Insts) {
-      // Cross-target gfx1250 -> gfx942: K-decomposed unscaled K=32 8-bit
-      // MFMA chain with software UE8M0 scale application. Gated on
-      // `HasFP8Insts` (FeatureFP8Insts) rather than the broader `HasMfma`
-      // because the FP8 / BF8 MFMA pseudos this emits are themselves
-      // gated on FeatureFP8Insts -- gfx90a / gfx940 have MAI but no FP8
-      // MFMA support and would silently miscompile. gfx950 also has
-      // FeatureFP8Insts but is caught by the `HasGfx950Insts` branch
-      // above, so this branch is effectively gfx942-only today.
+      // Cross-target gfx1250 -> gfx942: K-decomposed unscaled FP8/BF8 MFMA
+      // chain with software scale. Gated on HasFP8Insts (not HasMfma) so
+      // gfx90a / gfx940 (MAI but no FP8 MFMA) don't take this path; gfx950
+      // is already handled by the HasGfx950Insts branch above.
       ResultVal = emitWMMAScaleF8F6F4toMFMA(
           Ctx, A, B, C, MatrixAFmt, MatrixBFmt, CMod, MatrixAScale,
           MatrixAScaleFmt, ScaleSrc0, MatrixBScale, MatrixBScaleFmt,

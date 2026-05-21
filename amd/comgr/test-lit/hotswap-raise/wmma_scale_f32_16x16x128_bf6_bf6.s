@@ -1,65 +1,36 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=wmma_scale_f32_16x16x128_bf6_bf6_kernel 2>&1 | %FileCheck %s --check-prefix=IR_GFX942
 ;
-; Cross-target lift fixture for v_wmma_scale_f32_16x16x128_f8f6f4 with
-; BF6 (E3M2) fragments on BOTH sides. Pins the BF6 -> BF8 (E5M2)
-; widening branch of `emitWMMAScaleF8F6F4toMFMA`.
-;
-; BF6 widening shares the bit-unpacking core with FP6 (`extractF6Nibble`)
-; -- both formats are 6-bit-packed in the same wave32 layout. The
-; per-element widening (`widenBF6NibbleToBF8`) differs from FP6's:
-;   * Exp bias diff = 15 - 3 = 12 (vs 6 for FP6 -> FP8).
-;   * Mantissa width = 2 (vs 3 for FP6); destination is BF8 E5M2 (also
-;     mw=2). Exp bits shift by 2 in the destination packing.
-;   * Subnormal `ctlz` operates on a 2-bit mantissa; lz_2bit =
-;     `ctlz_i32(M) - 30` (yielding 0 or 1).
-;
-; INVARIANTS PINNED:
-;
-;   1. BF6 -> bf8.bf8 MFMA dispatch (both sides widen to E5M2 because
-;      the source mantissa width matches BF8, not FP8).
-;
-;   2. Per-element widening: `@llvm.ctlz.i32` for the 2-bit mantissa
-;      subnormal renorm; `sub i32 12, %{{...}}` for the biased BF8
-;      exponent; `sub i32 %{{...}}, 30` for the lz adjustment.
-;
-;   3. Cross-dword bit unpack: same `lshr i64` pattern as the FP6 case
-;      (the unpacker is format-agnostic; both formats produce 11 cross-
-;      boundary elements out of 64).
+; Cross-target lift (gfx1250 -> gfx942) with BF6 (E3M2) on both sides,
+; pinning the BF6 -> BF8 (E5M2) widening branch of
+; emitWMMAScaleF8F6F4toMFMA. BF6 shares extractF6Nibble with FP6 but
+; widens to BF8: exp bias diff 12, mantissa width 2, subnormal renorm
+; via ctlz on a 2-bit mantissa (lz = ctlz - 30).
 
 ; IR_GFX942-LABEL: define amdgpu_kernel void @wmma_scale_f32_16x16x128_bf6_bf6_kernel(
 
-; Cross-dword bit unpack: i64 shift right for the boundary elements.
+; Cross-dword bit unpack.
 ; IR_GFX942-DAG: lshr i64
 
-; Subnormal renormalization via ctlz on the 2-bit mantissa, vectorized
-; across 16 elements per super-chunk (`<16 x i32>` lane vector).
+; Subnormal renorm via ctlz, vectorized over 16 elements per chunk.
 ; IR_GFX942-DAG: call <16 x i32> @llvm.ctlz.v16i32(
 
-; BF6-specific arithmetic: `sub 12, ...` (biased BF8 exp from lz) and
-; `sub ..., 30` (lz_2bit adjustment from ctlz output). Both vectorized.
+; BF6-specific arithmetic: sub 12 (biased exp) and sub 30 (lz adjust).
 ; IR_GFX942-DAG: sub <16 x i32> {{(splat \(i32 12\)|<i32 12)}}
 ; IR_GFX942-DAG: sub <16 x i32> %{{[^,]+}}, {{(splat \(i32 30\)|<i32 30)}}
 
-; BF6 -> bf8.bf8 MFMA dispatch.
+; BF6 -> bf8.bf8 MFMA dispatch, 8 K-blocks total under WaveNative.
 ; IR_GFX942: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.bf8.bf8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
-
-; 8 K-block MFMAs total under WaveNative.
 ; IR_GFX942-COUNT-7: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.bf8.bf8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
 
 ; Scale-on-output fmuladd.
 ; IR_GFX942-DAG: call <4 x float> @llvm.fmuladd.v4f32(
 
-; Negative: no LUT.
+; Negatives: no LUT, no other MFMA combo, no scaled WMMA/MFMA dispatch.
 ; IR_GFX942-NOT: @__const.
-
-; Negative: no other MFMA combinations -- BF6 must go to bf8.bf8, not
-; cross-typed combinations.
 ; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.fp8.fp8
 ; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.fp8.bf8
 ; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.bf8.fp8
-
-; Negative: no native scaled-WMMA or scaled-MFMA dispatch.
 ; IR_GFX942-NOT: @llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4
 ; IR_GFX942-NOT: @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4
 
