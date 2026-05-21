@@ -1631,9 +1631,17 @@ Value *emitWMMAScaleF8F6F4toMFMA(
     Value *AddrHi = B.CreateShl(HiLane, B.getInt32(2), "addr_hi");
 
     // All 4 K-block scale bytes ride inside one i32, so one bpermute per
-    // scale src per pass suffices.
-    Value *ScaleSrc0Pass = emitDSBpermute(B, M, AddrLo, scaleSrc0);
-    Value *ScaleSrc1Pass = emitDSBpermute(B, M, AddrLo, scaleSrc1);
+    // scale src per pass suffices.  Skip the bpermute when the source is
+    // an i32 constant (e.g. inline-0 -> 0x7f7f7f7f for "scale by 1.0"
+    // per the WMMA-scale programming guide): bpermute of a uniform value
+    // is the identity, and downstream `extractScaleByte` calls
+    // constant-fold against the splat.
+    Value *ScaleSrc0Pass = isa<Constant>(scaleSrc0)
+                               ? scaleSrc0
+                               : emitDSBpermute(B, M, AddrLo, scaleSrc0);
+    Value *ScaleSrc1Pass = isa<Constant>(scaleSrc1)
+                               ? scaleSrc1
+                               : emitDSBpermute(B, M, AddrLo, scaleSrc1);
 
     Value *MfmaC[4];
     redistributeAcc(B, M, cDwords, AddrLo, AddrHi, LaneGroup, MfmaC);

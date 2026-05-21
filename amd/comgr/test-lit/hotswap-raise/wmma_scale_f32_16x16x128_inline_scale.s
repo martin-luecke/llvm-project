@@ -12,16 +12,19 @@
 
 ; IR_GFX942-LABEL: define amdgpu_kernel void @wmma_scale_inline0_kernel(
 
-; Both scale sources are bpermuted with 0x7f7f7f7f (= 2139062143)
-; as the payload. The bpermute is per pass (WaveNative default
-; runs 2 passes), so we expect at least one such call per scale src
-; per pass. The DAG match catches the constant payload regardless
-; of which lane address each pass uses.
-; IR_GFX942-DAG: call i32 @llvm.amdgcn.ds.bpermute(i32 %{{[^,]+}}, i32 2139062143)
+; Inline-0 scale source materializes as the i32 constant 0x7f7f7f7f
+; ("scale = 1.0" per K-block per the WMMA-scale programming guide).
+; The emitter short-circuits the per-pass bpermute on constant scale
+; sources, so the constant flows directly into `extractScaleByte` and
+; folds end-to-end through the E8M0 decode (`scale_byte - 127 = 0`)
+; into `ldexp(1.0, 0)` = scale factor 1.0.
+; IR_GFX942-DAG: call float @llvm.ldexp.f32.i32(float 1.000000e+00, i32 0)
 
-; Negative: no bpermute payload of `i32 0` for the scale srcs
-; (the bug would surface as `i32 0` instead of `i32 2139062143`).
+; Negative: no bpermute carries a constant scale payload. A bpermute
+; of a uniform value is the identity; the short-circuit removes it.
+; IR_GFX942-NOT: call i32 @llvm.amdgcn.ds.bpermute(i32 %{{[^,]+}}, i32 2139062143)
 ; IR_GFX942-NOT: call i32 @llvm.amdgcn.ds.bpermute(i32 %{{[^,]+}}, i32 0)
+; IR_GFX942-NOT: call i32 @llvm.amdgcn.ds.bpermute(i32 %{{[^,]+}}, i32 -16843010)
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
