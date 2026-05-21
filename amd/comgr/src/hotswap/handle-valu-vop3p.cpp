@@ -1118,6 +1118,29 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
         return ConstantInt::get(Ctx.I32Ty, 0);
       return Ctx.Regs.readReg32(Ctx.B, Pr);
     };
+    // scale_src0 / scale_src1 carry packed E8M0 (or other) scale bytes;
+    // when the operand is encoded as an inline constant 0, the gfx1250
+    // programming guide says the hardware substitutes 0x7f per byte
+    // (scale = 1.0 per K-block) rather than treating the raw i32 0 as
+    // packed scale bytes (which would decode to E8M0 byte 0 = 2^-127
+    // per block in the gfx942 software-scale path). Return nullptr +
+    // populate Hr for other inline constants -- no documented semantics
+    // and no corpus surfaces them.
+    bool ScaleSrcFailed = false;
+    auto NamedScaleSrc32 = [&](AMDGPU::OpName Name) -> Value * {
+      int Idx = AMDGPU::getNamedOperandIdx(Di.Inst.getOpcode(), Name);
+      if (Idx < 0)
+        return ConstantInt::get(Ctx.I32Ty, 0x7f7f7f7fU);
+      if (Di.isReg(Idx)) {
+        ParsedReg Pr = Ctx.parseReg(Di.getReg(Idx), Idx);
+        if (Pr.RegKind != ParsedReg::OTHER && Pr.RegKind != ParsedReg::NOREG)
+          return Ctx.Regs.readReg32(Ctx.B, Pr);
+      }
+      if (Di.isImm(Idx) && Di.getImm(Idx) == 0)
+        return ConstantInt::get(Ctx.I32Ty, 0x7f7f7f7fU);
+      ScaleSrcFailed = true;
+      return ConstantInt::get(Ctx.I32Ty, 0);
+    };
 
     Value *MatrixAFmt =
         ConstantInt::get(Ctx.I32Ty, NamedImm(AMDGPU::OpName::matrix_a_fmt));
@@ -1130,12 +1153,22 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
         Ctx.I32Ty, NamedImm(AMDGPU::OpName::matrix_a_scale));
     Value *MatrixAScaleFmt = ConstantInt::get(
         Ctx.I32Ty, NamedImm(AMDGPU::OpName::matrix_a_scale_fmt));
-    Value *ScaleSrc0 = NamedReg32(AMDGPU::OpName::scale_src0);
+    Value *ScaleSrc0 = NamedScaleSrc32(AMDGPU::OpName::scale_src0);
     Value *MatrixBScale = ConstantInt::get(
         Ctx.I32Ty, NamedImm(AMDGPU::OpName::matrix_b_scale));
     Value *MatrixBScaleFmt = ConstantInt::get(
         Ctx.I32Ty, NamedImm(AMDGPU::OpName::matrix_b_scale_fmt));
-    Value *ScaleSrc1 = NamedReg32(AMDGPU::OpName::scale_src1);
+    Value *ScaleSrc1 = NamedScaleSrc32(AMDGPU::OpName::scale_src1);
+    if (ScaleSrcFailed) {
+      Hr.Failure = RaiseFailure::unsupportedShape(
+          Di, "VOP3P",
+          "v_wmma_scale_f32_16x16x128_f8f6f4: scale_src0 / scale_src1 "
+          "encoding not supported. Supported: register, or inline "
+          "constant 0 (decoded as packed 0x7f, scale = 1.0 per K-block "
+          "per the gfx1250 programming guide). Other inline constants "
+          "have no documented WMMA-scale semantics.");
+      return Hr;
+    }
     Value *MatrixAReuse = ConstantInt::get(
         Type::getInt1Ty(Ctx.C),
         NamedImm(AMDGPU::OpName::matrix_a_reuse));
