@@ -1087,11 +1087,17 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
 
     ParsedReg Dest = Op.dst();
     ParsedReg SrcA = Op.srcReg(0), SrcB = Op.srcReg(1);
-    ParsedReg SrcC = Op.isSrcReg(2) ? Op.srcReg(2) : Dest;
 
     Value *A = Ctx.Regs.readRegVec(Ctx.B, SrcA, ATy);
     Value *B = Ctx.Regs.readRegVec(Ctx.B, SrcB, BTy);
-    Value *C = Ctx.Regs.readRegVec(Ctx.B, SrcC, CdTy);
+    // src2 may be an inline-0 (zero accumulator) on the threeaddr-imm-0
+    // encoding; the gfx942 path accumulates in software from C, so
+    // reading the destination VGPR as a fallback would seed the chain
+    // with stale contents. `readWMMAAccumC` materializes a zero
+    // accumulator for inline-0 and refuses other inline constants.
+    Value *C = readWMMAAccumC(Ctx, Di, Op, Dest, CdTy, Hr);
+    if (!C)
+      return Hr;
 
     // Read named-immediate / named-register operands. Using
     // `getNamedOperandIdx` instead of positional scan means any
