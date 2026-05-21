@@ -58,6 +58,7 @@ v_pk_mul_lo_u16_kernel:
 		.amdhsa_next_free_vgpr 4
 		.amdhsa_next_free_sgpr 2
 		.amdhsa_float_denorm_mode_32 3
+		.amdhsa_accum_offset 4
 	.end_amdhsa_kernel
 	.text
 	.p2alignl 7, 3214868480
