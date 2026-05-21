@@ -150,6 +150,16 @@
 ; IR_GFX942_MODREP-NOT: @llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4
 ; IR_GFX942_MODREP-NOT: @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4
 
+; Refusal pin: gfx90a has MAI (HasMfma) but no FP8 MFMA family
+; (FeatureFP8Insts), so the cross-target gate must reject this
+; instruction rather than silently emit `mfma.f32.16x16x32.bf8.fp8`
+; pseudos that the gfx90a backend cannot lower.
+; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
+; RUN:   && %not raise_cli %t.hsaco --target-isa=gfx90a --emit-ir=wmma_scale_f32_16x16x128_f8f6f4_kernel 2>&1 | %FileCheck %s --check-prefix=STDERR_GFX90A
+; STDERR_GFX90A: raise_cli: kernel 'wmma_scale_f32_16x16x128_f8f6f4_kernel' failed to raise:
+; STDERR_GFX90A-SAME: v_wmma_scale_f32_16x16x128_f8f6f4
+; STDERR_GFX90A-SAME: hasFP8Insts
+
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx1250 --emit-ir=wmma_scale_f32_16x16x128_f8f6f4_kernel 2>&1 | %FileCheck %s --check-prefix=IR
 ;

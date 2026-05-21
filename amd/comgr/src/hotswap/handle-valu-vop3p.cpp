@@ -1187,13 +1187,15 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
             "(ADwords/BDwords outside f8/f6/f4 set)");
         return Hr;
       }
-    } else if (Ctx.TargetIsa.HasMfma) {
-      // Cross-target gfx1250 -> gfx942 (or any HasMfma target without
-      // gfx950 scaled-F8F6F4 family): K-decomposed unscaled K=32 8-bit
-      // MFMA chain with software UE8M0 scale application. See
-      // `wmma-lowering.h::emitWMMAScaleF8F6F4toMFMA` for the design
-      // and the open verification items (K=128 lane layout, UE8M0 NaN
-      // propagation, f6 / f4 widening).
+    } else if (Ctx.TargetIsa.HasFP8Insts) {
+      // Cross-target gfx1250 -> gfx942: K-decomposed unscaled K=32 8-bit
+      // MFMA chain with software UE8M0 scale application. Gated on
+      // `HasFP8Insts` (FeatureFP8Insts) rather than the broader `HasMfma`
+      // because the FP8 / BF8 MFMA pseudos this emits are themselves
+      // gated on FeatureFP8Insts -- gfx90a / gfx940 have MAI but no FP8
+      // MFMA support and would silently miscompile. gfx950 also has
+      // FeatureFP8Insts but is caught by the `HasGfx950Insts` branch
+      // above, so this branch is effectively gfx942-only today.
       ResultVal = emitWMMAScaleF8F6F4toMFMA(
           Ctx, A, B, C, MatrixAFmt, MatrixBFmt, CMod, MatrixAScale,
           MatrixAScaleFmt, ScaleSrc0, MatrixBScale, MatrixBScaleFmt,
@@ -1220,9 +1222,9 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
           Di, "VOP3P",
           "v_wmma_scale_f32_16x16x128_f8f6f4 requires one of: hasTensorOps "
           "(gfx1250 native scaled WMMA), hasGfx950Insts (gfx950 scaled-"
-          "MFMA F8F6F4 via emitWMMAScaleF8F6F4toScaledMFMA), or hasMFMA (gfx942 "
-          "K-decomposed unscaled MFMA via emitWMMAScaleF8F6F4toMFMA)"
-          "; this target has none.");
+          "MFMA F8F6F4 via emitWMMAScaleF8F6F4toScaledMFMA), or hasFP8Insts "
+          "(gfx942 K-decomposed unscaled FP8 / BF8 MFMA via "
+          "emitWMMAScaleF8F6F4toMFMA); this target has none.");
       return Hr;
     }
 
