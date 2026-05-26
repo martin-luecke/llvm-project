@@ -881,6 +881,20 @@ static const Entry kCanonTable[] = {
     E(FLAT_ATOMIC_SWAP, FLAT_ATOMIC_SWAP),
     E(FLAT_ATOMIC_CMPSWAP, FLAT_ATOMIC_CMPSWAP),
     E(FLAT_ATOMIC_ADD_F32, FLAT_ATOMIC_ADD_F32),
+    // FP64 FLAT atomics. The `_SADDR` form is a distinct pseudo (not
+    // stripped by any alias rule) so list both. `_RTN` and `_RTN_agpr`
+    // suffixes collapse via the suffix-stripping rules at the bottom
+    // of the file, so we don't need separate entries for them.
+    // Mnemonic-rename caveat: on gfx12 the ISA spelling is
+    // `flat_atomic_min_num_f64`/`_max_num_f64`, but LLVM TableGen keeps
+    // the pseudo names `FLAT_ATOMIC_{MIN,MAX}_F64`, so one entry per
+    // pseudo covers both subtargets.
+    E(FLAT_ATOMIC_ADD_F64,       FLAT_ATOMIC_ADD_F64),
+    E(FLAT_ATOMIC_ADD_F64_SADDR, FLAT_ATOMIC_ADD_F64),
+    E(FLAT_ATOMIC_MIN_F64,       FLAT_ATOMIC_MIN_F64),
+    E(FLAT_ATOMIC_MIN_F64_SADDR, FLAT_ATOMIC_MIN_F64),
+    E(FLAT_ATOMIC_MAX_F64,       FLAT_ATOMIC_MAX_F64),
+    E(FLAT_ATOMIC_MAX_F64_SADDR, FLAT_ATOMIC_MAX_F64),
 
     // ---------------------------------------------------------------------
     // GLOBAL atomics
@@ -899,6 +913,14 @@ static const Entry kCanonTable[] = {
     E(GLOBAL_ATOMIC_ADD_F32, GLOBAL_ATOMIC_ADD_F32),
     E(GLOBAL_ATOMIC_PK_ADD_BF16, GLOBAL_ATOMIC_PK_ADD_BF16),
     E(GLOBAL_ATOMIC_PK_ADD_F16, GLOBAL_ATOMIC_PK_ADD_F16),
+    // FP64 GLOBAL atomics. Same SADDR / mnemonic-rename considerations
+    // as the FLAT block above.
+    E(GLOBAL_ATOMIC_ADD_F64,       GLOBAL_ATOMIC_ADD_F64),
+    E(GLOBAL_ATOMIC_ADD_F64_SADDR, GLOBAL_ATOMIC_ADD_F64),
+    E(GLOBAL_ATOMIC_MIN_F64,       GLOBAL_ATOMIC_MIN_F64),
+    E(GLOBAL_ATOMIC_MIN_F64_SADDR, GLOBAL_ATOMIC_MIN_F64),
+    E(GLOBAL_ATOMIC_MAX_F64,       GLOBAL_ATOMIC_MAX_F64),
+    E(GLOBAL_ATOMIC_MAX_F64_SADDR, GLOBAL_ATOMIC_MAX_F64),
 
     // ---------------------------------------------------------------------
     // SMEM atomics (enumerate addressing forms: IMM / SGPR / SGPR_IMM)
@@ -980,6 +1002,10 @@ static const Entry kCanonTable[] = {
     // §6) in the cross-wave case.
     E(DS_SWIZZLE_B32, DS_SWIZZLE_B32),
 
+    // DS_ADD_F64: LDS 64-bit FP add. `_RTN` collapses to non-RTN via
+    // the atomic-return suffix rule, so one entry covers both.
+    E(DS_ADD_F64, DS_ADD_F64),
+
     // ---------------------------------------------------------------------
     // MUBUF direct-to-LDS loads (distinct semantics from VGPR-dest loads)
     // ---------------------------------------------------------------------
@@ -1055,6 +1081,13 @@ static const Entry kCanonTable[] = {
     MUBUF4(BUFFER_ATOMIC_ADD_F32, BUFFER_ATOMIC_ADD_F32),
     MUBUF4(BUFFER_ATOMIC_PK_ADD_BF16, BUFFER_ATOMIC_PK_ADD_BF16),
     MUBUF4(BUFFER_ATOMIC_PK_ADD_F16, BUFFER_ATOMIC_PK_ADD_F16),
+    // FP64 BUFFER atomics. The gfx12 BUFFER_ATOMIC_{MIN,MAX}_F64 are
+    // mnemonic-renamed to `_num_f64` (BUFInstructions.td via
+    // `MUBUF_Real_Atomic_gfx12_Renamed`) but the pseudo names stay the
+    // same, so one MUBUF4/VBUF4 pair per opcode covers all subtargets.
+    MUBUF4(BUFFER_ATOMIC_ADD_F64, BUFFER_ATOMIC_ADD_F64),
+    MUBUF4(BUFFER_ATOMIC_MIN_F64, BUFFER_ATOMIC_MIN_F64),
+    MUBUF4(BUFFER_ATOMIC_MAX_F64, BUFFER_ATOMIC_MAX_F64),
     // gfx11+/gfx12 VBUFFER fork for the buffer atomics. The asm
     // spelling on gfx11+/gfx1250 renames `BUFFER_ATOMIC_ADD` to
     // `buffer_atomic_add_u32` (BUFInstructions.td:2789 declares
@@ -1087,6 +1120,9 @@ static const Entry kCanonTable[] = {
     VBUF4(BUFFER_ATOMIC_SWAP, BUFFER_ATOMIC_SWAP),
     VBUF4(BUFFER_ATOMIC_CMPSWAP, BUFFER_ATOMIC_CMPSWAP),
     VBUF4(BUFFER_ATOMIC_ADD_F32, BUFFER_ATOMIC_ADD_F32),
+    VBUF4(BUFFER_ATOMIC_ADD_F64, BUFFER_ATOMIC_ADD_F64),
+    VBUF4(BUFFER_ATOMIC_MIN_F64, BUFFER_ATOMIC_MIN_F64),
+    VBUF4(BUFFER_ATOMIC_MAX_F64, BUFFER_ATOMIC_MAX_F64),
 
     // ---------------------------------------------------------------------
     // AGPR moves

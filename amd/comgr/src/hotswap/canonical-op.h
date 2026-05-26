@@ -788,6 +788,11 @@ enum class CanonicalOp : uint16_t {
   FLAT_ATOMIC_SMIN, FLAT_ATOMIC_SMAX, FLAT_ATOMIC_UMIN, FLAT_ATOMIC_UMAX,
   FLAT_ATOMIC_SWAP, FLAT_ATOMIC_CMPSWAP,
   FLAT_ATOMIC_ADD_F32,
+  // 64-bit FP atomics. Natively supported on gfx90a/gfx940-family; on
+  // gfx12 the ISA mnemonic is `_min_num_f64`/`_max_num_f64` but LLVM
+  // keeps the pseudo names `FLAT_ATOMIC_{MIN,MAX}_F64`. Semantics are
+  // IEEE-754 minNum/maxNum, matching LLVM atomicrmw fmin/fmax.
+  FLAT_ATOMIC_ADD_F64, FLAT_ATOMIC_MIN_F64, FLAT_ATOMIC_MAX_F64,
 
   // -- GLOBAL atomics --
   GLOBAL_ATOMIC_ADD, GLOBAL_ATOMIC_SUB,
@@ -796,6 +801,7 @@ enum class CanonicalOp : uint16_t {
   GLOBAL_ATOMIC_SWAP, GLOBAL_ATOMIC_CMPSWAP,
   GLOBAL_ATOMIC_ADD_F32,
   GLOBAL_ATOMIC_PK_ADD_BF16, GLOBAL_ATOMIC_PK_ADD_F16,
+  GLOBAL_ATOMIC_ADD_F64, GLOBAL_ATOMIC_MIN_F64, GLOBAL_ATOMIC_MAX_F64,
 
   // -- SMEM atomics --
   // gfx8+ scalar-cache atomics.  Lifted to `atomicrmw` IR via handle-smem.cpp;
@@ -899,6 +905,13 @@ enum class CanonicalOp : uint16_t {
   // dispatched in the cross-wave case.
   DS_SWIZZLE_B32,
 
+  // -- DS atomics --
+  // LDS 64-bit FP add. Native on gfx90a/gfx940-family. Lifted to a
+  // plain `atomicrmw fadd double` in addrspace(3); AtomicExpandPass
+  // re-emits the native ds_add_f64 on the same target or falls back
+  // to a ds_cmpst_b64 CAS loop on subtargets that lack it.
+  DS_ADD_F64,
+
   // -- MUBUF --
   BUFFER_LOAD_DWORD, BUFFER_LOAD_DWORDX2, BUFFER_LOAD_DWORDX3, BUFFER_LOAD_DWORDX4,
   BUFFER_LOAD_UBYTE, BUFFER_LOAD_SBYTE, BUFFER_LOAD_USHORT, BUFFER_LOAD_SSHORT,
@@ -933,6 +946,7 @@ enum class CanonicalOp : uint16_t {
   BUFFER_ATOMIC_SWAP, BUFFER_ATOMIC_CMPSWAP,
   BUFFER_ATOMIC_ADD_F32,
   BUFFER_ATOMIC_PK_ADD_BF16, BUFFER_ATOMIC_PK_ADD_F16,
+  BUFFER_ATOMIC_ADD_F64, BUFFER_ATOMIC_MIN_F64, BUFFER_ATOMIC_MAX_F64,
 
   // -- MFMA --
   // gfx950 scaled F8F6F4 variants share a per-shape intrinsic but take 9

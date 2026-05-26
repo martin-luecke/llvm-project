@@ -299,7 +299,7 @@ HandlerResult handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
   // `lit_tests/buffer_atomic_swap_b32/` (RTN) +
   // `lit_tests/buffer_atomic_swap_b32_nortn/` (non-RTN) and the
   // cmpswap twins.
-  if (Sop >= CanonicalOp::BUFFER_ATOMIC_ADD && Sop <= CanonicalOp::BUFFER_ATOMIC_PK_ADD_F16) {
+  if (Sop >= CanonicalOp::BUFFER_ATOMIC_ADD && Sop <= CanonicalOp::BUFFER_ATOMIC_MAX_F64) {
     assert(((Di.TsFlags & SIInstrFlags::IsAtomicRet) != 0) == (Di.NumDefs > 0) &&
            "buffer atomic: IsAtomicRet disagrees with numDefs");
     MubufAddr Mbuf = decodeMubufAddr(Ctx, Di, Op, /*isStore=*/true,
@@ -334,7 +334,13 @@ HandlerResult handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
       return Hr;
     }
 
-    Value *Data = Ctx.Regs.readReg32(Ctx.B, Mbuf.StData);
+    // FP64 buffer atomics consume a 2-VGPR vdata pair and produce a
+    // 2-VGPR return; everything else is single-DWORD vdata.
+    const bool IsF64 = Sop == CanonicalOp::BUFFER_ATOMIC_ADD_F64 ||
+                       Sop == CanonicalOp::BUFFER_ATOMIC_MIN_F64 ||
+                       Sop == CanonicalOp::BUFFER_ATOMIC_MAX_F64;
+    Value *Data = IsF64 ? Ctx.Regs.readReg64(Ctx.B, Mbuf.StData)
+                        : Ctx.Regs.readReg32(Ctx.B, Mbuf.StData);
 
     Intrinsic::ID AtomicIntrinsic = Intrinsic::not_intrinsic;
     Type *AtomicTy = Ctx.I32Ty;
@@ -381,6 +387,25 @@ HandlerResult handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
       AtomicTy = FixedVectorType::get(Type::getHalfTy(Ctx.C), 2);
       IsFp = true;
       break;
+    // FP64 buffer atomics: emit the f64-typed raw-buffer fadd/fmin/fmax
+    // intrinsic. The backend selects the native gfx940 / gfx12 opcode
+    // (or expands to a buffer_atomic_cmpswap_x2 CAS loop on subtargets
+    // that don't support it).
+    case CanonicalOp::BUFFER_ATOMIC_ADD_F64:
+      AtomicIntrinsic = Intrinsic::amdgcn_raw_buffer_atomic_fadd;
+      AtomicTy = Ctx.F64Ty;
+      IsFp = true;
+      break;
+    case CanonicalOp::BUFFER_ATOMIC_MIN_F64:
+      AtomicIntrinsic = Intrinsic::amdgcn_raw_buffer_atomic_fmin;
+      AtomicTy = Ctx.F64Ty;
+      IsFp = true;
+      break;
+    case CanonicalOp::BUFFER_ATOMIC_MAX_F64:
+      AtomicIntrinsic = Intrinsic::amdgcn_raw_buffer_atomic_fmax;
+      AtomicTy = Ctx.F64Ty;
+      IsFp = true;
+      break;
     default:
       llvm::errs() << "transpiler: Unsupported buffer atomic: " << Mn << "\n";
       Hr.Failure = RaiseFailure::unsupportedInstructionForm(Di, "MUBUF",
@@ -401,8 +426,13 @@ HandlerResult handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
       // the no-return encoding.
       if (Di.NumDefs > 0) {
         Value *RetVal = OldVal;
-        if (IsFp) RetVal = Ctx.B.CreateBitCast(RetVal, Ctx.I32Ty);
-        Ctx.Regs.writeReg32(Ctx.B, Op.dst(), RetVal);
+        if (IsF64) {
+          if (IsFp) RetVal = Ctx.B.CreateBitCast(RetVal, Ctx.I64Ty);
+          Ctx.Regs.writeReg64(Ctx.B, Op.dst(), RetVal);
+        } else {
+          if (IsFp) RetVal = Ctx.B.CreateBitCast(RetVal, Ctx.I32Ty);
+          Ctx.Regs.writeReg32(Ctx.B, Op.dst(), RetVal);
+        }
       }
     });
     Hr.Handled = true;

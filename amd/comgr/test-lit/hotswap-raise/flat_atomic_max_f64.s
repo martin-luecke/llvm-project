@@ -1,0 +1,62 @@
+; RUN: %llvm_mc -mcpu=gfx942 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
+; RUN:   && %raise_cli %t.hsaco --emit-ir 2>/dev/null | %FileCheck %s
+;
+; Lift test for flat_atomic_max_f64 (gfx12 spelling is
+; `flat_atomic_max_num_f64`). HW semantics are IEEE 754 maxNum,
+; matching LLVM `atomicrmw fmax double`.
+
+; CHECK-LABEL: define amdgpu_kernel void @flat_atomic_max_f64_kernel(
+; CHECK: atomicrmw fmax ptr {{(addrspace\(0\) )?}}%{{[^,]+}}, double %{{[^ ]+}}
+; CHECK-NOT: atomicrmw fmax float
+; CHECK-NOT: atomicrmw fmaximum
+
+	.amdgcn_target "amdgcn-amd-amdhsa--gfx942"
+	.amdhsa_code_object_version 6
+	.text
+	.globl	flat_atomic_max_f64_kernel
+	.p2align	8
+	.type	flat_atomic_max_f64_kernel,@function
+flat_atomic_max_f64_kernel:
+	s_load_dwordx4 s[0:3], s[0:1], 0x0
+	s_waitcnt lgkmcnt(0)
+	v_mov_b32_e32 v0, s0
+	v_mov_b32_e32 v1, s1
+	v_mov_b32_e32 v2, s2
+	v_mov_b32_e32 v3, s3
+	;;#ASMSTART
+	flat_atomic_max_f64 v[0:1], v[2:3]
+	;;#ASMEND
+	s_endpgm
+	.section	.rodata,"a",@progbits
+	.p2align	6, 0x0
+	.amdhsa_kernel flat_atomic_max_f64_kernel
+		.amdhsa_kernarg_size 16
+		.amdhsa_user_sgpr_count 2
+		.amdhsa_user_sgpr_kernarg_segment_ptr 1
+		.amdhsa_next_free_vgpr 4
+		.amdhsa_next_free_sgpr 4
+		.amdhsa_accum_offset 4
+		.amdhsa_reserve_vcc 1
+		.amdhsa_float_denorm_mode_32 3
+	.end_amdhsa_kernel
+	.text
+	.amdgpu_metadata
+---
+amdhsa.kernels:
+  - .args:
+      - { .address_space:  global, .offset:         0, .size:           8, .value_kind:     global_buffer }
+      - { .offset:         8, .size:           8, .value_kind:     by_value }
+    .group_segment_fixed_size: 0
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 16
+    .max_flat_workgroup_size: 1024
+    .name:           flat_atomic_max_f64_kernel
+    .private_segment_fixed_size: 0
+    .sgpr_count:     4
+    .symbol:         flat_atomic_max_f64_kernel.kd
+    .vgpr_count:     4
+    .wavefront_size: 64
+amdhsa.version: [1, 2]
+...
+
+	.end_amdgpu_metadata
