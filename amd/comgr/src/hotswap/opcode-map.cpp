@@ -1002,9 +1002,15 @@ static const Entry kCanonTable[] = {
     // §6) in the cross-wave case.
     E(DS_SWIZZLE_B32, DS_SWIZZLE_B32),
 
-    // DS_ADD_F64: LDS 64-bit FP add. `_RTN` collapses to non-RTN via
-    // the atomic-return suffix rule, so one entry covers both.
-    E(DS_ADD_F64, DS_ADD_F64),
+    // DS_ADD_F64 / DS_ADD_RTN_F64. Unlike FLAT/GLOBAL/BUFFER atomics
+    // (where `_RTN` is the trailing suffix and collapses via the
+    // suffix-strip rule), DS atomics carry `_RTN` as an infix
+    // (`DS_ADD_RTN_F64`, not `DS_ADD_F64_RTN`), so the strip rule
+    // does not fire and we need an explicit alias to the non-RTN
+    // CanonicalOp. The handler keys the writeback off `di.numDefs`
+    // (set on the RTN pseudo), so one CanonicalOp covers both forms.
+    E(DS_ADD_F64,     DS_ADD_F64),
+    E(DS_ADD_RTN_F64, DS_ADD_F64),
 
     // ---------------------------------------------------------------------
     // MUBUF direct-to-LDS loads (distinct semantics from VGPR-dest loads)
