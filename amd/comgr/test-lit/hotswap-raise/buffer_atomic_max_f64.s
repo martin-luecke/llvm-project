@@ -1,16 +1,28 @@
 ; RUN: %llvm_mc -mcpu=gfx942 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && %not %raise_cli %t.hsaco --emit-ir 2>&1 | %FileCheck %s --check-prefix=STDERR
+; RUN:   && %raise_cli %t.hsaco --emit-ir 2>/dev/null | %FileCheck %s
 ;
-; Loud-refusal test for buffer_atomic_max_f64. See the sibling
-; buffer_atomic_min_f64.s test for the full rationale; mirror-image
-; situation (raw `src > tmp ? src : tmp` on gfx942 vs IEEE 754-2019
-; maximumNumber on gfx1250, no available LLVM IR shape bit-exact
-; for both, refusing rather than emitting approximate IR).
+; CAS-loop lift test for buffer_atomic_max_f64 from a gfx942 source
+; binary. Mirror of buffer_atomic_min_f64.s; see that fixture for
+; the full rationale on why a CAS loop is the only accurate lift.
+; gfx942 (ISA manual 12.15.3 op 81) is raw `src > tmp ? src : tmp`,
+; lowered here via `fcmp ogt` + `select` inside a
+; raw_buffer_atomic_cmpswap.i64 loop.
 
-; STDERR: transpiler: Unsupported buffer atomic: buffer_atomic_max_f64
-; STDERR: raise_cli: kernel 'buffer_atomic_max_f64_kernel' failed to raise:
-; STDERR-SAME: buffer_atomic_max_f64
-; STDERR-SAME: [MUBUF]
+; CHECK-LABEL: define amdgpu_kernel void @buffer_atomic_max_f64_kernel(
+; CHECK: %fp64_minmax_init = call i64 @llvm.amdgcn.raw.buffer.load.i64
+; CHECK: fp64_minmax_loop:
+; CHECK: %fp64_minmax_expected = phi i64
+; CHECK: %fp64_minmax_cmp = fcmp ogt double %fp64_minmax_src, %fp64_minmax_old
+; CHECK: %fp64_minmax_new = select i1 %fp64_minmax_cmp, double %fp64_minmax_src, double %fp64_minmax_old
+; CHECK: %fp64_minmax_cas = call i64 @llvm.amdgcn.raw.buffer.atomic.cmpswap.i64(i64 %fp64_minmax_new_bits, i64 %fp64_minmax_expected
+; CHECK: %fp64_minmax_ok = icmp eq i64 %fp64_minmax_cas, %fp64_minmax_expected
+; CHECK: br i1 %fp64_minmax_ok, label %fp64_minmax_exit, label %fp64_minmax_loop
+;
+; Negative pins.
+; CHECK-NOT: call double @llvm.maximumnum.f64
+; CHECK-NOT: llvm.amdgcn.raw.buffer.atomic.fmax
+; CHECK-NOT: atomicrmw fmax
+; CHECK-NOT: atomicrmw fmaximumnum
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx942"
 	.amdhsa_code_object_version 6
