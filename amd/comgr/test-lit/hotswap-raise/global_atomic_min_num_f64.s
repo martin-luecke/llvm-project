@@ -1,25 +1,22 @@
 ; RUN: %llvm_mc -mcpu=gfx942 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %raise_cli %t.hsaco --emit-ir 2>/dev/null | %FileCheck %s
 ;
-; Lift test for flat_atomic_min_f64. gfx942 ISA per-opcode pseudocode
-; (manual 12.15.3 op 80) is raw `src < tmp ? src : tmp` with no NaN
-; handling; no LLVM IR op matches bit-exactly. We lift to
-; `atomicrmw fminimumnum` as the closest-fit IEEE 754-2019
-; minimumNumber approximation; see handle-flat.cpp for the full
-; rationale and accepted accuracy gap.
+; Lift test for CanonicalOp GLOBAL_ATOMIC_MIN_NUM_F64; source asm
+; is the gfx942 `global_atomic_min_f64` mnemonic. Lifts to
+; `atomicrmw fminimumnum`.
 
-; CHECK-LABEL: define amdgpu_kernel void @flat_atomic_min_f64_kernel(
-; CHECK: atomicrmw fminimumnum ptr {{(addrspace\(0\) )?}}%{{[^,]+}}, double %{{[^ ]+}}
+; CHECK-LABEL: define amdgpu_kernel void @global_atomic_min_num_f64_kernel(
+; CHECK: atomicrmw fminimumnum ptr addrspace(1) %{{[^,]+}}, double %{{[^ ]+}}
 ; CHECK-NOT: atomicrmw fmin
 ; CHECK-NOT: atomicrmw fminimum ptr
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx942"
 	.amdhsa_code_object_version 6
 	.text
-	.globl	flat_atomic_min_f64_kernel
+	.globl	global_atomic_min_num_f64_kernel
 	.p2align	8
-	.type	flat_atomic_min_f64_kernel,@function
-flat_atomic_min_f64_kernel:
+	.type	global_atomic_min_num_f64_kernel,@function
+global_atomic_min_num_f64_kernel:
 	s_load_dwordx4 s[0:3], s[0:1], 0x0
 	s_waitcnt lgkmcnt(0)
 	v_mov_b32_e32 v0, s0
@@ -27,12 +24,12 @@ flat_atomic_min_f64_kernel:
 	v_mov_b32_e32 v2, s2
 	v_mov_b32_e32 v3, s3
 	;;#ASMSTART
-	flat_atomic_min_f64 v[0:1], v[2:3]
+	global_atomic_min_f64 v[0:1], v[2:3], off
 	;;#ASMEND
 	s_endpgm
 	.section	.rodata,"a",@progbits
 	.p2align	6, 0x0
-	.amdhsa_kernel flat_atomic_min_f64_kernel
+	.amdhsa_kernel global_atomic_min_num_f64_kernel
 		.amdhsa_kernarg_size 16
 		.amdhsa_user_sgpr_count 2
 		.amdhsa_user_sgpr_kernarg_segment_ptr 1
@@ -53,10 +50,10 @@ amdhsa.kernels:
     .kernarg_segment_align: 8
     .kernarg_segment_size: 16
     .max_flat_workgroup_size: 1024
-    .name:           flat_atomic_min_f64_kernel
+    .name:           global_atomic_min_num_f64_kernel
     .private_segment_fixed_size: 0
     .sgpr_count:     4
-    .symbol:         flat_atomic_min_f64_kernel.kd
+    .symbol:         global_atomic_min_num_f64_kernel.kd
     .vgpr_count:     4
     .wavefront_size: 64
 amdhsa.version: [1, 2]
