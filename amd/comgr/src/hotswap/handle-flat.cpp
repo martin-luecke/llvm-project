@@ -1263,7 +1263,7 @@ HandlerResult handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
   }
 
   // flat_atomic_* -- same as global_atomic but flat address space
-  if (Sop >= CanonicalOp::FLAT_ATOMIC_ADD && Sop <= CanonicalOp::FLAT_ATOMIC_MAX_F64) {
+  if (Sop >= CanonicalOp::FLAT_ATOMIC_ADD && Sop <= CanonicalOp::FLAT_ATOMIC_MAX_NUM_F64) {
     // Contract: the RTN/non-RTN collapse in OpcodeMap relies on
     // IsAtomicRet <=> (numDefs > 0) to decide result writeback below.
     assert(((Di.TsFlags & SIInstrFlags::IsAtomicRet) != 0) == (Di.NumDefs > 0) &&
@@ -1310,12 +1310,9 @@ HandlerResult handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
                          Op.srcReg(0).RegKind == ParsedReg::VGPR &&
                          Op.srcReg(1).RegKind == ParsedReg::VGPR &&
                          Op.srcReg(2).RegKind == ParsedReg::SGPR;
-    // F64 atomics access an 8-byte memory slot and read/write a 2-VGPR
-    // pair of vdata; the per-element size matters for the `scale_offset`
-    // multiply inside `decodeGlobalStoreAddr`.
     const bool IsF64 = Sop == CanonicalOp::FLAT_ATOMIC_ADD_F64 ||
-                       Sop == CanonicalOp::FLAT_ATOMIC_MIN_F64 ||
-                       Sop == CanonicalOp::FLAT_ATOMIC_MAX_F64;
+                       Sop == CanonicalOp::FLAT_ATOMIC_MIN_NUM_F64 ||
+                       Sop == CanonicalOp::FLAT_ATOMIC_MAX_NUM_F64;
     if (IsSaddr) {
       FlatAddr Fa = decodeGlobalStoreAddr(Ctx, Di, Op,
                                            /*elemBytes=*/IsF64 ? 8 : 4,
@@ -1377,52 +1374,16 @@ HandlerResult handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     case CanonicalOp::FLAT_ATOMIC_ADD_F32:
       AtomicOp = AtomicRMWInst::FAdd; IsFp = true;
       Data = Ctx.B.CreateBitCast(Data, Ctx.F32Ty); AtomicTy = Ctx.F32Ty; break;
-    // FP64 atomics. ADD lifts to `atomicrmw fadd` (gfx942 ADD_F64 is
-    // IEEE-compliant per the ISA per-opcode Notes: "Floating-point
-    // addition handles NAN/INF/denorm"). MIN/MAX lift to
-    // `atomicrmw fminimumnum/fmaximumnum`, which is the closest-fit
-    // LLVM IR op but NOT bit-exact for either subtarget:
-    //
-    //   * gfx1250 (MI400) `*_min_num_f64` / `*_max_num_f64` IS IEEE
-    //     754-2019 minimumNumber/maximumNumber per the gfx1250
-    //     pseudocode (full NaN-quieting + defined +0 > -0 tiebreak).
-    //     `fminimumnum`/`fmaximumnum` matches this on qNaN inputs;
-    //     small gap on sNaN where the HW returns `cvtToQuietNaN(src)`
-    //     and the IR op returns the non-NaN operand.
-    //
-    //   * gfx942 (MI300, CDNA3) `*_min_f64` / `*_max_f64` per-opcode
-    //     pseudocode (ISA manual 12.15.3 op 80/81) is raw `src < tmp`
-    //     / `src > tmp` -- NO NaN handling, no sign-of-zero tiebreak,
-    //     asymmetric (NaN-in-src loses, NaN-in-mem wins). Unlike the
-    //     ADD opcodes, the F64 MIN/MAX entries have no "handles NAN/
-    //     INF/denorm" Notes. Section 9.2.3's "FP Max Selection Rules"
-    //     do NOT apply here (those describe the F32 _max_num variants;
-    //     the raw F64 op is what it says it is). No LLVM IR op
-    //     matches raw `<`/`>` -- a bit-exact lift would require a
-    //     hand-rolled CAS loop. We accept the imprecision here:
-    //     `fminimumnum`/`fmaximumnum` over-specifies relative to the
-    //     HW (claims symmetric NaN handling + defined +0/-0 tiebreak
-    //     the HW doesn't provide), but real workloads rarely feed
-    //     NaN or signed-zero edge values into atomic min/max, and
-    //     the alternative (CAS-loop lift + new CanonicalOps for the
-    //     `_NUM_` variant) is a substantial complexity hit. TODO:
-    //     promote to a CAS-loop lift if accuracy-sensitive workloads
-    //     surface a regression.
-    //
-    // Re-emit caveat: the AMDGPU backend's
-    // `SITargetLowering::shouldExpandAtomicRMWInIR` does NOT currently
-    // case-match FMinimumNum/FMaximumNum, so re-codegen of the lifted
-    // IR will expand to a cmpxchg-based CAS loop instead of selecting
-    // the native HW op. Acceptable: the CAS expansion gives genuine
-    // IEEE 754-2019 semantics, which is strictly more correct than
-    // the raw `<`/`>` the original gfx942 binary used.
+    // MIN/MAX_F64 use `fminimumnum`/`fmaximumnum` (IEEE 754-2019);
+    // bit-exact for gfx1250 `_min/_max_num_f64`, over-specifies for
+    // the gfx942 raw `<`/`>` op which has no LLVM IR equivalent.
     case CanonicalOp::FLAT_ATOMIC_ADD_F64:
       AtomicOp = AtomicRMWInst::FAdd; IsFp = true;
       Data = Ctx.B.CreateBitCast(Data, Ctx.F64Ty); AtomicTy = Ctx.F64Ty; break;
-    case CanonicalOp::FLAT_ATOMIC_MIN_F64:
+    case CanonicalOp::FLAT_ATOMIC_MIN_NUM_F64:
       AtomicOp = AtomicRMWInst::FMinimumNum; IsFp = true;
       Data = Ctx.B.CreateBitCast(Data, Ctx.F64Ty); AtomicTy = Ctx.F64Ty; break;
-    case CanonicalOp::FLAT_ATOMIC_MAX_F64:
+    case CanonicalOp::FLAT_ATOMIC_MAX_NUM_F64:
       AtomicOp = AtomicRMWInst::FMaximumNum; IsFp = true;
       Data = Ctx.B.CreateBitCast(Data, Ctx.F64Ty); AtomicTy = Ctx.F64Ty; break;
     default:
@@ -1451,7 +1412,7 @@ HandlerResult handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
   }
 
   // ---- Global atomics ----
-  if (Sop >= CanonicalOp::GLOBAL_ATOMIC_ADD && Sop <= CanonicalOp::GLOBAL_ATOMIC_MAX_F64) {
+  if (Sop >= CanonicalOp::GLOBAL_ATOMIC_ADD && Sop <= CanonicalOp::GLOBAL_ATOMIC_MAX_NUM_F64) {
     assert(((Di.TsFlags & SIInstrFlags::IsAtomicRet) != 0) == (Di.NumDefs > 0) &&
            "global atomic: IsAtomicRet disagrees with numDefs");
     // Delegate addressing to `decodeGlobalStoreAddr`.  Global atomics
@@ -1494,25 +1455,13 @@ HandlerResult handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     // "2026-04-23 -- global_atomic SADDR form silently miscompiled"
     // for the full investigation and the regression gate.
     //
-    // Element size for `scale_offset`: most atomics in the CanonicalOp
-    // range operate on a 32-bit memory slot (the integer `_X2` variants
-    // are outside this range), so elemBytes=4 is correct for
-    //   ADD/SUB/AND/OR/XOR/MIN/MAX/SWAP/ADD_F32/PK_ADD_{BF16,F16}/CMPSWAP.
-    // The FP64 atomics (ADD_F64 / MIN_F64 / MAX_F64) use an 8-byte
-    // slot and a 2-VGPR vdata pair, so they take elemBytes=8.
-    // When `hasScaleOffset` is false the multiply is elided by the
-    // decoder.
     const bool IsF64 = Sop == CanonicalOp::GLOBAL_ATOMIC_ADD_F64 ||
-                       Sop == CanonicalOp::GLOBAL_ATOMIC_MIN_F64 ||
-                       Sop == CanonicalOp::GLOBAL_ATOMIC_MAX_F64;
+                       Sop == CanonicalOp::GLOBAL_ATOMIC_MIN_NUM_F64 ||
+                       Sop == CanonicalOp::GLOBAL_ATOMIC_MAX_NUM_F64;
     FlatAddr Fa = decodeGlobalStoreAddr(Ctx, Di, Op,
                                          /*elemBytes=*/IsF64 ? 8 : 4,
                                          "GLOBAL_ATOMIC");
     Value *Addr = Fa.Ptr;
-    // `stData` points to the base of the vdata VGPR range (32-bit for
-    // the scalar atomics; CMPSWAP treats it as a 2-vgpr pair
-    // cmp/new -- see the CMPSWAP branch below; F64 atomics read it as
-    // a 2-VGPR i64 pair, see the F64 switch arms below).
     Value *Data = IsF64 ? Ctx.Regs.readReg64(Ctx.B, Fa.StData)
                         : Ctx.Regs.readReg32(Ctx.B, Fa.StData);
 
@@ -1557,15 +1506,11 @@ HandlerResult handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     case CanonicalOp::GLOBAL_ATOMIC_PK_ADD_F16:
       AtomicOp = AtomicRMWInst::FAdd;
       AtomicTy = FixedVectorType::get(Type::getHalfTy(Ctx.C), 2); IsFp = true; break;
-    // F64 atomics: see the FLAT_ATOMIC_*_F64 block above for the
-    // rationale on choosing FMinimumNum/FMaximumNum over FMin/FMax
-    // (bit-exact IEEE 754-2019 minimumNumber/maximumNumber semantics
-    // matching the HW pseudocode; backend currently CAS-expands).
     case CanonicalOp::GLOBAL_ATOMIC_ADD_F64:
       AtomicOp = AtomicRMWInst::FAdd; AtomicTy = Ctx.F64Ty; IsFp = true; break;
-    case CanonicalOp::GLOBAL_ATOMIC_MIN_F64:
+    case CanonicalOp::GLOBAL_ATOMIC_MIN_NUM_F64:
       AtomicOp = AtomicRMWInst::FMinimumNum; AtomicTy = Ctx.F64Ty; IsFp = true; break;
-    case CanonicalOp::GLOBAL_ATOMIC_MAX_F64:
+    case CanonicalOp::GLOBAL_ATOMIC_MAX_NUM_F64:
       AtomicOp = AtomicRMWInst::FMaximumNum; AtomicTy = Ctx.F64Ty; IsFp = true; break;
     default:
       llvm::errs() << "transpiler: Unsupported global atomic variant: " << Mn << "\n";

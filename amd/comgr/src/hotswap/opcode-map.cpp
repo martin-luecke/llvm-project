@@ -891,10 +891,10 @@ static const Entry kCanonTable[] = {
     // pseudo covers both subtargets.
     E(FLAT_ATOMIC_ADD_F64,       FLAT_ATOMIC_ADD_F64),
     E(FLAT_ATOMIC_ADD_F64_SADDR, FLAT_ATOMIC_ADD_F64),
-    E(FLAT_ATOMIC_MIN_F64,       FLAT_ATOMIC_MIN_F64),
-    E(FLAT_ATOMIC_MIN_F64_SADDR, FLAT_ATOMIC_MIN_F64),
-    E(FLAT_ATOMIC_MAX_F64,       FLAT_ATOMIC_MAX_F64),
-    E(FLAT_ATOMIC_MAX_F64_SADDR, FLAT_ATOMIC_MAX_F64),
+    E(FLAT_ATOMIC_MIN_F64,       FLAT_ATOMIC_MIN_NUM_F64),
+    E(FLAT_ATOMIC_MIN_F64_SADDR, FLAT_ATOMIC_MIN_NUM_F64),
+    E(FLAT_ATOMIC_MAX_F64,       FLAT_ATOMIC_MAX_NUM_F64),
+    E(FLAT_ATOMIC_MAX_F64_SADDR, FLAT_ATOMIC_MAX_NUM_F64),
 
     // ---------------------------------------------------------------------
     // GLOBAL atomics
@@ -917,10 +917,10 @@ static const Entry kCanonTable[] = {
     // as the FLAT block above.
     E(GLOBAL_ATOMIC_ADD_F64,       GLOBAL_ATOMIC_ADD_F64),
     E(GLOBAL_ATOMIC_ADD_F64_SADDR, GLOBAL_ATOMIC_ADD_F64),
-    E(GLOBAL_ATOMIC_MIN_F64,       GLOBAL_ATOMIC_MIN_F64),
-    E(GLOBAL_ATOMIC_MIN_F64_SADDR, GLOBAL_ATOMIC_MIN_F64),
-    E(GLOBAL_ATOMIC_MAX_F64,       GLOBAL_ATOMIC_MAX_F64),
-    E(GLOBAL_ATOMIC_MAX_F64_SADDR, GLOBAL_ATOMIC_MAX_F64),
+    E(GLOBAL_ATOMIC_MIN_F64,       GLOBAL_ATOMIC_MIN_NUM_F64),
+    E(GLOBAL_ATOMIC_MIN_F64_SADDR, GLOBAL_ATOMIC_MIN_NUM_F64),
+    E(GLOBAL_ATOMIC_MAX_F64,       GLOBAL_ATOMIC_MAX_NUM_F64),
+    E(GLOBAL_ATOMIC_MAX_F64_SADDR, GLOBAL_ATOMIC_MAX_NUM_F64),
 
     // ---------------------------------------------------------------------
     // SMEM atomics (enumerate addressing forms: IMM / SGPR / SGPR_IMM)
@@ -1092,8 +1092,8 @@ static const Entry kCanonTable[] = {
     // `MUBUF_Real_Atomic_gfx12_Renamed`) but the pseudo names stay the
     // same, so one MUBUF4/VBUF4 pair per opcode covers all subtargets.
     MUBUF4(BUFFER_ATOMIC_ADD_F64, BUFFER_ATOMIC_ADD_F64),
-    MUBUF4(BUFFER_ATOMIC_MIN_F64, BUFFER_ATOMIC_MIN_F64),
-    MUBUF4(BUFFER_ATOMIC_MAX_F64, BUFFER_ATOMIC_MAX_F64),
+    MUBUF4(BUFFER_ATOMIC_MIN_F64, BUFFER_ATOMIC_MIN_NUM_F64),
+    MUBUF4(BUFFER_ATOMIC_MAX_F64, BUFFER_ATOMIC_MAX_NUM_F64),
     // gfx11+/gfx12 VBUFFER fork for the buffer atomics. The asm
     // spelling on gfx11+/gfx1250 renames `BUFFER_ATOMIC_ADD` to
     // `buffer_atomic_add_u32` (BUFInstructions.td:2789 declares
@@ -1127,8 +1127,8 @@ static const Entry kCanonTable[] = {
     VBUF4(BUFFER_ATOMIC_CMPSWAP, BUFFER_ATOMIC_CMPSWAP),
     VBUF4(BUFFER_ATOMIC_ADD_F32, BUFFER_ATOMIC_ADD_F32),
     VBUF4(BUFFER_ATOMIC_ADD_F64, BUFFER_ATOMIC_ADD_F64),
-    VBUF4(BUFFER_ATOMIC_MIN_F64, BUFFER_ATOMIC_MIN_F64),
-    VBUF4(BUFFER_ATOMIC_MAX_F64, BUFFER_ATOMIC_MAX_F64),
+    VBUF4(BUFFER_ATOMIC_MIN_F64, BUFFER_ATOMIC_MIN_NUM_F64),
+    VBUF4(BUFFER_ATOMIC_MAX_F64, BUFFER_ATOMIC_MAX_NUM_F64),
 
     // ---------------------------------------------------------------------
     // AGPR moves
