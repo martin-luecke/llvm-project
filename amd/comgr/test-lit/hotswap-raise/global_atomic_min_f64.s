@@ -1,12 +1,15 @@
 ; RUN: %llvm_mc -mcpu=gfx942 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %raise_cli %t.hsaco --emit-ir 2>/dev/null | %FileCheck %s
 ;
-; Lift test for global_atomic_min_f64 (gfx12 spelling
-; `global_atomic_min_num_f64`). IEEE 754 minNum -> atomicrmw fmin.
+; Lift test for global_atomic_min_f64. gfx942 HW is raw `<`
+; comparator (manual 12.15.3 op 80); lifts to `atomicrmw fminimumnum`
+; as the closest-fit IEEE 754-2019 minimumNumber approximation.
+; See handle-flat.cpp for the full rationale.
 
 ; CHECK-LABEL: define amdgpu_kernel void @global_atomic_min_f64_kernel(
-; CHECK: atomicrmw fmin ptr addrspace(1) %{{[^,]+}}, double %{{[^ ]+}}
-; CHECK-NOT: atomicrmw fmin float
+; CHECK: atomicrmw fminimumnum ptr addrspace(1) %{{[^,]+}}, double %{{[^ ]+}}
+; CHECK-NOT: atomicrmw fmin
+; CHECK-NOT: atomicrmw fminimum ptr
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx942"
 	.amdhsa_code_object_version 6

@@ -1,15 +1,17 @@
 ; RUN: %llvm_mc -mcpu=gfx942 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %raise_cli %t.hsaco --emit-ir 2>/dev/null | %FileCheck %s
 ;
-; Lift test for flat_atomic_min_f64 (gfx940 spelling; the gfx12
-; spelling is `flat_atomic_min_num_f64` -- LLVM keeps the pseudo
-; name `FLAT_ATOMIC_MIN_F64` for both). HW semantics are IEEE 754
-; minNum, matching LLVM `atomicrmw fmin double`.
+; Lift test for flat_atomic_min_f64. gfx942 ISA per-opcode pseudocode
+; (manual 12.15.3 op 80) is raw `src < tmp ? src : tmp` with no NaN
+; handling; no LLVM IR op matches bit-exactly. We lift to
+; `atomicrmw fminimumnum` as the closest-fit IEEE 754-2019
+; minimumNumber approximation; see handle-flat.cpp for the full
+; rationale and accepted accuracy gap.
 
 ; CHECK-LABEL: define amdgpu_kernel void @flat_atomic_min_f64_kernel(
-; CHECK: atomicrmw fmin ptr {{(addrspace\(0\) )?}}%{{[^,]+}}, double %{{[^ ]+}}
-; CHECK-NOT: atomicrmw fmin float
-; CHECK-NOT: atomicrmw fminimum
+; CHECK: atomicrmw fminimumnum ptr {{(addrspace\(0\) )?}}%{{[^,]+}}, double %{{[^ ]+}}
+; CHECK-NOT: atomicrmw fmin
+; CHECK-NOT: atomicrmw fminimum ptr
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx942"
 	.amdhsa_code_object_version 6

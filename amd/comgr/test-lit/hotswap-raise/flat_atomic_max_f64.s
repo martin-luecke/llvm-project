@@ -1,14 +1,16 @@
 ; RUN: %llvm_mc -mcpu=gfx942 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %raise_cli %t.hsaco --emit-ir 2>/dev/null | %FileCheck %s
 ;
-; Lift test for flat_atomic_max_f64 (gfx12 spelling is
-; `flat_atomic_max_num_f64`). HW semantics are IEEE 754 maxNum,
-; matching LLVM `atomicrmw fmax double`.
+; Lift test for flat_atomic_max_f64. gfx942 ISA per-opcode pseudocode
+; (manual 12.15.3 op 81) is raw `src > tmp ? src : tmp` with no NaN
+; handling. We lift to `atomicrmw fmaximumnum` as the closest-fit
+; IEEE 754-2019 maximumNumber approximation; see handle-flat.cpp for
+; the full rationale and accepted accuracy gap.
 
 ; CHECK-LABEL: define amdgpu_kernel void @flat_atomic_max_f64_kernel(
-; CHECK: atomicrmw fmax ptr {{(addrspace\(0\) )?}}%{{[^,]+}}, double %{{[^ ]+}}
-; CHECK-NOT: atomicrmw fmax float
-; CHECK-NOT: atomicrmw fmaximum
+; CHECK: atomicrmw fmaximumnum ptr {{(addrspace\(0\) )?}}%{{[^,]+}}, double %{{[^ ]+}}
+; CHECK-NOT: atomicrmw fmax
+; CHECK-NOT: atomicrmw fmaximum ptr
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx942"
 	.amdhsa_code_object_version 6

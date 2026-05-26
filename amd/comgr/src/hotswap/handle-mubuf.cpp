@@ -391,6 +391,33 @@ HandlerResult handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
     // intrinsic. The backend selects the native gfx940 / gfx12 opcode
     // (or expands to a buffer_atomic_cmpswap_x2 CAS loop on subtargets
     // that don't support it).
+    //
+    // ACCURACY GAP -- BUFFER_ATOMIC_{MIN,MAX}_F64 only.
+    // Lifts to the f64 raw_buffer_atomic_fmin/fmax intrinsic, which
+    // carries IEEE 754-2008 minNum/maxNum semantics. Two layers of
+    // imprecision relative to the gfx942 HW (raw `<`/`>` per the ISA
+    // manual 12.15.3 op 80/81 pseudocode -- see handle-flat.cpp's
+    // FP64 atomic block for the full discussion):
+    //   1. `minNum/maxNum` is symmetric and quietens NaN; the HW is
+    //      asymmetric (NaN-in-src loses, NaN-in-mem wins).
+    //   2. `minNum/maxNum` leaves the +0/-0 tiebreak unspecified;
+    //      the HW always returns the memory value when src equals
+    //      mem (because `+0 > -0` is false).
+    // The FLAT/GLOBAL siblings use `atomicrmw fminimumnum/fmaximumnum`
+    // for a tighter (still not bit-exact) approximation, but the
+    // buffer path can't:
+    //   - No `int_amdgcn_raw_buffer_atomic_{fminimumnum,fmaximumnum}`
+    //     intrinsic is defined in IntrinsicsAMDGPU.td.
+    //   - `atomicrmw fminimumnum/fmaximumnum` on buffer fat pointers
+    //     (addrspace(7)) is hard-rejected by
+    //     AMDGPULowerBufferFatPointers.cpp:1777.
+    // Accepted limitation; tracked. TODO(accuracy): rewrite as an
+    // explicit CAS loop using raw_buffer_atomic_cmpswap.i64 +
+    // `fcmp olt`/`ogt` + `select` to preserve both SRD-relative
+    // addressing and the HW raw-comparator semantics.
+    // ADD_F64 below is not affected: gfx942 ADD_F64 IS IEEE-compliant
+    // (per the ISA per-opcode Notes "Floating-point addition handles
+    // NAN/INF/denorm"), so `raw_buffer_atomic_fadd.f64` matches.
     case CanonicalOp::BUFFER_ATOMIC_ADD_F64:
       AtomicIntrinsic = Intrinsic::amdgcn_raw_buffer_atomic_fadd;
       AtomicTy = Ctx.F64Ty;
