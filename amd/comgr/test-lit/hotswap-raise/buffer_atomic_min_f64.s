@@ -1,12 +1,36 @@
 ; RUN: %llvm_mc -mcpu=gfx942 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && %raise_cli %t.hsaco --emit-ir 2>/dev/null | %FileCheck %s
+; RUN:   && %not %raise_cli %t.hsaco --emit-ir 2>&1 | %FileCheck %s --check-prefix=STDERR
 ;
-; Lift test for buffer_atomic_min_f64 (gfx12 spelling is
-; `buffer_atomic_min_num_f64`; LLVM pseudo name is shared).
+; Loud-refusal test for buffer_atomic_min_f64. The lift is refused
+; rather than approximated because no available LLVM IR shape is
+; bit-exact for both source ISAs at once:
+;
+;   - gfx942 HW (ISA manual 12.15.3 op 80) is raw `src < tmp ? src
+;     : tmp` -- no NaN handling, no +0/-0 tiebreak, asymmetric on
+;     NaN inputs (NaN-in-src loses, NaN-in-mem wins).
+;   - gfx1250 HW (sp3 manual sec 8.7.23 buffer_atomic_min_num_f64)
+;     is IEEE 754-2019 minimumNumber: qNaN-quieting, defined +0>-0
+;     tiebreak, sNaN converted to qNaN.
+;
+; LLVM-side options were all approximate or rejected:
+;   - `int_amdgcn_raw_buffer_atomic_fmin.f64`: IEEE 754-2008 minNum
+;     semantics -- over-specifies vs gfx942 raw `<`, under-specifies
+;     vs gfx1250 IEEE 754-2019 (+0/-0 tiebreak unspecified).
+;   - `atomicrmw fminimumnum`: matches gfx1250 (modulo sNaN) but
+;     buffer fat-pointer lowering hard-rejects it at
+;     AMDGPULowerBufferFatPointers.cpp:1777.
+;   - No `int_amdgcn_raw_buffer_atomic_fminimumnum` intrinsic exists.
+;
+; Per the project's accuracy-first stance we refuse loudly rather
+; than emit IR with documented semantic drift. The clean alternative
+; is a hand-rolled IR CAS loop using raw_buffer_atomic_cmpswap.i64
+; + the appropriate comparator per source ISA; deferred pending a
+; workload that needs it.
 
-; CHECK-LABEL: define amdgpu_kernel void @buffer_atomic_min_f64_kernel(
-; CHECK: call double @llvm.amdgcn.raw.buffer.atomic.fmin.f64
-; CHECK-NOT: atomicrmw fmin
+; STDERR: transpiler: Unsupported buffer atomic: buffer_atomic_min_f64
+; STDERR: raise_cli: kernel 'buffer_atomic_min_f64_kernel' failed to raise:
+; STDERR-SAME: buffer_atomic_min_f64
+; STDERR-SAME: [MUBUF]
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx942"
 	.amdhsa_code_object_version 6

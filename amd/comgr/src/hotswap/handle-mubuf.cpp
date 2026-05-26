@@ -392,47 +392,40 @@ HandlerResult handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
     // (or expands to a buffer_atomic_cmpswap_x2 CAS loop on subtargets
     // that don't support it).
     //
-    // ACCURACY GAP -- BUFFER_ATOMIC_{MIN,MAX}_F64 only.
-    // Lifts to the f64 raw_buffer_atomic_fmin/fmax intrinsic, which
-    // carries IEEE 754-2008 minNum/maxNum semantics. Two layers of
-    // imprecision relative to the gfx942 HW (raw `<`/`>` per the ISA
-    // manual 12.15.3 op 80/81 pseudocode -- see handle-flat.cpp's
-    // FP64 atomic block for the full discussion):
-    //   1. `minNum/maxNum` is symmetric and quietens NaN; the HW is
-    //      asymmetric (NaN-in-src loses, NaN-in-mem wins).
-    //   2. `minNum/maxNum` leaves the +0/-0 tiebreak unspecified;
-    //      the HW always returns the memory value when src equals
-    //      mem (because `+0 > -0` is false).
-    // The FLAT/GLOBAL siblings use `atomicrmw fminimumnum/fmaximumnum`
-    // for a tighter (still not bit-exact) approximation, but the
-    // buffer path can't:
-    //   - No `int_amdgcn_raw_buffer_atomic_{fminimumnum,fmaximumnum}`
-    //     intrinsic is defined in IntrinsicsAMDGPU.td.
-    //   - `atomicrmw fminimumnum/fmaximumnum` on buffer fat pointers
-    //     (addrspace(7)) is hard-rejected by
-    //     AMDGPULowerBufferFatPointers.cpp:1777.
-    // Accepted limitation; tracked. TODO(accuracy): rewrite as an
-    // explicit CAS loop using raw_buffer_atomic_cmpswap.i64 +
-    // `fcmp olt`/`ogt` + `select` to preserve both SRD-relative
-    // addressing and the HW raw-comparator semantics.
-    // ADD_F64 below is not affected: gfx942 ADD_F64 IS IEEE-compliant
-    // (per the ISA per-opcode Notes "Floating-point addition handles
-    // NAN/INF/denorm"), so `raw_buffer_atomic_fadd.f64` matches.
+    // ADD_F64 is IEEE-compliant on both gfx942 and gfx1250 (per the
+    // ISA per-opcode Notes "Floating-point addition handles NAN/INF/
+    // denorm"), so `raw_buffer_atomic_fadd.f64` is an exact match.
     case CanonicalOp::BUFFER_ATOMIC_ADD_F64:
       AtomicIntrinsic = Intrinsic::amdgcn_raw_buffer_atomic_fadd;
       AtomicTy = Ctx.F64Ty;
       IsFp = true;
       break;
-    case CanonicalOp::BUFFER_ATOMIC_MIN_F64:
-      AtomicIntrinsic = Intrinsic::amdgcn_raw_buffer_atomic_fmin;
-      AtomicTy = Ctx.F64Ty;
-      IsFp = true;
-      break;
-    case CanonicalOp::BUFFER_ATOMIC_MAX_F64:
-      AtomicIntrinsic = Intrinsic::amdgcn_raw_buffer_atomic_fmax;
-      AtomicTy = Ctx.F64Ty;
-      IsFp = true;
-      break;
+    // BUFFER_ATOMIC_{MIN,MAX}_F64 are deliberately NOT case-matched
+    // here; they fall through to the `default:` arm below and refuse
+    // with `unsupportedShape`. Rationale: no LLVM lift shape that's
+    // available to us is bit-exact for both source ISAs at once.
+    //   - gfx942 HW (ISA manual 12.15.3 op 80/81) is raw `<`/`>`,
+    //     asymmetric in NaN handling, no +0/-0 tiebreak. No LLVM IR
+    //     op or intrinsic captures this.
+    //   - gfx1250 HW is IEEE 754-2019 minimumNumber/maximumNumber.
+    //     `atomicrmw fminimumnum/fmaximumnum` matches (modulo sNaN),
+    //     but on buffer fat pointers (addrspace(7)) the upstream
+    //     lowering hard-rejects it at AMDGPULowerBufferFatPointers
+    //     .cpp:1777 ("atomic floating point fmaximumnum not supported
+    //     for buffer resources"), and no intrinsic equivalent
+    //     (`int_amdgcn_raw_buffer_atomic_{fminimumnum,fmaximumnum}`)
+    //     is defined in IntrinsicsAMDGPU.td.
+    //   - The fmin/fmax intrinsic carries IEEE 754-2008 minNum/maxNum
+    //     semantics: over-specifies vs gfx942 (claims symmetric NaN
+    //     handling the HW doesn't provide) and under-specifies vs
+    //     gfx1250 (leaves +0/-0 tiebreak unspecified). Acceptable
+    //     accuracy floor for "best effort" lifts but not for the
+    //     project's accuracy-first stance.
+    // The clean alternative is a hand-rolled IR CAS loop using
+    // raw_buffer_atomic_cmpswap.i64 + the chosen comparator, which
+    // would let us pick the right semantic per source ISA. Deferred
+    // pending a workload that needs it; see the corresponding loud
+    // refusal in tests as the regression gate.
     default:
       llvm::errs() << "transpiler: Unsupported buffer atomic: " << Mn << "\n";
       Hr.Failure = RaiseFailure::unsupportedInstructionForm(Di, "MUBUF",

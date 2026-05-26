@@ -1,12 +1,16 @@
 ; RUN: %llvm_mc -mcpu=gfx942 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && %raise_cli %t.hsaco --emit-ir 2>/dev/null | %FileCheck %s
+; RUN:   && %not %raise_cli %t.hsaco --emit-ir 2>&1 | %FileCheck %s --check-prefix=STDERR
 ;
-; Lift test for buffer_atomic_max_f64 (gfx12 spelling is
-; `buffer_atomic_max_num_f64`; LLVM pseudo name is shared).
+; Loud-refusal test for buffer_atomic_max_f64. See the sibling
+; buffer_atomic_min_f64.s test for the full rationale; mirror-image
+; situation (raw `src > tmp ? src : tmp` on gfx942 vs IEEE 754-2019
+; maximumNumber on gfx1250, no available LLVM IR shape bit-exact
+; for both, refusing rather than emitting approximate IR).
 
-; CHECK-LABEL: define amdgpu_kernel void @buffer_atomic_max_f64_kernel(
-; CHECK: call double @llvm.amdgcn.raw.buffer.atomic.fmax.f64
-; CHECK-NOT: atomicrmw fmax
+; STDERR: transpiler: Unsupported buffer atomic: buffer_atomic_max_f64
+; STDERR: raise_cli: kernel 'buffer_atomic_max_f64_kernel' failed to raise:
+; STDERR-SAME: buffer_atomic_max_f64
+; STDERR-SAME: [MUBUF]
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx942"
 	.amdhsa_code_object_version 6
