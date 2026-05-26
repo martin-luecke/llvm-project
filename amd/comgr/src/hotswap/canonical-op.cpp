@@ -112,6 +112,7 @@ const char *canonicalOpName(CanonicalOp Op) {
     S(V_CEIL_F64)
     S(V_READFIRSTLANE_B32)
     S(V_FFBH_U32) S(V_FFBL_B32) S(V_FFBH_I32)
+    S(V_PRNG_B32)
     S(V_CVT_PK_F32_FP8) S(V_CVT_PK_F32_BF8)
     S(V_CVT_F32_FP8) S(V_CVT_F32_BF8)
     S(V_CVT_SCALE_PK8_BF16_FP4)
