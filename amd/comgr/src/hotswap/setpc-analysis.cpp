@@ -268,6 +268,8 @@ public:
     PcChains.clear();
     Scalars.clear();
     IntraDirtyHalf.clear();
+    HalfCopySrc.clear();
+    PairAlias.clear();
   }
 
   // Record a known absolute PC in the SGPR pair starting at `lowIdx`.
@@ -324,6 +326,7 @@ public:
   void invalidateScalarAt(unsigned Idx) {
     IntraDirtyHalf.insert(Idx);
     Scalars.erase(Idx);
+    HalfCopySrc.erase(Idx);
   }
 
   // Promote an in-progress chain to "low add done": the next
@@ -364,6 +367,52 @@ public:
     }
   }
 
+  // Record that SGPR `dstIdx` was set by `s_mov_b32 sD, sS` where
+  // sS is at index `srcIdx`. If the complementary half has already
+  // been copied from the same source pair AND that source pair holds
+  // a complete chain, duplicate the chain to the destination pair.
+  // Also records a pair-alias so consumption sites (s_set_pc_i64 /
+  // s_swap_pc_i64) can resolve through inter-block dataflow on the
+  // source pair when the intra-block chain copy is not available.
+  void recordHalfCopy(unsigned DstIdx, unsigned SrcIdx) {
+    HalfCopySrc[DstIdx] = SrcIdx;
+    IntraDirtyHalf.insert(DstIdx);
+    invalidatePcAt(DstIdx);
+    // Check if the complementary half completes a pair copy from the
+    // same source pair.
+    unsigned DstLow = DstIdx & ~1u;
+    unsigned DstHi = DstLow + 1;
+    auto ItLo = HalfCopySrc.find(DstLow);
+    auto ItHi = HalfCopySrc.find(DstHi);
+    if (ItLo == HalfCopySrc.end() || ItHi == HalfCopySrc.end())
+      return;
+    unsigned SrcLo = ItLo->second;
+    unsigned SrcHi = ItHi->second;
+    if (SrcHi != SrcLo + 1)
+      return;
+    unsigned SrcPairLow = SrcLo & ~1u;
+    if (SrcLo != SrcPairLow)
+      return;
+    // Record pair alias for consumption-site resolution.
+    PairAlias[DstLow] = SrcPairLow;
+    PcChain *Chain = findPc(SrcPairLow);
+    if (!Chain || !Chain->LowAddDone)
+      return;
+    PcChain Copy = *Chain;
+    PcChains[DstLow] = Copy;
+  }
+
+  // If pair `lowIdx` was composed of two s_mov_b32 copies from the
+  // same source pair, return the source pair's low index. Consumption
+  // sites use this to resolve through the source pair's dataflow
+  // entry facts when no intra-block chain is available.
+  std::optional<unsigned> findPairAlias(unsigned LowIdx) const {
+    auto It = PairAlias.find(LowIdx);
+    if (It == PairAlias.end())
+      return std::nullopt;
+    return It->second;
+  }
+
   // Whether the block has performed any SGPR write to either half of
   // pair `lowIdx`. Used by Phase 2 to decide whether a swap/set_pc
   // site may fall back on dataflow entry facts.
@@ -386,6 +435,15 @@ private:
   llvm::DenseMap<unsigned, PcChain> PcChains;
   llvm::DenseMap<unsigned, ScalarImm> Scalars;
   llvm::DenseSet<unsigned> IntraDirtyHalf;
+  // Per-half copy tracking: HalfCopySrc[D] = S means "s_mov_b32 sD, sS"
+  // was seen in this block. Used by recordHalfCopy to detect when both
+  // halves of a destination pair are copies of both halves of a source
+  // pair that holds a completed PC chain.
+  llvm::DenseMap<unsigned, unsigned> HalfCopySrc;
+  // Pair alias: PairAlias[D] = S means pair D was composed by copying
+  // both halves from pair S via s_mov_b32. Used by consumption sites
+  // to resolve through the source pair's dataflow facts.
+  llvm::DenseMap<unsigned, unsigned> PairAlias;
 };
 
 // Mark every SGPR-half written by `di` as dirty in `state` and drop
@@ -747,6 +805,69 @@ SetPcAnalysis analyseSetPC(ArrayRef<DecodedInst> Insts,
         continue;
       }
 
+      // s_add_nc_u64 s[X:X+1], s[X:X+1], imm64 -- gfx1250 single-
+      // instruction 64-bit add that replaces the traditional s_add_co_u32
+      // + s_add_co_ci_u32 carry chain. If dst == src0 and the pair has
+      // a pending PC chain from s_get_pc_i64, complete it in one step.
+      case CanonicalOp::S_ADD_NC_U64: {
+        if (Di.NumDefs < 1 || !Di.isReg(0))
+          break;
+        auto DstIdx = sgprIdx(MRI, Di.getReg(0));
+        if (!DstIdx)
+          break;
+        unsigned S0 = Di.FirstSrcIdx;
+        unsigned S1 = S0 + 1;
+        std::optional<unsigned> Src0Idx;
+        if (Di.isReg(S0))
+          Src0Idx = sgprIdx(MRI, Di.getReg(S0));
+        if (!Src0Idx || *Src0Idx != *DstIdx)
+          break;
+        PcChain *Chain = State.findPc(*DstIdx);
+        if (!Chain || Chain->LowAddDone)
+          break;
+        if (!Di.isImm(S1))
+          break;
+        int64_t Addend = Di.getImm(S1);
+        uint64_t ResolvedTarget = Chain->Value +
+                                  static_cast<uint64_t>(Addend);
+        // Complete the chain in one step: mark low-add done with the
+        // full result, then finish the high-add with zero (the full
+        // 64-bit offset is already folded into the low call).
+        State.markLowAddDone(*DstIdx, ResolvedTarget);
+        State.finishHighAdd(*DstIdx, Di.Offset, 0);
+        Result.ChainTerminators[Di.Offset] =
+            SetPcCallSiteInfo{ResolvedTarget, *DstIdx};
+        continue;
+      }
+
+      // s_mov_b32 sD, sS -- track per-half copies so that a pair
+      // composed of two MOVs from the same source pair inherits the
+      // source's completed PC chain. This covers the exerciser's
+      // dispatch pattern where a target computed in s[2:3] is copied
+      // to s[28:29] via two s_mov_b32 before s_set_pc_i64 s[28:29].
+      case CanonicalOp::S_MOV_B32: {
+        if (Di.NumDefs < 1 || !Di.isReg(0))
+          break;
+        auto DstIdx = sgprIdx(MRI, Di.getReg(0));
+        if (!DstIdx)
+          break;
+        unsigned SrcOpIdx = Di.FirstSrcIdx;
+        if (!Di.isReg(SrcOpIdx)) {
+          // MOV from immediate -- track as scalar.
+          auto Imm = imm32(Di.Inst, SrcOpIdx);
+          if (Imm) {
+            State.recordScalar(*DstIdx, *Imm);
+            continue;
+          }
+          break;
+        }
+        auto SrcIdx = sgprIdx(MRI, Di.getReg(SrcOpIdx));
+        if (!SrcIdx)
+          break;
+        State.recordHalfCopy(*DstIdx, *SrcIdx);
+        continue;
+      }
+
       case CanonicalOp::S_SWAP_PC_I64: {
         // Phase 1 already added the fallthrough to mergedBlockStarts;
         // re-record for the caller's BB-layout merge.
@@ -811,21 +932,32 @@ SetPcAnalysis analyseSetPC(ArrayRef<DecodedInst> Insts,
           // intra-block consumption invalidates further reasoning).
           State.invalidatePcAt(*SrcLow);
         } else if (State.isPairDirty(*SrcLow)) {
-          // The block wrote to srcPair (chain-or-otherwise) but it
-          // didn't end with a complete chain. Dataflow entry facts
-          // are dead. Refuse loudly.
-          SetPcSiteInfo Info;
-          Info.SiteKind = SetPcSiteInfo::Kind::Unresolvable;
-          Info.RefusalReason =
-              (llvm::Twine("s_swap_pc_i64 source SGPR pair s[") +
-               llvm::Twine(*SrcLow) + ":" + llvm::Twine(*SrcLow + 1) +
-               "] was modified intra-block without producing a "
-               "statically resolvable getpc+add chain (the block "
-               "either started a chain that did not complete or "
-               "overwrote the pair with a non-chain value); inter-"
-               "block dataflow facts cannot recover this")
-                  .str();
-          Result.SetpcSites[Di.Offset] = std::move(Info);
+          // Check if the pair is a MOV-based copy of another pair.
+          auto Alias = State.findPairAlias(*SrcLow);
+          if (Alias) {
+            PendingDataflowSite Pds;
+            Pds.BlockOffset = Bd.Offset;
+            Pds.SiteOffset = Di.Offset;
+            Pds.SrcPair = *Alias;
+            Pds.IsSwap = true;
+            PendingDataflow.push_back(Pds);
+          } else {
+            // The block wrote to srcPair (chain-or-otherwise) but it
+            // didn't end with a complete chain. Dataflow entry facts
+            // are dead. Refuse loudly.
+            SetPcSiteInfo Info;
+            Info.SiteKind = SetPcSiteInfo::Kind::Unresolvable;
+            Info.RefusalReason =
+                (llvm::Twine("s_swap_pc_i64 source SGPR pair s[") +
+                 llvm::Twine(*SrcLow) + ":" + llvm::Twine(*SrcLow + 1) +
+                 "] was modified intra-block without producing a "
+                 "statically resolvable getpc+add chain (the block "
+                 "either started a chain that did not complete or "
+                 "overwrote the pair with a non-chain value); inter-"
+                 "block dataflow facts cannot recover this")
+                    .str();
+            Result.SetpcSites[Di.Offset] = std::move(Info);
+          }
         } else {
           // SrcPair is pristine through the block. Defer to Phase 4
           // dataflow re-classification.
@@ -881,6 +1013,18 @@ SetPcAnalysis analyseSetPC(ArrayRef<DecodedInst> Insts,
           continue;
         }
         if (State.isPairDirty(*SrcIdx)) {
+          // Check if the pair is a MOV-based copy of another pair.
+          // If so, defer to dataflow on the aliased source pair.
+          auto Alias = State.findPairAlias(*SrcIdx);
+          if (Alias) {
+            PendingDataflowSite Pds;
+            Pds.BlockOffset = Bd.Offset;
+            Pds.SiteOffset = Di.Offset;
+            Pds.SrcPair = *Alias;
+            Pds.IsSwap = false;
+            PendingDataflow.push_back(Pds);
+            continue;
+          }
           // Pair was dirtied intra-block without a complete chain;
           // dataflow facts are dead. Defer to Phase 5 PendingB
           // classification (matches against chainTerminators) which
