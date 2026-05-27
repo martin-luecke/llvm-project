@@ -200,12 +200,21 @@ ParsedReg RaiseContext::parseReg(MCRegister Reg, int MciOpIdx) const {
     Pr.RegKind = ParsedReg::SRC_SCC;
     Pr.Width = 1;
     return Pr;
+  // SRC_FLAT_SCRATCH_BASE_LO / _HI are read-only inline-source aliases
+  // for the FLAT_SCR_LO / FLAT_SCR_HI architectural registers. Route
+  // them through the same FLAT_SCR kind so readOp32 / readOp64 can
+  // materialise the value from the reg-file alloca.
+  case AMDGPU::SRC_FLAT_SCRATCH_BASE_LO:
+  case AMDGPU::SRC_FLAT_SCRATCH_BASE_HI:
+    Pr.RegKind = ParsedReg::FLAT_SCR;
+    Pr.Width = Width;
+    return Pr;
   // Aperture / runtime-defined source registers: SRC_SHARED_BASE /
-  // _LIMIT, SRC_PRIVATE_BASE / _LIMIT, SRC_FLAT_SCRATCH_BASE_LO /
-  // _HI, SRC_POPS_EXITING_WAVE_ID. Their values are set per-queue by
-  // the firmware and have no compile-time-knowable IR encoding, so
-  // we cannot lower them principledly. Classify as OTHER so parseReg
-  // does not crash; readOp32 / readOp64 will route OTHER through
+  // _LIMIT, SRC_PRIVATE_BASE / _LIMIT, SRC_POPS_EXITING_WAVE_ID.
+  // Their values are set per-queue by the firmware and have no
+  // compile-time-knowable IR encoding, so we cannot lower them
+  // principledly. Classify as OTHER so parseReg does not crash;
+  // readOp32 / readOp64 will route OTHER through
   // `recordReadFailure(unsupportedShape)` and the per-instruction
   // dispatch loop in raiser.cpp will surface it as a clean
   // unsupported-shape failure rather than a SIGABRT.
@@ -214,8 +223,6 @@ ParsedReg RaiseContext::parseReg(MCRegister Reg, int MciOpIdx) const {
   case AMDGPU::SRC_PRIVATE_BASE_LO:
   case AMDGPU::SRC_PRIVATE_LIMIT_LO:
   case AMDGPU::SRC_POPS_EXITING_WAVE_ID:
-  case AMDGPU::SRC_FLAT_SCRATCH_BASE_LO:
-  case AMDGPU::SRC_FLAT_SCRATCH_BASE_HI:
     Pr.RegKind = ParsedReg::OTHER;
     Pr.Width = Width;
     return Pr;
@@ -328,10 +335,10 @@ Value *RaiseContext::readOp32(const DecodedInst &Di, unsigned OpIdx) {
       return ConstantInt::get(I32Ty, 0);
     // OTHER is the parser's "I recognised the register but cannot
     // model it" channel, used today for runtime-defined aperture
-    // registers (SRC_SHARED_BASE / SRC_FLAT_SCRATCH_BASE_LO etc.,
-    // see parseReg's switch). Surface a clean unsupported-shape
-    // failure on the dispatch loop and return undef so we don't
-    // crash mid-handler -- the next instruction-boundary check in
+    // registers (SRC_SHARED_BASE / SRC_PRIVATE_BASE etc., see
+    // parseReg's switch). Surface a clean unsupported-shape failure
+    // on the dispatch loop and return undef so we don't crash
+    // mid-handler -- the next instruction-boundary check in
     // raiser.cpp will abort the kernel raise.
     if (Pr.RegKind == ParsedReg::OTHER) {
       recordReadFailure(RaiseFailure::unsupportedShape(
