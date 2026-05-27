@@ -364,18 +364,27 @@ AMDGPULowerMemoryModel pass learns it.
 
 ### 5.4 Standalone cache operations
 
-These SemOps do not yet exist. Adding them is the first real ISA
-divergence handled at the sync-translation level:
+Standalone cache ops are lifted to an LLVM `fence` rather than to a
+fixed per-target intrinsic; `SIMemoryLegalizer` re-emits the cache
+control appropriate to whatever target the raise writes to
+(`BUFFER_INV` / `BUFFER_WBL2` on gfx9.x, `global_inv` / `global_wb` on
+gfx12). This keeps the handler target-independent and lets the memory
+model -- not the raiser -- decide what each scope means on the target.
 
-| New SemOp | gfx12 source | gfx950 lowering |
+| SemOp | gfx12 source | lifted IR |
 |---|---|---|
-| `GLOBAL_INV` | `global_inv scope` | `call void @llvm.amdgcn.buffer.wbinvl1()` for CU/DEV; refuse SYS |
-| `GLOBAL_WB` | `global_wb scope` | `call void @llvm.amdgcn.buffer.wbl2()` for DEV |
-| `GLOBAL_WBINV` | `global_wbinv scope` | composition of the two |
-| `BUFFER_INV` | `buffer_inv scope` | same as `GLOBAL_INV` on gfx950 (unified L1) |
+| `GLOBAL_INV` | `global_inv scope` | `fence acquire` |
+| `GLOBAL_WB` | `global_wb scope` | `fence release` |
+| `GLOBAL_WBINV` | `global_wbinv scope` | `fence acq_rel` |
 
-If the source's `scope` is not representable with the target's
-intrinsics (e.g., gfx950 has no per-XCD cache op), refuse.
+The CPol `scope` bits select the fence syncscope: `SYS` -> system
+(unscoped), `DEV` -> `"agent"`, `SE` -> `"cluster"`, `CU` ->
+`"workgroup"`. Because every scope maps to a representable syncscope,
+no refusal is needed; on a target with no exact analog (e.g. `SE`
+"cluster" on a cluster-less gfx9.x) `SIMemoryLegalizer` widens to the
+nearest stronger scope, which is conservatively correct for a cache
+invalidate/writeback. `BUFFER_INV` follows the same `fence` lowering
+once it is added.
 
 Most Triton/Gluon kernels never emit standalone cache ops -- the
 AMDGPULowerMemoryModel pass derives them from atomic ordering+scope.
@@ -424,8 +433,8 @@ for each decoded instruction:
     if scope is unrepresentable: refuse
     emit AtomicRMW with tags
   if sop is GLOBAL_{INV,WB,WBINV} / BUFFER_INV:
-    map to target intrinsic if supported
-    else: refuse
+    emit fence (INV->acquire, WB->release, WBINV->acq_rel)
+    with syncscope from the CPol scope bits
   if sop is cluster barrier:
     if targetIsa.hasClusterBarriers:
       emit matching intrinsic

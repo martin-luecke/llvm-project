@@ -1332,6 +1332,11 @@ static const Entry kCanonTable[] = {
     E(GLOBAL_PREFETCH_B8_SADDR, GLOBAL_PREFETCH_B8),
     E(FLAT_PREFETCH_B8,         FLAT_PREFETCH_B8),
     E(FLAT_PREFETCH_B8_SADDR,   FLAT_PREFETCH_B8),
+
+    // gfx12+ GLOBAL cache control; `_gfx12*` MC reals collapse onto the pseudo.
+    E(GLOBAL_INV,   GLOBAL_INV),
+    E(GLOBAL_WB,    GLOBAL_WB),
+    E(GLOBAL_WBINV, GLOBAL_WBINV),
 };
 
 #undef SMEM3

@@ -9,6 +9,9 @@
 #include "flat-addr.h"
 #include "handlers.h"
 
+#include "MCTargetDesc/AMDGPUMCTargetDesc.h"
+#include "SIDefines.h"
+#include "Utils/AMDGPUBaseInfo.h"
 #include "canonical-op.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Twine.h"
@@ -18,7 +21,9 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/AMDHSAKernelDescriptor.h"
+#include "llvm/Support/AtomicOrdering.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -220,6 +225,51 @@ HandlerResult handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
   HandlerResult Hr;
   StringRef Mn(Di.Mnemonic);
   CanonicalOp Sop = Di.CanonOp;
+
+  // gfx12+ GLOBAL cache control: lift to `fence`; SIMemoryLegalizer
+  // re-emits the target-appropriate cache control.
+  if (Sop == CanonicalOp::GLOBAL_INV || Sop == CanonicalOp::GLOBAL_WB ||
+      Sop == CanonicalOp::GLOBAL_WBINV) {
+    // Default to system scope: if the cpol operand is missing or not an
+    // immediate, the conservative (broadest) fence is the safe fallback --
+    // CPol::SCOPE_CU is bit pattern 0, so it must not double as the
+    // "no scope read" value.
+    int CpolIdx = AMDGPU::getNamedOperandIdx(Di.Inst.getOpcode(),
+                                             AMDGPU::OpName::cpol);
+    SyncScope::ID SSID = SyncScope::System;
+    if (CpolIdx >= 0 && Di.isImm(static_cast<unsigned>(CpolIdx))) {
+      unsigned Scope =
+          static_cast<unsigned>(Di.getImm(static_cast<unsigned>(CpolIdx))) &
+          AMDGPU::CPol::SCOPE;
+      switch (Scope) {
+      case AMDGPU::CPol::SCOPE_SYS:
+        SSID = SyncScope::System;
+        break;
+      case AMDGPU::CPol::SCOPE_DEV:
+        SSID = Ctx.C.getOrInsertSyncScopeID("agent");
+        break;
+      case AMDGPU::CPol::SCOPE_SE:
+        SSID = Ctx.C.getOrInsertSyncScopeID("cluster");
+        break;
+      case AMDGPU::CPol::SCOPE_CU:
+        // No CU-scope LLVM syncscope exists; "workgroup" is the narrowest
+        // representable scope. It is weaker than the agent/cluster/system
+        // scopes above, and SIMemoryLegalizer may demote or elide it on the
+        // target -- faithful to the source's CU-local intent rather than a
+        // strengthening.
+        SSID = Ctx.C.getOrInsertSyncScopeID("workgroup");
+        break;
+      }
+    }
+    AtomicOrdering Ordering = AtomicOrdering::AcquireRelease;
+    if (Sop == CanonicalOp::GLOBAL_INV)
+      Ordering = AtomicOrdering::Acquire;
+    else if (Sop == CanonicalOp::GLOBAL_WB)
+      Ordering = AtomicOrdering::Release;
+    Ctx.B.CreateFence(Ordering, SSID);
+    Hr.Handled = true;
+    return Hr;
+  }
 
   // ---------------------------------------------------------------------
   // FLAT scratch family (`scratch_load_*`, `scratch_store_*`).

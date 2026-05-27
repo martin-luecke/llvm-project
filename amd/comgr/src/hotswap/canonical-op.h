@@ -1311,6 +1311,12 @@ enum class CanonicalOp : uint16_t {
   // above.
   FLAT_PREFETCH_B8,
 
+  // -- gfx12+ GLOBAL cache control --
+  // CPol-only opcodes lifted to `fence` IR.
+  GLOBAL_INV,
+  GLOBAL_WB,
+  GLOBAL_WBINV,
+
   // -- AGPR --
   V_ACCVGPR_READ_B32, V_ACCVGPR_WRITE_B32,
 
