@@ -440,6 +440,26 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   for (uint64_t Addr : SetpcAnalysis.ExtraBlockStarts)
     BlockStarts.insert(Addr);
 
+  // Prune block starts outside the decoded instruction range. Chain
+  // targets from s_swap_pc_i64 / s_set_pc_i64 may legitimately point
+  // into subroutine regions before (or after) the kernel's own text.
+  // Those addresses are meaningful for the setpc classification but
+  // must not become BasicBlocks -- the raiser only lowers instructions
+  // in [kernelOffset, lastInst], and out-of-range BBs would precede
+  // the entry block, violating LLVM's "entry block has no predecessors"
+  // rule.
+  if (!Insts.empty()) {
+    uint64_t Lo = Insts.front().Offset;
+    uint64_t Hi = Insts.back().Offset + Insts.back().Size;
+    auto It = BlockStarts.begin();
+    while (It != BlockStarts.end()) {
+      if (*It < Lo || *It > Hi)
+        It = BlockStarts.erase(It);
+      else
+        ++It;
+    }
+  }
+
   Result.TotalCount = static_cast<int>(Insts.size());
 
   {
