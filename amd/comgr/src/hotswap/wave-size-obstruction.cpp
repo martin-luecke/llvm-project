@@ -307,6 +307,8 @@ public:
     }
   }
 
+  void clearAll() { TaintedRegs.clear(); }
+
   void updateAfterInstruction(const DecodedInst &Di, bool ExplicitDefsTainted,
                               bool VccTainted, bool ExecTainted,
                               bool SccTainted) {
@@ -403,7 +405,8 @@ bool isSaveExecB32(CanonicalOp Sop) {
 
 SmallVector<LanePredicatedExecSite>
 findLanePredicatedExecSites(ArrayRef<DecodedInst> Insts,
-                            const MCRegisterInfo &MRI) {
+                            const MCRegisterInfo &MRI,
+                            const MCInstrInfo &MCII) {
   LaneIdProvenanceTracker Tracker(MRI);
   SmallVector<LanePredicatedExecSite> Sites;
 
@@ -417,6 +420,10 @@ findLanePredicatedExecSites(ArrayRef<DecodedInst> Insts,
     const bool OldExecTainted = Tracker.execTainted();
 
     bool ExplicitDefsTainted = SourceTainted;
+    // A tainted address does not taint the loaded value: under modulo
+    // replication each target lane reads the same cell as its source lane.
+    if (ExplicitDefsTainted && MCII.get(Di.Inst.getOpcode()).mayLoad())
+      ExplicitDefsTainted = false;
     bool VccTainted = SourceTainted;
     bool ExecTainted = SourceTainted || OldExecTainted;
     bool SccTainted = SourceTainted;
@@ -454,6 +461,14 @@ findLanePredicatedExecSites(ArrayRef<DecodedInst> Insts,
 
     Tracker.updateAfterInstruction(Di, ExplicitDefsTainted, VccTainted,
                                    ExecTainted, SccTainted);
+    // The linear walk cannot model control-flow joins. Reset all
+    // register taint at branch instructions so that provenance from one
+    // basic block does not leak into unrelated successors. This makes
+    // the analysis per-basic-block and prevents false positives from
+    // address-computation taint (e.g. v_mbcnt used for scratch
+    // addressing) bleeding across the entire kernel.
+    if (Di.IsBranch)
+      Tracker.clearAll();
   }
 
   return Sites;
@@ -579,7 +594,7 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
   // not by adding `raw.contains(...)` substring tests.
   bool HaveWmma = false;
   SmallVector<LanePredicatedExecSite> LanePredicatedExecSites =
-      findLanePredicatedExecSites(Insts, MRI);
+      findLanePredicatedExecSites(Insts, MRI, *Mc.InstrInfo);
   // Deferred TtmpWaveIdLeak site emission. The canonical shape --
   // `s_bfe_u32 sDST, ttmp8, 0x50019` -- has a principled rescue in
   // `handle-sop2.cpp`'s `S_BFE_U32` pattern-lift, which emits
