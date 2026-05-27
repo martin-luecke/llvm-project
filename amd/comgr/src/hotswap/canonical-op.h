@@ -788,11 +788,6 @@ enum class CanonicalOp : uint16_t {
   FLAT_ATOMIC_SMIN, FLAT_ATOMIC_SMAX, FLAT_ATOMIC_UMIN, FLAT_ATOMIC_UMAX,
   FLAT_ATOMIC_SWAP, FLAT_ATOMIC_CMPSWAP,
   FLAT_ATOMIC_ADD_F32,
-  // 64-bit FP atomics. The CanonicalOp name uses the gfx1250 `_NUM_`
-  // form to make the IEEE 754-2019 minimumNumber/maximumNumber
-  // semantic explicit; the LLVM TableGen pseudo is the legacy
-  // `FLAT_ATOMIC_{MIN,MAX}_F64` (no `_NUM_`) shared with the gfx942
-  // raw `<`/`>` HW op (the handler disambiguates via mnemonic).
   FLAT_ATOMIC_ADD_F64, FLAT_ATOMIC_MIN_NUM_F64, FLAT_ATOMIC_MAX_NUM_F64,
 
   // -- GLOBAL atomics --
@@ -907,10 +902,6 @@ enum class CanonicalOp : uint16_t {
   DS_SWIZZLE_B32,
 
   // -- DS atomics --
-  // LDS 64-bit FP add. Native on gfx90a/gfx940-family. Lifted to a
-  // plain `atomicrmw fadd double` in addrspace(3); AtomicExpandPass
-  // re-emits the native ds_add_f64 on the same target or falls back
-  // to a ds_cmpst_b64 CAS loop on subtargets that lack it.
   DS_ADD_F64,
 
   // -- MUBUF --
@@ -947,7 +938,11 @@ enum class CanonicalOp : uint16_t {
   BUFFER_ATOMIC_SWAP, BUFFER_ATOMIC_CMPSWAP,
   BUFFER_ATOMIC_ADD_F32,
   BUFFER_ATOMIC_PK_ADD_BF16, BUFFER_ATOMIC_PK_ADD_F16,
-  BUFFER_ATOMIC_ADD_F64, BUFFER_ATOMIC_MIN_NUM_F64, BUFFER_ATOMIC_MAX_NUM_F64,
+  BUFFER_ATOMIC_ADD_F64,
+  // gfx942 raw `<`/`>` comparator form (ISA manual 12.15.3 op 80/81).
+  BUFFER_ATOMIC_MIN_F64, BUFFER_ATOMIC_MAX_F64,
+  // gfx12 IEEE 754-2019 minimumNumber/maximumNumber form.
+  BUFFER_ATOMIC_MIN_NUM_F64, BUFFER_ATOMIC_MAX_NUM_F64,
 
   // -- MFMA --
   // gfx950 scaled F8F6F4 variants share a per-shape intrinsic but take 9

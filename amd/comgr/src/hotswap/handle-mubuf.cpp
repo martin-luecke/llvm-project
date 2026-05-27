@@ -335,19 +335,25 @@ HandlerResult handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
     }
 
     const bool IsF64 = Sop == CanonicalOp::BUFFER_ATOMIC_ADD_F64 ||
+                       Sop == CanonicalOp::BUFFER_ATOMIC_MIN_F64 ||
+                       Sop == CanonicalOp::BUFFER_ATOMIC_MAX_F64 ||
                        Sop == CanonicalOp::BUFFER_ATOMIC_MIN_NUM_F64 ||
                        Sop == CanonicalOp::BUFFER_ATOMIC_MAX_NUM_F64;
     Value *Data = IsF64 ? Ctx.Regs.readReg64(Ctx.B, Mbuf.StData)
                         : Ctx.Regs.readReg32(Ctx.B, Mbuf.StData);
 
-    // BUFFER_ATOMIC_{MIN,MAX}_F64: CAS loop. gfx942 (`*_f64`) uses
-    // raw `<`/`>`; gfx1250 (`*_num_f64`) uses IEEE 754-2019
-    // minimumNumber/maximumNumber. One LLVM pseudo covers both;
-    // disambiguate via the assembled mnemonic.
-    if (Sop == CanonicalOp::BUFFER_ATOMIC_MIN_NUM_F64 ||
+    // BUFFER_ATOMIC_{MIN,MAX}{,_NUM}_F64: CAS loop. The canonical op
+    // distinguishes gfx942 raw `<`/`>` from gfx12 IEEE 754-2019
+    // minimumNumber/maximumNumber; pick the comparator accordingly.
+    if (Sop == CanonicalOp::BUFFER_ATOMIC_MIN_F64 ||
+        Sop == CanonicalOp::BUFFER_ATOMIC_MAX_F64 ||
+        Sop == CanonicalOp::BUFFER_ATOMIC_MIN_NUM_F64 ||
         Sop == CanonicalOp::BUFFER_ATOMIC_MAX_NUM_F64) {
-      const bool IsMax = Sop == CanonicalOp::BUFFER_ATOMIC_MAX_NUM_F64;
-      const bool IsIeeeNum = Mn.contains("_num_");
+      const bool IsMax = Sop == CanonicalOp::BUFFER_ATOMIC_MAX_F64 ||
+                         Sop == CanonicalOp::BUFFER_ATOMIC_MAX_NUM_F64;
+      const bool IsIeeeNum =
+          Sop == CanonicalOp::BUFFER_ATOMIC_MIN_NUM_F64 ||
+          Sop == CanonicalOp::BUFFER_ATOMIC_MAX_NUM_F64;
       Value *SrcF64 = Ctx.B.CreateBitCast(Data, Ctx.F64Ty,
                                           "fp64_minmax_src");
       Function *BufLd = Intrinsic::getOrInsertDeclaration(
@@ -459,7 +465,7 @@ HandlerResult handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
       AtomicTy = Ctx.F64Ty;
       IsFp = true;
       break;
-    // BUFFER_ATOMIC_{MIN,MAX}_NUM_F64 handled by the CAS-loop block
+    // BUFFER_ATOMIC_{MIN,MAX}{,_NUM}_F64 handled by the CAS-loop block
     // above the switch; they never reach this default.
     default:
       llvm::errs() << "transpiler: Unsupported buffer atomic: " << Mn << "\n";

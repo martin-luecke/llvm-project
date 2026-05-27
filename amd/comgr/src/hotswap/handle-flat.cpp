@@ -1313,6 +1313,14 @@ HandlerResult handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     const bool IsF64 = Sop == CanonicalOp::FLAT_ATOMIC_ADD_F64 ||
                        Sop == CanonicalOp::FLAT_ATOMIC_MIN_NUM_F64 ||
                        Sop == CanonicalOp::FLAT_ATOMIC_MAX_NUM_F64;
+    const bool IsNumMinMaxF64 = Sop == CanonicalOp::FLAT_ATOMIC_MIN_NUM_F64 ||
+                                Sop == CanonicalOp::FLAT_ATOMIC_MAX_NUM_F64;
+    if (IsNumMinMaxF64 && !Ctx.Isa.HasIeeeNumMinMaxAtomics) {
+      Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+          Di, "FLAT", "f64 atomic min/max from a pre-gfx12 source uses raw "
+                      "compare semantics, not minimumNumber");
+      return Hr;
+    }
     if (IsSaddr) {
       FlatAddr Fa = decodeGlobalStoreAddr(Ctx, Di, Op,
                                            /*elemBytes=*/IsF64 ? 8 : 4,
@@ -1375,8 +1383,7 @@ HandlerResult handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
       AtomicOp = AtomicRMWInst::FAdd; IsFp = true;
       Data = Ctx.B.CreateBitCast(Data, Ctx.F32Ty); AtomicTy = Ctx.F32Ty; break;
     // MIN/MAX_F64 use `fminimumnum`/`fmaximumnum` (IEEE 754-2019);
-    // bit-exact for gfx1250 `_min/_max_num_f64`, over-specifies for
-    // the gfx942 raw `<`/`>` op which has no LLVM IR equivalent.
+    // bit-exact for gfx1250 `_min/_max_num_f64`.
     case CanonicalOp::FLAT_ATOMIC_ADD_F64:
       AtomicOp = AtomicRMWInst::FAdd; IsFp = true;
       Data = Ctx.B.CreateBitCast(Data, Ctx.F64Ty); AtomicTy = Ctx.F64Ty; break;
@@ -1458,6 +1465,14 @@ HandlerResult handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     const bool IsF64 = Sop == CanonicalOp::GLOBAL_ATOMIC_ADD_F64 ||
                        Sop == CanonicalOp::GLOBAL_ATOMIC_MIN_NUM_F64 ||
                        Sop == CanonicalOp::GLOBAL_ATOMIC_MAX_NUM_F64;
+    const bool IsNumMinMaxF64 = Sop == CanonicalOp::GLOBAL_ATOMIC_MIN_NUM_F64 ||
+                                Sop == CanonicalOp::GLOBAL_ATOMIC_MAX_NUM_F64;
+    if (IsNumMinMaxF64 && !Ctx.Isa.HasIeeeNumMinMaxAtomics) {
+      Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+          Di, "FLAT", "f64 atomic min/max from a pre-gfx12 source uses raw "
+                      "compare semantics, not minimumNumber");
+      return Hr;
+    }
     FlatAddr Fa = decodeGlobalStoreAddr(Ctx, Di, Op,
                                          /*elemBytes=*/IsF64 ? 8 : 4,
                                          "GLOBAL_ATOMIC");
