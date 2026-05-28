@@ -816,9 +816,14 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
         BasicBlock::Create(C, "sub_0x" + utohexstr(Addr), F);
     OffsetToBb[Addr] = Bb;
   }
-  BasicBlock *EntryBb = UseThreadLoop
-                            ? BasicBlock::Create(C, "entry", F, FirstBodyBb)
-                            : OffsetToBb[KernelOffset];
+  BasicBlock *EntryBb;
+  if (UseThreadLoop) {
+    EntryBb = BasicBlock::Create(C, "entry", F, FirstBodyBb);
+  } else if (!ExtraBlockStarts.empty()) {
+    EntryBb = BasicBlock::Create(C, "entry", F, FirstBodyBb);
+  } else {
+    EntryBb = OffsetToBb[KernelOffset];
+  }
 
   // ==== Phase 4: Init entry registers ====
   IRBuilder<> B(EntryBb);
@@ -1121,6 +1126,11 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
 
     B.SetInsertPoint(DoneBb);
     B.CreateRetVoid();
+  }
+
+  if (!ExtraBlockStarts.empty() && !UseThreadLoop) {
+    B.CreateBr(OffsetToBb[KernelOffset]);
+    B.SetInsertPoint(OffsetToBb[Insts.front().Offset]);
   }
 
   int RaisedCount = 0;
