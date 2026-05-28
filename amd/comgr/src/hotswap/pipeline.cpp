@@ -373,8 +373,11 @@ static bool raiseAndCompileKernel(const TextSection &text,
   std::string llcBin = std::string(LLVM_TOOLS_DIR) + "/llc";
   std::string mcpuLlc = ("-mcpu=" + targetISA).str();
   auto llcStart = timingStart(options.CollectTimings);
-  if (runTool(llcBin, {llcBin, "-march=amdgcn", mcpuLlc, "-filetype=asm", "-o",
-                       asmPath, irPath}) != 0) {
+  std::string optLevel = "-O2";
+  if (const char *env = std::getenv("HSA_HOTSWAP_LLC_OPT_LEVEL"))
+    optLevel = env;
+  if (runTool(llcBin, {llcBin, "-march=amdgcn", mcpuLlc, optLevel,
+                       "-filetype=asm", "-o", asmPath, irPath}) != 0) {
     result.Timings.llcSeconds += timingElapsed(options.CollectTimings, llcStart);
     llvm::errs() << "transpiler: llc failed for '" << kernelName << "'\n";
     return false;
