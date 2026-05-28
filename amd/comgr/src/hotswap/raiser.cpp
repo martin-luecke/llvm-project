@@ -1130,13 +1130,22 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
 
   if (!ExtraBlockStarts.empty() && !UseThreadLoop) {
     B.CreateBr(OffsetToBb[KernelOffset]);
-    B.SetInsertPoint(OffsetToBb[Insts.front().Offset]);
+    for (uint64_t Addr : BlockStarts) {
+      if (Addr >= KernelOffset)
+        continue;
+      BasicBlock *SubBb = OffsetToBb[Addr];
+      if (SubBb->empty())
+        IRBuilder<>(SubBb).CreateUnreachable();
+    }
   }
 
   int RaisedCount = 0;
 
   for (size_t InstIdx = 0; InstIdx < Insts.size(); ++InstIdx) {
     const DecodedInst &Di = Insts[InstIdx];
+
+    if (!ExtraBlockStarts.empty() && Di.Offset < KernelOffset)
+      continue;
 
     // If a terminator ended the recovered CFG path and the next decoded
     // instruction is not a known block leader, that instruction is unreachable
