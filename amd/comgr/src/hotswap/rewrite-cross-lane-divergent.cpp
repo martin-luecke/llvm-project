@@ -280,6 +280,10 @@ bool isIntrinsicVGPRSafePropagator(Intrinsic::ID Id) {
   case Intrinsic::bitreverse:
   case Intrinsic::fshl:
   case Intrinsic::fshr:
+  case Intrinsic::sadd_sat:
+  case Intrinsic::uadd_sat:
+  case Intrinsic::ssub_sat:
+  case Intrinsic::usub_sat:
     return true;
   default:
     return false;
