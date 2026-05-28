@@ -1199,15 +1199,16 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Hr.Handled = true;
     return Hr;
   }
+  // Same NUM / maximumnum contract as V_MAX_F32 below (v_max_num_f64 / v_max_f64).
   if (Sop == CanonicalOp::V_MAX_NUM_F64 || Sop == CanonicalOp::V_MIN_NUM_F64) {
     Value *S0 = Op.src64(0), *S1 = Op.src64(1);
     auto *F64Ty = Type::getDoubleTy(Ctx.C);
     S0 = Ctx.B.CreateBitCast(S0, F64Ty); S1 = Ctx.B.CreateBitCast(S1, F64Ty);
     Intrinsic::ID Id =
-        Sop == CanonicalOp::V_MAX_NUM_F64 ? Intrinsic::maxnum : Intrinsic::minnum;
+        Sop == CanonicalOp::V_MAX_NUM_F64 ? Intrinsic::maximumnum : Intrinsic::minimumnum;
     Function *Fn = Intrinsic::getOrInsertDeclaration(&Ctx.M, Id, {F64Ty});
     const char *Name =
-        Sop == CanonicalOp::V_MAX_NUM_F64 ? "vmaxnum_f64" : "vminnum_f64";
+        Sop == CanonicalOp::V_MAX_NUM_F64 ? "vmax_num_f64" : "vmin_num_f64";
     Ctx.writeReg64(Op.dst(),
                    Ctx.B.CreateBitCast(Ctx.B.CreateCall(Fn, {S0, S1}, Name),
                                        Ctx.I64Ty));
@@ -1371,12 +1372,19 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Hr.Handled = true;
     return Hr;
   }
+  // Vector IEEE-754-2019 maximumNumber/minimumNumber. LLVM's canonical pseudo
+  // is `V_{MAX,MIN}_F32`; gfx12+ manuals name the real mnemonics
+  // `v_{max,min}_num_f32`, with `v_{max,min}_f32` accepted as compatibility
+  // aliases (same contract as `S_{MAX,MIN}_NUM_F32` in handle-sop2.cpp).
+  // LLVM's `maximumnum` / `minimumnum` intrinsics model that NUM family; the
+  // NaN-propagating `maximum` / `minimum` intrinsics are for V_MAXIMUM_F32 /
+  // V_MINIMUM_F32 and must not be used here.
   if (Sop == CanonicalOp::V_MAX_F32 || Sop == CanonicalOp::V_MAX_NUM_F32) {
     Value *S0 = Op.srcF(0), *S1 = Op.srcF(1);
     if (S0->getType() != Ctx.F32Ty) S0 = Ctx.B.CreateBitCast(S0, Ctx.F32Ty);
     if (S1->getType() != Ctx.F32Ty) S1 = Ctx.B.CreateBitCast(S1, Ctx.F32Ty);
-    Function *MaxFn = Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::maxnum, {Ctx.F32Ty});
-    Ctx.writeReg32(Op.dst(), Ctx.B.CreateBitCast(Ctx.B.CreateCall(MaxFn, {S0, S1}, "fmax"), Ctx.I32Ty));
+    Function *MaxFn = Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::maximumnum, {Ctx.F32Ty});
+    Ctx.writeReg32(Op.dst(), Ctx.B.CreateBitCast(Ctx.B.CreateCall(MaxFn, {S0, S1}, "fmax_num"), Ctx.I32Ty));
     Hr.Handled = true;
     return Hr;
   }
@@ -1384,8 +1392,8 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Value *S0 = Op.srcF(0), *S1 = Op.srcF(1);
     if (S0->getType() != Ctx.F32Ty) S0 = Ctx.B.CreateBitCast(S0, Ctx.F32Ty);
     if (S1->getType() != Ctx.F32Ty) S1 = Ctx.B.CreateBitCast(S1, Ctx.F32Ty);
-    Function *MinFn = Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::minnum, {Ctx.F32Ty});
-    Ctx.writeReg32(Op.dst(), Ctx.B.CreateBitCast(Ctx.B.CreateCall(MinFn, {S0, S1}, "fmin"), Ctx.I32Ty));
+    Function *MinFn = Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::minimumnum, {Ctx.F32Ty});
+    Ctx.writeReg32(Op.dst(), Ctx.B.CreateBitCast(Ctx.B.CreateCall(MinFn, {S0, S1}, "fmin_num"), Ctx.I32Ty));
     Hr.Handled = true;
     return Hr;
   }
@@ -2044,20 +2052,21 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Hr.Handled = true;
     return Hr;
   }
+  // Ternary IEEE-754-2019 maximumNumber (v_max3_num_f32; v_max3_f32 alias).
   if (Sop == CanonicalOp::V_MAX3_F32 || Sop == CanonicalOp::V_MAX3_NUM_F32) {
     Value *S0 = Op.srcF(0), *S1 = Op.srcF(1), *S2 = Op.srcF(2);
     if (S0->getType() != Ctx.F32Ty) S0 = Ctx.B.CreateBitCast(S0, Ctx.F32Ty);
     if (S1->getType() != Ctx.F32Ty) S1 = Ctx.B.CreateBitCast(S1, Ctx.F32Ty);
     if (S2->getType() != Ctx.F32Ty) S2 = Ctx.B.CreateBitCast(S2, Ctx.F32Ty);
-    Function *MaxFn = Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::maxnum, {Ctx.F32Ty});
+    Function *MaxFn = Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::maximumnum, {Ctx.F32Ty});
     Value *M01 = Ctx.B.CreateCall(MaxFn, {S0, S1});
-    Ctx.writeReg32(Op.dst(), Ctx.B.CreateBitCast(Ctx.B.CreateCall(MaxFn, {M01, S2}, "max3"), Ctx.I32Ty));
+    Ctx.writeReg32(Op.dst(), Ctx.B.CreateBitCast(Ctx.B.CreateCall(MaxFn, {M01, S2}, "max3_num"), Ctx.I32Ty));
     Hr.Handled = true;
     return Hr;
   }
   // IEEE-754 2019 ternary maximum: NaN-propagating 3-source reduction.
   // Same shape as V_MAX3_F32 above but uses Intrinsic::maximum (NaN-
-  // propagating) instead of Intrinsic::maxnum (NaN-pruning), matching
+  // propagating) instead of Intrinsic::maximumnum (NUM), matching
   // the gfx12 v_maximum3_f32 / v_minimum3_f32 hardware semantics.
   if (Sop == CanonicalOp::V_MAXIMUM3_F32 ||
       Sop == CanonicalOp::V_MINIMUM3_F32) {
@@ -2198,7 +2207,7 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
 
-  // F16 .NUM clamp pair: NaN-pruning minnum/maxnum semantics with full
+  // F16 .NUM clamp pair: IEEE minimumNumber/maximumNumber with full
   // source/destination op_sel handling.
   if (Sop == CanonicalOp::V_MINMAX_NUM_F16 ||
       Sop == CanonicalOp::V_MAXMIN_NUM_F16) {
@@ -2218,9 +2227,9 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     }
 
     Function *MaxFn = Intrinsic::getOrInsertDeclaration(
-        &Ctx.M, Intrinsic::maxnum, {Ctx.F16Ty});
+        &Ctx.M, Intrinsic::maximumnum, {Ctx.F16Ty});
     Function *MinFn = Intrinsic::getOrInsertDeclaration(
-        &Ctx.M, Intrinsic::minnum, {Ctx.F16Ty});
+        &Ctx.M, Intrinsic::minimumnum, {Ctx.F16Ty});
     Function *InnerFn = MinThenMax ? MinFn : MaxFn;
     Function *OuterFn = MinThenMax ? MaxFn : MinFn;
     Value *Inner = Ctx.B.CreateCall(InnerFn, {Srcs[0], Srcs[1]},
@@ -2233,9 +2242,9 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Hr.Handled = true;
     return Hr;
   }
-  // VOP3 .NUM clamp pair: NaN-pruning minnum/maxnum semantics.
-  //   v_minmax_num_f32: maxnum(minnum(S0, S1), S2)
-  //   v_maxmin_num_f32: minnum(maxnum(S0, S1), S2)
+  // VOP3 .NUM clamp pair: IEEE minimumNumber/maximumNumber semantics.
+  //   v_minmax_num_f32: maximumnum(minimumnum(S0, S1), S2)
+  //   v_maxmin_num_f32: minimumnum(maximumnum(S0, S1), S2)
   if (Sop == CanonicalOp::V_MINMAX_NUM_F32 ||
       Sop == CanonicalOp::V_MAXMIN_NUM_F32) {
     const bool MinThenMax = Sop == CanonicalOp::V_MINMAX_NUM_F32;
@@ -2248,9 +2257,9 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     if (S1->getType() != Ctx.F32Ty) S1 = Ctx.B.CreateBitCast(S1, Ctx.F32Ty);
     if (S2->getType() != Ctx.F32Ty) S2 = Ctx.B.CreateBitCast(S2, Ctx.F32Ty);
     Function *MaxFn = Intrinsic::getOrInsertDeclaration(
-        &Ctx.M, Intrinsic::maxnum, {Ctx.F32Ty});
+        &Ctx.M, Intrinsic::maximumnum, {Ctx.F32Ty});
     Function *MinFn = Intrinsic::getOrInsertDeclaration(
-        &Ctx.M, Intrinsic::minnum, {Ctx.F32Ty});
+        &Ctx.M, Intrinsic::minimumnum, {Ctx.F32Ty});
     Function *InnerFn = MinThenMax ? MinFn : MaxFn;
     Function *OuterFn = MinThenMax ? MaxFn : MinFn;
     const char *InnerName = MinThenMax ? "vminmax_inner" : "vmaxmin_inner";
