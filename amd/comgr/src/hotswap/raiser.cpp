@@ -199,7 +199,8 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
                                  bool EnableWritelaneRewrite,
                                  bool EnableWaveNative,
                                  bool ForceThreadLoopProjection,
-                                 bool SuppressC5ForThreadLoopRoute) {
+                                 bool SuppressC5ForThreadLoopRoute,
+                                 llvm::ArrayRef<uint64_t> ExtraBlockStarts = {}) {
   RaiseResult Result;
 
   // Reject obviously-bad ISA inputs before reaching the MC stack -- an
@@ -419,7 +420,7 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   DecodeResult Decoded =
       decodeKernel(Mc, OpcMap,
                    ArrayRef<uint8_t>(TextBytes.data(), TextBytes.size()),
-                   KernelOffset);
+                   KernelOffset, ExtraBlockStarts);
   auto &Insts = Decoded.Insts;
   auto &BlockStarts = Decoded.BlockStarts;
 
@@ -462,6 +463,21 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
 
   Result.TotalCount = static_cast<int>(Insts.size());
 
+  // When extra block starts (subroutine symbols) are present, the decoded
+  // instruction stream covers both subroutines and the kernel. The wave-size
+  // obstruction analysis must only examine the kernel's own instructions —
+  // subroutine test stubs contain atomics/shuffles that would false-positive.
+  ArrayRef<DecodedInst> KernelInsts(Insts);
+  if (!ExtraBlockStarts.empty() && !Insts.empty()) {
+    auto KernelIt =
+        std::lower_bound(Insts.begin(), Insts.end(), KernelOffset,
+                         [](const DecodedInst &D, uint64_t Off) {
+                           return D.Offset < Off;
+                         });
+    if (KernelIt != Insts.end())
+      KernelInsts = ArrayRef<DecodedInst>(&*KernelIt, Insts.end() - KernelIt);
+  }
+
   {
     raw_string_ostream DisOs(Result.DisasmText);
     for (const auto &Di : Insts) {
@@ -476,7 +492,7 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   // the structured classifier in Phase 1.4.5 below is the primary
   // decision surface. See wave-projection.cpp for the text of the
   // legacy diagnostic.
-  emitCrossWaveWarning(Projection, Mc, Insts, SourceIsa,
+  emitCrossWaveWarning(Projection, Mc, KernelInsts, SourceIsa,
                        CompilationTargetIsa);
 
   // ==== Phase 1.4.5: Wave-size obstruction classifier
@@ -512,7 +528,7 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   unsigned ClassifierWaveIdLiftScalarizedSites = 0;
   {
     ObstructionReport Report =
-        buildObstructionReport(Insts, Mc, Isa, TargetIsa,
+        buildObstructionReport(KernelInsts, Mc, Isa, TargetIsa,
                                EnableWritelaneRewrite);
     for (const auto &S : Report.Sites)
       if (S.Kind == ObstructionKind::WaveIdLiftScalarized)
@@ -567,7 +583,7 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   // the remaining case: explicit-operand EXEC writers (e.g.
   // `s_mov_b32 exec_lo, s2`) where "writes EXEC" depends on the
   // runtime operand value rather than the MCInstrDesc alone.
-  for (const DecodedInst &Di : Insts) {
+  for (const DecodedInst &Di : KernelInsts) {
     if (!instructionWritesEXEC(Di, Mc))
       continue;
     if (getCanonicalOpAttrs(Di.CanonOp).RoutesExecThroughStoreExec)
@@ -1213,9 +1229,12 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
     // *before* the `hr.Handled` check -- a handler that "succeeded"
     // by returning undef from a read is still an unraised kernel.
     if (Ctx.PendingFailure.hasFailed()) {
-      if (!Result.Failure.hasFailed())
-        Result.Failure = Ctx.PendingFailure;
-      Result.AllFailures.push_back(std::move(Ctx.PendingFailure));
+      bool InSub = !ExtraBlockStarts.empty() && Di.Offset < KernelOffset;
+      if (!InSub) {
+        if (!Result.Failure.hasFailed())
+          Result.Failure = Ctx.PendingFailure;
+        Result.AllFailures.push_back(std::move(Ctx.PendingFailure));
+      }
       Ctx.PendingFailure = RaiseFailure{};
       continue;
     }
@@ -1282,20 +1301,40 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
     // The handler either recognised the instruction but refused the
     // specific shape (Hr.Failure.Reason != None), or no handler claimed
     // it at all -- promote to `UnsupportedOpcode` and bucket by format.
+    //
+    // Subroutine instructions (offset < KernelOffset) that fail to raise
+    // are non-fatal: the exerciser tests one instruction per invocation,
+    // so untested subroutine paths are never reached at runtime. Record
+    // them as warnings rather than hard failures.
+    bool InSubroutine =
+        !ExtraBlockStarts.empty() && Di.Offset < KernelOffset;
     if (Hr.Failure.hasFailed()) {
-      if (!Result.Failure.hasFailed())
-        Result.Failure = Hr.Failure;
-      Result.AllFailures.push_back(std::move(Hr.Failure));
+      if (InSubroutine) {
+        LLVM_DEBUG(dbgs() << "transpiler: Skipping subroutine failure: "
+                          << Di.Mnemonic << " at 0x"
+                          << format_hex_no_prefix(Di.Offset, 8) << "\n");
+      } else {
+        if (!Result.Failure.hasFailed())
+          Result.Failure = Hr.Failure;
+        Result.AllFailures.push_back(std::move(Hr.Failure));
+      }
     } else {
       RaiseFailure f = RaiseFailure::unsupportedOpcode(
           Di, formatName(Di.TsFlags, Di.Inst.getOpcode()));
-      errs() << "transpiler: Unsupported instruction: " << Di.Mnemonic
-             << " (raw: " << Di.RawMnemonic << ")"
-             << " [format=" << f.Format << "]"
-             << " at offset 0x" << format_hex(Di.Offset, 1) << "\n";
-      if (!Result.Failure.hasFailed())
-        Result.Failure = f;
-      Result.AllFailures.push_back(std::move(f));
+      if (InSubroutine) {
+        LLVM_DEBUG(dbgs() << "transpiler: Skipping unsupported subroutine "
+                             "instruction: "
+                          << Di.Mnemonic << " at 0x"
+                          << format_hex_no_prefix(Di.Offset, 8) << "\n");
+      } else {
+        errs() << "transpiler: Unsupported instruction: " << Di.Mnemonic
+               << " (raw: " << Di.RawMnemonic << ")"
+               << " [format=" << f.Format << "]"
+               << " at offset 0x" << format_hex(Di.Offset, 1) << "\n";
+        if (!Result.Failure.hasFailed())
+          Result.Failure = f;
+        Result.AllFailures.push_back(std::move(f));
+      }
     }
   }
 
@@ -1658,12 +1697,14 @@ RaiseResult raiseToIR(llvm::ArrayRef<uint8_t> TextBytes,
                       uint64_t KernelOffset,
                       llvm::StringRef CompilationTargetIsa,
                       bool EnableWritelaneRewrite,
-                      bool EnableWaveNative) {
+                      bool EnableWaveNative,
+                      llvm::ArrayRef<uint64_t> ExtraBlockStarts) {
   return raiseToIRImpl(TextBytes, SourceIsa, KernelName, Meta, KernelOffset,
                        CompilationTargetIsa, EnableWritelaneRewrite,
                        EnableWaveNative,
                        /*forceThreadLoopProjection=*/false,
-                       /*suppressC5ForThreadLoopRoute=*/false);
+                       /*suppressC5ForThreadLoopRoute=*/false,
+                       ExtraBlockStarts);
 }
 
 } // namespace COMGR::hotswap

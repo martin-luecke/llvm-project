@@ -112,6 +112,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <cctype>
+#include <set>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -379,10 +380,30 @@ int main(int argc, char **argv) {
       return 1;
     }
     uint64_t kernelOffset = *kernelOffsetOrErr;
+    std::vector<uint64_t> extraStarts;
+    if (auto FuncOffsetsOrErr =
+            COMGR::hotswap::listFunctionSymbolOffsets(coData)) {
+      std::set<uint64_t> kernelOffsets;
+      kernelOffsets.insert(kernelOffset);
+      if (auto NamesOrErr = COMGR::hotswap::listKernelNames(coData)) {
+        for (const auto &Name : *NamesOrErr) {
+          if (auto OffOrErr =
+                  COMGR::hotswap::findKernelSymbolOffset(coData, Name))
+            kernelOffsets.insert(*OffOrErr);
+          else
+            llvm::consumeError(OffOrErr.takeError());
+        }
+      } else {
+        llvm::consumeError(NamesOrErr.takeError());
+      }
+      for (uint64_t Off : *FuncOffsetsOrErr)
+        if (!kernelOffsets.count(Off))
+          extraStarts.push_back(Off);
+    }
     auto raised = COMGR::hotswap::raiseToIR(text.Bytes, isa, target, meta,
                                         kernelOffset, targetIsa,
                                         EnableWritelaneRewrite,
-                                        EnableWaveNative);
+                                        EnableWaveNative, extraStarts);
     if (!raised.Success) {
       // Contract: raiseToIR only populates RaiseResult::IrText on the
       // success path (the last write before setting `success = true`),
@@ -520,10 +541,30 @@ int main(int argc, char **argv) {
       } else {
         llvm::consumeError(metaOrErr.takeError());
       }
+      std::vector<uint64_t> extraStarts;
+      if (auto FuncOffsetsOrErr =
+              COMGR::hotswap::listFunctionSymbolOffsets(coData)) {
+        std::set<uint64_t> kernelOffsets;
+        kernelOffsets.insert(kernelOffset);
+        if (auto NamesOrErr = COMGR::hotswap::listKernelNames(coData)) {
+          for (const auto &Name : *NamesOrErr) {
+            if (auto OffOrErr =
+                    COMGR::hotswap::findKernelSymbolOffset(coData, Name))
+              kernelOffsets.insert(*OffOrErr);
+            else
+              llvm::consumeError(OffOrErr.takeError());
+          }
+        } else {
+          llvm::consumeError(NamesOrErr.takeError());
+        }
+        for (uint64_t Off : *FuncOffsetsOrErr)
+          if (!kernelOffsets.count(Off))
+            extraStarts.push_back(Off);
+      }
       auto raised = COMGR::hotswap::raiseToIR(text.Bytes, isa, kName, meta,
                                           kernelOffset, targetIsa,
                                           EnableWritelaneRewrite,
-                                          EnableWaveNative);
+                                          EnableWaveNative, extraStarts);
       shm->done = true;
       shm->success = raised.Success;
       shm->lifted = raised.LiftedCount;

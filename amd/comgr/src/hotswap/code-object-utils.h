@@ -28,6 +28,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace COMGR::hotswap {
 
@@ -153,6 +154,11 @@ llvm::Expected<KernelMeta> extractKernelMeta(llvm::MemoryBufferRef ElfData,
 /// `.text` section of `ElfData`.
 llvm::Expected<uint64_t> findKernelSymbolOffset(llvm::MemoryBufferRef ElfData,
                                                 llvm::StringRef KernelName);
+
+/// Return the `.text`-relative byte offsets of all `STT_FUNC` symbols in
+/// `ElfData`, sorted in ascending order.
+llvm::Expected<std::vector<uint64_t>>
+listFunctionSymbolOffsets(llvm::MemoryBufferRef ElfData);
 
 } // namespace COMGR::hotswap
 

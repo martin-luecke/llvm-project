@@ -31,6 +31,7 @@
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
 #include <climits>
 #include <optional>
 #include <string>
@@ -668,9 +669,12 @@ void collectBranchTargets(const DecodedInst &Di, uint64_t Off,
 DecodeResult decodeKernel(const MCState &Mc,
                           const OpcodeMap &OpcMap,
                           ArrayRef<uint8_t> TextBytes,
-                          uint64_t KernelOffset) {
+                          uint64_t KernelOffset,
+                          ArrayRef<uint64_t> ExtraBlockStarts) {
   DecodeResult Out;
   Out.BlockStarts.insert(KernelOffset);
+  for (uint64_t Extra : ExtraBlockStarts)
+    Out.BlockStarts.insert(Extra);
 
   if (KernelOffset > 0)
     errs() << "transpiler: Starting disassembly at kernel offset 0x"
@@ -678,6 +682,11 @@ DecodeResult decodeKernel(const MCState &Mc,
 
   const uint64_t TotalSize = TextBytes.size();
   uint64_t Off = KernelOffset;
+  if (!ExtraBlockStarts.empty()) {
+    uint64_t MinExtra =
+        *std::min_element(ExtraBlockStarts.begin(), ExtraBlockStarts.end());
+    Off = std::min(Off, MinExtra);
+  }
   while (Off < TotalSize) {
     MCInst Inst;
     uint64_t InstSize = 0;

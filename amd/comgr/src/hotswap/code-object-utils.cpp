@@ -327,4 +327,47 @@ findKernelSymbolOffset(llvm::MemoryBufferRef ElfData,
   return *AddrOrErr - TextBase;
 }
 
+llvm::Expected<std::vector<uint64_t>>
+listFunctionSymbolOffsets(llvm::MemoryBufferRef ElfData) {
+  llvm::Expected<std::unique_ptr<llvm::object::ObjectFile>> ObjOrErr =
+      llvm::object::ObjectFile::createELFObjectFile(ElfData);
+  if (!ObjOrErr)
+    return ObjOrErr.takeError();
+
+  uint64_t TextBase = UINT64_MAX;
+  for (const llvm::object::SectionRef &Sec : (*ObjOrErr)->sections()) {
+    llvm::Expected<llvm::StringRef> NameOrErr = Sec.getName();
+    if (!NameOrErr)
+      return NameOrErr.takeError();
+    if (*NameOrErr == ".text") {
+      TextBase = Sec.getAddress();
+      break;
+    }
+  }
+  if (TextBase == UINT64_MAX)
+    return makeHotswapError(
+        "listFunctionSymbolOffsets: no .text section in ELF");
+
+  std::vector<uint64_t> Offsets;
+  for (const llvm::object::SymbolRef &Sym : (*ObjOrErr)->symbols()) {
+    llvm::Expected<llvm::object::SymbolRef::Type> TypeOrErr = Sym.getType();
+    if (!TypeOrErr) {
+      llvm::consumeError(TypeOrErr.takeError());
+      continue;
+    }
+    if (*TypeOrErr != llvm::object::SymbolRef::ST_Function)
+      continue;
+    llvm::Expected<uint64_t> AddrOrErr = Sym.getAddress();
+    if (!AddrOrErr) {
+      llvm::consumeError(AddrOrErr.takeError());
+      continue;
+    }
+    if (*AddrOrErr < TextBase)
+      continue;
+    Offsets.push_back(*AddrOrErr - TextBase);
+  }
+  llvm::sort(Offsets);
+  return Offsets;
+}
+
 } // namespace COMGR::hotswap

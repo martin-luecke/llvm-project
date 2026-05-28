@@ -12,6 +12,7 @@
 #include "llvm/Support/AMDHSAKernelDescriptor.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringExtras.h"
 
 #include <algorithm>
@@ -287,9 +288,31 @@ static bool raiseAndCompileKernel(const TextSection &text,
                  << "' at .text offset 0x" << llvm::utohexstr(kernelOffset)
                  << "\n");
 
+  std::vector<uint64_t> extraStarts;
+  if (auto FuncOffsetsOrErr = listFunctionSymbolOffsets(codeObjectData)) {
+    llvm::DenseSet<uint64_t> kernelOffsets;
+    kernelOffsets.insert(kernelOffset);
+    if (auto NamesOrErr = listKernelNames(codeObjectData)) {
+      for (const auto &Name : *NamesOrErr) {
+        if (auto OffOrErr = findKernelSymbolOffset(codeObjectData, Name))
+          kernelOffsets.insert(*OffOrErr);
+        else
+          llvm::consumeError(OffOrErr.takeError());
+      }
+    } else {
+      llvm::consumeError(NamesOrErr.takeError());
+    }
+    for (uint64_t Off : *FuncOffsetsOrErr)
+      if (!kernelOffsets.count(Off))
+        extraStarts.push_back(Off);
+    if (!extraStarts.empty())
+      LLVM_DEBUG(llvm::dbgs() << "transpiler: Pre-seeding " << extraStarts.size()
+                              << " function symbol(s) as extra block starts\n");
+  }
+
   auto raised = raiseToIR(text.Bytes, sourceISA, kernelName, meta, kernelOffset,
                            targetISA, options.EnableWritelaneRewrite,
-                           options.EnableWaveNative);
+                           options.EnableWaveNative, extraStarts);
   if (!raised.Success) {
     llvm::errs() << "transpiler: Raising '" << kernelName << "' to LLVM IR failed";
     result.FailKernel = kernelName;
