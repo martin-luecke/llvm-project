@@ -798,14 +798,23 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   // explicitly during the create loop.
   llvm::DenseMap<uint64_t, BasicBlock *> OffsetToBb;
   BasicBlock *FirstBodyBb = nullptr;
+  // Create kernel BBs first (>= KernelOffset) so the entry block is
+  // the first BB in the function, then append subroutine BBs after.
   for (uint64_t Addr : BlockStarts) {
-    if (!ExtraBlockStarts.empty() && Addr < KernelOffset)
+    if (Addr < KernelOffset)
       continue;
     BasicBlock *Bb =
         BasicBlock::Create(C, "bb_0x" + utohexstr(Addr - KernelOffset), F);
     OffsetToBb[Addr] = Bb;
     if (!FirstBodyBb)
       FirstBodyBb = Bb;
+  }
+  for (uint64_t Addr : BlockStarts) {
+    if (Addr >= KernelOffset)
+      continue;
+    BasicBlock *Bb =
+        BasicBlock::Create(C, "sub_0x" + utohexstr(Addr), F);
+    OffsetToBb[Addr] = Bb;
   }
   BasicBlock *EntryBb = UseThreadLoop
                             ? BasicBlock::Create(C, "entry", F, FirstBodyBb)
