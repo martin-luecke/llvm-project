@@ -566,6 +566,29 @@ HandlerResult handleSOP1(RaiseContext &Ctx, const DecodedInst &Di,
     Ctx.Regs.writeReg64(Ctx.B, Op.dst(), RetMarker);
 
     if (Info.SiteKind == SetPcSiteInfo::Kind::DirectA) {
+      if (Ctx.SubroutineFunctions &&
+          Info.DirectTarget < Ctx.KernelOffset) {
+        SmallVector<unsigned> VgprIdxs, SgprIdxs;
+        for (unsigned I = 0; I < 80 && I < Ctx.Regs.Vgpr.size(); ++I)
+          VgprIdxs.push_back(I);
+        for (unsigned I = 0; I < 32 && I < Ctx.Regs.Sgpr.size(); ++I)
+          SgprIdxs.push_back(I);
+        emitRegStateFlush(Ctx.B, Ctx.Regs, Ctx.RegStatePtr, *Ctx.RSLayout,
+                          VgprIdxs, SgprIdxs);
+        auto SubIt = Ctx.SubroutineFunctions->find(Info.DirectTarget);
+        if (SubIt != Ctx.SubroutineFunctions->end()) {
+          Ctx.B.CreateCall(SubIt->second, {Ctx.RegStatePtr});
+        } else {
+          Function *TrapFn =
+              Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::trap);
+          Ctx.B.CreateCall(TrapFn);
+        }
+        emitRegStateReload(Ctx.B, Ctx.Regs, Ctx.RegStatePtr, *Ctx.RSLayout,
+                           VgprIdxs, SgprIdxs);
+        Ctx.B.CreateBr(Ctx.lookupBB(ReturnAddr));
+        Hr.Handled = true;
+        return Hr;
+      }
       Ctx.B.CreateBr(Ctx.lookupBB(Info.DirectTarget));
       Hr.Handled = true;
       return Hr;
