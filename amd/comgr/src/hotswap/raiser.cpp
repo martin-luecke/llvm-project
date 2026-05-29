@@ -1177,6 +1177,7 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
             SubFnTy, GlobalValue::InternalLinkage,
             "__hotswap_sub_0x" + utohexstr(SubStart), &M);
         SubFn->setCallingConv(CallingConv::AMDGPU_Gfx);
+        SubFn->addFnAttr(Attribute::AlwaysInline);
         SubFunctions[SubStart] = SubFn;
 
         // Create entry BB and set up local register file.
@@ -1332,15 +1333,12 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
 
         // If the subroutine failed to raise, replace its body with trap.
         if (SubFailed) {
-          // Delete all BBs and recreate with a single trap+unreachable.
+          // Delete all BBs and replace with ret void so llc can
+          // inline the empty body.
           while (SubFn->size() > 0)
             SubFn->back().eraseFromParent();
-          BasicBlock *TrapBb = BasicBlock::Create(C, "trap", SubFn);
-          IRBuilder<> TrapB(TrapBb);
-          Function *TrapFn =
-              Intrinsic::getOrInsertDeclaration(&M, Intrinsic::trap);
-          TrapB.CreateCall(TrapFn);
-          TrapB.CreateUnreachable();
+          BasicBlock *StubBb = BasicBlock::Create(C, "stub", SubFn);
+          IRBuilder<>(StubBb).CreateRetVoid();
           errs() << "transpiler: subroutine __hotswap_sub_0x"
                  << utohexstr(SubStart) << " failed to raise; replaced with "
                  << "trap\n";
