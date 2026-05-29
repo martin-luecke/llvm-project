@@ -9,6 +9,8 @@
 #include "handlers.h"
 #include "canonical-op-attrs.h"
 
+#include "MCTargetDesc/AMDGPUMCExpr.h"
+
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/IR/Constants.h"
@@ -463,6 +465,28 @@ HandlerResult handleSOP1(RaiseContext &Ctx, const DecodedInst &Di,
     CallTarget->setName("swap_call_target_marker");
     emitEnumeratedDispatch(Ctx, CallTarget, Info.IndirectTargets,
                            Di.Offset);
+    Hr.Handled = true;
+    return Hr;
+  }
+  if (Sop == CanonicalOp::S_ADD_PC_I64) {
+    // The 64-bit offset arrives as either isImm() or an AMDGPUMCExpr::Lit64
+    // isExpr() (the latter when Hi_32(offset)==0).
+    const MCInst &Inst = Di.Inst;
+    int64_t Imm64 = 0;
+    for (unsigned I = 0; I < Inst.getNumOperands(); ++I) {
+      const MCOperand &MO = Inst.getOperand(I);
+      if (MO.isImm()) {
+        Imm64 = MO.getImm();
+        break;
+      }
+      if (MO.isExpr() && AMDGPU::isLitExpr(MO.getExpr())) {
+        Imm64 = AMDGPU::getLitValue(MO.getExpr());
+        break;
+      }
+    }
+    uint64_t Target = static_cast<uint64_t>(
+        static_cast<int64_t>(Di.Offset + Di.Size) + Imm64);
+    Ctx.B.CreateBr(Ctx.lookupBB(Target));
     Hr.Handled = true;
     return Hr;
   }

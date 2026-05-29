@@ -244,6 +244,10 @@ enum class CanonicalOp : uint16_t {
   // enumerates the swap's return offset as one of its cascade
   // targets.
   S_SWAP_PC_I64,
+  // gfx1250/gfx13 PC-relative unconditional long branch:
+  // PC_next = PC_after_inst + sign_extend(imm64). Lifts to an
+  // unconditional `br` to the resolved target BB.
+  S_ADD_PC_I64,
   S_ABS_I32,
   S_SET_VGPR_MSB,
   // Read-modify-write bit set/clear on an SGPR. Tied src keeps the
