@@ -349,31 +349,124 @@ HandlerResult handleSOP1(RaiseContext &Ctx, const DecodedInst &Di,
         Hr.Handled = true;
         return Hr;
       }
-      // Fall through to the enumerated dispatch cascade for the kernel.
+      // Check if the IndirectB targets are subroutine offsets that we
+      // should dispatch via function calls instead of branches.
       Value *RetVal = Ctx.Regs.loadSGPR64(
           Ctx.B, static_cast<int>(Info.IndirectRetPairLowReg));
       RetVal->setName("ret_pc_marker");
+      if (Ctx.SubroutineFunctions && !Info.IndirectTargets.empty() &&
+          Info.IndirectTargets.front() < Ctx.KernelOffset) {
+        IRBuilder<> &B = Ctx.B;
+        SmallVector<unsigned> VgprIdxs, SgprIdxs;
+        for (unsigned I = 0; I < 80 && I < Ctx.Regs.Vgpr.size(); ++I)
+          VgprIdxs.push_back(I);
+        for (unsigned I = 0; I < 32 && I < Ctx.Regs.Sgpr.size(); ++I)
+          SgprIdxs.push_back(I);
+        emitRegStateFlush(B, Ctx.Regs, Ctx.RegStatePtr, *Ctx.RSLayout,
+                          VgprIdxs, SgprIdxs);
+
+        BasicBlock *AfterDispatch = BasicBlock::Create(
+            Ctx.C, "after_indirectb_dispatch_0x" + utohexstr(Di.Offset),
+            Ctx.Kernel);
+        for (size_t I = 0; I < Info.IndirectTargets.size(); ++I) {
+          uint64_t Target = Info.IndirectTargets[I];
+          auto SubIt = Ctx.SubroutineFunctions->find(Target);
+          Constant *MarkerCi = ConstantInt::get(Ctx.I64Ty, Target);
+          Value *Cmp = B.CreateICmpEQ(RetVal, MarkerCi);
+
+          BasicBlock *CallBb = BasicBlock::Create(
+              Ctx.C, "indirectb_call_sub_0x" + utohexstr(Target), Ctx.Kernel);
+          BasicBlock *NextBb;
+          if (I + 1 < Info.IndirectTargets.size())
+            NextBb = BasicBlock::Create(
+                Ctx.C, "indirectb_dispatch_" + Twine(I + 1), Ctx.Kernel);
+          else
+            NextBb = BasicBlock::Create(
+                Ctx.C, "indirectb_dispatch_unreachable", Ctx.Kernel);
+
+          B.CreateCondBr(Cmp, CallBb, NextBb);
+          B.SetInsertPoint(CallBb);
+          if (SubIt != Ctx.SubroutineFunctions->end()) {
+            B.CreateCall(SubIt->second, {Ctx.RegStatePtr});
+          } else {
+            Function *TrapFn =
+                Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::trap);
+            B.CreateCall(TrapFn);
+          }
+          B.CreateBr(AfterDispatch);
+          B.SetInsertPoint(NextBb);
+        }
+        B.CreateUnreachable();
+
+        B.SetInsertPoint(AfterDispatch);
+        emitRegStateReload(B, Ctx.Regs, Ctx.RegStatePtr, *Ctx.RSLayout,
+                           VgprIdxs, SgprIdxs);
+        Hr.Handled = true;
+        return Hr;
+      }
       emitEnumeratedDispatch(Ctx, RetVal, Info.IndirectTargets,
                              Di.Offset);
       Hr.Handled = true;
       return Hr;
     }
     case SetPcSiteInfo::Kind::DispatchSet: {
-      // Both shapes lower to the same enumerated-dispatch cascade:
-      // read the source SGPR pair as i64 (it holds the per-predecessor
-      // marker -- the resolved target's source-MC byte offset, written
-      // either by the call-site chain-terminator hook in raiser.cpp for
-      // IndirectB, or by the dispatch-target chain-terminator hook for
-      // DispatchSet), then emit a cmp+br cascade against each
-      // enumerated target offset. See `emitEnumeratedDispatch` above
-      // for why this is a cascade of integer equality compares and not
-      // `indirectbr` / a ptr-equality check against `blockaddress`.
-      // The classification difference is purely semantic (return vs.
-      // forward dispatch); the lowering mechanism is identical.
-      Value *RetVal = Ctx.Regs.loadSGPR64(
+      Value *DispTarget = Ctx.Regs.loadSGPR64(
           Ctx.B, static_cast<int>(Info.IndirectRetPairLowReg));
-      RetVal->setName("ret_pc_marker");
-      emitEnumeratedDispatch(Ctx, RetVal, Info.IndirectTargets,
+      DispTarget->setName("ret_pc_marker");
+      // When targets are subroutine offsets and subroutine functions
+      // are available, emit call-based dispatch (same pattern as the
+      // s_swap_pc_i64 subroutine call cascade).
+      if (Ctx.SubroutineFunctions && !Info.IndirectTargets.empty() &&
+          Info.IndirectTargets.front() < Ctx.KernelOffset) {
+        IRBuilder<> &B = Ctx.B;
+        SmallVector<unsigned> VgprIdxs, SgprIdxs;
+        for (unsigned I = 0; I < 80 && I < Ctx.Regs.Vgpr.size(); ++I)
+          VgprIdxs.push_back(I);
+        for (unsigned I = 0; I < 32 && I < Ctx.Regs.Sgpr.size(); ++I)
+          SgprIdxs.push_back(I);
+        emitRegStateFlush(B, Ctx.Regs, Ctx.RegStatePtr, *Ctx.RSLayout,
+                          VgprIdxs, SgprIdxs);
+
+        BasicBlock *AfterDispatch = BasicBlock::Create(
+            Ctx.C, "after_setpc_dispatch_0x" + utohexstr(Di.Offset),
+            Ctx.Kernel);
+        for (size_t I = 0; I < Info.IndirectTargets.size(); ++I) {
+          uint64_t Target = Info.IndirectTargets[I];
+          auto SubIt = Ctx.SubroutineFunctions->find(Target);
+          Constant *MarkerCi = ConstantInt::get(Ctx.I64Ty, Target);
+          Value *Cmp = B.CreateICmpEQ(DispTarget, MarkerCi);
+
+          BasicBlock *CallBb = BasicBlock::Create(
+              Ctx.C, "setpc_call_sub_0x" + utohexstr(Target), Ctx.Kernel);
+          BasicBlock *NextBb;
+          if (I + 1 < Info.IndirectTargets.size())
+            NextBb = BasicBlock::Create(
+                Ctx.C, "setpc_dispatch_" + Twine(I + 1), Ctx.Kernel);
+          else
+            NextBb = BasicBlock::Create(
+                Ctx.C, "setpc_dispatch_unreachable", Ctx.Kernel);
+
+          B.CreateCondBr(Cmp, CallBb, NextBb);
+          B.SetInsertPoint(CallBb);
+          if (SubIt != Ctx.SubroutineFunctions->end()) {
+            B.CreateCall(SubIt->second, {Ctx.RegStatePtr});
+          } else {
+            Function *TrapFn =
+                Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::trap);
+            B.CreateCall(TrapFn);
+          }
+          B.CreateBr(AfterDispatch);
+          B.SetInsertPoint(NextBb);
+        }
+        B.CreateUnreachable();
+
+        B.SetInsertPoint(AfterDispatch);
+        emitRegStateReload(B, Ctx.Regs, Ctx.RegStatePtr, *Ctx.RSLayout,
+                           VgprIdxs, SgprIdxs);
+        Hr.Handled = true;
+        return Hr;
+      }
+      emitEnumeratedDispatch(Ctx, DispTarget, Info.IndirectTargets,
                              Di.Offset);
       Hr.Handled = true;
       return Hr;
