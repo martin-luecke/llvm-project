@@ -352,7 +352,7 @@ enum class CanonicalOp : uint16_t {
   V_CVT_F16_F32, V_CVT_F32_F16, V_CVT_F32_BF16,
   V_CVT_F32_UBYTE0, V_CVT_F32_UBYTE1, V_CVT_F32_UBYTE2, V_CVT_F32_UBYTE3,
   V_CVT_F32_F64, V_CVT_F64_F32,
-  V_CVT_F64_U32, V_CVT_F64_I32, V_CVT_U32_F64,
+  V_CVT_F64_U32, V_CVT_F64_I32, V_CVT_U32_F64, V_CVT_I32_F64,
   V_RCP_IFLAG_F32, V_RCP_F32, V_RSQ_F32, V_SQRT_F32, V_EXP_F32, V_LOG_F32,
   // gfx12+ VOP3 pseudo-scalar f32 transcendentals: scalar input and scalar
   // output variants of the corresponding VOP1 special-function instructions.
@@ -473,7 +473,7 @@ enum class CanonicalOp : uint16_t {
   // The hardware opcode also carries a VOP3 clamp bit, which is semantically
   // redundant for this unsigned operation because the result is already in the
   // U32 representable range.
-  V_ADD_MIN_U32,
+  V_ADD_MIN_U32, V_ADD_MIN_I32, V_ADD_MAX_U32, V_ADD_MAX_I32,
   V_BFE_U32, V_BFE_I32, V_BFI_B32, V_PERM_B32,
   V_MBCNT_LO_U32_B32, V_MBCNT_HI_U32_B32,
   V_READLANE_B32, V_WRITELANE_B32,

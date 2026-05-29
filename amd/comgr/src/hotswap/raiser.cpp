@@ -1234,6 +1234,13 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
         SubCtx.RegStatePtr = SubRegStatePtr;
         SubCtx.RSLayout = &RSLayout;
         SubCtx.KernelOffset = KernelOffset;
+        SubCtx.SourcePrivateSegmentFixedSize = Meta.PrivateSegmentFixedSize;
+        SubCtx.SourceComputePgmRsrc2 = Meta.ComputePgmRsrc2;
+        SubCtx.SourceKernelCodeProperties = Meta.KernelCodeProperties;
+        llvm::errs() << "transpiler: sub_0x" << llvm::utohexstr(SubStart)
+                     << " scratch: pvt=" << SubCtx.SourcePrivateSegmentFixedSize
+                     << " rsrc2=0x" << llvm::utohexstr(SubCtx.SourceComputePgmRsrc2)
+                     << "\n";
 
         // Raise instructions in the subroutine range.
         bool SubFailed = false;
@@ -1298,17 +1305,19 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
 
           if (SubCtx.PendingFailure.hasFailed()) {
             SubFailed = true;
+            errs() << "transpiler: sub_0x" << utohexstr(SubStart)
+                   << " pending failure on " << Di.Mnemonic
+                   << " at 0x" << format_hex_no_prefix(Di.Offset, 8)
+                   << ": " << SubCtx.PendingFailure.Detail << "\n";
             SubCtx.PendingFailure = RaiseFailure{};
             break;
           }
 
           if (!Hr.Handled) {
             SubFailed = true;
-            LLVM_DEBUG(dbgs() << "transpiler: subroutine 0x"
-                              << utohexstr(SubStart)
-                              << " failed on instruction "
-                              << Di.Mnemonic << " at 0x"
-                              << format_hex_no_prefix(Di.Offset, 8) << "\n");
+            errs() << "transpiler: sub_0x" << utohexstr(SubStart)
+                   << " unhandled " << Di.Mnemonic
+                   << " at 0x" << format_hex_no_prefix(Di.Offset, 8) << "\n";
             break;
           }
 

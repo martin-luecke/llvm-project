@@ -1320,6 +1320,13 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Hr.Handled = true;
     return Hr;
   }
+  if (Sop == CanonicalOp::V_CVT_I32_F64) {
+    auto *F64Ty = Type::getDoubleTy(Ctx.C);
+    Value *V = Ctx.B.CreateBitCast(Op.src64(0), F64Ty);
+    Ctx.writeReg32(Op.dst(), Ctx.B.CreateFPToSI(V, Ctx.I32Ty, "cvt_i32_f64"));
+    Hr.Handled = true;
+    return Hr;
+  }
 
   // ---- Reversed-operand shifts ----
   if (Sop == CanonicalOp::V_LSHRREV_B32) {
@@ -1942,6 +1949,54 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
                                   "vadd_min_sum");
     Ctx.writeReg32(Op.dst(),
                    Ctx.B.CreateCall(UminFn, {Sum, Op.src(2)}, "vadd_min"));
+    Hr.Handled = true;
+    return Hr;
+  }
+  if (Sop == CanonicalOp::V_ADD_MIN_I32) {
+    std::optional<bool> Clamp = readVOP3Clamp(Di, Hr, "v_add_min_i32");
+    if (!Clamp)
+      return Hr;
+    Function *SaddSatFn = Intrinsic::getOrInsertDeclaration(
+        &Ctx.M, Intrinsic::sadd_sat, {Ctx.I32Ty});
+    Function *SminFn =
+        Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::smin,
+                                          {Ctx.I32Ty});
+    Value *Sum = Ctx.B.CreateCall(SaddSatFn, {Op.src(0), Op.src(1)},
+                                  "vadd_min_i_sum");
+    Ctx.writeReg32(Op.dst(),
+                   Ctx.B.CreateCall(SminFn, {Sum, Op.src(2)}, "vadd_min_i"));
+    Hr.Handled = true;
+    return Hr;
+  }
+  if (Sop == CanonicalOp::V_ADD_MAX_U32) {
+    std::optional<bool> Clamp = readVOP3Clamp(Di, Hr, "v_add_max_u32");
+    if (!Clamp)
+      return Hr;
+    Function *UaddSatFn = Intrinsic::getOrInsertDeclaration(
+        &Ctx.M, Intrinsic::uadd_sat, {Ctx.I32Ty});
+    Function *UmaxFn =
+        Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::umax,
+                                          {Ctx.I32Ty});
+    Value *Sum = Ctx.B.CreateCall(UaddSatFn, {Op.src(0), Op.src(1)},
+                                  "vadd_max_u_sum");
+    Ctx.writeReg32(Op.dst(),
+                   Ctx.B.CreateCall(UmaxFn, {Sum, Op.src(2)}, "vadd_max_u"));
+    Hr.Handled = true;
+    return Hr;
+  }
+  if (Sop == CanonicalOp::V_ADD_MAX_I32) {
+    std::optional<bool> Clamp = readVOP3Clamp(Di, Hr, "v_add_max_i32");
+    if (!Clamp)
+      return Hr;
+    Function *SaddSatFn = Intrinsic::getOrInsertDeclaration(
+        &Ctx.M, Intrinsic::sadd_sat, {Ctx.I32Ty});
+    Function *SmaxFn =
+        Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::smax,
+                                          {Ctx.I32Ty});
+    Value *Sum = Ctx.B.CreateCall(SaddSatFn, {Op.src(0), Op.src(1)},
+                                  "vadd_max_i_sum");
+    Ctx.writeReg32(Op.dst(),
+                   Ctx.B.CreateCall(SmaxFn, {Sum, Op.src(2)}, "vadd_max_i"));
     Hr.Handled = true;
     return Hr;
   }
