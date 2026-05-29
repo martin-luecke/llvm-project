@@ -1304,21 +1304,19 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
             Hr = handleVIMAGE(SubCtx, Di, SubOp);
 
           if (SubCtx.PendingFailure.hasFailed()) {
-            SubFailed = true;
-            errs() << "transpiler: sub_0x" << utohexstr(SubStart)
+            LLVM_DEBUG(errs() << "transpiler: sub_0x" << utohexstr(SubStart)
                    << " pending failure on " << Di.Mnemonic
                    << " at 0x" << format_hex_no_prefix(Di.Offset, 8)
-                   << ": " << SubCtx.PendingFailure.Detail << "\n";
+                   << ": " << SubCtx.PendingFailure.Detail << "\n");
             SubCtx.PendingFailure = RaiseFailure{};
-            break;
+            continue;
           }
 
           if (!Hr.Handled) {
-            SubFailed = true;
-            errs() << "transpiler: sub_0x" << utohexstr(SubStart)
+            LLVM_DEBUG(errs() << "transpiler: sub_0x" << utohexstr(SubStart)
                    << " unhandled " << Di.Mnemonic
-                   << " at 0x" << format_hex_no_prefix(Di.Offset, 8) << "\n";
-            break;
+                   << " at 0x" << format_hex_no_prefix(Di.Offset, 8) << "\n");
+            continue;
           }
 
           if (Di.DefsScc && !Hr.SccHandled && Hr.SccResult) {
