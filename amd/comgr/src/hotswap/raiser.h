@@ -59,7 +59,8 @@ RaiseResult raiseToIR(llvm::ArrayRef<uint8_t> TextBytes,
                       llvm::StringRef CompilationTargetIsa = "",
                       bool EnableWritelaneRewrite = true,
                       bool EnableWaveNative = true,
-                      llvm::ArrayRef<uint64_t> ExtraBlockStarts = {});
+                      llvm::ArrayRef<uint64_t> ExtraBlockStarts = {},
+                      uint64_t TextBase = 0);
 
 } // namespace COMGR::hotswap
 

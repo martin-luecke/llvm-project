@@ -385,7 +385,9 @@ HandlerResult handleSOP1(RaiseContext &Ctx, const DecodedInst &Di,
         for (size_t I = 0; I < SubOffsets.size(); ++I) {
           uint64_t Target = SubOffsets[I];
           Function *SubFn = (*Ctx.SubroutineFunctions)[Target];
-          Constant *MarkerCi = ConstantInt::get(Ctx.I64Ty, Target);
+          // Compare against the absolute ELF address (TextBase + .text-relative
+          // offset) because the kernel's runtime dispatch computes absolute addrs.
+          Constant *MarkerCi = ConstantInt::get(Ctx.I64Ty, Target + Ctx.TextBase);
           Value *Cmp = B.CreateICmpEQ(RetVal, MarkerCi);
 
           BasicBlock *CallBb = BasicBlock::Create(

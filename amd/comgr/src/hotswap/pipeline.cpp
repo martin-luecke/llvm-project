@@ -312,7 +312,8 @@ static bool raiseAndCompileKernel(const TextSection &text,
 
   auto raised = raiseToIR(text.Bytes, sourceISA, kernelName, meta, kernelOffset,
                            targetISA, options.EnableWritelaneRewrite,
-                           options.EnableWaveNative, extraStarts);
+                           options.EnableWaveNative, extraStarts,
+                           text.BaseAddress);
   if (!raised.Success) {
     llvm::errs() << "transpiler: Raising '" << kernelName << "' to LLVM IR failed";
     result.FailKernel = kernelName;

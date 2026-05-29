@@ -89,6 +89,7 @@ struct RaiseContext {
   llvm::Value *RegStatePtr = nullptr;
   RegStateLayout *RSLayout = nullptr;
   uint64_t KernelOffset = 0;
+  uint64_t TextBase = 0;
   llvm::DenseMap<uint64_t, llvm::Function *> *SubroutineFunctions = nullptr;
 
   // gfx1250 s_set_vgpr_msb state: only the LOW 8 bits of the instruction's

@@ -201,7 +201,8 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
                                  bool EnableWaveNative,
                                  bool ForceThreadLoopProjection,
                                  bool SuppressC5ForThreadLoopRoute,
-                                 llvm::ArrayRef<uint64_t> ExtraBlockStarts = {}) {
+                                 llvm::ArrayRef<uint64_t> ExtraBlockStarts = {},
+                                 uint64_t TextBase = 0) {
   RaiseResult Result;
 
   // Reject obviously-bad ISA inputs before reaching the MC stack -- an
@@ -1362,6 +1363,7 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
     Ctx.RegStatePtr = RegStateAlloca;
     Ctx.RSLayout = &RSLayout;
     Ctx.KernelOffset = KernelOffset;
+    Ctx.TextBase = TextBase;
   }
 
   int RaisedCount = 0;
@@ -1953,13 +1955,14 @@ RaiseResult raiseToIR(llvm::ArrayRef<uint8_t> TextBytes,
                       llvm::StringRef CompilationTargetIsa,
                       bool EnableWritelaneRewrite,
                       bool EnableWaveNative,
-                      llvm::ArrayRef<uint64_t> ExtraBlockStarts) {
+                      llvm::ArrayRef<uint64_t> ExtraBlockStarts,
+                      uint64_t TextBase) {
   return raiseToIRImpl(TextBytes, SourceIsa, KernelName, Meta, KernelOffset,
                        CompilationTargetIsa, EnableWritelaneRewrite,
                        EnableWaveNative,
                        /*forceThreadLoopProjection=*/false,
                        /*suppressC5ForThreadLoopRoute=*/false,
-                       ExtraBlockStarts);
+                       ExtraBlockStarts, TextBase);
 }
 
 } // namespace COMGR::hotswap

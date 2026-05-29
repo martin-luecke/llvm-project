@@ -403,7 +403,7 @@ int main(int argc, char **argv) {
     auto raised = COMGR::hotswap::raiseToIR(text.Bytes, isa, target, meta,
                                         kernelOffset, targetIsa,
                                         EnableWritelaneRewrite,
-                                        EnableWaveNative, extraStarts);
+                                        EnableWaveNative, extraStarts, text.BaseAddress);
     if (!raised.Success) {
       // Contract: raiseToIR only populates RaiseResult::IrText on the
       // success path (the last write before setting `success = true`),
@@ -564,7 +564,7 @@ int main(int argc, char **argv) {
       auto raised = COMGR::hotswap::raiseToIR(text.Bytes, isa, kName, meta,
                                           kernelOffset, targetIsa,
                                           EnableWritelaneRewrite,
-                                          EnableWaveNative, extraStarts);
+                                          EnableWaveNative, extraStarts, text.BaseAddress);
       shm->done = true;
       shm->success = raised.Success;
       shm->lifted = raised.LiftedCount;

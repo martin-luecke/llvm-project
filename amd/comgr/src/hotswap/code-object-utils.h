@@ -37,6 +37,7 @@ namespace COMGR::hotswap {
 /// the underlying ELF MemoryBuffer is not borrowed across the call.
 struct TextSection {
   llvm::SmallVector<uint8_t> Bytes;
+  uint64_t BaseAddress = 0;
 };
 
 /// One entry of the kernel argument table extracted from the AMDGPU MsgPack

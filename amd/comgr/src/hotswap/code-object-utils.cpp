@@ -199,6 +199,7 @@ llvm::Expected<TextSection> extractTextSection(llvm::MemoryBufferRef ElfData) {
       return ContentsOrErr.takeError();
     TextSection Result;
     Result.Bytes.assign(ContentsOrErr->begin(), ContentsOrErr->end());
+    Result.BaseAddress = Sec.getAddress();
     return Result;
   }
   return makeHotswapError("extractTextSection: .text section not found in ELF");
