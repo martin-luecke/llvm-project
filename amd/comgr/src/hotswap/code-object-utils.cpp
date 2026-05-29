@@ -355,8 +355,20 @@ listFunctionSymbolOffsets(llvm::MemoryBufferRef ElfData) {
       llvm::consumeError(TypeOrErr.takeError());
       continue;
     }
-    if (*TypeOrErr != llvm::object::SymbolRef::ST_Function)
+    if (*TypeOrErr != llvm::object::SymbolRef::ST_Function &&
+        *TypeOrErr != llvm::object::SymbolRef::ST_Unknown)
       continue;
+    // For NOTYPE symbols, only include TC_ labels in .text (test case
+    // dispatch targets for the firexs exerciser pattern).
+    if (*TypeOrErr == llvm::object::SymbolRef::ST_Unknown) {
+      llvm::Expected<llvm::StringRef> NameOrErr = Sym.getName();
+      if (!NameOrErr) {
+        llvm::consumeError(NameOrErr.takeError());
+        continue;
+      }
+      if (!NameOrErr->starts_with("TC_"))
+        continue;
+    }
     llvm::Expected<uint64_t> AddrOrErr = Sym.getAddress();
     if (!AddrOrErr) {
       llvm::consumeError(AddrOrErr.takeError());
@@ -367,6 +379,9 @@ listFunctionSymbolOffsets(llvm::MemoryBufferRef ElfData) {
     Offsets.push_back(*AddrOrErr - TextBase);
   }
   llvm::sort(Offsets);
+  Offsets.erase(std::unique(Offsets.begin(), Offsets.end()), Offsets.end());
+  llvm::errs() << "transpiler: listFunctionSymbolOffsets returned "
+               << Offsets.size() << " offsets (including NOTYPE .text symbols)\n";
   return Offsets;
 }
 

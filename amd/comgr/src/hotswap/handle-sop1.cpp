@@ -354,8 +354,16 @@ HandlerResult handleSOP1(RaiseContext &Ctx, const DecodedInst &Di,
       Value *RetVal = Ctx.Regs.loadSGPR64(
           Ctx.B, static_cast<int>(Info.IndirectRetPairLowReg));
       RetVal->setName("ret_pc_marker");
-      if (Ctx.SubroutineFunctions && !Info.IndirectTargets.empty() &&
-          Info.IndirectTargets.front() < Ctx.KernelOffset) {
+      llvm::errs() << "transpiler: IndirectB at 0x"
+                   << llvm::format_hex(Di.Offset, 1)
+                   << " SubFns=" << (Ctx.SubroutineFunctions ? "yes" : "no")
+                   << " count="
+                   << (Ctx.SubroutineFunctions ? Ctx.SubroutineFunctions->size() : 0)
+                   << " IndirectTargets=" << Info.IndirectTargets.size() << "\n";
+      if (Ctx.SubroutineFunctions && !Ctx.SubroutineFunctions->empty()) {
+        // Use ALL subroutine function offsets as dispatch targets,
+        // not just the ones discovered by SetPC analysis dataflow.
+        // The analysis cannot resolve runtime-computed dispatch tables.
         IRBuilder<> &B = Ctx.B;
         SmallVector<unsigned> VgprIdxs, SgprIdxs;
         for (unsigned I = 0; I < 80 && I < Ctx.Regs.Vgpr.size(); ++I)
@@ -365,19 +373,25 @@ HandlerResult handleSOP1(RaiseContext &Ctx, const DecodedInst &Di,
         emitRegStateFlush(B, Ctx.Regs, Ctx.RegStatePtr, *Ctx.RSLayout,
                           VgprIdxs, SgprIdxs);
 
+        // Collect and sort subroutine offsets for deterministic cascade.
+        SmallVector<uint64_t> SubOffsets;
+        for (const auto &Entry : *Ctx.SubroutineFunctions)
+          SubOffsets.push_back(Entry.first);
+        llvm::sort(SubOffsets);
+
         BasicBlock *AfterDispatch = BasicBlock::Create(
             Ctx.C, "after_indirectb_dispatch_0x" + utohexstr(Di.Offset),
             Ctx.Kernel);
-        for (size_t I = 0; I < Info.IndirectTargets.size(); ++I) {
-          uint64_t Target = Info.IndirectTargets[I];
-          auto SubIt = Ctx.SubroutineFunctions->find(Target);
+        for (size_t I = 0; I < SubOffsets.size(); ++I) {
+          uint64_t Target = SubOffsets[I];
+          Function *SubFn = (*Ctx.SubroutineFunctions)[Target];
           Constant *MarkerCi = ConstantInt::get(Ctx.I64Ty, Target);
           Value *Cmp = B.CreateICmpEQ(RetVal, MarkerCi);
 
           BasicBlock *CallBb = BasicBlock::Create(
               Ctx.C, "indirectb_call_sub_0x" + utohexstr(Target), Ctx.Kernel);
           BasicBlock *NextBb;
-          if (I + 1 < Info.IndirectTargets.size())
+          if (I + 1 < SubOffsets.size())
             NextBb = BasicBlock::Create(
                 Ctx.C, "indirectb_dispatch_" + Twine(I + 1), Ctx.Kernel);
           else
@@ -386,13 +400,7 @@ HandlerResult handleSOP1(RaiseContext &Ctx, const DecodedInst &Di,
 
           B.CreateCondBr(Cmp, CallBb, NextBb);
           B.SetInsertPoint(CallBb);
-          if (SubIt != Ctx.SubroutineFunctions->end()) {
-            B.CreateCall(SubIt->second, {Ctx.RegStatePtr});
-          } else {
-            Function *TrapFn =
-                Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::trap);
-            B.CreateCall(TrapFn);
-          }
+          B.CreateCall(SubFn, {Ctx.RegStatePtr});
           B.CreateBr(AfterDispatch);
           B.SetInsertPoint(NextBb);
         }
