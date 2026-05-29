@@ -8,6 +8,7 @@
 
 #include "handlers.h"
 #include "canonical-op-attrs.h"
+#include "subroutine-abi.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallString.h"
@@ -333,7 +334,30 @@ HandlerResult handleSOP1(RaiseContext &Ctx, const DecodedInst &Di,
       Hr.Handled = true;
       return Hr;
     }
-    case SetPcSiteInfo::Kind::IndirectB:
+    case SetPcSiteInfo::Kind::IndirectB: {
+      // When inside a subroutine function, IndirectB is the return path.
+      // Emit epilogue (store registers back to RegState) + ret void.
+      if (Ctx.IsSubroutineFunction) {
+        SmallVector<unsigned> VgprIdxs, SgprIdxs;
+        for (unsigned I = 0; I < 80 && I < Ctx.Regs.Vgpr.size(); ++I)
+          VgprIdxs.push_back(I);
+        for (unsigned I = 0; I < 32 && I < Ctx.Regs.Sgpr.size(); ++I)
+          SgprIdxs.push_back(I);
+        emitSubroutineEpilogue(Ctx.B, Ctx.Regs, Ctx.RegStatePtr, *Ctx.RSLayout,
+                               VgprIdxs, SgprIdxs);
+        Ctx.B.CreateRetVoid();
+        Hr.Handled = true;
+        return Hr;
+      }
+      // Fall through to the enumerated dispatch cascade for the kernel.
+      Value *RetVal = Ctx.Regs.loadSGPR64(
+          Ctx.B, static_cast<int>(Info.IndirectRetPairLowReg));
+      RetVal->setName("ret_pc_marker");
+      emitEnumeratedDispatch(Ctx, RetVal, Info.IndirectTargets,
+                             Di.Offset);
+      Hr.Handled = true;
+      return Hr;
+    }
     case SetPcSiteInfo::Kind::DispatchSet: {
       // Both shapes lower to the same enumerated-dispatch cascade:
       // read the source SGPR pair as i64 (it holds the per-predecessor
@@ -453,11 +477,75 @@ HandlerResult handleSOP1(RaiseContext &Ctx, const DecodedInst &Di,
       Hr.Handled = true;
       return Hr;
     }
-    // DispatchSet: emit an enumerated-dispatch cascade through the
-    // source pair into the enumerated targets. The source pair holds
-    // a per-predecessor i64 marker (the resolved callee's source-MC
-    // byte offset), rewritten by the chain-terminator hook in
-    // raiser.cpp on each contributing predecessor path.
+    // DispatchSet: when targets are subroutine offsets (< KernelOffset)
+    // and SubroutineFunctions is available, emit a call-based dispatch
+    // instead of an intra-function branch cascade. This calls each
+    // subroutine function with the RegState struct pointer.
+    if (Ctx.SubroutineFunctions && !Info.IndirectTargets.empty() &&
+        Info.IndirectTargets.front() < Ctx.KernelOffset) {
+      // Flush registers to RegState struct before the call.
+      SmallVector<unsigned> VgprIdxs, SgprIdxs;
+      for (unsigned I = 0; I < 80 && I < Ctx.Regs.Vgpr.size(); ++I)
+        VgprIdxs.push_back(I);
+      for (unsigned I = 0; I < 32 && I < Ctx.Regs.Sgpr.size(); ++I)
+        SgprIdxs.push_back(I);
+      emitRegStateFlush(Ctx.B, Ctx.Regs, Ctx.RegStatePtr, *Ctx.RSLayout,
+                        VgprIdxs, SgprIdxs);
+
+      Value *CallTarget = Ctx.Regs.loadSGPR64(
+          Ctx.B, static_cast<int>(Info.IndirectRetPairLowReg));
+      CallTarget->setName("swap_call_target_marker");
+
+      IRBuilder<> &B = Ctx.B;
+      // Build call cascade.
+      BasicBlock *AfterDispatch = Ctx.lookupBB(ReturnAddr);
+      for (size_t I = 0; I < Info.IndirectTargets.size(); ++I) {
+        uint64_t Target = Info.IndirectTargets[I];
+        auto SubIt = Ctx.SubroutineFunctions->find(Target);
+        Constant *MarkerCi = ConstantInt::get(Ctx.I64Ty, Target);
+        Value *Cmp = B.CreateICmpEQ(CallTarget, MarkerCi);
+
+        BasicBlock *CallBb = BasicBlock::Create(
+            Ctx.C, "call_sub_0x" + utohexstr(Target), Ctx.Kernel);
+        BasicBlock *NextBb;
+        if (I + 1 < Info.IndirectTargets.size())
+          NextBb = BasicBlock::Create(
+              Ctx.C, "dispatch_call_" + Twine(I + 1), Ctx.Kernel);
+        else
+          NextBb = BasicBlock::Create(
+              Ctx.C, "dispatch_call_unreachable", Ctx.Kernel);
+
+        B.CreateCondBr(Cmp, CallBb, NextBb);
+        B.SetInsertPoint(CallBb);
+        if (SubIt != Ctx.SubroutineFunctions->end()) {
+          B.CreateCall(SubIt->second, {Ctx.RegStatePtr});
+        } else {
+          // Subroutine not raised -- emit trap.
+          Function *TrapFn =
+              Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::trap);
+          B.CreateCall(TrapFn);
+        }
+        B.CreateBr(AfterDispatch);
+        B.SetInsertPoint(NextBb);
+      }
+      B.CreateUnreachable(); // end of cascade
+
+      // Reload registers from RegState struct after the call returns.
+      B.SetInsertPoint(AfterDispatch, AfterDispatch->begin());
+      emitRegStateReload(B, Ctx.Regs, Ctx.RegStatePtr, *Ctx.RSLayout,
+                         VgprIdxs, SgprIdxs);
+      // Move insert point to end of AfterDispatch BB.
+      B.SetInsertPoint(AfterDispatch);
+
+      Hr.Handled = true;
+      return Hr;
+    }
+
+    // Non-subroutine DispatchSet: emit an enumerated-dispatch cascade
+    // through the source pair into the enumerated targets. The source
+    // pair holds a per-predecessor i64 marker (the resolved callee's
+    // source-MC byte offset), rewritten by the chain-terminator hook
+    // in raiser.cpp on each contributing predecessor path.
     Value *CallTarget = Ctx.Regs.loadSGPR64(
         Ctx.B, static_cast<int>(Info.IndirectRetPairLowReg));
     CallTarget->setName("swap_call_target_marker");

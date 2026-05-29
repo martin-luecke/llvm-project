@@ -11,6 +11,7 @@
 
 #include "decoded-inst.h"
 #include "isa-profile.h"
+#include "subroutine-abi.h"
 #include "kernarg-layout.h"
 #include "mc-state.h"
 #include "parsed-reg.h"
@@ -83,6 +84,12 @@ struct RaiseContext {
   // setpc-analysis.h for the full contract; see canonical-op.h's
   // `S_SET_PC_I64` doc for the lowering shapes.
   const SetPcAnalysis *SetpcAnalysis = nullptr;
+
+  bool IsSubroutineFunction = false;
+  llvm::Value *RegStatePtr = nullptr;
+  RegStateLayout *RSLayout = nullptr;
+  uint64_t KernelOffset = 0;
+  llvm::DenseMap<uint64_t, llvm::Function *> *SubroutineFunctions = nullptr;
 
   // gfx1250 s_set_vgpr_msb state: only the LOW 8 bits of the instruction's
   // 16-bit immediate carry runtime meaning.  They encode the MSB bit pair for

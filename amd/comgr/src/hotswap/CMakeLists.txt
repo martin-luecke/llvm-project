@@ -160,6 +160,7 @@ add_library(hotswap-transpiler OBJECT
   raise-failure.cpp
   raise-context.cpp
   reg-file.cpp
+  subroutine-abi.cpp
   kernarg-layout.cpp
   user-sgpr-layout.cpp
   wave-projection.cpp

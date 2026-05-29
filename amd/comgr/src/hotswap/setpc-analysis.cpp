@@ -165,7 +165,7 @@ namespace {
 // out far below this; any larger fan-out is much more likely to be a
 // runtime-derived chain we cannot enumerate, and refusing loudly is
 // the principled response.
-constexpr size_t kMaxDispatchTargets = 16;
+constexpr size_t kMaxDispatchTargets = 256;
 
 // Classify a register operand as an SGPR and return its hardware
 // index. Returns nullopt for non-SGPR regs (VCC/EXEC/SCC/M0/...).

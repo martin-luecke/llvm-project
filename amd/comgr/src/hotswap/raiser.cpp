@@ -38,6 +38,7 @@
 #include "handlers.h"
 #include "rewrite-cross-lane-divergent.h"
 #include "c5-predicate-chain-classifier.h"
+#include "subroutine-abi.h"
 #include "tdm-runtime.h"
 
 #include "llvm/ADT/Twine.h"
@@ -809,13 +810,6 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
     if (!FirstBodyBb)
       FirstBodyBb = Bb;
   }
-  for (uint64_t Addr : BlockStarts) {
-    if (Addr >= KernelOffset)
-      continue;
-    BasicBlock *Bb =
-        BasicBlock::Create(C, "sub_0x" + utohexstr(Addr), F);
-    OffsetToBb[Addr] = Bb;
-  }
   BasicBlock *EntryBb;
   if (UseThreadLoop) {
     EntryBb = BasicBlock::Create(C, "entry", F, FirstBodyBb);
@@ -1128,15 +1122,248 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
     B.CreateRetVoid();
   }
 
+  // ==== Phase 4.5: Raise subroutine functions ====
+  //
+  // When extra block starts (subroutine symbols) are present, each
+  // subroutine is raised as a separate LLVM function that communicates
+  // with the kernel via a RegState struct in private memory
+  // (addrspace 5). The kernel's s_swap_pc_i64 DispatchSet handler
+  // flushes registers into the struct, calls the subroutine function,
+  // and reloads on return. The subroutine's s_set_pc_i64 IndirectB
+  // return emits an epilogue (store-back) + ret void.
+  RegStateLayout RSLayout;
+  AllocaInst *RegStateAlloca = nullptr;
+  DenseMap<uint64_t, Function *> SubFunctions;
+
   if (!ExtraBlockStarts.empty() && !UseThreadLoop) {
     B.CreateBr(OffsetToBb[KernelOffset]);
-    for (uint64_t Addr : BlockStarts) {
-      if (Addr >= KernelOffset)
-        continue;
-      BasicBlock *SubBb = OffsetToBb[Addr];
-      if (SubBb->empty())
-        IRBuilder<>(SubBb).CreateUnreachable();
+
+    // (a) Collect subroutine entry offsets (sorted ascending from
+    // ExtraBlockStarts, all < KernelOffset).
+    SmallVector<uint64_t> SubEntries;
+    for (uint64_t Addr : ExtraBlockStarts) {
+      if (Addr < KernelOffset)
+        SubEntries.push_back(Addr);
     }
+    llvm::sort(SubEntries);
+
+    if (!SubEntries.empty()) {
+      // (b) Create RegStateLayout and alloca in the kernel's entry block.
+      RSLayout.init(C, Regs.Sgpr.size(), Regs.Vgpr.size(), Regs.ExecTy);
+      {
+        IRBuilder<> AllocaB(&F->getEntryBlock(),
+                            F->getEntryBlock().getFirstInsertionPt());
+        RegStateAlloca = AllocaB.CreateAlloca(RSLayout.Ty, nullptr, "regstate");
+      }
+
+      // Register index sets for flush/reload.
+      SmallVector<unsigned> VgprIdxs, SgprIdxs;
+      for (unsigned I = 0; I < 80 && I < Regs.Vgpr.size(); ++I)
+        VgprIdxs.push_back(I);
+      for (unsigned I = 0; I < 32 && I < Regs.Sgpr.size(); ++I)
+        SgprIdxs.push_back(I);
+
+      // (c-e) For each subroutine entry, create and raise a function.
+      for (size_t Si = 0; Si < SubEntries.size(); ++Si) {
+        uint64_t SubStart = SubEntries[Si];
+        uint64_t SubEnd = (Si + 1 < SubEntries.size())
+                              ? SubEntries[Si + 1]
+                              : KernelOffset;
+
+        // Create subroutine function.
+        auto *SubFnTy =
+            FunctionType::get(VoidTy, {PointerType::get(C, 5)}, false);
+        Function *SubFn = Function::Create(
+            SubFnTy, GlobalValue::InternalLinkage,
+            "__hotswap_sub_0x" + utohexstr(SubStart), &M);
+        SubFn->setCallingConv(CallingConv::AMDGPU_Gfx);
+        SubFunctions[SubStart] = SubFn;
+
+        // Create entry BB and set up local register file.
+        BasicBlock *SubEntryBb = BasicBlock::Create(C, "entry", SubFn);
+        IRBuilder<> SubB(SubEntryBb);
+
+        AllocaRegFile SubRegs;
+        SubRegs.init(SubB, I32Ty, I1Ty, Isa, *Mc.RegInfo, Projection);
+
+        Value *SubRegStatePtr = SubFn->getArg(0);
+        SubRegStatePtr->setName("regstate");
+
+        // Prologue: load registers from RegState.
+        emitSubroutinePrologue(SubB, SubRegs, SubRegStatePtr, RSLayout,
+                               VgprIdxs, SgprIdxs);
+
+        // Create BBs for block starts within this subroutine's range.
+        DenseMap<uint64_t, BasicBlock *> SubOffsetToBb;
+        SubOffsetToBb[SubStart] = SubEntryBb;
+        for (uint64_t Addr : BlockStarts) {
+          if (Addr <= SubStart || Addr >= SubEnd)
+            continue;
+          BasicBlock *Bb =
+              BasicBlock::Create(C, "sub_bb_0x" + utohexstr(Addr), SubFn);
+          SubOffsetToBb[Addr] = Bb;
+        }
+
+        // Build a minimal RaiseContext for the subroutine.
+        KernargLayout SubKernargs; // empty -- subroutines don't access kernargs
+        RaiseContext SubCtx{C,
+                            M,
+                            SubB,
+                            SubRegs,
+                            Projection,
+                            Mc,
+                            Isa,
+                            TargetIsa,
+                            SubKernargs,
+                            nullptr, // no UserSgprLayout
+                            SubFn,
+                            nullptr, // no ThreadLoopLatch
+                            I1Ty,
+                            I8Ty,
+                            I32Ty,
+                            I64Ty,
+                            F32Ty,
+                            F16Ty,
+                            F64Ty,
+                            PtrGlobalTy,
+                            SubOffsetToBb};
+        SubCtx.SetpcAnalysis = &SetpcAnalysis;
+        SubCtx.IsSubroutineFunction = true;
+        SubCtx.RegStatePtr = SubRegStatePtr;
+        SubCtx.RSLayout = &RSLayout;
+        SubCtx.KernelOffset = KernelOffset;
+
+        // Raise instructions in the subroutine range.
+        bool SubFailed = false;
+        for (size_t Ii = 0; Ii < Insts.size(); ++Ii) {
+          const DecodedInst &Di = Insts[Ii];
+          if (Di.Offset < SubStart || Di.Offset >= SubEnd)
+            continue;
+
+          // BB boundary handling (mirrors the kernel's Phase 5 logic).
+          auto BbIt = SubOffsetToBb.find(Di.Offset);
+          if (SubB.GetInsertBlock()->hasTerminator() &&
+              BbIt == SubOffsetToBb.end())
+            continue;
+          if (BbIt != SubOffsetToBb.end() &&
+              BbIt->second != SubB.GetInsertBlock()) {
+            BasicBlock *InsertBb = SubB.GetInsertBlock();
+            if (!InsertBb->hasTerminator())
+              SubB.CreateBr(BbIt->second);
+            SubB.SetInsertPoint(BbIt->second);
+            SubCtx.VgprMsBs = 0;
+            SubCtx.clearSgprWaveMaskShadow();
+          }
+
+          SubCtx.computeVGPRAdjust(Di);
+          SubCtx.resetLaneActiveCache();
+          OpResolver SubOp{SubCtx, Di};
+
+          // Dispatch to format-specific handler (same dispatch as kernel).
+          const uint64_t KValu =
+              SIInstrFlags::DPP | SIInstrFlags::SDWA | SIInstrFlags::VOP1 |
+              SIInstrFlags::VOP2 | SIInstrFlags::VOP3 | SIInstrFlags::VOPC |
+              SIInstrFlags::VOP3P;
+          const uint64_t Flags = Di.TsFlags;
+          const unsigned Opc = Di.Inst.getOpcode();
+          HandlerResult Hr;
+          if (AMDGPU::isVOPD(Opc))
+            Hr = handleVOPD(SubCtx, Di, SubOp);
+          else if (Flags & SIInstrFlags::IsMAI)
+            Hr = handleMFMA(SubCtx, Di, SubOp);
+          else if (Flags & KValu)
+            Hr = handleVALU(SubCtx, Di, SubOp);
+          else if (Flags & SIInstrFlags::SOPP)
+            Hr = handleSOPP(SubCtx, Di, SubOp);
+          else if (Flags & SIInstrFlags::SOPC)
+            Hr = handleSOPC(SubCtx, Di, SubOp);
+          else if (Flags & SIInstrFlags::SOP1)
+            Hr = handleSOP1(SubCtx, Di, SubOp);
+          else if (Flags & SIInstrFlags::SOP2)
+            Hr = handleSOP2(SubCtx, Di, SubOp);
+          else if (Flags & SIInstrFlags::SOPK)
+            Hr = handleSOPK(SubCtx, Di, SubOp);
+          else if (Flags & SIInstrFlags::SMRD)
+            Hr = handleSMEM(SubCtx, Di, SubOp);
+          else if (Flags & SIInstrFlags::FLAT)
+            Hr = handleFLAT(SubCtx, Di, SubOp);
+          else if (Flags & SIInstrFlags::MUBUF)
+            Hr = handleMUBUF(SubCtx, Di, SubOp);
+          else if (Flags & SIInstrFlags::DS)
+            Hr = handleDS(SubCtx, Di, SubOp);
+          else if (Flags & SIInstrFlags::TENSOR_CNT)
+            Hr = handleVIMAGE(SubCtx, Di, SubOp);
+
+          if (SubCtx.PendingFailure.hasFailed()) {
+            SubFailed = true;
+            SubCtx.PendingFailure = RaiseFailure{};
+            break;
+          }
+
+          if (!Hr.Handled) {
+            SubFailed = true;
+            LLVM_DEBUG(dbgs() << "transpiler: subroutine 0x"
+                              << utohexstr(SubStart)
+                              << " failed on instruction "
+                              << Di.Mnemonic << " at 0x"
+                              << format_hex_no_prefix(Di.Offset, 8) << "\n");
+            break;
+          }
+
+          if (Di.DefsScc && !Hr.SccHandled && Hr.SccResult) {
+            Value *Zero = Constant::getNullValue(Hr.SccResult->getType());
+            SubCtx.Regs.storeSCC(SubCtx.B,
+                                 SubCtx.B.CreateICmpNE(Hr.SccResult, Zero));
+          }
+
+          // Chain-terminator post-processing for s_addc_u32 in subroutines.
+          if (Di.CanonOp == CanonicalOp::S_ADDC_U32) {
+            auto It = SetpcAnalysis.ChainTerminators.find(Di.Offset);
+            if (It != SetpcAnalysis.ChainTerminators.end()) {
+              (void)SubCtx.lookupBB(It->second.ResolvedReturnAddr);
+              Value *RetMarker =
+                  ConstantInt::get(SubCtx.I64Ty, It->second.ResolvedReturnAddr);
+              SubCtx.Regs.storeSGPR64(
+                  SubCtx.B, static_cast<int>(It->second.RetPairLowReg),
+                  RetMarker);
+            }
+          }
+        }
+
+        // If the subroutine failed to raise, replace its body with trap.
+        if (SubFailed) {
+          // Delete all BBs and recreate with a single trap+unreachable.
+          while (SubFn->size() > 0)
+            SubFn->back().eraseFromParent();
+          BasicBlock *TrapBb = BasicBlock::Create(C, "trap", SubFn);
+          IRBuilder<> TrapB(TrapBb);
+          Function *TrapFn =
+              Intrinsic::getOrInsertDeclaration(&M, Intrinsic::trap);
+          TrapB.CreateCall(TrapFn);
+          TrapB.CreateUnreachable();
+          errs() << "transpiler: subroutine __hotswap_sub_0x"
+                 << utohexstr(SubStart) << " failed to raise; replaced with "
+                 << "trap\n";
+        } else {
+          // Ensure all BBs have terminators.
+          for (auto &BB : *SubFn) {
+            if (!BB.hasTerminator()) {
+              IRBuilder<> TermB(&BB);
+              TermB.CreateUnreachable();
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Wire subroutine function data into the kernel's RaiseContext so the
+  // s_swap_pc_i64 handler can emit call-based dispatch.
+  if (!SubFunctions.empty()) {
+    Ctx.SubroutineFunctions = &SubFunctions;
+    Ctx.RegStatePtr = RegStateAlloca;
+    Ctx.RSLayout = &RSLayout;
+    Ctx.KernelOffset = KernelOffset;
   }
 
   int RaisedCount = 0;
