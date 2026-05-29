@@ -1934,10 +1934,8 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     if (!Clamp)
       return Hr;
 
-    const CanonicalOp Signed[] = { CanonicalOp::V_ADD_MIN_I32, CanonicalOp::V_ADD_MAX_I32 };
-    const CanonicalOp Max[] = { CanonicalOp::V_ADD_MAX_U32, CanonicalOp::V_ADD_MAX_I32 };
-    const bool IsSinged = is_contained(Signed, Sop);
-    const bool IsMax = is_contained(Max, Sop);
+    bool IsSinged = Sop == CanonicalOp::V_ADD_MIN_I32 || Sop == CanonicalOp::V_ADD_MAX_I32;
+    bool IsMax =  Sop == CanonicalOp::V_ADD_MAX_U32 || Sop == CanonicalOp::V_ADD_MAX_I32;
 
     const Intrinsic::ID AddSatId = IsSinged ? Intrinsic::sadd_sat : Intrinsic::uadd_sat;
     const Intrinsic::ID MinId = IsSinged ? Intrinsic::smin : Intrinsic::umin;
