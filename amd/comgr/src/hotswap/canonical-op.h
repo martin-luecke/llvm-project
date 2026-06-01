@@ -438,7 +438,6 @@ enum class CanonicalOp : uint16_t {
   // -- VOP2 / VOP3 --
   V_ADD_F32, V_SUB_F32, V_SUBREV_F32, V_MUL_F32,
   V_FMAC_F32, V_FMA_F32, V_FMAMK_F32, V_FMAAK_F32,
-  V_MAX_F32, V_MIN_F32,
   V_ADD_NC_U32, V_SUB_NC_U32, V_SUBREV_NC_U32,
   V_ADD_CO_U32, V_ADD_CO_CI_U32,
   V_SUB_CO_U32, V_SUBREV_CO_U32, V_SUB_CO_CI_U32, V_SUBREV_CO_CI_U32,
@@ -507,6 +506,7 @@ enum class CanonicalOp : uint16_t {
   // generated assembly recovers the original instruction without
   // codegen quality loss.
   V_MED3_I32,
+  // IEEE-754-2019 maximumNumber/minimumNumber: numeric operand preferred over NaN.
   V_MAX_NUM_F32, V_MIN_NUM_F32,
   // IEEE-754 2019 maximum/minimum: propagate NaN (distinct from maxnum/minnum).
   V_MAXIMUM_F32, V_MINIMUM_F32,
@@ -577,7 +577,7 @@ enum class CanonicalOp : uint16_t {
   // preserve the unselected destination half and honor source/dst op_sel.
   V_MINMAX_NUM_F16, V_MAXMIN_NUM_F16,
   // IEEE-754 2019 f16 maximum/minimum: propagate NaN, distinct from
-  // V_MAX_F16 / V_MIN_F16's maxnum/minnum semantics.
+  // V_MAX_F16 / V_MIN_F16's maximumnum/minimumnum semantics.
   V_MAXIMUM_F16, V_MINIMUM_F16,
   // IEEE-754 2019 f16 ternary reductions and clamp pair. These handlers
   // honor source/destination op_sel and preserve the unselected destination

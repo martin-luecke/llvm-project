@@ -227,13 +227,13 @@ HandlerResult handleValuSmallOps(RaiseContext &Ctx, const DecodedInst &Di,
     case CanonicalOp::V_SUBREV_F16: Res = Ctx.B.CreateFSub(B, A, "subrev_f16"); break;
     case CanonicalOp::V_MAX_F16: {
       Function *Fn = Intrinsic::getOrInsertDeclaration(
-          &Ctx.M, Intrinsic::maxnum, {Ctx.F16Ty});
+          &Ctx.M, Intrinsic::maximumnum, {Ctx.F16Ty});
       Res = Ctx.B.CreateCall(Fn, {A, B}, "max_f16");
       break;
     }
     case CanonicalOp::V_MIN_F16: {
       Function *Fn = Intrinsic::getOrInsertDeclaration(
-          &Ctx.M, Intrinsic::minnum, {Ctx.F16Ty});
+          &Ctx.M, Intrinsic::minimumnum, {Ctx.F16Ty});
       Res = Ctx.B.CreateCall(Fn, {A, B}, "min_f16");
       break;
     }

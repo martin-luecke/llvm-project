@@ -445,8 +445,8 @@ static const Entry kCanonTable[] = {
     E(V_FMA_F32_e64, V_FMA_F32),
     E(V_FMAMK_F32, V_FMAMK_F32),
     E(V_FMAAK_F32, V_FMAAK_F32),
-    E(V_MAX_F32_e64, V_MAX_F32),
-    E(V_MIN_F32_e64, V_MIN_F32),
+    E(V_MAX_F32_e64, V_MAX_NUM_F32),
+    E(V_MIN_F32_e64, V_MIN_NUM_F32),
     // gfx11+ IEEE-754 2019 maximum/minimum. These differ from V_MAX_NUM_F32 /
     // V_MIN_NUM_F32 in their NaN semantics: maximum/minimum propagate NaN,
     // while maxnum/minnum return the non-NaN operand.
