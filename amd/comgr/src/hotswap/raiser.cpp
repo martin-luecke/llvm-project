@@ -867,9 +867,21 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
         B.CreateLShr(FlatBase, 32), I32Ty, "fscr_hi");
     B.CreateStore(ScratchLo, Regs.FlatScr[0]);
     B.CreateStore(ScratchHi, Regs.FlatScr[1]);
+    // On gfx1250, the enable_sgpr_flat_scratch_init bit is repurposed as
+    // the kernarg segment pointer (flat scratch is handled differently on
+    // GFX12+). Seed the FlatScratchInit SGPR pair with the kernarg pointer
+    // so s_load instructions using this pair read from kernarg memory.
     if (UserSgprLayout.FlatScratchInitSgpr >= 0) {
-      Regs.storeSGPR32(B, UserSgprLayout.FlatScratchInitSgpr, ScratchLo);
-      Regs.storeSGPR32(B, UserSgprLayout.FlatScratchInitSgpr + 1, ScratchHi);
+      Value *KargPtr = B.CreateCall(
+          Intrinsic::getOrInsertDeclaration(
+              &M, Intrinsic::amdgcn_kernarg_segment_ptr),
+          {}, "fscr_kernarg_ptr");
+      Value *KargInt = B.CreatePtrToInt(KargPtr, I64Ty, "fscr_karg_int");
+      Regs.storeSGPR32(B, UserSgprLayout.FlatScratchInitSgpr,
+                       B.CreateTrunc(KargInt, I32Ty, "fscr_karg_lo"));
+      Regs.storeSGPR32(B, UserSgprLayout.FlatScratchInitSgpr + 1,
+                       B.CreateTrunc(B.CreateLShr(KargInt, 32), I32Ty,
+                                     "fscr_karg_hi"));
     }
   }
   SourceHiddenArgContext HiddenCtx{C, M, B, I8Ty, I32Ty, I64Ty, Meta.Args};
