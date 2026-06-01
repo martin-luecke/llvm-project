@@ -851,6 +851,27 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
     Regs.storeSGPR32(B, UserSgprLayout.WorkgroupIdYSgpr,
                      B.CreateCall(FnWorkgroupIdY, {}, "wg_id_y"));
   }
+  // Seed FLAT_SCR with the flat-address form of the scratch base.
+  // Allocate a byte at scratch offset 0, addrspacecast to flat, then
+  // ptrtoint. The addrspacecast makes the backend add FLAT_SCRATCH to
+  // the scratch offset, giving the correct flat address.
+  if (UserSgprLayout.FlatScratchInitSgpr >= 0 ||
+      Meta.PrivateSegmentFixedSize > 0) {
+    auto *PrivPtrTy = PointerType::get(C, 5);  // addrspace(5) = private
+    auto *FlatPtrTy = PointerType::get(C, 0);  // addrspace(0) = flat
+    Value *NullPriv = ConstantPointerNull::get(PrivPtrTy);
+    Value *FlatPtr = B.CreateAddrSpaceCast(NullPriv, FlatPtrTy, "fscr_flat");
+    Value *FlatBase = B.CreatePtrToInt(FlatPtr, I64Ty, "fscr_base");
+    Value *ScratchLo = B.CreateTrunc(FlatBase, I32Ty, "fscr_lo");
+    Value *ScratchHi = B.CreateTrunc(
+        B.CreateLShr(FlatBase, 32), I32Ty, "fscr_hi");
+    B.CreateStore(ScratchLo, Regs.FlatScr[0]);
+    B.CreateStore(ScratchHi, Regs.FlatScr[1]);
+    if (UserSgprLayout.FlatScratchInitSgpr >= 0) {
+      Regs.storeSGPR32(B, UserSgprLayout.FlatScratchInitSgpr, ScratchLo);
+      Regs.storeSGPR32(B, UserSgprLayout.FlatScratchInitSgpr + 1, ScratchHi);
+    }
+  }
   SourceHiddenArgContext HiddenCtx{C, M, B, I8Ty, I32Ty, I64Ty, Meta.Args};
   auto EmitPreloadedHiddenKernargDword = [&](int ByteOffset) -> Value * {
     SourceHiddenArgValue Hidden = emitSourceHiddenDword(HiddenCtx, ByteOffset);
@@ -966,8 +987,22 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
     for (auto *Slot : Regs.Ttmp)
       SeedB.CreateStore(ConstantInt::get(I32Ty, 0), Slot);
     SeedB.CreateStore(ConstantInt::get(I32Ty, 0), Regs.M0);
-    SeedB.CreateStore(ConstantInt::get(I32Ty, 0), Regs.FlatScr[0]);
-    SeedB.CreateStore(ConstantInt::get(I32Ty, 0), Regs.FlatScr[1]);
+    // Re-seed FlatScr with the flat scratch base (same as entry-BB seeding).
+    if (UserSgprLayout.FlatScratchInitSgpr >= 0 ||
+        Meta.PrivateSegmentFixedSize > 0) {
+      auto *PrivPtrTy2 = PointerType::get(C, 5);
+      auto *FlatPtrTy2 = PointerType::get(C, 0);
+      Value *NP2 = ConstantPointerNull::get(PrivPtrTy2);
+      Value *FP2 = SeedB.CreateAddrSpaceCast(NP2, FlatPtrTy2);
+      Value *FB2 = SeedB.CreatePtrToInt(FP2, I64Ty);
+      SeedB.CreateStore(SeedB.CreateTrunc(FB2, I32Ty), Regs.FlatScr[0]);
+      SeedB.CreateStore(
+          SeedB.CreateTrunc(SeedB.CreateLShr(FB2, 32), I32Ty),
+          Regs.FlatScr[1]);
+    } else {
+      SeedB.CreateStore(ConstantInt::get(I32Ty, 0), Regs.FlatScr[0]);
+      SeedB.CreateStore(ConstantInt::get(I32Ty, 0), Regs.FlatScr[1]);
+    }
 
     // Mirror the entry-BB user-SGPR seeding above: the kernarg pair is
     // re-seeded with `amdgcn_kernarg_segment_ptr` so kernarg SMEM loads
