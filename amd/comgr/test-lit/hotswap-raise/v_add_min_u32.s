@@ -22,26 +22,9 @@
 	.type	v_add_min_u32_kernel,@function
 v_add_min_u32_kernel:
 	s_setreg_imm32_b32 hwreg(HW_REG_WAVE_MODE, 25, 1), 1
-	s_load_b32 s2, s[0:1], 0x1c
-	s_bfe_u32 s3, ttmp6, 0x4000c
-	s_and_b32 s4, ttmp6, 15
-	s_add_co_i32 s3, s3, 1
-	s_getreg_b32 s5, hwreg(HW_REG_IB_STS2, 6, 4)
-	s_mul_i32 s3, ttmp9, s3
-	s_delay_alu instid0(SALU_CYCLE_1) | instskip(SKIP_4) | instid1(SALU_CYCLE_1)
-	s_add_co_i32 s4, s4, s3
-	s_wait_kmcnt 0x0
-	s_and_b32 s2, s2, 0xffff
-	s_cmp_eq_u32 s5, 0
-	s_cselect_b32 s3, ttmp9, s4
-	v_mad_u32 v3, s3, s2, v0
 	s_load_b128 s[0:3], s[0:1], 0x0
-	s_delay_alu instid0(VALU_DEP_1) | instskip(NEXT) | instid1(VALU_DEP_1)
-	v_lshl_add_u32 v0, v3, 1, v3
-	v_ashrrev_i32_e32 v1, 31, v0
 	s_wait_kmcnt 0x0
-	s_delay_alu instid0(VALU_DEP_1)
-	v_lshl_add_u64 v[0:1], v[0:1], 2, s[2:3]
+	v_mov_b64_e64 v[0:1], s[0:1]
 	global_load_b96 v[0:2], v[0:1], off
 	s_wait_loadcnt 0x0
 	v_add_min_u32 v0, s2, -1, v0
