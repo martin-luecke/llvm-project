@@ -1378,7 +1378,7 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Intrinsic::ID Id =
         Sop == CanonicalOp::V_MAX_NUM_F32 ? Intrinsic::maximumnum : Intrinsic::minimumnum;
     Function *Fn = Intrinsic::getOrInsertDeclaration(&Ctx.M, Id, {Ctx.F32Ty});
-    const char *Name = Sop == CanonicalOp::V_MAX_NUM_F32 ? "fmax" : "fmin";
+    const char *Name = Sop == CanonicalOp::V_MAX_NUM_F32 ? "vmaxnum" : "vminnum";
     Ctx.writeReg32(Op.dst(),
                    Ctx.B.CreateBitCast(Ctx.B.CreateCall(Fn, {S0, S1}, Name), Ctx.I32Ty));
     Hr.Handled = true;
