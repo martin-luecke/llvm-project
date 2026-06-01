@@ -269,7 +269,15 @@ bool shouldRefuseC5(PredicateChainProjection Projection,
     return modrepCanHaveActiveReplicaLane(SourceWaveSize,
                                           MaxFlatWorkgroupSize);
   case PredicateChainProjection::WaveNative:
-    return MaxFlatWorkgroupSize > 0 && MaxFlatWorkgroupSize < TargetWaveSize;
+    // Refuse the phantom-lane regime (wg < target wave) AND the multi-source-
+    // wave regime (wg > source wave): in the latter, WaveNative packs several
+    // source wave32 waves into one target wave64, so a workitem.id.x() lane-
+    // position predicate is source-wave-scoped and mis-evaluates across the
+    // packed waves -- observed as a runtime VM fault in DeepSeek-V3
+    // fused_moe_kernel. (EXPERIMENT to confirm the C5-predicate attribution.)
+    return MaxFlatWorkgroupSize > 0 &&
+           (MaxFlatWorkgroupSize < TargetWaveSize ||
+            MaxFlatWorkgroupSize > SourceWaveSize);
   case PredicateChainProjection::ThreadLoop:
     return !SuppressThreadLoopC5;
   }
