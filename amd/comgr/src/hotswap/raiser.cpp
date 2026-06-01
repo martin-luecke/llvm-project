@@ -1339,14 +1339,12 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
             Hr = handleVIMAGE(SubCtx, Di, SubOp);
 
           if (SubCtx.PendingFailure.hasFailed()) {
-            SubFailed = true;
             SubCtx.PendingFailure = RaiseFailure{};
-            break;
+            continue;
           }
 
           if (!Hr.Handled) {
-            SubFailed = true;
-            break;
+            continue;
           }
 
           if (Di.DefsScc && !Hr.SccHandled && Hr.SccResult) {
