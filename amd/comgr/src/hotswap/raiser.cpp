@@ -1546,12 +1546,20 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
       if (Di.CanonOp == CanonicalOp::S_ADDC_U32) {
         auto It = SetpcAnalysis.ChainTerminators.find(Di.Offset);
         if (It != SetpcAnalysis.ChainTerminators.end()) {
-          // Force the BB to exist so the downstream cascade's
-          // direct branch has a destination; we don't use the
-          // pointer here.
-          (void)Ctx.lookupBB(It->second.ResolvedReturnAddr);
-          Value *RetMarker =
-              ConstantInt::get(Ctx.I64Ty, It->second.ResolvedReturnAddr);
+          uint64_t ResolvedAddr = It->second.ResolvedReturnAddr;
+          // When subroutine functions handle the dispatch, don't create
+          // fallback BBs for subroutine-range offsets. The call-based
+          // IndirectB cascade handles routing, not intra-function branches.
+          if (!Ctx.SubroutineFunctions || ResolvedAddr >= KernelOffset)
+            (void)Ctx.lookupBB(ResolvedAddr);
+          // When subroutine functions handle dispatch, write the marker as
+          // an absolute ELF address so it matches the IndirectB cascade's
+          // comparison values. Otherwise keep .text-relative for the
+          // standard DispatchSet cascade.
+          uint64_t Marker = ResolvedAddr;
+          if (Ctx.SubroutineFunctions && ResolvedAddr < KernelOffset)
+            Marker += TextBase;
+          Value *RetMarker = ConstantInt::get(Ctx.I64Ty, Marker);
           Ctx.Regs.storeSGPR64(Ctx.B,
                                 static_cast<int>(It->second.RetPairLowReg),
                                 RetMarker);
