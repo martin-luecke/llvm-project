@@ -476,7 +476,8 @@ enum class CanonicalOp : uint16_t {
   V_BFE_U32, V_BFE_I32, V_BFI_B32, V_PERM_B32,
   V_MBCNT_LO_U32_B32, V_MBCNT_HI_U32_B32,
   V_READLANE_B32, V_WRITELANE_B32,
-  V_MED3_F32, V_MAX3_F32, V_MIN3_F32, V_MAX3_NUM_F32,
+  // VOP3 ternary maximumNumber/minimumNumber
+  V_MED3_NUM_F32, V_MAX3_NUM_F32, V_MIN3_NUM_F32,
   // VOP3 IEEE-2019 ternary clamp `minnum(maxnum(s0, s1), s2)`.
   // gfx12 renamed gfx11's V_MINMAX_F32 (.td:1485, opcode 0x25f)
   // to V_MINMAX_NUM_F32 (.td:1696, opcode 0x268) when the .NUM
@@ -514,7 +515,7 @@ enum class CanonicalOp : uint16_t {
   // reduction.  gfx11+/gfx12 (`HasMinimum3Maximum3F32` feature in
   // AMDGPU.td:194; VOP3 opcodes 0x22e/0x22f).  Lowered to chained
   // `llvm.maximum`/`llvm.minimum` calls -- llc on gfx950 selects
-  // `v_max3_f32`/`v_min3_f32` (the maxnum/minnum ternaries) when no
+  // `v_max3_num_f32`/`v_min3_num_f32` (the maximumnum/minimumnum ternaries) when no
   // NaN propagation is required, or expands to two 2-source IEEE
   // calls when it is.
   V_MAXIMUM3_F32, V_MINIMUM3_F32,
@@ -572,12 +573,13 @@ enum class CanonicalOp : uint16_t {
   // half-write placement. Lowered to llvm.fma.f16; semantics match
   // VOP3Instructions.td:453,2312,2601 (any_fma SDNode).
   V_FMA_F16,
-  V_MAX_F16, V_MIN_F16,
+  // VOP2 maximumNumber/minimumNumber
+  V_MAX_NUM_F16, V_MIN_NUM_F16,
   // F16 ternary clamp `.NUM` pair. Like the IEEE f16 forms below, these
   // preserve the unselected destination half and honor source/dst op_sel.
   V_MINMAX_NUM_F16, V_MAXMIN_NUM_F16,
-  // IEEE-754 2019 f16 maximum/minimum: propagate NaN, distinct from
-  // V_MAX_F16 / V_MIN_F16's maximumnum/minimumnum semantics.
+  // IEEE-754 2019 f16 maximum/minimum: propagate NaN (`llvm.maximum` /
+  // `llvm.minimum`)
   V_MAXIMUM_F16, V_MINIMUM_F16,
   // IEEE-754 2019 f16 ternary reductions and clamp pair. These handlers
   // honor source/destination op_sel and preserve the unselected destination

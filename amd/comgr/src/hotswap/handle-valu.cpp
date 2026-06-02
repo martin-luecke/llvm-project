@@ -2039,7 +2039,7 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Hr.Handled = true;
     return Hr;
   }
-  if (Sop == CanonicalOp::V_MAX3_F32 || Sop == CanonicalOp::V_MAX3_NUM_F32) {
+  if (Sop == CanonicalOp::V_MAX3_NUM_F32) {
     Value *S0 = Op.srcF(0), *S1 = Op.srcF(1), *S2 = Op.srcF(2);
     if (S0->getType() != Ctx.F32Ty) S0 = Ctx.B.CreateBitCast(S0, Ctx.F32Ty);
     if (S1->getType() != Ctx.F32Ty) S1 = Ctx.B.CreateBitCast(S1, Ctx.F32Ty);
@@ -2051,7 +2051,7 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
   // IEEE-754 2019 ternary maximum: NaN-propagating 3-source reduction.
-  // Same shape as V_MAX3_F32 above but uses Intrinsic::maximum (NaN-
+  // Same shape as V_MAX3_NUM_F32 above but uses Intrinsic::maximum (NaN-
   // propagating) instead of Intrinsic::maximumnum (numeric operand preferred over NaN), matching
   // the gfx12 v_maximum3_f32 / v_minimum3_f32 hardware semantics.
   if (Sop == CanonicalOp::V_MAXIMUM3_F32 ||
@@ -2256,7 +2256,7 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Hr.Handled = true;
     return Hr;
   }
-  if (Sop == CanonicalOp::V_MIN3_F32) {
+  if (Sop == CanonicalOp::V_MIN3_NUM_F32) {
     Value *S0 = Op.srcF(0), *S1 = Op.srcF(1), *S2 = Op.srcF(2);
     if (S0->getType() != Ctx.F32Ty) S0 = Ctx.B.CreateBitCast(S0, Ctx.F32Ty);
     if (S1->getType() != Ctx.F32Ty) S1 = Ctx.B.CreateBitCast(S1, Ctx.F32Ty);
@@ -2267,13 +2267,13 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Hr.Handled = true;
     return Hr;
   }
-  if (Sop == CanonicalOp::V_MED3_F32) {
+  if (Sop == CanonicalOp::V_MED3_NUM_F32) {
     Value *S0 = Op.srcF(0), *S1 = Op.srcF(1), *S2 = Op.srcF(2);
     if (S0->getType() != Ctx.F32Ty) S0 = Ctx.B.CreateBitCast(S0, Ctx.F32Ty);
     if (S1->getType() != Ctx.F32Ty) S1 = Ctx.B.CreateBitCast(S1, Ctx.F32Ty);
     if (S2->getType() != Ctx.F32Ty) S2 = Ctx.B.CreateBitCast(S2, Ctx.F32Ty);
-    Function *MaxFn = Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::maxnum, {Ctx.F32Ty});
-    Function *MinFn = Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::minnum, {Ctx.F32Ty});
+    Function *MaxFn = Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::maximumnum, {Ctx.F32Ty});
+    Function *MinFn = Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::minimumnum, {Ctx.F32Ty});
     Value *Mn01 = Ctx.B.CreateCall(MinFn, {S0, S1});
     Value *Mx01 = Ctx.B.CreateCall(MaxFn, {S0, S1});
     Ctx.writeReg32(Op.dst(), Ctx.B.CreateBitCast(Ctx.B.CreateCall(MaxFn, {Mn01, Ctx.B.CreateCall(MinFn, {Mx01, S2})}, "med3"), Ctx.I32Ty));
