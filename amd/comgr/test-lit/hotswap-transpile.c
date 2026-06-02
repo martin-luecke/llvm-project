@@ -17,21 +17,21 @@
 // NULL: NULL_ARGS: INVALID_ARGUMENT
 
 // COM: Malformed ISA strings -> parseTargetIdentifier rejects.
-// RUN: hotswap-transpile %t.elf not-a-valid-isa also-not-valid \
+// RUN: hotswap-transpile %t.elf not-a-valid-isa --source-isa=also-not-valid \
 // RUN:   | %FileCheck --check-prefix=BADISA %s
 // BADISA: RESULT: INVALID_ARGUMENT
 
 // COM: Zero-size input data with a well-formed ISA pair -> rejected
 // COM: at the data-pointer gate (mirrors hotswap-rewrite.c's ZEROSIZE).
-// RUN: hotswap-transpile %t.elf amdgcn-amd-amdhsa--gfx1250 \
-// RUN:                   amdgcn-amd-amdhsa--gfx942 --zero-size \
+// RUN: hotswap-transpile %t.elf amdgcn-amd-amdhsa--gfx942 \
+// RUN:                   --source-isa=amdgcn-amd-amdhsa--gfx1250 --zero-size \
 // RUN:   | %FileCheck --check-prefix=ZEROSIZE %s
 // ZEROSIZE: RESULT: INVALID_ARGUMENT
 
 // COM: Wrong data kind (BC instead of EXECUTABLE) -> rejected at the
 // COM: kind gate. Both hotswap entry points share this contract.
-// RUN: hotswap-transpile %t.elf amdgcn-amd-amdhsa--gfx1250 \
-// RUN:                   amdgcn-amd-amdhsa--gfx942 --wrong-kind \
+// RUN: hotswap-transpile %t.elf amdgcn-amd-amdhsa--gfx942 \
+// RUN:                   --source-isa=amdgcn-amd-amdhsa--gfx1250 --wrong-kind \
 // RUN:   | %FileCheck --check-prefix=WRONGKIND %s
 // WRONGKIND: RESULT: INVALID_ARGUMENT
 
@@ -41,8 +41,8 @@
 // COM: which the comgr wrapper maps to AMD_COMGR_STATUS_ERROR. This is the
 // COM: cheapest way to assert that the hotswap call site is actually wired
 // COM: up without staging a real HSACO into the comgr tree.
-// RUN: hotswap-transpile %t.elf amdgcn-amd-amdhsa--gfx1250 \
-// RUN:                   amdgcn-amd-amdhsa--gfx942 \
+// RUN: hotswap-transpile %t.elf amdgcn-amd-amdhsa--gfx942 \
+// RUN:                   --source-isa=amdgcn-amd-amdhsa--gfx1250 \
 // RUN:   | %FileCheck --check-prefix=NOKERNELS %s
 // NOKERNELS: RESULT: ERROR
 
@@ -51,14 +51,16 @@
 // COM: ops) under amd/comgr/hotswap/tests/. Re-lower it to gfx942 and verify
 // COM: both the API contract (SUCCESS + non-empty bytes) and the binary
 // COM: contents (ELF e_flags retargeted to gfx942, kernel symbol preserved).
+// COM: --source-isa is omitted to also exercise auto-detection: source_gfx
+// COM: must come back as gfx950, recovered from the input ELF's e_flags.
 // COM: The hotswap backend shells out to llc and ld.lld; the lit site config
 // COM: prepends llvm_tools_dir to PATH so both are reachable from the test
 // COM: environment.
 // RUN: hotswap-transpile %S/vecadd_gfx950.co \
-// RUN:                   amdgcn-amd-amdhsa--gfx950 \
 // RUN:                   amdgcn-amd-amdhsa--gfx942 \
 // RUN:                   --output=%t.gfx942.co \
 // RUN:   | %FileCheck --check-prefix=VECADD %s
+// VECADD: source_gfx=gfx950 target_gfx=gfx942
 // VECADD: RESULT: SUCCESS bytes={{[1-9][0-9]*}}
 
 // COM: Sanity-check the source binary's e_flags so the negative check below
@@ -86,21 +88,29 @@
 // RUN:   | %FileCheck --check-prefix=TGTSYM %s
 // TGTSYM: vecadd
 
+// COM: An explicit --source-isa contradicting the object's own ISA is a
+// COM: caller error: the gfx950 object named gfx900 must be rejected up front.
+// RUN: hotswap-transpile %S/vecadd_gfx950.co \
+// RUN:                   amdgcn-amd-amdhsa--gfx942 \
+// RUN:                   --source-isa=amdgcn-amd-amdhsa--gfx900 \
+// RUN:   | %FileCheck --check-prefix=SRCMISMATCH %s
+// SRCMISMATCH: RESULT: INVALID_ARGUMENT
+
 // COM: Focused warm-cache smoke: first run misses and writes, second run hits
 // COM: the same caller-provided cache directory.
 // RUN: rm -rf %t.cache
 // RUN: env HSA_HOTSWAP_CACHE_DIR=%t.cache hotswap-transpile \
 // RUN:                   %S/vecadd_gfx950.co \
-// RUN:                   amdgcn-amd-amdhsa--gfx950 \
 // RUN:                   amdgcn-amd-amdhsa--gfx942 \
+// RUN:                   --source-isa=amdgcn-amd-amdhsa--gfx950 \
 // RUN:   | %FileCheck --check-prefix=CACHEMISS %s
 // CACHEMISS-DAG: cache_hit=0
 // CACHEMISS-DAG: cache_lookup=miss
 // CACHEMISS-DAG: cache_write=success
 // RUN: env HSA_HOTSWAP_CACHE_DIR=%t.cache hotswap-transpile \
 // RUN:                   %S/vecadd_gfx950.co \
-// RUN:                   amdgcn-amd-amdhsa--gfx950 \
 // RUN:                   amdgcn-amd-amdhsa--gfx942 \
+// RUN:                   --source-isa=amdgcn-amd-amdhsa--gfx950 \
 // RUN:   | %FileCheck --check-prefix=CACHEHIT %s
 // CACHEHIT-DAG: cache_hit=1
 // CACHEHIT-DAG: cache_lookup=hit

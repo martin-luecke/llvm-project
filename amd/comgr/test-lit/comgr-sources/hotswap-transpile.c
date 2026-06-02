@@ -115,26 +115,29 @@ int main(int argc, char *argv[]) {
     return 0;
   }
 
-  if (argc < 4)
-    fail("usage: hotswap-transpile <elf_file> <source_isa> <target_isa> "
-         "[--zero-size|--wrong-kind] [--output=<path>]");
+  if (argc < 3)
+    fail("usage: hotswap-transpile <elf_file> <target_isa> "
+         "[--source-isa=<isa>] [--zero-size|--wrong-kind] [--output=<path>]");
 
   const char *ElfFile = argv[1];
-  const char *SourceISA = argv[2];
-  const char *TargetISA = argv[3];
+  const char *TargetISA = argv[2];
+  // NULL when omitted, so the transpiler recovers it from the input ELF.
+  const char *SourceISA = NULL;
   int ZeroSize = 0;
   int WrongKind = 0;
   // Optional path to dump the transpiled bytes to. lit tests use this to
   // hand the output to llvm-readelf / llvm-objdump for ISA-level smoke
   // checks; the validation paths leave it NULL and only inspect stdout.
   const char *OutputPath = NULL;
-  for (int i = 4; i < argc; i++) {
+  for (int i = 3; i < argc; i++) {
     if (strcmp(argv[i], "--zero-size") == 0)
       ZeroSize = 1;
     else if (strcmp(argv[i], "--wrong-kind") == 0)
       WrongKind = 1;
     else if (strncmp(argv[i], "--output=", 9) == 0)
       OutputPath = argv[i] + 9;
+    else if (strncmp(argv[i], "--source-isa=", 13) == 0)
+      SourceISA = argv[i] + 13;
     else
       fail("unknown option: %s", argv[i]);
   }

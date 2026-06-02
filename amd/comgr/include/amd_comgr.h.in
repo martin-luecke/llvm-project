@@ -2857,6 +2857,9 @@ amd_comgr_hotswap_rewrite(
  *   the code object was compiled for. The isa name is defined as the Code
  *   Object Target Identification string, described at
  *   https://llvm.org/docs/AMDGPUUsage.html#code-object-target-identification
+ *   May be NULL or empty, in which case the source isa name is recovered from
+ *   the @p input ELF header (EF_AMDGPU_MACH). When given explicitly, its
+ *   processor must match the @p input ELF header.
  * @param[in] target_isa_name A null terminated string that is the isa name
  *   of the target GPU. May differ from @p source_isa_name across processor
  *   families.
@@ -2871,8 +2874,11 @@ amd_comgr_hotswap_rewrite(
  *   compilation/link failure). Diagnostic detail is logged to stderr.
  * @retval ::AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT @p input is an invalid
  *   data object, is not of kind @p AMD_COMGR_DATA_KIND_EXECUTABLE, does not
- *   contain data bytes, or @p source_isa_name or @p target_isa_name is
- *   NULL or malformed.
+ *   contain data bytes, @p target_isa_name is NULL or malformed, @p
+ *   source_isa_name is malformed, @p source_isa_name names a different
+ *   processor than the @p input ELF header, or @p source_isa_name was omitted
+ *   and the source isa name could not be recovered from the @p input ELF
+ *   header.
  * @retval ::AMD_COMGR_STATUS_ERROR_OUT_OF_RESOURCES Unable to allocate
  *   the output data object.
  */
@@ -2994,7 +3000,10 @@ typedef enum amd_comgr_hotswap_transpile_result_string_s {
  * @param[in] input A data object of kind @p AMD_COMGR_DATA_KIND_EXECUTABLE
  *   containing the input ELF code object bytes.
  * @param[in] source_isa_name A null terminated string that is the isa name
- *   the code object was compiled for.
+ *   the code object was compiled for. May be NULL or empty, in which case the
+ *   source isa name is recovered from the @p input ELF header
+ *   (EF_AMDGPU_MACH). When given explicitly, its processor must match the
+ *   @p input ELF header.
  * @param[in] target_isa_name A null terminated string that is the isa name
  *   of the target GPU.
  * @param[out] output A handle to a data object of kind @p

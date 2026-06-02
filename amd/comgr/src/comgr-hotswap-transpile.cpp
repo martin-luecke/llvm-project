@@ -24,6 +24,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "amd_comgr.h"
+#include "comgr-metadata.h"
 #include "comgr.h"
 
 #include "hotswap/code-object-utils.h"
@@ -432,10 +433,28 @@ amd_comgr_status_t AMD_COMGR_API amd_comgr_hotswap_transpile_with_options(
   };
   DataObject *InputP = DataObject::convert(input);
   if (!InputP || !InputP->Data ||
-      InputP->DataKind != AMD_COMGR_DATA_KIND_EXECUTABLE || !source_isa_name ||
-      !target_isa_name || !output)
+      InputP->DataKind != AMD_COMGR_DATA_KIND_EXECUTABLE || !target_isa_name ||
+      !output)
     return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
   if (options && options->size < sizeof(amd_comgr_hotswap_transpile_options_t))
+    return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
+
+  llvm::MemoryBufferRef InputBuf(llvm::StringRef(InputP->Data, InputP->Size),
+                                 "hotswap_input");
+
+  // Recover the object's own ISA from its ELF e_flags (EF_AMDGPU_MACH).
+  std::string ElfSourceIsa;
+  const bool HaveElfSourceIsa =
+      metadata::getElfIsaName(InputBuf, ElfSourceIsa) ==
+      AMD_COMGR_STATUS_SUCCESS;
+
+  // Explicit source_isa_name wins, else fall back to the detected ISA.
+  std::string ResolvedSourceIsa;
+  if (source_isa_name && *source_isa_name)
+    ResolvedSourceIsa = source_isa_name;
+  else if (HaveElfSourceIsa)
+    ResolvedSourceIsa = ElfSourceIsa;
+  else
     return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
 
   // Validate both ISA names through the same parser the byte-level
@@ -446,20 +465,31 @@ amd_comgr_status_t AMD_COMGR_API amd_comgr_hotswap_transpile_with_options(
   // unsupported instructions as a pipeline failure (see
   // RaiseFailure::reason in amd/comgr/hotswap/raise-failure.hpp).
   TargetIdentifier SourceIdent, TargetIdent;
-  if (parseTargetIdentifier(source_isa_name, SourceIdent) ||
+  if (parseTargetIdentifier(ResolvedSourceIsa, SourceIdent) ||
       parseTargetIdentifier(target_isa_name, TargetIdent))
     return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
 
-  llvm::MemoryBufferRef InputBuf(llvm::StringRef(InputP->Data, InputP->Size),
-                                 "hotswap_input");
+  // Reject an explicit source ISA that contradicts the object's own; compare
+  // processor only, so bare `gfx<n>` matches a sramecc/xnack-tagged object.
+  if (source_isa_name && *source_isa_name && HaveElfSourceIsa) {
+    TargetIdentifier ElfIdent;
+    if (parseTargetIdentifier(ElfSourceIsa, ElfIdent) ||
+        ElfIdent.Processor != SourceIdent.Processor) {
+      llvm::errs() << "amd_comgr_hotswap_transpile: source isa '"
+                   << ResolvedSourceIsa
+                   << "' does not match the input code object isa '"
+                   << ElfSourceIsa << "'\n";
+      return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
+    }
+  }
 
   COMGR::hotswap::TranslationCacheRequest CacheRequest;
   CacheRequest.SourceObject = InputBuf;
   CacheRequest.SourceGfx = SourceIdent.Processor.str();
   CacheRequest.TargetGfx = TargetIdent.Processor.str();
-  CacheRequest.SourceIsa = source_isa_name;
+  CacheRequest.SourceIsa = ResolvedSourceIsa;
   CacheRequest.TargetIsa = target_isa_name;
-  CacheRequest.CodeIsa = source_isa_name;
+  CacheRequest.CodeIsa = ResolvedSourceIsa;
   CacheRequest.HotswapRulesPath =
       options && options->hotswap_rules_path ? options->hotswap_rules_path : "";
   CacheRequest.CacheDirectory =
