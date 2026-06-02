@@ -378,6 +378,7 @@ static bool raiseAndCompileKernel(const TextSection &text,
   if (const char *env = std::getenv("HSA_HOTSWAP_LLC_OPT_LEVEL"))
     optLevel = env;
   if (runTool(llcBin, {llcBin, "-march=amdgcn", mcpuLlc, optLevel,
+                       "-amdgpu-function-calls=true",
                        "-filetype=asm", "-o", asmPath, irPath}) != 0) {
     result.Timings.llcSeconds += timingElapsed(options.CollectTimings, llcStart);
     llvm::errs() << "transpiler: llc failed for '" << kernelName << "'\n";

@@ -1224,8 +1224,8 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
         Function *SubFn = Function::Create(
             SubFnTy, GlobalValue::InternalLinkage,
             "__hotswap_sub_0x" + utohexstr(SubStart), &M);
-        SubFn->setCallingConv(CallingConv::AMDGPU_Gfx);
-        SubFn->addFnAttr(Attribute::AlwaysInline);
+        SubFn->setCallingConv(CallingConv::C);
+        SubFn->addFnAttr(Attribute::NoInline);
         SubFunctions[SubStart] = SubFn;
 
         // Create entry BB and set up local register file.
