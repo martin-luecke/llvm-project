@@ -1182,13 +1182,13 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   RegStateLayout RSLayout;
   AllocaInst *RegStateAlloca = nullptr;
   DenseMap<uint64_t, Function *> SubFunctions;
+  SmallVector<uint64_t> SubEntries;
 
   if (!ExtraBlockStarts.empty() && !UseThreadLoop) {
     B.CreateBr(OffsetToBb[KernelOffset]);
 
     // (a) Collect subroutine entry offsets (sorted ascending from
     // ExtraBlockStarts, all < KernelOffset).
-    SmallVector<uint64_t> SubEntries;
     for (uint64_t Addr : ExtraBlockStarts) {
       if (Addr < KernelOffset)
         SubEntries.push_back(Addr);
@@ -1211,14 +1211,39 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
       for (unsigned I = 0; I < 32 && I < Regs.Sgpr.size(); ++I)
         SgprIdxs.push_back(I);
 
-      // (c-e) For each subroutine entry, create and raise a function.
+      // (c-e) For each subroutine entry, create either:
+      //   - An inline BB in the kernel function (small subroutines — shares
+      //     the kernel's register file directly, zero overhead)
+      //   - A separate callable function (large subroutines — needs
+      //     RegState flush/reload but compiles independently)
+      //
+      // Threshold: subroutines larger than ~50 source instructions (200
+      // bytes) become callable functions. The oracle (65KB) and its
+      // helpers are the main ones. TC_ test cases (~20 bytes each) stay
+      // inline.
+      constexpr uint64_t kInlineThresholdBytes = 0; // All callable for now
+
       for (size_t Si = 0; Si < SubEntries.size(); ++Si) {
         uint64_t SubStart = SubEntries[Si];
         uint64_t SubEnd = (Si + 1 < SubEntries.size())
                               ? SubEntries[Si + 1]
                               : KernelOffset;
+        uint64_t SubSize = SubEnd - SubStart;
 
-        // Create subroutine function.
+        // Small subroutines: create an inline BB in the kernel function.
+        // The dispatch cascade branches here directly; the subroutine
+        // shares the kernel's AllocaRegFile (no flush/reload overhead).
+        if (SubSize <= kInlineThresholdBytes) {
+          BasicBlock *SubBb =
+              BasicBlock::Create(C, "sub_0x" + utohexstr(SubStart), F);
+          OffsetToBb[SubStart] = SubBb;
+          // Mark as inline (null function) so the dispatch handler
+          // emits a branch instead of a call.
+          SubFunctions[SubStart] = nullptr;
+          continue;
+        }
+
+        // Large subroutines: create a separate callable function.
         auto *SubFnTy =
             FunctionType::get(VoidTy, {PointerType::get(C, 5)}, false);
         Function *SubFn = Function::Create(
@@ -1420,8 +1445,29 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   for (size_t InstIdx = 0; InstIdx < Insts.size(); ++InstIdx) {
     const DecodedInst &Di = Insts[InstIdx];
 
-    if (!ExtraBlockStarts.empty() && Di.Offset < KernelOffset)
-      continue;
+    // Skip instructions in callable (non-inline) subroutine ranges.
+    // Inline subroutines (SubFunctions[offset] == nullptr) have their
+    // BBs in the kernel function and are raised here. Callable ones
+    // (SubFunctions[offset] != nullptr) are raised separately.
+    if (!ExtraBlockStarts.empty() && Di.Offset < KernelOffset) {
+      bool inCallable = false;
+      if (Ctx.SubroutineFunctions) {
+        // Find which subroutine range contains this instruction.
+        // SubEntries is sorted — find the last entry <= Di.Offset.
+        auto It = std::upper_bound(SubEntries.begin(), SubEntries.end(),
+                                   Di.Offset);
+        if (It != SubEntries.begin()) {
+          --It;
+          auto FnIt = Ctx.SubroutineFunctions->find(*It);
+          if (FnIt != Ctx.SubroutineFunctions->end() &&
+              FnIt->second != nullptr) {
+            inCallable = true;
+          }
+        }
+      }
+      if (inCallable)
+        continue;
+    }
 
     // If a terminator ended the recovered CFG path and the next decoded
     // instruction is not a known block leader, that instruction is unreachable

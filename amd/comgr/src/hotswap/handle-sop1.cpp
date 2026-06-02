@@ -361,37 +361,32 @@ HandlerResult handleSOP1(RaiseContext &Ctx, const DecodedInst &Di,
                    << (Ctx.SubroutineFunctions ? Ctx.SubroutineFunctions->size() : 0)
                    << " IndirectTargets=" << Info.IndirectTargets.size() << "\n";
       if (Ctx.SubroutineFunctions && !Ctx.SubroutineFunctions->empty()) {
-        // Use ALL subroutine function offsets as dispatch targets,
-        // not just the ones discovered by SetPC analysis dataflow.
-        // The analysis cannot resolve runtime-computed dispatch tables.
         IRBuilder<> &B = Ctx.B;
         SmallVector<unsigned> VgprIdxs, SgprIdxs;
         for (unsigned I = 0; I < 80 && I < Ctx.Regs.Vgpr.size(); ++I)
           VgprIdxs.push_back(I);
         for (unsigned I = 0; I < 32 && I < Ctx.Regs.Sgpr.size(); ++I)
           SgprIdxs.push_back(I);
-        emitRegStateFlush(B, Ctx.Regs, Ctx.RegStatePtr, *Ctx.RSLayout,
-                          VgprIdxs, SgprIdxs);
 
-        // Collect and sort subroutine offsets for deterministic cascade.
+        // Collect and sort subroutine offsets.
         SmallVector<uint64_t> SubOffsets;
         for (const auto &Entry : *Ctx.SubroutineFunctions)
           SubOffsets.push_back(Entry.first);
         llvm::sort(SubOffsets);
 
+        // AfterDispatch merges callable subroutine returns.
         BasicBlock *AfterDispatch = BasicBlock::Create(
             Ctx.C, "after_indirectb_dispatch_0x" + utohexstr(Di.Offset),
             Ctx.Kernel);
+
         for (size_t I = 0; I < SubOffsets.size(); ++I) {
           uint64_t Target = SubOffsets[I];
           Function *SubFn = (*Ctx.SubroutineFunctions)[Target];
-          // Compare against the absolute ELF address (TextBase + .text-relative
-          // offset) because the kernel's runtime dispatch computes absolute addrs.
           Constant *MarkerCi = ConstantInt::get(Ctx.I64Ty, Target + Ctx.TextBase);
           Value *Cmp = B.CreateICmpEQ(RetVal, MarkerCi);
 
-          BasicBlock *CallBb = BasicBlock::Create(
-              Ctx.C, "indirectb_call_sub_0x" + utohexstr(Target), Ctx.Kernel);
+          BasicBlock *DispBb = BasicBlock::Create(
+              Ctx.C, "indirectb_sub_0x" + utohexstr(Target), Ctx.Kernel);
           BasicBlock *NextBb;
           if (I + 1 < SubOffsets.size())
             NextBb = BasicBlock::Create(
@@ -400,17 +395,29 @@ HandlerResult handleSOP1(RaiseContext &Ctx, const DecodedInst &Di,
             NextBb = BasicBlock::Create(
                 Ctx.C, "indirectb_dispatch_unreachable", Ctx.Kernel);
 
-          B.CreateCondBr(Cmp, CallBb, NextBb);
-          B.SetInsertPoint(CallBb);
-          B.CreateCall(SubFn, {Ctx.RegStatePtr});
-          B.CreateBr(AfterDispatch);
+          B.CreateCondBr(Cmp, DispBb, NextBb);
+          B.SetInsertPoint(DispBb);
+
+          if (SubFn) {
+            // Callable subroutine: flush registers, call, reload.
+            emitRegStateFlush(B, Ctx.Regs, Ctx.RegStatePtr, *Ctx.RSLayout,
+                              VgprIdxs, SgprIdxs);
+            B.CreateCall(SubFn, {Ctx.RegStatePtr});
+            emitRegStateReload(B, Ctx.Regs, Ctx.RegStatePtr, *Ctx.RSLayout,
+                               VgprIdxs, SgprIdxs);
+            B.CreateBr(AfterDispatch);
+          } else {
+            // Inline subroutine: branch directly to its BB in the
+            // kernel. Shares the kernel's register file — no overhead.
+            // Return path: the subroutine's s_set_pc_i64 IndirectB
+            // branches back via its own enumerated dispatch cascade.
+            B.CreateBr(Ctx.lookupBB(Target));
+          }
           B.SetInsertPoint(NextBb);
         }
-        B.CreateUnreachable();
+        B.CreateRetVoid(); // unreachable fallthrough
 
         B.SetInsertPoint(AfterDispatch);
-        emitRegStateReload(B, Ctx.Regs, Ctx.RegStatePtr, *Ctx.RSLayout,
-                           VgprIdxs, SgprIdxs);
         Hr.Handled = true;
         return Hr;
       }
