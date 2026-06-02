@@ -66,6 +66,12 @@ void emitRegStateFlush(IRBuilder<> &B, const AllocaRegFile &Regs,
     Value *Val = B.CreateLoad(I32Ty, Regs.Vgpr[Idx]);
     B.CreateStore(Val, ElemPtr);
   }
+  // Flush EXEC to RegState so subroutine SPE diamonds don't corrupt it.
+  if (Regs.Exec && Regs.ExecTy) {
+    Value *ExecGEP = B.CreateStructGEP(Layout.Ty, StatePtr,
+                                       RegStateLayout::KExecField);
+    B.CreateStore(B.CreateLoad(Regs.ExecTy, Regs.Exec), ExecGEP);
+  }
 }
 
 void emitRegStateReload(IRBuilder<> &B, const AllocaRegFile &Regs,
@@ -92,6 +98,12 @@ void emitRegStateReload(IRBuilder<> &B, const AllocaRegFile &Regs,
         B.CreateInBoundsGEP(I32Ty, VgprBase, B.getInt32(Idx));
     Value *Val = B.CreateLoad(I32Ty, ElemPtr);
     B.CreateStore(Val, Regs.Vgpr[Idx]);
+  }
+  // Reload EXEC from RegState to restore kernel's EXEC state.
+  if (Regs.Exec && Regs.ExecTy) {
+    Value *ExecGEP = B.CreateStructGEP(Layout.Ty, StatePtr,
+                                       RegStateLayout::KExecField);
+    B.CreateStore(B.CreateLoad(Regs.ExecTy, ExecGEP), Regs.Exec);
   }
 }
 
