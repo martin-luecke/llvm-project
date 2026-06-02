@@ -1395,7 +1395,7 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
           for (auto &BB : *SubFn) {
             if (!BB.hasTerminator()) {
               IRBuilder<> TermB(&BB);
-              TermB.CreateUnreachable();
+              TermB.CreateRetVoid();
             }
           }
         }
