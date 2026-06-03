@@ -292,16 +292,15 @@ HandlerResult handleSOP1(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
   if (Sop == CanonicalOp::S_GETPC_B64) {
-    // Stub: the destination's symbolic PC is irrelevant for raised
-    // IR. For Pattern A chains, the chain's binary value is never
-    // read after we emit the `br label %target`. For Pattern B call
-    // sites, the call-site rewrite in raiser.cpp overwrites the
-    // ret-pair with a `blockaddress` after the chain's high-half
-    // terminator runs, so the binary PC the chain would otherwise
-    // produce is also discarded. Writing zero keeps SROA happy and
-    // surfaces any stray downstream read as an obvious-zero use that
-    // would crash the verifier rather than silently miscompile.
-    Ctx.Regs.writeReg64(Ctx.B, Op.dst(), ConstantInt::get(Ctx.I64Ty, 0));
+    // Write the source TEXT-section VA of PC+4 (the instruction after
+    // s_get_pc_i64). For Pattern A/B chains the chain handler
+    // overwrites this value, so it's harmless. For non-chain uses
+    // (e.g. computing a return address for a dispatch jump table), the
+    // downstream code relies on the correct binary value to match
+    // cascade comparisons in IndirectB handlers.
+    uint64_t PcPlus4 = Di.Offset + Di.Size + Ctx.TextBase;
+    Ctx.Regs.writeReg64(Ctx.B, Op.dst(),
+                         ConstantInt::get(Ctx.I64Ty, PcPlus4));
     Hr.Handled = true;
     return Hr;
   }
