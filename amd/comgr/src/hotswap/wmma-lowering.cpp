@@ -243,44 +243,50 @@ static Value *selectByLaneGroup(IRBuilder<> &B, Value *LaneGroup,
 }
 
 /// Redistribute A or B input from gfx12 WMMA layout (8 VGPRs, Wave32)
-/// to gfx942 MFMA layout (2 VGPRs × 2 passes, Wave64).
+/// to gfx942 MFMA layout (2 VGPRs x 2 passes, Wave64).
 ///
-/// NOTE: the per-lane K-distribution documented below is EMPIRICALLY
-/// CORRECT for the WMMA.B operand (v170-177 in matmul_fp16) as pinned
-/// by mode-7 / mode-9 instrumentation (see `hotswap/docs/matrix-
-/// translation.md §12.4.4 Session-5 per-dword characterization`).  The
-/// WMMA.A operand on gfx1250 has a DIFFERENT per-lane layout -- lanes
-/// 0-15 and lanes 16-31 hold the SAME K subset at the same GPR
-/// position but different cols -- which this redistribution does NOT
-/// handle correctly (see matrix-translation.md §12.4.4 and the refusal
-/// gate in `handle-valu-vop3p.cpp`).
+/// Source layout (MI400 Shader Programming Guide section 4.6.12.2,
+/// "16-bit A-Matrix 16x32 (MxK)"; B-Matrix uses the same table with
+/// M->N substitution):
 ///
-/// The gfx12 WMMA k-distribution interleaves between the two lane halves:
-///   Lanes 0-15:  GPR pairs {0,1}->k 0-3, {2,3}->k 8-11, {4,5}->k 16-19, {6,7}->k 24-27
-///   Lanes 16-31: GPR pairs {0,1}->k 4-7, {2,3}->k 12-15, {4,5}->k 20-23, {6,7}->k 28-31
+///   Lanes 0-15  hold row M = L%16, K=0..7 in VGPR 0-3 (2 K's per dword,
+///                                  packed lo/hi), K=16..23 in VGPR 4-7.
+///   Lanes 16-31 hold row M = L%16, K=8..15 in VGPR 0-3, K=24..31 in
+///                                  VGPR 4-7.
 ///
-/// The gfx942 MFMA distributes k across 4 lane groups of 16:
-///   LG 0 (0-15)->k 0-3, LG 1 (16-31)->k 4-7, LG 2 (32-47)->k 8-11, LG 3 (48-63)->k 12-15
+/// So lower wave32 half = K[3]==0 subset, upper half = K[3]==1 subset;
+/// each VGPR-pair within a half covers 4 consecutive K values.
 ///
-/// For MFMA1 (first K=16): LG {0,1} read WMMA GPRs {0,1}; LG {2,3} read GPRs {2,3}
-/// For MFMA2 (second K=16): LG {0,1} read WMMA GPRs {4,5}; LG {2,3} read GPRs {6,7}
-/// Even lane groups read from lower W32 half, odd from upper W32 half.
+/// Target gfx942 MFMA (K=16 BF16/F16) per matrix calculator -- for both
+/// A and B, 2 VGPRs per lane, 4 K-values per VGPR-pair:
+///
+///   LG 0 (lanes 0-15)  hold K=0..3,  with VGPR 0 = K{0,1}, VGPR 1 = K{2,3}
+///   LG 1 (lanes 16-31) hold K=4..7
+///   LG 2 (lanes 32-47) hold K=8..11
+///   LG 3 (lanes 48-63) hold K=12..15
+///
+/// The second MFMA pass covers K=16..31 with the same LG slicing.
+///
+/// Source-(lane,VGPR) for MFMA dword G in pass p (p=0 -> K=0..15,
+/// p=1 -> K=16..31):
+///   src_w32_lane = (lane%16) + 16*(LG/2)        // lo half if LG<2
+///   src_w32_vgpr = 4*p + 2*(LG%2) + G            // VGPR pair {0,1} or {2,3}
 static void redistributeInput(IRBuilder<> &B, Module &M,
                                Value **WmmaGpRs,
                                Value *AddrLo, Value *AddrHi,
                                Value *LaneGroup,
                                Value **MfmaLo, Value **MfmaHi) {
   for (unsigned G = 0; G < 2; ++G) {
-    Value *V0 = emitDSBpermute(B, M, AddrLo, WmmaGpRs[G]);
-    Value *V1 = emitDSBpermute(B, M, AddrHi, WmmaGpRs[G]);
-    Value *V2 = emitDSBpermute(B, M, AddrLo, WmmaGpRs[G + 2]);
-    Value *V3 = emitDSBpermute(B, M, AddrHi, WmmaGpRs[G + 2]);
+    Value *V0 = emitDSBpermute(B, M, AddrLo, WmmaGpRs[G]);     // LG0: lo, G
+    Value *V1 = emitDSBpermute(B, M, AddrLo, WmmaGpRs[G + 2]); // LG1: lo, G+2
+    Value *V2 = emitDSBpermute(B, M, AddrHi, WmmaGpRs[G]);     // LG2: hi, G
+    Value *V3 = emitDSBpermute(B, M, AddrHi, WmmaGpRs[G + 2]); // LG3: hi, G+2
     MfmaLo[G] = selectByLaneGroup(B, LaneGroup, V0, V1, V2, V3);
 
-    Value *U0 = emitDSBpermute(B, M, AddrLo, WmmaGpRs[G + 4]);
-    Value *U1 = emitDSBpermute(B, M, AddrHi, WmmaGpRs[G + 4]);
-    Value *U2 = emitDSBpermute(B, M, AddrLo, WmmaGpRs[G + 6]);
-    Value *U3 = emitDSBpermute(B, M, AddrHi, WmmaGpRs[G + 6]);
+    Value *U0 = emitDSBpermute(B, M, AddrLo, WmmaGpRs[G + 4]); // LG0: lo, G+4
+    Value *U1 = emitDSBpermute(B, M, AddrLo, WmmaGpRs[G + 6]); // LG1: lo, G+6
+    Value *U2 = emitDSBpermute(B, M, AddrHi, WmmaGpRs[G + 4]); // LG2: hi, G+4
+    Value *U3 = emitDSBpermute(B, M, AddrHi, WmmaGpRs[G + 6]); // LG3: hi, G+6
     MfmaHi[G] = selectByLaneGroup(B, LaneGroup, U0, U1, U2, U3);
   }
 }
