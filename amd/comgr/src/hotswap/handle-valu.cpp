@@ -1462,17 +1462,20 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     // Write the boolean flag to the actual SDST destination (operand 1):
     // vcc_lo, sN, or null. The kernel saves flags to SGPRs and later
     // restores them to VCC via s_mov_b32 before each v_div_fmas_f32.
-    Value *Flag = Ctx.B.CreateExtractValue(R, 1);
-    if (Di.NumDefs >= 2 && Di.isReg(1)) {
-      ParsedReg FlagDst = Op.dst(1);
-      if (FlagDst.RegKind == ParsedReg::VCC)
-        Ctx.Regs.storeVCC(Ctx.B, Flag);
-      else if (FlagDst.RegKind == ParsedReg::SGPR && FlagDst.BaseIdx >= 0)
-        Ctx.Regs.storeSGPR32(Ctx.B, FlagDst.BaseIdx, Ctx.B.CreateZExt(Flag, Ctx.I32Ty));
-      // NOREG (null) or unrecognized -> discard the flag
-    } else {
-      Ctx.Regs.storeVCC(Ctx.B, Flag);
-    }
+    // Route the carry-out flag (i1 per lane) through the shared
+    // SGPR/VCC writer.  Prior to using `writeCarryOutI1` the SGPR
+    // arm here did `zext i1 -> i32` per lane and called
+    // `storeSGPR32`, leaving per-lane 0/1 in each lane's alloca slot.
+    // The matching `s_mov_b32 vcc_lo, sN` / V_CNDMASK that restores
+    // VCC before `v_div_fmas_f32` runs the load through
+    // `extractLaneBitFromWaveMask` and interprets the per-lane value
+    // as a wave mask, recovering bit 0 only for target lanes 0 and
+    // `W_src` (replication-aliased) and dropping the carry for every
+    // other lane.  The helper ballots the per-lane i1 to a source-
+    // width wave mask, stores it through `writeRegExecWidth`, and
+    // caches the i1 via `recordSgprWaveMaskI1` for same-BB
+    // consumers -- the round-trip the SGPR consumers actually expect.
+    writeCarryOutI1(Ctx, Di, Op, Ctx.B.CreateExtractValue(R, 1));
     Hr.Handled = true;
     return Hr;
   }
