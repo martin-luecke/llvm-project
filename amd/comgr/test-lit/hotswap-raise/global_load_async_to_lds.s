@@ -3,113 +3,36 @@
 ; RUN:     --target-isa=gfx942 --emit-ir=global_load_async_to_lds_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s --check-prefix=IR
 ;
+; The runtime LDS-dest gate reads HW_REG_LDS_ALLOC.LDS_SIZE, whose layout is
+; only verified for gfx9. Other targets refuse rather than gate on an
+; unverified encoding. Pin that refusal on a gfx11 target.
+;
+; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
+; RUN:   && %not raise_cli %t.hsaco \
+; RUN:     --target-isa=gfx1100 --emit-ir=global_load_async_to_lds_kernel 2>&1 \
+; RUN:   | %FileCheck %s --check-prefix=REFUSE
+;
+; REFUSE: failed to raise: global_load_async_to_lds_b32 [FLAT]
+; REFUSE-SAME: HW_REG_LDS_ALLOC.LDS_SIZE layout not verified for this target
+;
 ; Lift fixture for FLAT `global_load_async_to_lds_b{8,32,64,128}` on the
-; CROSS-TARGET arm (gfx1250 -> gfx942). Pins the synchronous per-lane
-; emulation in transpiler/handle_flat.cpp under
-; `SemOp::GLOBAL_LOAD_ASYNC_TO_LDS_B{8,32,64,128}` when
-; `ctx.targetIsa.hasTensorOps` is false. Companion fixture to
-; `global_load_async_to_lds_same_target.ll`, which pins the
-; same-target (gfx1250 -> gfx1250) intrinsic-emit shape.
+; CROSS-TARGET arm (gfx1250 -> gfx942), where `hasTensorOps` is false. The
+; cross-target arm has no async DMA, so the raiser emulates it with a
+; synchronous per-lane `load` + `store`: bit-identical per-lane LDS state to the
+; async DMA after `s_wait_asynccnt 0`, losing only pipelining overlap (a
+; throughput, not correctness, regression).
 ;
-; === Why this is an emulation, not the prior loud refusal ===
-;
-; Pre-2026-04-24 (see the git-log entry accompanying this fixture
-; change), the cross-target arm refused the lift loudly with a
-; `RaiseFailure::unsupportedShape` diagnostic that cited the
-; gfx1250-only asynccnt unit and the gated `amdgcn.global.load.async.
-; to.lds.b*` intrinsic. That posture was correct in the sense of
-; avoiding silent miscompile, but it blocked every `matmul_ogs_*`
-; MoE expert-GEMM kernel in the GPT-OSS surface (4 kernels,
-; runtime-dominant in inference) end-to-end on gfx942. Every one
-; of those kernels compiled without errors up to the first
-; async-DMA instruction, then refused.
-;
-; The DOCUMENTED semantic trade-off (spelled out verbatim on the
-; SemOp doc block in `semop.hpp`): the synchronous `load` + `store`
-; chain produces bit-identical per-lane LDS state to what the source
-; async DMA produces AFTER the companion `s_wait_asynccnt 0`. The
-; ONLY information lost is the **pipelining overlap** between the
-; async DMA and unrelated VMEM / LDS ops in the wave's own
-; instruction stream; on gfx942 the emulation serialises those.
-; This is a throughput regression, not a correctness regression.
-; Kernels that depend on observable effects under a partially-
-; elapsed asynccnt (e.g. a hand-written pipeliner polling asynccnt
-; state) are NOT in the GPT-OSS corpus and remain out of scope;
-; they would have to be hand-written to produce instructions that
-; LLVM IR cannot express anyway.
-;
-; === ISA pragma reference (verbatim) ===
-;
-; From `hotswap/docs/manuals/instruction_manual.pdf §13.6.{9,10,11,12}`
-; (MI400 Shader Instruction Set, sp3), identical across all four
-; widths except the LDS-store byte count:
-;
-;   pragma "vector" do
-;     dsaddr  = LDS_BASE.b32 + VGPR[laneId][VDST.u32] + INST_OFFSET.b32;
-;     memaddr = ADDR;   // CalcGlobalAddr(VADDR, SADDR, IOFFSET)
-;     LDS[dsaddr].bN = MEM[memaddr].bN   (N = 8 / 32 / 64 / 128)
-;   endpragma
-;
-; Two key observations the emulation relies on:
-;
-;   1. `pragma "vector" do` runs the body per-active-lane; the
-;      raiser wraps the `load` + `store` pair in `emitUnderExec` so
-;      inactive lanes skip the whole memory round-trip.
-;
-;   2. `INST_OFFSET` applies to BOTH the LDS address and the global
-;      address.  For this HIP fixture all offsets are zero, so the
-;      GEP chain is elided.  The handler has a non-zero-offset
-;      branch that GEPs the offset onto both pointers via
-;      `CreateGEP(i8Ty, ptr, i64 offset)`; a future fixture
-;      exercising non-zero flat_offset would pin that branch.
-;
-; === Per-width emission ===
-;
-; The HIP fixture compiles the four clang builtins
-; `__builtin_amdgcn_global_load_async_to_lds_b{8,32,64,128}` into
-; SADDR-form instructions with `scale_offset` enabled (the
-; assembler emits `scale_offset` because the per-lane VGPR offset
-; is the thread-id times the access element size).  The emulation
-; materialises `scale_offset` as `mul i64 %voff_zext, N` for
-; N = 1 / 4 / 8 / 16 respectively (see
-; `decode.cpp::decodeScaleOffset` for how the cpol bit becomes
-; `DecodedInst::hasScaleOffset`).  For b8, accessBytes = 1 makes
-; scaled and unscaled offsets identical; the assembler / decoder
-; emits the plain `saddr + voff` shape, so the b8 section pins the
-; byte-width load/store rather than a no-op multiply.
-;
-; The LDS-base VGPR holds the per-lane i32 address (lds_base +
-; tid*elemBytes on this fixture); the emulation casts it to
-; `ptr addrspace(3)` via `inttoptr i32`, matching the same-target
-; arm's LDS-pointer shape (see
-; `global_load_async_to_lds_same_target.ll`) so IR-shape reviewers
-; can visually diff the two arms at the LDS-base cast.
-;
-; Access type per width — larger widths are lifted as vectors of
-; i32 rather than a single `iN`, mirroring
-; `GLOBAL_LOAD_DWORDX{2,3,4}`'s handling of the same aggregate
-; shape; the backend picks `global_load_{dword,dwordx2,dwordx4}` /
-; `ds_store_{b32,b64,b128}` on gfx942 from the aligned-load
-; attribute below:
-;
-;   b32  : i32
-;   b64  : <2 x i32>
-;   b128 : <4 x i32>
-;   b8   : i8
-;
-; The natural alignment (accessBytes = 4 / 8 / 16) is attached to
-; both the load and store so the backend's memop-alignment-derived
-; codegen picks the right dword / dwordx2 / dwordx4 opcode.
+; `scale_offset` (per-lane VGPR offset = tid * elemBytes) is materialised as
+; `mul i64 %voff_zext, N` for N = 1/4/8/16. b8 has N=1, so the multiply is
+; elided. Widths > b32 are lifted as `<n x i32>` so the backend picks the right
+; dwordx{2,4} / ds_store opcode from the attached natural alignment:
+;   b32: i32   b64: <2 x i32>   b128: <4 x i32>   b8: i8
 
-; LDS-destination drop gate.  gfx12 `global_load_async_to_lds` drops any lane
-; whose LDS-destination offset is outside the LDS aperture; Triton uses an
-; INT_MAX (0x7fffffff) LDS-dest sentinel to predicate masked GEMM-tile rows
-; (whose global tile address is intentionally OOB and whose LDS slot is
-; pre-initialised to the `other` value).  The synchronous emulation MUST
-; replicate the drop -- otherwise the masked lane's OOB global address is
-; dereferenced and faults whenever it is unmapped.  Each width below therefore
-; gates the emulated load+store on the LDS destination being within the 64 KiB
-; LDS capacity (`icmp ult i32 %lds_off, 65536` + a `br` into the do-block).
+; LDS-destination drop gate. gfx12 drops a lane whose LDS-dest offset is past
+; the LDS allocation; Triton uses an INT_MAX sentinel to predicate masked
+; GEMM-tile rows (intentionally-OOB global address). The emulation replicates
+; the drop by reading the allocation at runtime: `s_getreg` simm16 17158 =
+; hwreg(LDS_ALLOC, 12, 9), granules * 512 bytes, then `icmp ult` + `br`.
 ;
 ; ----- b32 ----- (first load in the HIP kernel)
 
@@ -118,7 +41,9 @@
 ; IR: %scaled_voff{{[0-9]*}} = mul i64 %voff_zext{{[0-9]*}}, 4
 ; IR: %saddr_vaddr{{[0-9]*}} = add i64 {{.*}}, %scaled_voff{{[0-9]*}}
 ; IR: %{{[0-9]+}} = inttoptr i64 %saddr_vaddr{{[0-9]*}} to ptr addrspace(1)
-; IR: %async_lds_inb{{[0-9]*}} = icmp ult i32 {{.*}}, 65536
+; IR: %lds_alloc_granules{{[0-9]*}} = call i32 @llvm.amdgcn.s.getreg(i32 17158)
+; IR: %lds_alloc_bytes{{[0-9]*}} = mul i32 %lds_alloc_granules{{[0-9]*}}, 512
+; IR: %async_lds_inb{{[0-9]*}} = icmp ult i32 {{.*}}, %lds_alloc_bytes{{[0-9]*}}
 ; IR: br i1 %async_lds_inb{{[0-9]*}}
 ; IR: %async_gload{{[0-9]*}} = load i32, ptr addrspace(1) %{{[0-9]+}}, align 4
 ; IR: store i32 %async_gload{{[0-9]*}}, ptr addrspace(3) %lds_ptr{{[0-9]*}}, align 4
@@ -154,11 +79,8 @@
 
 ; ----- Negative assertions -----
 ;
-; The emulation MUST NOT emit the native intrinsic on the cross-
-; target arm (the intrinsic is gfx1250-only and would fail isel on
-; gfx942).  A regression that accidentally took the same-target
-; path on a non-gfx1250 target would surface here as an IR shape
-; containing the intrinsic name.
+; The cross-target arm MUST NOT emit the gfx1250-only intrinsic (it would fail
+; isel on gfx942).
 
 ; IR-NOT: @llvm.amdgcn.global.load.async.to.lds.b8
 ; IR-NOT: @llvm.amdgcn.global.load.async.to.lds.b32
@@ -170,59 +92,17 @@
 ; RUN:     --target-isa=gfx1250 --emit-ir=global_load_async_to_lds_kernel 2>&1 \
 ; RUN:   | %FileCheck %s --check-prefix=SAME
 ;
-; Lift fixture for FLAT `global_load_async_to_lds_b{8,32,64,128}` —
-; the same-target (gfx1250 → gfx1250) intrinsic-emit path. Pins
-; the principled lift in transpiler/handle_flat.cpp under
-; `SemOp::GLOBAL_LOAD_ASYNC_TO_LDS_B{8,32,64,128}` when
-; `ctx.targetIsa.hasTensorOps` is true. Companion fixture to
-; `global_load_async_to_lds.ll`, which pins the cross-target
-; (gfx942) loud refusal.
-;
-; The FLATInstructions.td `FLAT_Global_Load_LDS_Pseudo<IsAsync=1>`
-; multiclass yields three operand-shape variants — plain
-; (vdst:VGPR_32, vaddr:VGPR_64, off:imm, cpol:imm) and SADDR
-; (vdst:VGPR_32, saddr:SGPR_64, vaddr:VGPR_32, off:imm, cpol:imm)
-; for each width. The fixture's HIP source uses the clang
-; builtins `__builtin_amdgcn_global_load_async_to_lds_b{8,32,64,128}`
-; which compile to the plain VFLAT 0x60-0x62 reals (vdst=v1,
-; vaddr=v0, saddr=s[0:1]/s[6:7]/s[4:5] — the kernel-arg pointers
-; landed in the SGPR base + per-lane VGPR offset shape, which the
-; AMDGPU disassembler prints as the SADDR variant).
-;
-; The matching LLVM intrinsic family
-; (IntrinsicsAMDGPU.td:3939-3946, all sharing `AMDGPUAsyncGlobalLoadToLDS`
-; on line 3904) is
+; Same-target (gfx1250 -> gfx1250) intrinsic-emit path, where `hasTensorOps` is
+; true. The handler casts `vdst` to `ptr addrspace(3)` (`lds_ptr*`), decodes the
+; global address, threads the FLAT `offset` and `cpol` immediates through, and
+; wraps the call in `emitUnderExec`:
 ;
 ;   void llvm.amdgcn.global.load.async.to.lds.b{8,32,64,128}(
-;       ptr addrspace(1) %gaddr,
-;       ptr addrspace(3) %laddr,
-;       i32 immarg      %offset,
-;       i32 immarg      %cpol)
+;       ptr addrspace(1) %gaddr, ptr addrspace(3) %laddr,
+;       i32 immarg %offset, i32 immarg %cpol)
 ;
-; The handler:
-;   * casts `vdst` (a per-lane VGPR_32 carrying the LDS i32 base)
-;     via `inttoptr i32 %vgpr to ptr addrspace(3)` (named
-;     `lds_ptr*` in the emitted IR);
-;   * decodes the global address via the shared FLAT `decodeFlatAddr`
-;     helper (plain → vaddr-only, SADDR → saddr+vaddr) into a
-;     `ptr addrspace(1)`;
-;   * threads the FLAT `offset` immediate and the `cpol` immediate
-;     through as the trailing `i32 immarg` pair (cpol = 0x800 here
-;     because the assembler emits `scale_offset` for the
-;     scaled-saddr path);
-;   * wraps the call in `ctx.emitUnderExec` so wave-divergent EXEC
-;     is honoured before the side-effecting DMA.
-;
-; We pin the per-width call shape and the LDS-pointer cast it
-; consumes. Drift indicators:
-;   * If a future LLVM rename swaps the intrinsic name (e.g. drops
-;     the `async.` infix) the IR check fails immediately and
-;     pinpoints the rename rather than letting a silently mis-named
-;     intrinsic reach the backend.
-;   * If the LDS-base operand is lowered as a `<n x i32>` vector
-;     (or any non-`ptr addrspace(3)` shape), the matching
-;     `inttoptr i32 ... to ptr addrspace(3)` line goes missing and
-;     FileCheck reports the exact divergence.
+; Pins the per-width call shape and the LDS-pointer cast it consumes, catching
+; an intrinsic rename or a non-`ptr addrspace(3)` LDS-base lowering.
 
 ; b32: per-lane LDS i32 base via inttoptr i32 → ptr addrspace(3),
 ; then the b32 async DMA call.

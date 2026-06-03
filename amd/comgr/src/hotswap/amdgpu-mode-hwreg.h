@@ -26,6 +26,21 @@ namespace COMGR::hotswap::amdgpu {
 /// HWREG id for the wave MODE register (`HW_REG_MODE` / `HW_REG_WAVE_MODE`).
 static constexpr unsigned HwregIdMode = 1;
 
+/// LDS_ALLOC register (id `AMDGPU::Hwreg::ID_LDS_ALLOC`) fields, gfx9 layout.
+/// LLVM defines the id but not this subfield layout.
+struct LdsAllocReg {
+  /// LDS_SIZE bits [20:12]: allocated LDS in granule units.
+  static constexpr unsigned SizeFieldOffset = 12;
+  static constexpr unsigned SizeFieldSizeBits = 9;
+};
+
+/// s_getreg/s_setreg simm16 selecting field [Offset, Offset+SizeBits) of \p Id.
+inline constexpr unsigned encodeHwregSimm16(unsigned Id, unsigned Offset,
+                                            unsigned SizeBits) {
+  return (Id & 0x3fu) | ((Offset & 0x1fu) << 6) |
+         (((SizeBits - 1) & 0x1fu) << 11);
+}
+
 /// Per-wave MODE register bit fields.
 struct ModeReg {
   /// FP16_OVFL -- overflowed f16 VALU results clamp to +/-MAX_FP16 instead of

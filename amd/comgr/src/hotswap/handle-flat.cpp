@@ -863,26 +863,34 @@ HandlerResult handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     Align AccessAlign(AccessBytes);
 
     // gfx12 `global_load_async_to_lds` drops a lane whose LDS-destination
-    // offset is out of range: its LDS write does not happen (gfx12 programming
-    // manual, "Async LDS Load/Store" -- out of range is past the LDS allocated
-    // to the workgroup, and unconditionally past the physical LDS size).
-    // Triton predicates the masked (padding / K-edge) rows of a GEMM tile load
-    // this way, parking their LDS destination at the INT_MAX sentinel; those
-    // rows' global tile addresses are intentionally out of bounds and their
-    // LDS slots already hold the `other` value.
+    // offset is past the workgroup's LDS allocation: its LDS write does not
+    // happen. Triton uses this to predicate masked GEMM rows, parking their LDS
+    // destination at the INT_MAX sentinel; those rows' global addresses are
+    // intentionally OOB and would fault on a real load under a packed runtime
+    // heap. The synchronous emulation must skip such a lane entirely.
     //
-    // The synchronous emulation must skip such a lane entirely: its loaded
-    // value is unused (the LDS write is dropped), and a real load of the masked
-    // lane's OOB global address faults when that address is unmapped. That
-    // fault is allocation-dependent -- benign when a loose allocator leaves the
-    // page mapped, fatal under a packed runtime heap -- so it surfaces in a
-    // full runtime but not in isolated single-kernel replay. Gate on the
-    // target's physical LDS capacity: a conservative, allocation-independent
-    // out-of-range bound that keeps every real destination and rejects the
-    // sentinel (far past it).
-    Value *LdsInBounds = Ctx.B.CreateICmpULT(
-        LdsOff, ConstantInt::get(Ctx.I32Ty, Ctx.TargetIsa.LdsByteCapacity),
-        "async_lds_inb");
+    // Replicate the drop bound by reading the allocation at runtime from
+    // HW_REG_LDS_ALLOC.LDS_SIZE (granule count; bytes = field * granule). That
+    // layout is only verified for gfx9; refuse on other targets rather than
+    // gate on an unverified encoding that could silently drop real lanes.
+    if (Ctx.TargetIsa.LdsAllocSizeGetregEnc == 0) {
+      Hr.Failure = RaiseFailure::unsupportedShape(
+          Di, "FLAT",
+          "global_load_async_to_lds_b* cross-target emulation: "
+          "HW_REG_LDS_ALLOC.LDS_SIZE layout not verified for this target");
+      return Hr;
+    }
+    Function *Getreg =
+        Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::amdgcn_s_getreg);
+    Value *AllocGranules = Ctx.B.CreateCall(
+        Getreg,
+        {ConstantInt::get(Ctx.I32Ty, Ctx.TargetIsa.LdsAllocSizeGetregEnc)},
+        "lds_alloc_granules");
+    Value *LdsBound = Ctx.B.CreateMul(
+        AllocGranules,
+        ConstantInt::get(Ctx.I32Ty, Ctx.TargetIsa.LdsAllocGranuleBytes),
+        "lds_alloc_bytes");
+    Value *LdsInBounds = Ctx.B.CreateICmpULT(LdsOff, LdsBound, "async_lds_inb");
     Ctx.emitUnderExec([&] {
       BasicBlock *PredBb = Ctx.B.GetInsertBlock();
       Function *Fn = PredBb->getParent();

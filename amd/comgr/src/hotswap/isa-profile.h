@@ -9,7 +9,9 @@
 #ifndef HOTSWAP_TRANSPILER_ISA_PROFILE_H
 #define HOTSWAP_TRANSPILER_ISA_PROFILE_H
 
+#include "amdgpu-mode-hwreg.h"               // amdgpu::encodeHwregSimm16
 #include "MCTargetDesc/AMDGPUMCTargetDesc.h" // AMDGPU::Feature* enum
+#include "SIDefines.h"                       // AMDGPU::Hwreg::ID_LDS_ALLOC
 #include "Utils/AMDGPUBaseInfo.h"            // AMDGPU::hasMAIInsts
 #include "llvm/MC/MCSubtargetInfo.h"
 
@@ -69,11 +71,12 @@ struct ISAProfile {
   // than deriving it from a string at each use site.
   bool HasGfx125UserSgprCountField = false;
 
-  // Addressable (physical) LDS capacity of this target, in bytes
-  // (IsaInfo::getAddressableLocalMemorySize). The async-to-LDS lowering uses it
-  // as the out-of-range bound separating a real LDS destination from the gfx12
-  // INT_MAX drop sentinel (see handle-flat.cpp).
-  unsigned LdsByteCapacity = 65536;
+  // s_getreg simm16 for HW_REG_LDS_ALLOC.LDS_SIZE and its granule in bytes,
+  // for reading the workgroup's LDS allocation at runtime (= field * granule).
+  // The async-to-LDS lowering gates on this bound. Set only on gfx9 (verified
+  // layout); left zero otherwise, on which the lowering refuses.
+  unsigned LdsAllocSizeGetregEnc = 0;
+  unsigned LdsAllocGranuleBytes = 0;
 
   bool isWave32() const { return WaveSize == 32; }
 
@@ -93,8 +96,13 @@ struct ISAProfile {
     P.HasFP8ConversionInsts =
         STI.hasFeature(llvm::AMDGPU::FeatureFP8ConversionInsts);
     P.HasGfx125UserSgprCountField = llvm::AMDGPU::isGFX1250Plus(STI);
-    P.LdsByteCapacity =
-        llvm::AMDGPU::IsaInfo::getAddressableLocalMemorySize(&STI);
+    if (llvm::AMDGPU::isGFX9(STI)) {
+      P.LdsAllocSizeGetregEnc = amdgpu::encodeHwregSimm16(
+          llvm::AMDGPU::Hwreg::ID_LDS_ALLOC,
+          amdgpu::LdsAllocReg::SizeFieldOffset,
+          amdgpu::LdsAllocReg::SizeFieldSizeBits);
+      P.LdsAllocGranuleBytes = llvm::AMDGPU::getLdsDwGranularity(STI) * 4;
+    }
     return P;
   }
 
