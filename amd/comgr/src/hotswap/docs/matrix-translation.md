@@ -1517,6 +1517,483 @@ Regression guards landed with the fix:
   EXEC gate: inactive lanes must retain their initial VGPR values while
   active lanes see the asymmetric swap.
 
+### 12.4.8 Session-9 Triton attention NaN localization (2026-06-02)
+
+Followup to Sessions 5–8 on a different kernel:
+`SGLANG_ATTENTION_BACKEND=triton` on Gemma3 produces all-NaN logits
+(empty `output_ids`) under HotSwap gfx1250:32 → gfx942, while
+`SGLANG_ATTENTION_BACKEND=aiter` works. The Triton path uses
+`_fwd_grouped_kernel_stage1` (SGLang `decode_attention.py` GQA decode
+stage 1) and `_fwd_kernel` (`extend_attention.py`). Both kernels are
+bf16 K=32 WMMA under `WaveNativeProjection`
+(workgroup_size=128, wave32, 4 source waves → 2 target waves).
+
+**Diagnostic harness** (`wmma-lowering.cpp::runGroupPass`):
+`HOTSWAP_ABLATE_MFMA_CALL` modes 7/8/9 elementwise-clamp bf16 NaN/Inf
+bit patterns ((i16 & 0x7F80) == 0x7F80 → 0) on A only, B only, or both
+before the MFMA call. `HOTSWAP_ABLATE_WMMA_RANGE="min:max"` further
+gates which WMMA call-site indices (static counter in
+`emitWMMAtoMFMA`) get clamped. `HOTSWAP_LOG_WMMA_IDX=1` prints
+`[wmma-lowering] idx=N kernel=...` per WMMA lift for index-to-kernel
+attribution.
+
+**Bisection results** (Gemma3 + Triton, 3-prompt smoke suite):
+
+| Mode + range                                  | Hotswap output |
+| --------------------------------------------- | -------------- |
+| Mode 6 (zero B, keep A intact)                | all-NaN logits |
+| Mode 5 (zero A, keep B intact)                | finite logits  |
+| Mode 8 (clamp NaN in B only)                  | all-NaN logits |
+| Mode 7 (clamp NaN in A only)                  | finite logits  |
+| Mode 9 (clamp both)                           | finite (matches mode 7) |
+| Mode 7 + range `0:20` (stage1 only)           | finite (matches mode 7) |
+| Mode 7 + range `20:148` (skip stage1)         | all-NaN logits |
+| Mode 7 + range `0:10` or `10:20` (half stage1)| all-NaN logits |
+
+**Conclusions pinned:**
+1. NaN bits enter via the **WMMA.A operand** of MFMA, not B and not C.
+2. The source kernel is **`_fwd_grouped_kernel_stage1`** (20 WMMAs at
+   indices 0..19). `_fwd_kernel`'s 128 WMMAs are clean (either not
+   exercised by the 3-prompt suite or genuinely NaN-free under the
+   widen).
+3. Within stage1, NaN is **re-injected at every WMMA** (clamping any
+   strict subset leaves the rest producing NaN), consistent with the
+   bug being in the per-WMMA `redistributeInput` for A under wave32→
+   wave64 widen, NOT in a single propagation chain.
+4. Mode-7 NaN-clamp is sufficient to keep the model **finite**, but
+   output tokens are still garbage (the layout asymmetry between WMMA.A
+   and WMMA.B documented in §12.4.4 remains). This is the next defect
+   after NaN.
+
+**Source-side structure of stage1's WMMA inputs** (from hotswap
+triton_cache amdgcn):
+
+```
+ds_store_b128 v105, v[118:121]
+ds_store_b128 v105, v[134:137] offset:8192
+... (8 ds_stores total)
+s_barrier_signal -1
+s_barrier_wait -1
+ds_load_b128  v[122:125], v109
+ds_load_b128  v[118:121], v151
+v_wmma_f32_16x16x32_bf16 v[142:149], v[118:125], v[32:39], 0
+```
+
+WMMA.A composed via store-to-LDS + cross-wave barrier + load-from-LDS
+pattern. `_fwd_kernel` has the same shape but with different LDS
+strides and more WMMAs per iteration. The differentiator for why
+stage1 NaN's but `_fwd_kernel` doesn't (under identical projection)
+is **not yet identified**. Candidates: per-source-wave LDS address
+computation widened incorrectly, EXEC interaction with predicated
+stores, or undefined VGPR ranges in upper-half lanes pulled in by the
+bpermute-based `redistributeInput`.
+
+**Followup work:**
+1. Confirm whether the upper-half target-lane LDS data is correct in
+   stage1 (instrument the lifted ds_load to dump a sentinel pattern).
+2. If LDS data is correct, the bug is in `redistributeInput`'s
+   bpermute reads from cross-half lanes -- candidate fix is the §12.4.4
+   asymmetric A redistribution.
+3. If LDS data is wrong, the bug is in the cross-wave LDS lift
+   (per-source-wave address widening), and `wmma-lowering.cpp`
+   is innocent.
+4. Either way, keep mode 7's bf16 NaN clamp as a defensive guard until
+   the upstream fix lands -- it's a 4-instruction overhead per MFMA
+   (`AND` + `ICMP` + `SELECT`) and converts silent NaN poisoning into
+   finite (possibly wrong) outputs.
+
+### 12.4.9 Session-10: stage1 lifted-IR autopsy -- failed EXEC-mask hypothesis (2026-06-02)
+
+**Status: HYPOTHESIS FALSIFIED.** The fix described below was
+implemented, built, and run. It *did not* eliminate the NaN, and it
+*broke* the previously-working mode-7 bf16 NaN clamp (mode-7 with the
+EXEC mask layered on top also produces NaN). Reverted. Documented
+here as a negative result so the next investigator doesn't re-run it.
+
+Inspected `_fwd_grouped_kernel_stage1.ll` (post-lift, pre-mode-7-clamp)
+to nail down the NaN entry point. Stage1 has **direct LDS load/store
+via `addrspace(3)`** -- not just `ds.bpermute`. The earlier
+"only bpermute" survey missed it because the grep filtered on
+`@llvm.amdgcn.ds.*` intrinsic names and addrspace-3 loads use the
+plain `load` instruction.
+
+**The LDS load feeding WMMA.A** (lifted IR around line 5260):
+
+```llvm
+spe_do2939:
+  %ds_ld2941 = load <4 x i32>, ptr addrspace(3) %1181, align 16
+  ; ... bitcast/extract into Vgpr122..Vgpr125 ...
+
+spe_skip2940:                                     ; from spe_do2939 or skip
+  %Vgpr125.2 = phi i32 [ %1189, %spe_do2939 ], [ %Vgpr125.1, %spe_skip2930 ]
+  %Vgpr124.2 = phi i32 [ %1187, %spe_do2939 ], [ %Vgpr124.1, %spe_skip2930 ]
+  %Vgpr123.4 = phi i32 [ %1185, %spe_do2939 ], [ %Vgpr123.3, %spe_skip2930 ]
+  %Vgpr122.3 = phi i32 [ %1183, %spe_do2939 ], [ %Vgpr122.2, %spe_skip2930 ]
+```
+
+Address chain: `Vgpr109 = (tid & 15) << 4`. Depends ONLY on the low
+4 bits of the workitem ID -- identical for source-wave-0 and
+source-wave-1 lanes. (In the original wave32 source this is fine: the
+two waves race-write the same LDS bank but the workgroup-level barrier
+plus the producer-side data layout makes the final state coherent.)
+
+**EXEC-masked LDS load -> stale Vgpr in inactive lanes.** Each `spe_do`
+block is gated by an `EXEC bit at this lane` check via mbcnt + ballot:
+
+```llvm
+%wn_lane_active2938 = icmp ne i64 %wn_exec_bit2937, 0
+br i1 %wn_lane_active2938, label %spe_do2939, label %spe_skip2940
+```
+
+During **pass 0** (source wave 0 active), lanes 32..63 are EXEC=0 and
+skip the `spe_do` body. Their `Vgpr122..125` PHI takes the
+`%Vgpr*.prev` edge -- which traces all the way back to the entry
+`phi i32 [ undef, %spe_skip1401 ], ...`. So **upper-half lanes hold
+undef/poison for the WMMA.A VGPRs during pass-0's MFMA call.**
+
+**MFMA reads ALL lanes regardless of EXEC.** The MFMA K-reduction
+fans out across lane-groups -- LG0..LG3 own K[0..3], K[4..7],
+K[8..11], K[12..15] respectively. Each output cell sums contributions
+from all 4 LGs. So the C accumulator written into pass-0's *active*
+lanes (0..31) reads upper-half garbage during the cross-lane reduction.
+**That's the NaN injection path:** undef bf16 dwords in lanes 32..63
+contain NaN-encoded bit patterns (exponent all-ones) with high
+probability, and IEEE `0 * NaN = NaN` poisons every output cell.
+
+Symmetrically, pass 1 (source wave 1, EXEC=lanes 32..63) reads stale
+Vgpr from lanes 0..31, which by then hold pass-0's residue (typically
+valid data from the previous WMMA, but for the wrong source-wave's
+LDS region). The mode 10/11 bisection confirms this: BOTH passes need
+the clamp -- the NaN bits exist in both upper-pass garbage AND lower-
+pass residue.
+
+**Why `_fwd_kernel` survives.** Its K=32 chains are deeper and have
+intervening writes that happen to clobber the upper-half garbage with
+*non-NaN* bit patterns before the MFMA call. Stage1's first WMMA in
+the loop reads from VGPRs that were never written outside of the
+EXEC-gated `spe_do` block, so the entry-phi undef survives until the
+MFMA call -- and `undef` in upper lanes is freely chosen by the
+backend, here happening to materialize NaN-class bf16.
+
+**Root cause (PROPOSED, falsified by implementation test):** I
+initially proposed that the WMMA->MFMA lowering's per-source-wave
+`runGroupPass` did not mask the *inactive* half-target's contribution
+to the MFMA's cross-lane K-reduction, and that inactive-lane VGPR
+contents (undef) were poisoning the active lanes' outputs via NaN bit
+patterns.
+
+**Why this is wrong** (verified after implementing and running):
+re-tracing the bperm address chain shows that **pass-0 bperm reads
+target lanes [0..31] (LoLane = lane&15, HiLane = lane&15+16) and
+pass-1 bperm reads target lanes [32..63] (LoLane = lane&15+32, HiLane
+= lane&15+48)**. Each pass reads only from lanes that were *active*
+during that pass's SPE-gated LDS load, so inactive-lane Vgpr garbage
+is never propagated into the MFMA input via the bperm path.
+Implementing the EXEC-aware mask anyway and running it:
+
+- **mode 0 (EXEC-mask only, no NaN clamp):** still NaN -- the model
+  output is still empty / all-zero token ids with NaN logprobs.
+- **mode 7 (EXEC-mask + bf16 NaN clamp):** **also** NaN now, where
+  mode 7 alone (without EXEC-mask) had previously worked. The mask is
+  actively harmful because pass-0's MFMA now drops K[8..15]
+  (lanes 32..63 zeroed) and pass-1 drops K[0..7] (lanes 0..31
+  zeroed), so each half computes an incomplete K-reduction. Some
+  downstream operation amplifies the resulting math error into NaN.
+
+So both the diagnosis and the fix were wrong. **The NaN bits flowing
+into the WMMA.A operand are not generated by this WMMA at all** --
+they are flowing in from upstream LDS contents that were already
+NaN-poisoned by some prior compute (e.g., a previous WMMA whose
+output was stored to LDS, or a non-WMMA softmax/exp/div op).
+Mode-7's clamp works because it sanitizes the inputs unconditionally,
+breaking the inheritance chain. The EXEC-mask fix doesn't, because
+the NaN bits live in *active*-lane VGPRs, not inactive ones.
+
+**What to investigate next:**
+
+1. **Find the upstream NaN producer.** Since mode-7 clamping the A
+   operand of each WMMA's MFMA cleans the chain, the NaN must enter
+   the dataflow either (a) at a non-WMMA op (an LLVM intrinsic, a
+   div / log / exp), or (b) at a WMMA whose output is mishandled
+   downstream. Possible attack: insert a similar bf16 NaN-clamp guard
+   on the WMMA *output* path (the `collectResult` dwords) and bisect
+   which WMMA first emits NaN. If a specific WMMA shows up as
+   "produces NaN on output despite clean inputs", that's a real
+   per-WMMA lowering bug. Otherwise the producer is non-WMMA.
+
+2. **Audit the lifter's `exp`, `log`, `rcp`, `div` lowerings under
+   WaveNative.** The lifted IR already shows uses of
+   `@llvm.amdgcn.exp2.f32` / `log.f32` / `rcp.f32` / `div.fixup.f32`
+   / `div.fmas.f32` / `div.scale.f32`. Any of these returning NaN on
+   inactive lanes (whose inputs may be undef) and then having that
+   NaN flow through ds.bpermute / LDS to the WMMA inputs would
+   reproduce the symptom we see. The Triton attention kernel computes
+   `softmax(qk_t / sqrt(d_k))` -- plenty of surface for a single
+   division-by-zero on an inactive lane to taint LDS contents.
+
+3. **Mode-7's bf16 clamp must stay** -- it's the only known way to
+   keep the model finite end-to-end. Treat it as a permanent guard
+   until the upstream producer is found and fixed.
+
+### 12.4.10 Session-11: WMMA-output f32 NaN/Inf clamp (mode 12) ruled out (2026-06-02)
+
+Implementation of investigation path (1) above. Added a new ablation
+mode 12 in `wmma-lowering.cpp::emitWMMAtoMFMA`: after the final
+`FinalDwords[]` reassembly (post group-1 select), test each f32 dword
+for `(x & 0x7F800000) == 0x7F800000` (NaN or Inf exponent field)
+and replace with 0. Gated by `HOTSWAP_ABLATE_MFMA_CALL=12` and the
+existing `HOTSWAP_ABLATE_WMMA_RANGE` range gate, so the same env
+that bisects mode 7/9 input clamps now also bisects output clamps.
+IU8 (integer accumulator) is exempt -- "NaN" has no meaning for
+integer outputs.
+
+**Result with full range (no `HOTSWAP_ABLATE_WMMA_RANGE`, every
+WMMA's output clamped):** Same failure as mode 7 / mode 0 -- run
+completes, equivalence-check raises `ValueError: logprob must be
+finite, got nan`. See `/home/azinenko/.claude/jobs/142e23cf/
+mode12.log` for the trace.
+
+**Interpretation.** The combination
+
+* mode 7 (clamp bf16 NaN on WMMA *input* A) -> smoke text OK, eq fails
+* mode 9 (clamp bf16 NaN on inputs A and B) -> smoke text OK, eq fails
+* mode 12 (clamp f32 NaN/Inf on WMMA *output*, every WMMA) -> eq fails
+
+establishes that NaN propagation through the WMMA boundary is NOT
+the load-bearing source. If it were, mode 12 (which is strictly
+upper-bounded by "no f32 NaN can leave any WMMA") would have
+produced finite logprobs. Therefore the NaN that ultimately
+contaminates the logits is generated by *non-WMMA compute*
+downstream of (or independent of) the matmul chain.
+
+Mode 7's smoke-pass effect is now reinterpreted: clamping the input
+bf16 NaN bits does eliminate one *channel* of NaN, enough for the
+top-1 token to be a real word, but does not stop the separate
+transcendental / division pathway that taints other logits in the
+output distribution.
+
+**Code preserved.** Mode 12 is left in place for future use
+(e.g. to bisect particular WMMA indices once the upstream producer
+is narrowed). It is a pure ablation -- has no effect when
+`HOTSWAP_ABLATE_MFMA_CALL` is unset or set to any other value.
+
+**Next investigation -- audit `exp2.f32` / `log.f32` / `rcp.f32` /
+`div.scale.f32` / `div.fixup.f32` / `div.fmas.f32` lowerings.**
+The Triton attention softmax computes `exp(qk - row_max)` and
+`1 / row_sum`, both of which surface inactive-lane traps if the
+lifter passes through arbitrary upstream-VGPR values to a `exp2`
+or `rcp` whose write is then read cross-lane. Under WaveNative the
+ambient HW EXEC=-1 means every lane physically executes the
+intrinsic on its (possibly garbage) inputs -- if a non-EXEC-gated
+write back to the lane's destination VGPR happens, that VGPR
+becomes the NaN source. Start at `handle-valu-vop1.cpp` for the
+`v_exp_f32` / `v_log_f32` / `v_rcp_f32` family and check whether
+the lifter wraps them in `emitUnderExec` (correct) or emits them
+bare (the suspected bug).
+
+### 12.4.11 Session-12: V_DIV_SCALE_F32 SGPR carry-out fix (2026-06-03)
+
+**What we found.** Reading `_fwd_kernel_stage2.ll` (Triton attention
+across-KV-split merge kernel) showed a clean `(v << 32) | v`
+replication pattern feeding `v_div_fmas_f32`'s i1 carry-flag input:
+
+```
+%539 = extractvalue { float, i1 } %divscale588, 1   ; per-lane carry
+%540 = zext i1 %539 to i32                          ; per-lane 0/1
+...
+%583 = zext i32 %540 to i64
+%584 = shl i64 %583, 32
+%wn_mask_widen660 = or i64 %583, %584               ; (v<<32) | v
+%wn_mask_lane_i1666 = ...lshr by lane_id; and 1; icmp ne...
+%divfmas667 = call float @llvm.amdgcn.div.fmas.f32(..., i1 %wn_mask_lane_i1666)
+```
+
+The widening pattern (`extractLaneBitFromWaveMask` under
+`WaveNativeProjection`) is correct only when its input is a *wave
+mask* -- one bit per lane packed into a source-width integer.
+`%540` instead held *per-lane* data: each lane's own SGPR alloca
+slot contained `zext(carry_lane, i32) = 0 or 1`. Under the
+replication+extract round-trip:
+
+- target lane 0   reads bit 0 of (carry[0]<<32 | carry[0])  -> carry[0]  ok
+- target lane 32  reads bit 32 of (carry[32]<<32 | carry[32]) -> carry[32] ok
+- target lane k (k != 0, k != 32) -> always 0
+
+So 62 of 64 target lanes received `carry=0` regardless of what
+`v_div_scale_f32` actually produced, silently turning `v_div_fmas_f32`'s
+scale-by-2^(+/-64) into a wrong-sign exponent and seeding NaN/Inf into
+the softmax denominator.
+
+**Where the bug lived.** `handle-valu.cpp` `V_DIV_SCALE_F32` handler
+wrote the SGPR-destination carry-out via
+`storeSGPR32(baseIdx, zext(flag, i32))`. Every other carry-chain
+lifter (V_ADD_CO_*, V_SUB_CO_*, V_ADD_CO_CI_*, V_SUB_CO_CI_*) routes
+through the shared `writeCarryOutI1` helper, which ballots the
+per-lane i1 to a source-width wave mask via
+`projection.ballotI1ToWidth`, stores it through `writeRegExecWidth`
+(handles SGPR-pair vs single-SGPR width policy), and caches the
+per-lane i1 via `recordSgprWaveMaskI1` for same-BB consumers.
+`V_DIV_SCALE_F32` was the lone outlier.
+
+**Fix.** Replace the SGPR-carry arm in `V_DIV_SCALE_F32` with a
+direct call to `writeCarryOutI1`. The helper already handles all
+three SDST shapes (VCC, SGPR with valid baseIdx, NOREG) and the
+NumDefs<2 / non-register fallback to implicit VCC. The lifted IR
+for the same kernel after the fix shows the expected ballot
+pattern:
+
+```
+%539 = extractvalue { float, i1 } %divscale588, 1
+%carry_ballot = call i64 @llvm.amdgcn.ballot.i64(i1 %539)
+%carry_ballot_trunc = trunc i64 %carry_ballot to i32
+...
+%582 = zext i32 %carry_ballot_trunc to i64
+%583 = shl i64 %582, 32
+%wn_mask_widen661 = or i64 %582, %583
+...
+%divfmas668 = call float @llvm.amdgcn.div.fmas.f32(..., i1 %wn_mask_lane_i1667)
+```
+
+Target lanes 0-31 now read each source lane's actual carry. Target
+lanes 32-63 read the same bits as 0-31 (source wave 0's carries),
+because the ballot got truncated to source-wave width before being
+stored to the source-named 32-bit SGPR; this is the same
+documented residual lossy path as the V_CMP -> SGPR ballot+trunc
+write, and the per-lane `recordSgprWaveMaskI1` shadow lets a
+same-BB consumer bypass the extract entirely (see
+`sgpr-wave-mask-translation.md` 3.1).
+
+**Test outcome.** Gemma3-4B-IT Triton attention E2E (HotSwap
+gfx1250-wave32 -> gfx942-wave64) with `HOTSWAP_ABLATE_MFMA_CALL=7`
+produces `output_ids=[0, 236743, 94943, 94943, ...]` -- byte-for-byte
+identical to the pre-fix mode-7 baseline. The divscale-carry fix is
+semantically correct on its own (verified by the IR shape change
+above) but does NOT move the equivalence-check needle for this
+kernel: the dominant NaN producer is upstream of the divscale path
+(WMMA accumulator path, the same surface that mode 7's bf16-NaN
+clamp band-aid is masking). Investigation continues -- the next
+candidate is the
+`v_exp_f32` / `v_rcp_f32` / `v_log_f32` family under WaveNative
+ambient EXEC=-1 (see Session-11's "Next investigation" note above).
+
+### 12.4.12 Session-12 follow-up: S_MOV_B32 SGPR->VCC shadow lookup (2026-06-03)
+
+**Why the Session-12 fix wasn't enough on its own.** Session 12 fixed
+the `V_DIV_SCALE_F32` carry-out *producer* side (ballot the per-lane
+i1 into a source-width wave mask before storing to the SGPR-pair
+slot). But the *consumer* side -- the
+`s_mov_b32 vcc_lo, sN` lifter in
+`handle-sop1.cpp` -- still routed every SGPR->VCC move through the
+generic `writeReg32(VCC, ...)` path, which calls
+`extractLaneBitFromWaveMask` on the raw 32-bit SGPR value. The
+ballot+truncate at the producer plus the replication+extract at the
+consumer compose to the classic lossy round-trip: target lanes 0..31
+get source-wave-0's carries, and target lanes 32..63 get the SAME
+source-wave-0 carries (instead of source-wave-1's). The bypass
+existed for VOP3 SOP2 consumers via `tryGetSrcWaveMaskI1`, but the
+single-source `S_MOV_B32` handler never called it.
+
+**Fix (`handle-sop1.cpp` S_MOV_B32 branch).** Before the generic
+`writeReg32(Dst, Src)`, check whether `Src` is an SGPR whose per-lane
+i1 lives in the wave-mask shadow cache:
+
+1. `Ctx.lookupSgprWaveMaskI1(SrcReg.BaseIdx)` -- same-BB fresh value.
+2. If miss, `Ctx.loadSgprWaveMaskValid(SrcReg.BaseIdx)` /
+   `loadSgprWaveMaskExec(...)` -- the cross-BB alloca shadow, with a
+   per-lane `extractLaneBitFromWaveMask(loadSGPR(...))` fallback
+   selected by the `valid` flag (so a never-recorded SGPR still gets
+   the documented lossy extract, not a wrong value).
+3. If `Dst.RegKind == VCC` and a per-lane i1 was found, short-circuit
+   straight to `Ctx.Regs.storeVCC(B, SrcWaveMaskI1)`. This skips
+   `writeReg32(VCC, ...)`'s lossy `extractLaneBitFromWaveMask` call
+   entirely.
+4. For SGPR->SGPR moves, re-record the i1 shadow under
+   `Dst.BaseIdx` after the underlying `writeReg32` so downstream
+   consumers find the carry where they expect it.
+5. Also record the EXEC->SGPR move case (`Src.RegKind == EXEC`), so
+   later `s_mov_b32 vcc_lo, sN` reads of saved-EXEC SGPRs benefit
+   from the same bypass.
+
+**IR-level evidence.** Freshly lifted `_fwd_kernel_stage2.ll` after
+the fix shows two changes:
+
+* The `smov_sgpr_mask_shadow_sel` marker appears 8 times (12 in
+  stage1) -- evidence the new lookup arm fired on real SGPR sources
+  during the kernel lift.
+* Every `@llvm.amdgcn.div.fmas.f32` call now takes its i1 carry
+  directly from `extractvalue { float, i1 } %divscale*, 1`: no more
+  ballot/truncate/widen/extract round-trip between divscale and the
+  consuming divfmas in any of stage2's three divscale call sites or
+  stage1's seven divfmas call sites.
+
+```
+%547 = extractvalue { float, i1 } %divscale655, 1
+%divfmas728 = call float @llvm.amdgcn.div.fmas.f32(..., i1 %547)
+```
+
+**Test outcome.** Gemma3-4B-IT Triton attention E2E (HotSwap
+gfx1250-wave32 -> gfx942-wave64) with `HOTSWAP_ABLATE_MFMA_CALL=7`
+still produces `output_ids=[0, 236743, 94943, 94943, ...]` --
+byte-for-byte identical to the pre-fix mode-7 baseline. The
+equivalence check still raises
+`ValueError: logprob must be finite, got nan`. Combined with
+Session-12's outcome, this confirms the divscale/divfmas carry
+chain (both producer and consumer sides) was lifted correctly all
+along under the lossy ballot+extract approximation that
+`extractLaneBitFromWaveMask` accepts; the actual NaN producer lives
+elsewhere.
+
+**Cross-references.**
+
+* Mode 0 (no clamp at all): output_ids
+  `[0, 0, 0, ..., 0]` (16 zeros), all logprobs NaN including for
+  INPUT tokens. This shows the NaN appears in prefill -- the first
+  forward pass over the prompt already produces NaN LM-head logits.
+  The Triton attention `_fwd_kernel` (prefill) is therefore the
+  upstream NaN producer, not just the decode-time
+  `_fwd_grouped_kernel_stage1` / `_fwd_kernel_stage2`.
+* The S_MOV consumer-side bypass is still a correctness
+  improvement we want to keep: it eliminates a real silent miscompile
+  channel for any cross-widening kernel that does
+  `v_cmp -> SGPR -> s_mov vcc_lo, sN -> divfmas` or similar carry
+  routing, even if this specific kernel didn't depend on it.
+
+**Next investigation.** Mode 12 (clamp every WMMA output) has been
+ruled out -- the NaN doesn't propagate through WMMA outputs.
+
+Subsequent ablation results:
+
+* Mode 14 (mode 7 + mode 13 = clamp A bf16 NaN + clamp C f32 NaN on
+  the MFMA input each iteration): still NaN logprobs, plus the
+  hotswap output_ids became NON-DETERMINISTIC across run1 and run2
+  (`[0, 94943, ...]` vs `[0, 236743, 94943, ...]` for case 0;
+  different again for case 1). Adding the C-input clamp neither
+  eliminates the NaN nor stabilises the output, which means the
+  contamination either bypasses the MFMA C input entirely or arrives
+  via an Inf -> 0 * Inf -> NaN path (mode 13 deliberately preserves
+  Inf because the softmax legitimately uses +/-Inf as the row-max
+  sentinel).
+
+The remaining hypotheses are non-MFMA paths that can introduce NaN:
+
+1. Cross-lane reads (`ds_bpermute`, `permlane*` emulation,
+   MFMA hardware C-input addressing) pulling NaN from inactive
+   lanes' VGPRs that contain the 0xA5A5_A5A5 sentinel.
+2. LDS stores that are not EXEC-gated leaving NaN in shared memory
+   that an active lane later loads.
+3. A specific VOP3/VOP3P/SOP op that writes a destination without
+   `emitUnderExec` wrapping under `WaveNativeProjection`.
+
+Of these, (1) is the most plausible: WMMA's two-pass cross-widening
+intentionally widens "redistribute" reads across the full target
+wave, and `ds_bpermute` is convergent (all 64 hardware lanes
+participate). If the source kernel zero-initialises an accumulator
+or row_max VGPR via a `v_mov_b32` that the lifter wraps in
+`emitUnderExec`, then inactive lanes keep their pre-existing SPE
+sentinel (0xA5A5_A5A5 = NaN bit pattern). A subsequent cross-lane
+reduction that reads those slots propagates NaN regardless of which
+lanes are "active" at the kernel level.
+
 ## 13. Relationship to other axes
 
 - **SPE / wave-size** (`wave-size-translation.md`): WMMA sites require uniform
