@@ -185,12 +185,55 @@ HandlerResult handleSOP1(RaiseContext &Ctx, const DecodedInst &Di,
     ParsedReg Dst = Op.dst();
     ParsedReg SrcReg = Op.isSrcReg(0) ? Op.srcReg(0) : ParsedReg{};
     Value *Src = Op.src(0);
+
+    // Resolve the per-lane i1 wave mask carried by the SGPR, if any.
+    // Prefer the in-BB shadow (lookupSgprWaveMaskI1), then the
+    // cross-BB alloca shadow (validity bit + EXEC-width mask), then
+    // fall through to the standard writeReg32 path below.
+    Value *SrcWaveMaskI1 = nullptr;
+    if (SrcReg.RegKind == ParsedReg::SGPR && SrcReg.BaseIdx >= 0) {
+      if (Value *Fresh = Ctx.lookupSgprWaveMaskI1(SrcReg.BaseIdx)) {
+        SrcWaveMaskI1 = Fresh;
+      } else if (Value *ShadowValid =
+                     Ctx.loadSgprWaveMaskValid(SrcReg.BaseIdx)) {
+        Value *ShadowExec = Ctx.loadSgprWaveMaskExec(SrcReg.BaseIdx);
+        Value *ShadowI1 = Ctx.Projection.extractLaneBitFromWaveMask(
+            Ctx.B, ShadowExec);
+        Value *SgprMask = Ctx.Isa.isWave32()
+                              ? Ctx.Regs.loadSGPR32(Ctx.B, SrcReg.BaseIdx)
+                              : Ctx.Regs.loadSGPR64(Ctx.B, SrcReg.BaseIdx);
+        Value *Fallback =
+            Ctx.Projection.extractLaneBitFromWaveMask(Ctx.B, SgprMask);
+        SrcWaveMaskI1 = Ctx.B.CreateSelect(ShadowValid, ShadowI1, Fallback,
+                                            "sgpr_mask_shadow_sel");
+      }
+    }
+
+    // `s_mov_b32 vcc_lo, sN` short-circuit: commit the per-lane i1
+    // directly into the VCC alloca instead of going through the lossy
+    // `writeReg32(VCC, V)` -> `extractLaneBitFromWaveMask` round-trip.
+    // Critical for the V_DIV_SCALE_F32 -> SGPR -> s_mov vcc, sN ->
+    // V_DIV_FMAS_F32 carry chain under wave32 -> wave64 cross-widening,
+    // where the round-trip otherwise replicates source wave 0's
+    // carries into lanes 32..63 and breaks source wave 1's div_fmas
+    // scale by 2^(+/-64).
+    if (Dst.RegKind == ParsedReg::VCC && SrcWaveMaskI1) {
+      Ctx.Regs.storeVCC(Ctx.B, SrcWaveMaskI1);
+      Hr.Handled = true;
+      return Hr;
+    }
+
     Ctx.Regs.writeReg32(Ctx.B, Dst, Src);
     if (Dst.RegKind == ParsedReg::SGPR && SrcReg.RegKind == ParsedReg::EXEC) {
       Value *ExecI1 = Ctx.Projection.extractLaneBitFromWaveMask(
           Ctx.B, Ctx.Regs.loadExec(Ctx.B));
       Ctx.recordSgprWaveMaskI1(Dst.BaseIdx, ExecI1, /*isPair=*/false);
     }
+    // SGPR -> SGPR mov: re-record the shadow under the destination
+    // SGPR so chained consumers (e.g. a further s_mov_b32 vcc, sM)
+    // still resolve to the original per-lane i1.
+    if (Dst.RegKind == ParsedReg::SGPR && Dst.BaseIdx >= 0 && SrcWaveMaskI1)
+      Ctx.recordSgprWaveMaskI1(Dst.BaseIdx, SrcWaveMaskI1, /*isPair=*/false);
     Hr.Handled = true;
     return Hr;
   }
