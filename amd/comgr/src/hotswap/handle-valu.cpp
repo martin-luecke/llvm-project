@@ -1462,17 +1462,11 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     // Write the boolean flag to the actual SDST destination (operand 1):
     // vcc_lo, sN, or null. The kernel saves flags to SGPRs and later
     // restores them to VCC via s_mov_b32 before each v_div_fmas_f32.
-    Value *Flag = Ctx.B.CreateExtractValue(R, 1);
-    if (Di.NumDefs >= 2 && Di.isReg(1)) {
-      ParsedReg FlagDst = Op.dst(1);
-      if (FlagDst.RegKind == ParsedReg::VCC)
-        Ctx.Regs.storeVCC(Ctx.B, Flag);
-      else if (FlagDst.RegKind == ParsedReg::SGPR && FlagDst.BaseIdx >= 0)
-        Ctx.Regs.storeSGPR32(Ctx.B, FlagDst.BaseIdx, Ctx.B.CreateZExt(Flag, Ctx.I32Ty));
-      // NOREG (null) or unrecognized -> discard the flag
-    } else {
-      Ctx.Regs.storeVCC(Ctx.B, Flag);
-    }
+    // Route the carry-out (i1 per lane) through the shared helper so
+    // a downstream `s_mov_b32 vcc_lo, sN` restore finds a proper
+    // source-width wave mask in the SGPR alloca, and same-BB consumers
+    // like V_DIV_FMAS_F32 can use the cached i1 directly.
+    writeCarryOutI1(Ctx, Di, Op, Ctx.B.CreateExtractValue(R, 1));
     Hr.Handled = true;
     return Hr;
   }
