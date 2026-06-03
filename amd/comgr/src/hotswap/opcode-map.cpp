@@ -81,6 +81,21 @@ struct Entry {
   E(BASE##_SGPR,     SEM), \
   E(BASE##_SGPR_IMM, SEM)
 
+// gfx11+ SMEM has its own LLVM opcode names (`S_LOAD_B*` rather than
+// `S_LOAD_DWORD*`) with no non-suffixed base pseudo, so neither the legacy
+// `SMEM3` rows nor the `_gfxN` strip rules in `buildPseudoAliasMap` catch
+// them.  Enumerate the per-subtarget reals directly. gfx11 keeps the
+// standalone SGPR form; gfx12/13 dropped it.
+#define SMEM3_GFX11(BASE, SEM) \
+  E(BASE##_IMM_gfx11,      SEM), \
+  E(BASE##_SGPR_gfx11,     SEM), \
+  E(BASE##_SGPR_IMM_gfx11, SEM)
+#define SMEM2_GFX12_13(BASE, SEM) \
+  E(BASE##_IMM_gfx12,      SEM), \
+  E(BASE##_SGPR_IMM_gfx12, SEM), \
+  E(BASE##_IMM_gfx13,      SEM), \
+  E(BASE##_SGPR_IMM_gfx13, SEM)
+
 static const Entry kCanonTable[] = {
     // ---------------------------------------------------------------------
     // SOPP
@@ -144,6 +159,18 @@ static const Entry kCanonTable[] = {
     SMEM3(S_LOAD_DWORDX4,  S_LOAD_B128),
     SMEM3(S_LOAD_DWORDX8,  S_LOAD_B256),
     SMEM3(S_LOAD_DWORDX16, S_LOAD_B512),
+    // gfx11+ SMEM reals (no non-suffixed base in LLVM tablegen).
+    SMEM3_GFX11   (S_LOAD_B32,  S_LOAD_B32),
+    SMEM2_GFX12_13(S_LOAD_B32,  S_LOAD_B32),
+    SMEM3_GFX11   (S_LOAD_B64,  S_LOAD_B64),
+    SMEM2_GFX12_13(S_LOAD_B64,  S_LOAD_B64),
+    SMEM2_GFX12_13(S_LOAD_B96,  S_LOAD_B96),
+    SMEM3_GFX11   (S_LOAD_B128, S_LOAD_B128),
+    SMEM2_GFX12_13(S_LOAD_B128, S_LOAD_B128),
+    SMEM3_GFX11   (S_LOAD_B256, S_LOAD_B256),
+    SMEM2_GFX12_13(S_LOAD_B256, S_LOAD_B256),
+    SMEM3_GFX11   (S_LOAD_B512, S_LOAD_B512),
+    SMEM2_GFX12_13(S_LOAD_B512, S_LOAD_B512),
     // gfx12+ scalar narrow loads. All four types expose the full
     // IMM/SGPR/SGPR_IMM triad so the existing SMEM3 macro applies
     // unchanged. Handler in handle-smem.cpp.
@@ -151,6 +178,11 @@ static const Entry kCanonTable[] = {
     SMEM3(S_LOAD_I8,       S_LOAD_I8),
     SMEM3(S_LOAD_U16,      S_LOAD_U16),
     SMEM3(S_LOAD_I16,      S_LOAD_I16),
+    // gfx12/13 narrow SMEM reals (gfx12 introduced this family).
+    SMEM2_GFX12_13(S_LOAD_U8,  S_LOAD_U8),
+    SMEM2_GFX12_13(S_LOAD_I8,  S_LOAD_I8),
+    SMEM2_GFX12_13(S_LOAD_U16, S_LOAD_U16),
+    SMEM2_GFX12_13(S_LOAD_I16, S_LOAD_I16),
     SMEM3(S_STORE_DWORD,   S_STORE_B32),
     SMEM3(S_STORE_DWORDX2, S_STORE_B64),
     SMEM3(S_STORE_DWORDX4, S_STORE_B128),
