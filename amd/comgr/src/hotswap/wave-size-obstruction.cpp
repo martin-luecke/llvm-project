@@ -698,6 +698,16 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
 
     // --- §3 Class 1: absolute lane-ID leaks --------------------------
     if (Sop == CanonicalOp::V_MBCNT_HI_U32_B32) {
+      // For wave32 source widened to wave64, mbcnt_hi is unconditionally
+      // a pass-through of src1: the hi-half mask `(1 << max(0, L - 32)) - 1`
+      // is empty for every source lane L in [0, 31]. The lift in
+      // handle-valu-cross-lane.cpp emits src1 directly in that case, so
+      // there is no leak. The classifier only refuses other widening
+      // directions (e.g. wave64 source narrowed to wave32 target), where
+      // the source instruction reads exec_hi and the target has no
+      // equivalent register to model it.
+      if (Src.isWave32() && Tgt.WaveSize > Src.WaveSize)
+        continue;
       ObstructionSite Site;
       Site.Inst = &Di;
       Site.Kind = ObstructionKind::MbcntHiLaneIdLeak;
