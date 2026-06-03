@@ -1631,7 +1631,10 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
       // codegen pattern), sidestepping the ISel crash entirely.
       // See setpc-analysis.h + canonical-op.h's S_SET_PC_I64 doc +
       // `emitEnumeratedDispatch` in handle-sop1.cpp.
-      if (Di.CanonOp == CanonicalOp::S_ADDC_U32) {
+      // gfx1250 uses S_ADD_NC_U64 as a single-instruction chain
+      // terminator (replaces the gfx9 S_ADDC_U32 high-half carry add).
+      if (Di.CanonOp == CanonicalOp::S_ADDC_U32 ||
+          Di.CanonOp == CanonicalOp::S_ADD_NC_U64) {
         auto It = SetpcAnalysis.ChainTerminators.find(Di.Offset);
         if (It != SetpcAnalysis.ChainTerminators.end()) {
           uint64_t ResolvedAddr = It->second.ResolvedReturnAddr;
