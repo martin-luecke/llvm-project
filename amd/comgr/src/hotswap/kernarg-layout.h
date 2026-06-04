@@ -56,6 +56,13 @@ enum class SourceHiddenArgKind {
   HiddenRemainderY,
   HiddenRemainderZ,
   HiddenGridDims,
+  HiddenGlobalOffsetX,
+  HiddenGlobalOffsetY,
+  HiddenGlobalOffsetZ,
+  HiddenReservedZero,
+  HiddenPrivateBase,
+  HiddenSharedBase,
+  HiddenQueuePtr,
   UnsupportedHidden,
 };
 

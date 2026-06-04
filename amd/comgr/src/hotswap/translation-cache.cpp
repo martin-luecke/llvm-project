@@ -282,6 +282,7 @@ KeyData buildKeyData(const TranslationCacheRequest &request,
   appendKeyField(material, "orig_mach", request.OrigMach);
   appendKeyField(material, "rules_path", request.HotswapRulesPath);
   appendKeyField(material, "rules_sha256", data.rulesSha256);
+  appendKeyField(material, "kernel_allowlist", request.KernelAllowlist);
   appendKeyField(material, "strict", request.StrictMode);
   appendKeyField(material, "enable_writelane_rewrite",
                  request.EnableWritelaneRewrite);
@@ -490,6 +491,7 @@ llvm::json::Object metadataObject(const TranslationCacheRequest &request,
       {"orig_mach", request.OrigMach},
       {"hotswap_rules_path", request.HotswapRulesPath},
       {"hotswap_rules_sha256", keyData.rulesSha256},
+      {"kernel_allowlist", request.KernelAllowlist},
       {"strict_mode", request.StrictMode},
       {"enable_writelane_rewrite", request.EnableWritelaneRewrite},
       {"enable_wave_native", request.EnableWaveNative},
@@ -534,6 +536,8 @@ bool validateMetadata(const TranslationCacheRequest &request,
       !requireEqualString(obj, "hotswap_rules_path", request.HotswapRulesPath,
                           Reason) ||
       !requireEqualString(obj, "hotswap_rules_sha256", keyData.rulesSha256,
+                          Reason) ||
+      !requireEqualString(obj, "kernel_allowlist", request.KernelAllowlist,
                           Reason) ||
       !requireEqualBool(obj, "strict_mode", request.StrictMode, Reason) ||
       !requireEqualBool(obj, "enable_writelane_rewrite",

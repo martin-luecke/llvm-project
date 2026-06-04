@@ -231,6 +231,98 @@ std::optional<uint32_t> imm32(const MCInst &Inst, unsigned OpIdx) {
   return static_cast<uint32_t>(Op.getImm() & 0xFFFFFFFFu);
 }
 
+std::optional<int64_t> imm64(const MCInst &Inst, unsigned OpIdx) {
+  if (OpIdx >= Inst.getNumOperands())
+    return std::nullopt;
+  const MCOperand &Op = Inst.getOperand(OpIdx);
+  if (!Op.isImm())
+    return std::nullopt;
+  return Op.getImm();
+}
+
+std::optional<int64_t> trailingImm64FromText(StringRef FullText) {
+  size_t Comma = FullText.rfind(',');
+  if (Comma == StringRef::npos)
+    return std::nullopt;
+  StringRef Tok = FullText.substr(Comma + 1).trim();
+  uint64_t Raw = 0;
+  if (Tok.getAsInteger(0, Raw))
+    return std::nullopt;
+  return static_cast<int64_t>(Raw);
+}
+
+bool defOverlapsPair(const DecodedInst &Di, const MCRegisterInfo &MRI,
+                     unsigned PairLow) {
+  for (unsigned I = 0; I < Di.NumDefs && I < Di.numOps(); ++I) {
+    if (!Di.isReg(I))
+      continue;
+    auto DefLow = sgprIdx(MRI, Di.getReg(I));
+    if (!DefLow)
+      continue;
+    unsigned W = regWidth32(MRI, Di.getReg(I));
+    for (unsigned K = 0; K < W; ++K) {
+      unsigned Half = *DefLow + K;
+      if (Half == PairLow || Half == PairLow + 1)
+        return true;
+    }
+  }
+  return false;
+}
+
+std::optional<uint64_t> findNearestTextualPcChain(ArrayRef<DecodedInst> Insts,
+                                                  uint64_t SiteOffset,
+                                                  unsigned PairLow,
+                                                  const MCRegisterInfo &MRI,
+                                                  uint64_t TextSize) {
+  auto SiteIt = std::find_if(Insts.begin(), Insts.end(),
+                             [&](const DecodedInst &Di) {
+                               return Di.Offset == SiteOffset;
+                             });
+  if (SiteIt == Insts.end() || SiteIt == Insts.begin())
+    return std::nullopt;
+  size_t SiteIdx = static_cast<size_t>(std::distance(Insts.begin(), SiteIt));
+
+  for (size_t I = SiteIdx; I-- > 0;) {
+    const DecodedInst &Di = Insts[I];
+    if (!defOverlapsPair(Di, MRI, PairLow))
+      continue;
+
+    if (Di.CanonOp != CanonicalOp::S_ADD_NC_U64 || Di.NumDefs < 1 ||
+        !Di.isReg(0))
+      return std::nullopt;
+    auto DstIdx = sgprIdx(MRI, Di.getReg(0));
+    if (!DstIdx || *DstIdx != PairLow)
+      return std::nullopt;
+    unsigned S0 = Di.FirstSrcIdx;
+    unsigned S1 = S0 + 1;
+    std::optional<unsigned> Src0Idx;
+    if (Di.isReg(S0))
+      Src0Idx = sgprIdx(MRI, Di.getReg(S0));
+    if (!Src0Idx || *Src0Idx != PairLow)
+      return std::nullopt;
+    auto Addend = imm64(Di.Inst, S1);
+    if (!Addend)
+      Addend = trailingImm64FromText(Di.FullText);
+    if (!Addend || I == 0)
+      return std::nullopt;
+
+    const DecodedInst &Prev = Insts[I - 1];
+    if (Prev.CanonOp != CanonicalOp::S_GETPC_B64 || Prev.NumDefs < 1 ||
+        !Prev.isReg(0))
+      return std::nullopt;
+    auto GetPcDst = sgprIdx(MRI, Prev.getReg(0));
+    if (!GetPcDst || *GetPcDst != PairLow)
+      return std::nullopt;
+    uint64_t Target =
+        (Prev.Offset + Prev.Size) + static_cast<uint64_t>(*Addend);
+    if (Target >= TextSize)
+      return std::nullopt;
+    return Target;
+  }
+
+  return std::nullopt;
+}
+
 // Per-pair PC-chain state. We track the symbolic absolute kernel
 // offset stored in an SGPR pair sX:X+1, plus the offset of the chain
 // terminator (the s_add_co_ci_u32 high-half add) so the raiser knows
@@ -348,6 +440,17 @@ public:
       return;
     It->second.Value += AddedHi << 32;
     It->second.Terminator = TerminatorOff;
+    IntraDirtyHalf.insert(LowIdx + 1);
+  }
+
+  void finishWideAdd(unsigned LowIdx, uint64_t TerminatorOff, int64_t Addend) {
+    auto It = PcChains.find(LowIdx);
+    if (It == PcChains.end())
+      return;
+    It->second.Value += static_cast<uint64_t>(Addend);
+    It->second.Terminator = TerminatorOff;
+    It->second.LowAddDone = true;
+    IntraDirtyHalf.insert(LowIdx);
     IntraDirtyHalf.insert(LowIdx + 1);
   }
 
@@ -579,13 +682,13 @@ computeSuccessors(const DecodedInst &LastInst, uint64_t NextBlockOffset,
 
 SetPcAnalysis analyseSetPC(ArrayRef<DecodedInst> Insts,
                            const std::set<uint64_t> &BlockStarts,
-                           const MCState &Mc) {
+                           const MCState &Mc,
+                           uint64_t TextSize) {
   SetPcAnalysis Result;
   if (Insts.empty())
     return Result;
 
   const MCRegisterInfo &MRI = *Mc.RegInfo;
-
   // ---------------------------------------------------------------
   // Phase 1 -- pre-pass: enumerate every swap/set_pc fallthrough as a
   // block leader. This guarantees the per-block walk sees each
@@ -744,6 +847,36 @@ SetPcAnalysis analyseSetPC(ArrayRef<DecodedInst> Insts,
                             static_cast<uint64_t>(*Src1Imm));
         Result.ChainTerminators[Di.Offset] =
             SetPcCallSiteInfo{State.findPc(LowIdx)->Value, LowIdx};
+        continue;
+      }
+
+      case CanonicalOp::S_ADD_NC_U64: {
+        if (Di.NumDefs < 1 || !Di.isReg(0))
+          break;
+        auto DstIdx = sgprIdx(MRI, Di.getReg(0));
+        if (!DstIdx)
+          break;
+        unsigned S0 = Di.FirstSrcIdx;
+        unsigned S1 = S0 + 1;
+        std::optional<unsigned> Src0Idx;
+        if (Di.isReg(S0))
+          Src0Idx = sgprIdx(MRI, Di.getReg(S0));
+        if (!Src0Idx || *Src0Idx != *DstIdx)
+          break;
+        PcChain *Chain = State.findPc(*DstIdx);
+        if (!Chain)
+          break;
+        auto Src1Imm = imm64(Di.Inst, S1);
+        if (!Src1Imm)
+          Src1Imm = trailingImm64FromText(Di.FullText);
+        if (!Src1Imm)
+          break;
+        uint64_t Target = Chain->Value + static_cast<uint64_t>(*Src1Imm);
+        if (Target >= TextSize)
+          break;
+        State.finishWideAdd(*DstIdx, Di.Offset, *Src1Imm);
+        Result.ChainTerminators[Di.Offset] =
+            SetPcCallSiteInfo{State.findPc(*DstIdx)->Value, *DstIdx};
         continue;
       }
 
@@ -1108,12 +1241,43 @@ SetPcAnalysis analyseSetPC(ArrayRef<DecodedInst> Insts,
       continue;
     const auto &Facts = EntryFacts[Bit->second];
     auto It = Facts.find(Pds.SrcPair);
-    bool Resolved =
-        (It != Facts.end()) && !It->second.Incomplete &&
+    PcLatticeValue SinglePredFact;
+    const PcLatticeValue *ResolvedFact = nullptr;
+    if (It != Facts.end() && !It->second.Incomplete &&
         !It->second.Values.empty() &&
-        It->second.Values.size() <= kMaxDispatchTargets;
+        It->second.Values.size() <= kMaxDispatchTargets) {
+      ResolvedFact = &It->second;
+    } else {
+      // The block-entry lattice is intentionally conservative: when one
+      // predecessor mentions a pair and another does not, the join marks the
+      // pair incomplete rather than guessing.  For a use block with exactly
+      // one immediate predecessor, however, the predecessor's exit fact is the
+      // complete incoming state at this edge.  Accept that edge-local SET only
+      // when it is already a bounded concrete PC set; otherwise keep the loud
+      // refusal below.
+      const auto &Preds = Predecessors[Bit->second];
+      if (Preds.size() == 1) {
+        auto Exit = ComputeExit(EntryFacts[Preds[0]], Blocks[Preds[0]]);
+        auto Eit = Exit.find(Pds.SrcPair);
+        if (Eit != Exit.end() && !Eit->second.Incomplete &&
+            !Eit->second.Values.empty() &&
+            Eit->second.Values.size() <= kMaxDispatchTargets) {
+          SinglePredFact = Eit->second;
+          ResolvedFact = &SinglePredFact;
+        }
+      }
+      if (!ResolvedFact && Pds.IsSwap) {
+        if (auto Target = findNearestTextualPcChain(Insts, Pds.SiteOffset,
+                                                    Pds.SrcPair, MRI,
+                                                    TextSize)) {
+          SinglePredFact.Values.push_back(*Target);
+          SinglePredFact.Incomplete = false;
+          ResolvedFact = &SinglePredFact;
+        }
+      }
+    }
 
-    if (!Resolved) {
+    if (!ResolvedFact) {
       if (Pds.IsSwap) {
         SetPcSiteInfo Info;
         Info.SiteKind = SetPcSiteInfo::Kind::Unresolvable;
@@ -1142,8 +1306,8 @@ SetPcAnalysis analyseSetPC(ArrayRef<DecodedInst> Insts,
       continue;
     }
 
-    SmallVector<uint64_t, 4> Targets(It->second.Values.begin(),
-                                     It->second.Values.end());
+    SmallVector<uint64_t, 4> Targets(ResolvedFact->Values.begin(),
+                                     ResolvedFact->Values.end());
     SetPcSiteInfo Info;
     if (Targets.size() == 1) {
       Info.SiteKind = SetPcSiteInfo::Kind::DirectA;

@@ -200,12 +200,21 @@ ParsedReg RaiseContext::parseReg(MCRegister Reg, int MciOpIdx) const {
     Pr.RegKind = ParsedReg::SRC_SCC;
     Pr.Width = 1;
     return Pr;
+  // Source flat-scratch base aliases read the same architectural pair
+  // as FLAT_SCR_{LO,HI}. Route them through the existing FLAT_SCR
+  // storage so instructions that form scratch-relative pointers can
+  // consume a single modeled base value instead of failing as OTHER.
+  case AMDGPU::SRC_FLAT_SCRATCH_BASE_LO:
+  case AMDGPU::SRC_FLAT_SCRATCH_BASE_HI:
+    Pr.RegKind = ParsedReg::FLAT_SCR;
+    Pr.Width = Width;
+    return Pr;
   // Aperture / runtime-defined source registers: SRC_SHARED_BASE /
-  // _LIMIT, SRC_PRIVATE_BASE / _LIMIT, SRC_FLAT_SCRATCH_BASE_LO /
-  // _HI, SRC_POPS_EXITING_WAVE_ID. Their values are set per-queue by
-  // the firmware and have no compile-time-knowable IR encoding, so
-  // we cannot lower them principledly. Classify as OTHER so parseReg
-  // does not crash; readOp32 / readOp64 will route OTHER through
+  // _LIMIT, SRC_PRIVATE_BASE / _LIMIT, SRC_POPS_EXITING_WAVE_ID.
+  // Their values are set per-queue by the firmware and have no
+  // compile-time-knowable IR encoding, so we cannot lower them
+  // principledly. Classify as OTHER so parseReg does not crash;
+  // readOp32 / readOp64 will route OTHER through
   // `recordReadFailure(unsupportedShape)` and the per-instruction
   // dispatch loop in raiser.cpp will surface it as a clean
   // unsupported-shape failure rather than a SIGABRT.
@@ -214,8 +223,6 @@ ParsedReg RaiseContext::parseReg(MCRegister Reg, int MciOpIdx) const {
   case AMDGPU::SRC_PRIVATE_BASE_LO:
   case AMDGPU::SRC_PRIVATE_LIMIT_LO:
   case AMDGPU::SRC_POPS_EXITING_WAVE_ID:
-  case AMDGPU::SRC_FLAT_SCRATCH_BASE_LO:
-  case AMDGPU::SRC_FLAT_SCRATCH_BASE_HI:
     Pr.RegKind = ParsedReg::OTHER;
     Pr.Width = Width;
     return Pr;

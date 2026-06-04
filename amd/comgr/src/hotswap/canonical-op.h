@@ -64,6 +64,8 @@ enum class CanonicalOp : uint16_t {
 
   // -- SMEM --
   S_LOAD_B32, S_LOAD_B64, S_LOAD_B96, S_LOAD_B128, S_LOAD_B256, S_LOAD_B512,
+  S_BUFFER_LOAD_B32, S_BUFFER_LOAD_B64, S_BUFFER_LOAD_B96,
+  S_BUFFER_LOAD_B128, S_BUFFER_LOAD_B256, S_BUFFER_LOAD_B512,
   // gfx12+ scalar narrow loads: fetch 1 or 2 bytes from a uniform address and
   // zero/sign-extend into a 32-bit SGPR. Older ISAs have no equivalent; on a
   // cross-target lift to gfx942 the backend will lower the narrow `load iN`
@@ -85,9 +87,11 @@ enum class CanonicalOp : uint16_t {
   S_CMP_EQ_F32, S_CMP_LG_F32, S_CMP_GT_F32, S_CMP_GE_F32,
   S_CMP_LT_F32, S_CMP_LE_F32, S_CMP_NEQ_F32,
   S_CMP_NGT_F32, S_CMP_NGE_F32, S_CMP_NLT_F32, S_CMP_NLE_F32, S_CMP_NLG_F32,
+  S_CMP_O_F32, S_CMP_U_F32,
   S_CMP_EQ_F16, S_CMP_LG_F16, S_CMP_GT_F16, S_CMP_GE_F16,
   S_CMP_LT_F16, S_CMP_LE_F16, S_CMP_NEQ_F16,
   S_CMP_NGT_F16, S_CMP_NGE_F16, S_CMP_NLT_F16, S_CMP_NLE_F16, S_CMP_NLG_F16,
+  S_CMP_O_F16, S_CMP_U_F16,
 
   // -- SOPK --
   S_MOVK_I32, S_ADDK_I32, S_MULK_I32,
@@ -352,7 +356,7 @@ enum class CanonicalOp : uint16_t {
   V_CVT_F16_F32, V_CVT_F32_F16, V_CVT_F32_BF16,
   V_CVT_F32_UBYTE0, V_CVT_F32_UBYTE1, V_CVT_F32_UBYTE2, V_CVT_F32_UBYTE3,
   V_CVT_F32_F64, V_CVT_F64_F32,
-  V_CVT_F64_U32, V_CVT_F64_I32, V_CVT_U32_F64,
+  V_CVT_F64_U32, V_CVT_F64_I32, V_CVT_U32_F64, V_CVT_I32_F64,
   V_RCP_IFLAG_F32, V_RCP_F32, V_RSQ_F32, V_SQRT_F32, V_EXP_F32, V_LOG_F32,
   // gfx12+ VOP3 pseudo-scalar f32 transcendentals: scalar input and scalar
   // output variants of the corresponding VOP1 special-function instructions.
@@ -361,7 +365,7 @@ enum class CanonicalOp : uint16_t {
   V_S_EXP_F32, V_S_LOG_F32, V_S_RCP_F32, V_S_RSQ_F32, V_S_SQRT_F32,
   V_LDEXP_F32,
   V_FLOOR_F32, V_CEIL_F32, V_TRUNC_F32, V_RNDNE_F32, V_FRACT_F32,
-  V_CEIL_F64,
+  V_CEIL_F64, V_TRUNC_F64, V_FLOOR_F64,
   V_READFIRSTLANE_B32,
   // VOP1 packed FP8/BF8 -> 2x F32 expansion (VOP1Instructions.td:652-
   // 653, profile VOPProfileCVT_PK_F32_F8). Reads 16 bits of the i32
@@ -584,7 +588,8 @@ enum class CanonicalOp : uint16_t {
   // half.
   V_MAXIMUM3_F16, V_MINIMUM3_F16,
   V_MAXIMUMMINIMUM_F16, V_MINIMUMMAXIMUM_F16,
-  V_LDEXP_F16, V_FLOOR_F16, V_CVT_F16_U16, V_CVT_U16_F16,
+  V_LDEXP_F16, V_FLOOR_F16, V_CVT_F16_U16, V_CVT_F16_I16,
+  V_CVT_U16_F16, V_CVT_I16_F16,
   V_ASHRREV_I16, V_LSHRREV_B16, V_LSHLREV_B16,
   V_MAX_U16, V_MIN_U16, V_MAX_I16, V_MIN_I16,
   // 16-bit integer arith (gfx8+, VOP2Instructions.td). Plain i16
@@ -638,6 +643,7 @@ enum class CanonicalOp : uint16_t {
   V_LDEXP_F64,
 
   V_MAX_U32, V_MIN_U32, V_MAX_I32, V_MIN_I32,
+  V_MAXMIN_U32, V_MINMAX_U32, V_MAXMIN_I32, V_MINMAX_I32,
   V_PERMLANE16_B32, V_PERMLANEX16_B32, V_PERMLANE64_B32,
   V_PERMLANE16_SWAP_B32, V_PERMLANE32_SWAP_B32,
 
@@ -706,6 +712,9 @@ enum class CanonicalOp : uint16_t {
   //                   SDAG: shift count is src0, value is src1, low 4
   //                   bits of the count select the shift amount per
   //                   AMDGPU's hardware-clamp-to-element-width).
+  // V_PK_LSHRREV_B16: dst = src1 >> (src0 & 15)        (logical zero-fill
+  //                   sibling; same reversed-operand and shift-count mask
+  //                   contract as V_PK_LSHLREV_B16).
   // V_PK_MUL_LO_U16:  dst = (src0 * src1) & 0xFFFF     (lane-wise low
   //                   16 bits of the integer product; "lo" means the
   //                   low half of the 32-bit multiply, so signed vs
@@ -717,12 +726,10 @@ enum class CanonicalOp : uint16_t {
   // each output lane (defaults: op_sel=[0,0,0], op_sel_hi=[1,1,1] --
   // natural lo->lo, hi->hi packing).
   //
-  // Sibling V_PK_LSHRREV_B16 / V_PK_ASHRREV_I16 share the same handler
-  // shape (only the IR opcode differs: lshr / ashr); they are NOT
-  // enumerated here because the kerneldex corpus has zero producers
-  // for them today and adding them speculatively would violate the
-  // "no fallback / design what the corpus exercises" discipline.
-  V_PK_ADD_U16, V_PK_LSHLREV_B16, V_PK_MUL_LO_U16,
+  // Sibling V_PK_ASHRREV_I16 shares the same handler shape (only the
+  // IR opcode differs: ashr), but remains unenumerated until a corpus
+  // producer appears.
+  V_PK_ADD_U16, V_PK_LSHLREV_B16, V_PK_LSHRREV_B16, V_PK_MUL_LO_U16,
 
   V_BITOP3_B32, V_BITOP3_B16,
 
@@ -768,7 +775,8 @@ enum class CanonicalOp : uint16_t {
   // -- FLAT / GLOBAL / SCRATCH memory --
   FLAT_LOAD_UBYTE, FLAT_LOAD_SBYTE, FLAT_LOAD_USHORT, FLAT_LOAD_SSHORT,
   FLAT_LOAD_DWORD, FLAT_LOAD_DWORDX2, FLAT_LOAD_DWORDX3, FLAT_LOAD_DWORDX4,
-  FLAT_STORE_BYTE, FLAT_STORE_SHORT, FLAT_STORE_SHORT_D16_HI,
+  FLAT_STORE_BYTE, FLAT_STORE_BYTE_D16_HI,
+  FLAT_STORE_SHORT, FLAT_STORE_SHORT_D16_HI,
   FLAT_STORE_DWORD, FLAT_STORE_DWORDX2, FLAT_STORE_DWORDX3, FLAT_STORE_DWORDX4,
   GLOBAL_LOAD_UBYTE, GLOBAL_LOAD_SBYTE, GLOBAL_LOAD_USHORT, GLOBAL_LOAD_SSHORT,
   GLOBAL_LOAD_SHORT_D16_HI,
@@ -776,7 +784,9 @@ enum class CanonicalOp : uint16_t {
   GLOBAL_STORE_BYTE, GLOBAL_STORE_BYTE_D16_HI,
   GLOBAL_STORE_SHORT, GLOBAL_STORE_SHORT_D16_HI,
   GLOBAL_STORE_DWORD, GLOBAL_STORE_DWORDX2, GLOBAL_STORE_DWORDX3, GLOBAL_STORE_DWORDX4,
+  SCRATCH_LOAD_UBYTE, SCRATCH_LOAD_SBYTE, SCRATCH_LOAD_USHORT, SCRATCH_LOAD_SSHORT,
   SCRATCH_LOAD_DWORD, SCRATCH_LOAD_DWORDX2, SCRATCH_LOAD_DWORDX3, SCRATCH_LOAD_DWORDX4,
+  SCRATCH_STORE_BYTE, SCRATCH_STORE_SHORT,
   SCRATCH_STORE_DWORD, SCRATCH_STORE_DWORDX2, SCRATCH_STORE_DWORDX3, SCRATCH_STORE_DWORDX4,
 
   // -- FLAT atomics --

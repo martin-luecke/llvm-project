@@ -747,11 +747,18 @@ HandlerResult handleValuCrossLane(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
   case CanonicalOp::V_MBCNT_HI_U32_B32: {
-    Function *Mbcnt = Intrinsic::getOrInsertDeclaration(
-        &Ctx.M, Intrinsic::amdgcn_mbcnt_hi, {});
-    Ctx.writeReg32(Op.dst(),
-                   Ctx.B.CreateCall(Mbcnt, {Op.src(0), Op.src(1)},
-                                    "mbcnt_hi"));
+    Value *Result = nullptr;
+    if (Ctx.Isa.isWave32() && Ctx.TargetIsa.WaveSize > Ctx.Isa.WaveSize) {
+      // A wave32 source has no lanes 32..63, so the high-half mbcnt stage is
+      // the carry-in unchanged. Using target mbcnt_hi here would turn source
+      // lane ids into absolute wave64 lane ids in the upper half.
+      Result = Op.src(1);
+    } else {
+      Function *Mbcnt = Intrinsic::getOrInsertDeclaration(
+          &Ctx.M, Intrinsic::amdgcn_mbcnt_hi, {});
+      Result = Ctx.B.CreateCall(Mbcnt, {Op.src(0), Op.src(1)}, "mbcnt_hi");
+    }
+    Ctx.writeReg32(Op.dst(), Result);
     Hr.Handled = true;
     return Hr;
   }

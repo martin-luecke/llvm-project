@@ -96,6 +96,8 @@ const char *rewriteIdName(RewriteId R) {
   case RewriteId::PostRaiseCrossLaneRewrite:
     return "post-raise cross-lane rewrite (writelane -> select, "
            "readlane -> ds.bpermute)";
+  case RewriteId::SourceLocalMbcnt:
+    return "source-local mbcnt rewrite";
   }
   return "UnknownRewriteId";
 }
@@ -563,6 +565,8 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
   ObstructionReport Report;
   if (Src.WaveSize == Tgt.WaveSize)
     return Report;
+  const bool HasSourceLocalMbcntRewrite =
+      Src.isWave32() && Tgt.WaveSize > Src.WaveSize;
   const MCRegisterInfo &MRI = *Mc.RegInfo;
 
   // First pass: tag the self-contained obstruction kinds (lane-id
@@ -701,10 +705,17 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
       ObstructionSite Site;
       Site.Inst = &Di;
       Site.Kind = ObstructionKind::MbcntHiLaneIdLeak;
-      Site.Rewrite = RewriteId::None;
-      Site.RewriteImplemented = false;
-      Site.Detail = "v_mbcnt_hi reads target exec_hi -- no wave32 semantics "
-                    "to preserve under modulo-replication";
+      if (HasSourceLocalMbcntRewrite) {
+        Site.Rewrite = RewriteId::SourceLocalMbcnt;
+        Site.RewriteImplemented = true;
+        Site.Detail = "v_mbcnt_hi is lifted as source-wave-local passthrough "
+                      "on wave32 -> wider targets";
+      } else {
+        Site.Rewrite = RewriteId::None;
+        Site.RewriteImplemented = false;
+        Site.Detail = "v_mbcnt_hi reads target exec_hi -- no wave32 semantics "
+                      "to preserve under modulo-replication";
+      }
       Report.Sites.push_back(std::move(Site));
       continue;
     }
@@ -1111,9 +1122,17 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
     ObstructionSite Site;
     Site.Inst = Pw.Inst;
     Site.Kind = Pw.Kind;
-    Site.Rewrite = RewriteId::None;
-    Site.RewriteImplemented = false;
-    Site.Detail = Pw.Detail;
+    if (HasSourceLocalMbcntRewrite) {
+      Site.Rewrite = RewriteId::SourceLocalMbcnt;
+      Site.RewriteImplemented = true;
+      Site.Detail =
+          Pw.Detail +
+          "; source-local mbcnt lowering makes the predicate lane_id % W_s";
+    } else {
+      Site.Rewrite = RewriteId::None;
+      Site.RewriteImplemented = false;
+      Site.Detail = Pw.Detail;
+    }
     Report.Sites.push_back(std::move(Site));
   }
 

@@ -146,7 +146,8 @@ struct SetPcAnalysis {
 // classification.
 SetPcAnalysis analyseSetPC(llvm::ArrayRef<DecodedInst> Insts,
                            const std::set<uint64_t> &BlockStarts,
-                           const MCState &Mc);
+                           const MCState &Mc,
+                           uint64_t TextSize);
 
 } // namespace COMGR::hotswap
 

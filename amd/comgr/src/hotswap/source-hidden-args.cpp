@@ -62,6 +62,13 @@ Value *dispatchPtr(SourceHiddenArgContext &Ctx) {
   return Ctx.B.CreateCall(DispatchPtrFn, {}, "dispatch_ptr");
 }
 
+Value *queuePtrInt(SourceHiddenArgContext &Ctx) {
+  Function *QueuePtrFn =
+      Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::amdgcn_queue_ptr);
+  Value *Ptr = Ctx.B.CreateCall(QueuePtrFn, {}, "queue_ptr");
+  return Ctx.B.CreatePtrToInt(Ptr, Ctx.I64Ty, "source_hidden_queue_ptr");
+}
+
 Value *loadDispatchU16(SourceHiddenArgContext &Ctx, unsigned ByteOffset,
                        const Twine &Name) {
   Value *Ptr =
@@ -147,6 +154,17 @@ SourceHiddenArgValue emitHiddenArgValue(SourceHiddenArgContext &Ctx,
     Result.Value = emitHiddenRemainder(Ctx, 2);
   else if (Kind == SourceHiddenArgKind::HiddenGridDims)
     Result.Value = emitGridDims(Ctx);
+  else if (Kind == SourceHiddenArgKind::HiddenGlobalOffsetX ||
+           Kind == SourceHiddenArgKind::HiddenGlobalOffsetY ||
+           Kind == SourceHiddenArgKind::HiddenGlobalOffsetZ)
+    Result.Value = Ctx.B.getInt32(0);
+  else if (Kind == SourceHiddenArgKind::HiddenReservedZero)
+    Result.Value = Ctx.B.getInt32(0);
+  else if (Kind == SourceHiddenArgKind::HiddenPrivateBase ||
+           Kind == SourceHiddenArgKind::HiddenSharedBase)
+    Result.Value = Ctx.B.getInt32(0);
+  else if (Kind == SourceHiddenArgKind::HiddenQueuePtr)
+    Result.Value = queuePtrInt(Ctx);
   else
     return unsupportedHiddenKind("<unknown>");
   return Result;
