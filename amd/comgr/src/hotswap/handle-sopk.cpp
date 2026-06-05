@@ -418,7 +418,42 @@ HandlerResult handleSOPK(RaiseContext &Ctx, const DecodedInst &Di,
                     "immediate at op 0) -- refusing to lower.\n";
           return Hr;
         }
-        ValArg = ConstantInt::get(Ctx.I32Ty, Di.getImm(0));
+        int64_t ImmVal = Di.getImm(0);
+        ValArg = ConstantInt::get(Ctx.I32Ty, ImmVal);
+
+        // gfx1250 packs VGPR_MSB encoding bits into imm32[12:19] of any
+        // S_SETREG_IMM32_B32 that targets HW_REG_MODE.  AMDGPULowerVGPREncoding
+        // (`updateSetregModeImm`) folds the current VGPR_MSB state into the
+        // prologue MODE setreg the kernel already emits (typically
+        // `s_setreg_imm32_b32 hwreg(MODE, 25, 1), 1` to set REPLAY_MODE),
+        // producing imm values like 0x1001 where the high byte carries
+        // VGPR_MSB and only bit 0 is consumed by the named field.  The
+        // architectural ignoring-Offset behaviour for the MSB bits is
+        // mirrored by that pass's comment "Note that Offset is ignored for
+        // mode bits here." -- the hardware always latches MODE bits[12:19]
+        // from imm[12:19] on a MODE setreg.
+        //
+        // Without mirroring that latch here, subsequent VGPR operand encodings
+        // in the disassembled stream that depend on a non-zero VGPR_MSB
+        // resolve to the wrong physical register: e.g. a `v_writelane_b32 v0,
+        // s0, 0` whose source kernel actually targets v256 (an SGPR-spill
+        // VGPR) gets lifted as a write to lifted-Vgpr0, corrupting whatever
+        // the lifter happened to keep in Vgpr0 (typically workitem.id.x via
+        // amdhsa_system_vgpr_workitem_id=0).  Triton's prefill flash-
+        // attention kernel hits exactly this: its LDS Q-tile base is derived
+        // from lifted-Vgpr0, so lane 0's Q element lands at a garbage LDS
+        // address and the subsequent K x Q MFMA produces NaN.
+        if (HwregId == amdgpu::HwregIdMode) {
+          // MODE register byte layout (bits 12..19, low-bit-first):
+          //   (dst[0-1], src0[2-3], src1[4-5], src2[6-7])
+          // S_SET_VGPR_MSB layout the lifter tracks in VgprMsBs:
+          //   (src0[0-1], src1[2-3], src2[4-5], dst[6-7])
+          // Convert MODE -> S_SET_VGPR_MSB via right-rotate by 2 (the
+          // inverse of LLVM AMDGPULowerVGPREncoding's `rotl<uint8_t>` in
+          // convertModeToSetregFormat).
+          uint8_t ModeFmt = static_cast<uint8_t>((ImmVal >> 12) & 0xff);
+          Ctx.VgprMsBs = static_cast<uint8_t>((ModeFmt >> 2) | (ModeFmt << 6));
+        }
       } else {
         // S_SETREG_B32: value is an SGPR at MCInst op 0.  Reading
         // through op.src(0) returns the SSA i32 for that SGPR's
