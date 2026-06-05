@@ -418,7 +418,23 @@ HandlerResult handleSOPK(RaiseContext &Ctx, const DecodedInst &Di,
                     "immediate at op 0) -- refusing to lower.\n";
           return Hr;
         }
-        ValArg = ConstantInt::get(Ctx.I32Ty, Di.getImm(0));
+        int64_t ImmVal = Di.getImm(0);
+        ValArg = ConstantInt::get(Ctx.I32Ty, ImmVal);
+
+        // gfx1250 packs VGPR_MSB encoding bits into imm[12:19] of any
+        // S_SETREG_IMM32_B32 targeting HW_REG_MODE.  The compiler folds
+        // the current VGPR_MSB state into the kernel-prologue MODE setreg
+        // (e.g. REPLAY_MODE), producing values like 0x1001 where bit 0 is
+        // the named-field payload and bits 12..19 carry the MSB bank
+        // selector.  The hardware latches those bits unconditionally,
+        // independent of the (offset, size) field selector.
+        if (HwregId == amdgpu::HwregIdMode) {
+          // MODE byte layout (bits 12..19): dst[0:1], src0[2:3], src1[4:5], src2[6:7]
+          // VgprMsBs layout:                src0[0:1], src1[2:3], src2[4:5], dst[6:7]
+          // Convert by right-rotating 2 bits (inverse of the compiler's left-rotate).
+          uint8_t ModeFmt = static_cast<uint8_t>((ImmVal >> 12) & 0xff);
+          Ctx.VgprMsBs = static_cast<uint8_t>((ModeFmt >> 2) | (ModeFmt << 6));
+        }
       } else {
         // S_SETREG_B32: value is an SGPR at MCInst op 0.  Reading
         // through op.src(0) returns the SSA i32 for that SGPR's
