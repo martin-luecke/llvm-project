@@ -418,7 +418,31 @@ HandlerResult handleSOPK(RaiseContext &Ctx, const DecodedInst &Di,
                     "immediate at op 0) -- refusing to lower.\n";
           return Hr;
         }
-        ValArg = ConstantInt::get(Ctx.I32Ty, Di.getImm(0));
+        int64_t ImmVal = Di.getImm(0);
+        ValArg = ConstantInt::get(Ctx.I32Ty, ImmVal);
+
+        // On gfx1250, any S_SETREG_IMM32_B32 targeting HW_REG_MODE writes
+        // the VGPR most-significant-bit (MSB) selectors from imm32 bits
+        // [12:19], regardless of the field offset/size. LLVM's
+        // AMDGPULowerVGPREncoding pass folds the current MSB state into the
+        // prologue MODE setreg the kernel already emits (e.g. imm 0x1001,
+        // where bit 0 is the named field and the high byte carries the MSB
+        // selectors). We must mirror that here, otherwise later VGPR operand
+        // encodings that depend on a non-zero MSB resolve to the wrong
+        // physical register.
+        if (HwregId == amdgpu::HwregIdMode) {
+          // The MODE byte is (dst, src0, src1, src2); VgprMsBs tracks the
+          // S_SET_VGPR_MSB layout (src0, src1, src2, dst). Right-rotate by
+          // VgprMsbModeToSetregRotate to convert (inverse of the pass's
+          // convertModeToSetregFormat, which rotates left).
+          constexpr unsigned ByteBits = 8;
+          constexpr unsigned Rot = amdgpu::ModeReg::VgprMsbModeToSetregRotate;
+          uint8_t ModeFmt = static_cast<uint8_t>(
+              (ImmVal >> amdgpu::ModeReg::VgprMsbLowBit) &
+              amdgpu::ModeReg::VgprMsbByteMask);
+          Ctx.VgprMsBs =
+              static_cast<uint8_t>((ModeFmt >> Rot) | (ModeFmt << (ByteBits - Rot)));
+        }
       } else {
         // S_SETREG_B32: value is an SGPR at MCInst op 0.  Reading
         // through op.src(0) returns the SSA i32 for that SGPR's
