@@ -48,6 +48,12 @@ SourceHiddenArgByte classifySourceHiddenArgByte(ArrayRef<KernelArgMeta> Args,
       Result.Kind = SourceHiddenArgKind::HiddenRemainderZ;
     else if (Kind == "hidden_grid_dims")
       Result.Kind = SourceHiddenArgKind::HiddenGridDims;
+    else if (Kind == "hidden_global_offset_x")
+      Result.Kind = SourceHiddenArgKind::HiddenGlobalOffsetX;
+    else if (Kind == "hidden_global_offset_y")
+      Result.Kind = SourceHiddenArgKind::HiddenGlobalOffsetY;
+    else if (Kind == "hidden_global_offset_z")
+      Result.Kind = SourceHiddenArgKind::HiddenGlobalOffsetZ;
     else
       Result.Kind = SourceHiddenArgKind::UnsupportedHidden;
     return Result;

@@ -147,6 +147,11 @@ SourceHiddenArgValue emitHiddenArgValue(SourceHiddenArgContext &Ctx,
     Result.Value = emitHiddenRemainder(Ctx, 2);
   else if (Kind == SourceHiddenArgKind::HiddenGridDims)
     Result.Value = emitGridDims(Ctx);
+  else if (Kind == SourceHiddenArgKind::HiddenGlobalOffsetX ||
+           Kind == SourceHiddenArgKind::HiddenGlobalOffsetY ||
+           Kind == SourceHiddenArgKind::HiddenGlobalOffsetZ)
+    // HIP launches always pass global_offset = 0.
+    Result.Value = Ctx.B.getInt64(0);
   else
     return unsupportedHiddenKind("<unknown>");
   return Result;
