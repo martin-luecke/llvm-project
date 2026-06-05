@@ -908,6 +908,39 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
     };
     if (!UseThreadLoop)
       SeedTtmp8(B);
+
+    // ttmp6 on gfx12+ contains per-wave dispatch state:
+    //   bits[3:0]   = wave_id_in_threadgroup
+    //   bits[15:12] = max_wave_id (num_waves_per_wg - 1)
+    // Triton-generated kernels read these fields via `s_bfe_u32` and
+    // `s_and_b32` to compute global wave indices for persistent-schedule
+    // dispatch.  Without initialization, reads of ttmp6 return LLVM
+    // `undef`, which poisons downstream address computations even when
+    // the value is on the dead side of a `select` -- LLVM's undef
+    // semantics permit the optimizer to propagate poison through either
+    // arm.  Seeding ttmp6 to its architectural value eliminates the
+    // undef source.
+    {
+      Value *TidForTtmp6 = Projection.emitWorkitemIdX(B);
+      TidForTtmp6->setName("ttmp6_tid");
+      Value *WaveIdForTtmp6 =
+          B.CreateLShr(TidForTtmp6, B.getInt32(5), "ttmp6_wave_id");
+      // bits[3:0] = wave_id_in_wg (only low 4 bits used)
+      Value *WaveIdLo = B.CreateAnd(WaveIdForTtmp6, B.getInt32(0xF),
+                                    "ttmp6_wave_id_lo4");
+      // bits[15:12] = num_waves_per_wg - 1
+      int MaxWg = Meta.MaxFlatWorkgroupSize > 0
+                      ? Meta.MaxFlatWorkgroupSize
+                      : 1024;
+      unsigned NumWaves =
+          (static_cast<unsigned>(MaxWg) + Isa.WaveSize - 1) / Isa.WaveSize;
+      Value *MaxWaveId = B.getInt32(NumWaves > 0 ? NumWaves - 1 : 0);
+      Value *MaxWaveIdShifted =
+          B.CreateShl(MaxWaveId, B.getInt32(12), "ttmp6_max_wave_id");
+      Value *Ttmp6Val =
+          B.CreateOr(WaveIdLo, MaxWaveIdShifted, "ttmp6_val");
+      B.CreateStore(Ttmp6Val, Regs.Ttmp[6]);
+    }
   }
 
   auto SeedThreadLoopIterationState = [&](IRBuilder<> &SeedB) {
@@ -973,6 +1006,27 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
       Value *Ttmp7Val = SeedB.CreateOr(WgIdYLo, WgIdZHi, "ttmp7_val");
       SeedB.CreateStore(Ttmp7Val, Regs.Ttmp[7]);
       SeedTtmp8(SeedB);
+
+      // Seed ttmp6 (same layout as the entry-block seeding above).
+      {
+        Value *TidForTtmp6 = Projection.emitWorkitemIdX(SeedB);
+        TidForTtmp6->setName("ttmp6_tid");
+        Value *WaveIdForTtmp6 =
+            SeedB.CreateLShr(TidForTtmp6, SeedB.getInt32(5), "ttmp6_wave_id");
+        Value *WaveIdLo = SeedB.CreateAnd(WaveIdForTtmp6, SeedB.getInt32(0xF),
+                                          "ttmp6_wave_id_lo4");
+        int MaxWg = Meta.MaxFlatWorkgroupSize > 0
+                        ? Meta.MaxFlatWorkgroupSize
+                        : 1024;
+        unsigned NumWaves =
+            (static_cast<unsigned>(MaxWg) + Isa.WaveSize - 1) / Isa.WaveSize;
+        Value *MaxWaveId = SeedB.getInt32(NumWaves > 0 ? NumWaves - 1 : 0);
+        Value *MaxWaveIdShifted =
+            SeedB.CreateShl(MaxWaveId, SeedB.getInt32(12), "ttmp6_max_wave_id");
+        Value *Ttmp6Val =
+            SeedB.CreateOr(WaveIdLo, MaxWaveIdShifted, "ttmp6_val");
+        SeedB.CreateStore(Ttmp6Val, Regs.Ttmp[6]);
+      }
     }
 
     SeedWorkitemX(SeedB);
