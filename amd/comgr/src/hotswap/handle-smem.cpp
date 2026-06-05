@@ -118,7 +118,10 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
     // pipeline refuses to silently substitute a target-ABI implicit
     // arg for a source-ABI one. In permissive mode we trust the
     // ROCm convention that the layouts match (both gfx9-12 follow
-    // the same `hidden_*` block).
+    // the same `hidden_*` block). Only the `amdgcn_implicitarg_ptr`
+    // fallback below depends on that equivalence; known source-hidden
+    // synthesis paths read AQL dispatch state and are safe in either
+    // mode, so they run first.
     //
     // Gating: `baseIsKernargPair` (literal SGPR-index match against
     // the source-ABI kernarg pair) + `immOffset` + a positive
@@ -131,20 +134,20 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
     if (BaseIsKernargPair && ImmOffset &&
         Ctx.Kernargs.ImplicitArgsBase > 0 &&
         ByteOffset >= Ctx.Kernargs.ImplicitArgsBase) {
-      if (isStrictMode()) {
-        Hr.Failure = RaiseFailure::strictUnsafeLowering(
-            Di, "implicitarg.ptr",
-            "cross-arch implicitarg.ptr lowering is unresolved: source "
-            "implicit-arg offsets are being applied to the target runtime "
-            "hidden-arg block");
-        return Hr;
-      }
       SourceHiddenArgContext HiddenCtx{Ctx.C,      Ctx.M,      Ctx.B,
                                        Ctx.I8Ty,   Ctx.I32Ty,  Ctx.I64Ty,
                                        Ctx.Kernargs.Args};
       SourceHiddenArgValue HiddenBase =
           emitSourceHiddenDword(HiddenCtx, ByteOffset);
       if (!HiddenBase.Matched) {
+        if (isStrictMode()) {
+          Hr.Failure = RaiseFailure::strictUnsafeLowering(
+              Di, "implicitarg.ptr",
+              "cross-arch implicitarg.ptr lowering is unresolved: source "
+              "implicit-arg offsets are being applied to the target runtime "
+              "hidden-arg block");
+          return Hr;
+        }
         Function *FnImplicitArgPtr = Intrinsic::getOrInsertDeclaration(
             &Ctx.M, Intrinsic::amdgcn_implicitarg_ptr);
         Value *ImplPtr =
