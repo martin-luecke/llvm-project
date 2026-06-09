@@ -237,6 +237,33 @@ HandlerResult handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
         StoreTy = VecTy;
         Val = Ctx.Regs.readRegVec(Ctx.B, Vdata, VecTy);
       }
+      // Source programs may emit `v_cmp_o_f32 + v_cndmask v_dst, 0, v_src,
+      // vcc` before a buffer_store to convert NaN outputs (e.g. from 0/0
+      // in a fully-masked softmax row) to 0. Under WaveNative cross-widening
+      // those instructions may be dropped by the CFG walker; mirror their
+      // intent by scrubbing NaN per-element to 0 here.
+      // Opt out with HSA_HOTSWAP_DIAG_MUBUF_STORE_SCRUB=off.
+      static const bool ScrubNaN = []() {
+        const char *S = std::getenv("HSA_HOTSWAP_DIAG_MUBUF_STORE_SCRUB");
+        return !(S && StringRef(S) == "off");
+      }();
+      if (ScrubNaN && Ctx.Projection.providesFullWaveExecInvariant()) {
+        Constant *ZeroI32 = ConstantInt::get(Ctx.I32Ty, 0);
+        if (!isSubDword && dwords == 1) {
+          Value *F = Ctx.B.CreateBitCast(Val, Ctx.B.getFloatTy(), "ms_f");
+          Value *IsNaN = Ctx.B.CreateFCmpUNO(F, F, "ms_uno");
+          Val = Ctx.B.CreateSelect(IsNaN, ZeroI32, Val, "ms_scrub");
+        } else if (!isSubDword && dwords > 1) {
+          auto *VecTy = cast<FixedVectorType>(StoreTy);
+          auto *VecF = FixedVectorType::get(Ctx.B.getFloatTy(),
+                                            VecTy->getNumElements());
+          Value *F = Ctx.B.CreateBitCast(Val, VecF, "ms_f");
+          Value *IsNaN = Ctx.B.CreateFCmpUNO(F, F, "ms_uno");
+          Constant *ZeroSplat = ConstantVector::getSplat(
+              VecTy->getElementCount(), ZeroI32);
+          Val = Ctx.B.CreateSelect(IsNaN, ZeroSplat, Val, "ms_scrub");
+        }
+      }
       Function *BufSt = Intrinsic::getOrInsertDeclaration(
           &Ctx.M, Intrinsic::amdgcn_raw_buffer_store, {StoreTy});
       auto EmitStore = [&] {
