@@ -74,6 +74,14 @@ enum class CanonicalOp : uint16_t {
   // correct but uniformity-lossy. See handle-smem.cpp for the design notes.
   S_LOAD_U8, S_LOAD_I8, S_LOAD_U16, S_LOAD_I16,
   S_STORE_B32, S_STORE_B64, S_STORE_B128,
+  // Scalar buffer loads (s_buffer_load_dword{,x2,x4,x8,x16}). Same operand
+  // shape as S_LOAD_B* except `sbase` is an SGPR_128 buffer resource
+  // descriptor (V#): word0 = base[31:0], word1[15:0] = base[47:32]. The lift
+  // decomposes the 48-bit base + offset into a plain global load (the
+  // num_records bounds field only affects out-of-range reads, which valid
+  // kernels do not rely on). See handle-smem.cpp.
+  S_BUFFER_LOAD_B32, S_BUFFER_LOAD_B64, S_BUFFER_LOAD_B128,
+  S_BUFFER_LOAD_B256, S_BUFFER_LOAD_B512,
 
   // -- SOPC --
   S_CMP_EQ_U32, S_CMP_LG_U32, S_CMP_GT_U32, S_CMP_GE_U32,

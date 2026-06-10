@@ -155,6 +155,15 @@ static const Entry kCanonTable[] = {
     SMEM3(S_STORE_DWORDX2, S_STORE_B64),
     SMEM3(S_STORE_DWORDX4, S_STORE_B128),
 
+    // Scalar buffer loads (sbase = SGPR_128 V# descriptor). Same IMM/SGPR/
+    // SGPR_IMM triad as the s_load family; handler in handle-smem.cpp
+    // decomposes the descriptor's 48-bit base.
+    SMEM3(S_BUFFER_LOAD_DWORD,    S_BUFFER_LOAD_B32),
+    SMEM3(S_BUFFER_LOAD_DWORDX2,  S_BUFFER_LOAD_B64),
+    SMEM3(S_BUFFER_LOAD_DWORDX4,  S_BUFFER_LOAD_B128),
+    SMEM3(S_BUFFER_LOAD_DWORDX8,  S_BUFFER_LOAD_B256),
+    SMEM3(S_BUFFER_LOAD_DWORDX16, S_BUFFER_LOAD_B512),
+
     // gfx12+ SMEM scalar prefetch hints (SM_Prefetch_Pseudo). Pure
     // advisory cache hints with no architectural side effects -- lifted
     // as no-ops in handle-smem.cpp. Single operand form (no IMM/SGPR

@@ -147,6 +147,17 @@ SourceHiddenArgValue emitHiddenArgValue(SourceHiddenArgContext &Ctx,
     Result.Value = emitHiddenRemainder(Ctx, 2);
   else if (Kind == SourceHiddenArgKind::HiddenGridDims)
     Result.Value = emitGridDims(Ctx);
+  else if (Kind == SourceHiddenArgKind::HiddenGlobalOffsetX ||
+           Kind == SourceHiddenArgKind::HiddenGlobalOffsetY ||
+           Kind == SourceHiddenArgKind::HiddenGlobalOffsetZ)
+    // hidden_global_offset_{x,y,z} hold the OpenCL global work offset. The
+    // HIP launch path (hipModuleLaunchKernel et al.) -- the only dispatch
+    // path the hotswap runtime drives -- never sets a global offset, so the
+    // source-ABI value is always 0. The arg is i64 in the ABI, but the byte
+    // extractor below widens via ZExtOrTrunc, so a constant i32 0 yields the
+    // correct (zero) byte for every offset within the field. This is an
+    // explicit source-ABI synthesis, not a target-implicitarg fallback.
+    Result.Value = ConstantInt::get(Ctx.I32Ty, 0);
   else
     return unsupportedHiddenKind("<unknown>");
   return Result;

@@ -248,6 +248,83 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
 
+  // Scalar buffer loads: s_buffer_load_dword{,x2,x4,x8,x16}. Same MC operand
+  // shape as the dword s_load family (sdst, sbase, imm-or-sgpr offset, cpol)
+  // except `sbase` is an SGPR_128 buffer resource descriptor (V#) rather than
+  // a raw 64-bit pointer pair. The 48-bit base address lives in
+  //   word0 = base[31:0]   (sbase + 0)
+  //   word1[15:0] = base[47:32]   (sbase + 1)
+  // and the effective byte address is `base48 + offset`. word2 (num_records)
+  // and word3 (flags) gate only out-of-range accesses (which return 0); valid
+  // kernels never rely on that, so the lift decomposes the descriptor into a
+  // plain global GEP+load -- the same memory the hardware s_buffer_load reads.
+  //
+  // Offset handling mirrors the dword s_load generic path (imm OR sgpr via
+  // src(1), with the gfx12 `scale_offset` element scaling); the SGPR_IMM form
+  // carries the same single-offset limitation as the s_load handler above.
+  if (Sop == CanonicalOp::S_BUFFER_LOAD_B32 ||
+      Sop == CanonicalOp::S_BUFFER_LOAD_B64 ||
+      Sop == CanonicalOp::S_BUFFER_LOAD_B128 ||
+      Sop == CanonicalOp::S_BUFFER_LOAD_B256 ||
+      Sop == CanonicalOp::S_BUFFER_LOAD_B512) {
+    int LoadDwords = 1;
+    switch (Sop) {
+    case CanonicalOp::S_BUFFER_LOAD_B32:  LoadDwords = 1;  break;
+    case CanonicalOp::S_BUFFER_LOAD_B64:  LoadDwords = 2;  break;
+    case CanonicalOp::S_BUFFER_LOAD_B128: LoadDwords = 4;  break;
+    case CanonicalOp::S_BUFFER_LOAD_B256: LoadDwords = 8;  break;
+    case CanonicalOp::S_BUFFER_LOAD_B512: LoadDwords = 16; break;
+    default: break;
+    }
+    int LoadBytes = LoadDwords * 4;
+
+    ParsedReg Dest = Op.dst();
+    ParsedReg Base = Op.srcReg(0);
+    if (Base.RegKind != ParsedReg::SGPR) {
+      Hr.Failure = RaiseFailure::unsupportedShape(
+          Di, "SMEM", "s_buffer_load expects an SGPR buffer descriptor base");
+      return Hr;
+    }
+
+    // Decompose the V# 48-bit base from descriptor dwords 0 and 1.
+    Value *W0 = Ctx.Regs.loadSGPR32(Ctx.B, Base.BaseIdx + 0);
+    Value *W1 = Ctx.Regs.loadSGPR32(Ctx.B, Base.BaseIdx + 1);
+    Value *Base48 = Ctx.B.CreateOr(
+        Ctx.B.CreateZExt(W0, Ctx.I64Ty, "vsharp_lo"),
+        Ctx.B.CreateShl(
+            Ctx.B.CreateAnd(Ctx.B.CreateZExt(W1, Ctx.I64Ty, "vsharp_hi"),
+                            ConstantInt::get(Ctx.I64Ty, 0xFFFF)),
+            ConstantInt::get(Ctx.I64Ty, 32)),
+        "vsharp_base48");
+
+    unsigned OffIdx = Op.srcIdx(1);
+    bool ImmOffset = Di.isImm(OffIdx);
+    Value *Addr = Base48;
+    if (ImmOffset) {
+      int64_t ByteOffset = Op.srcImm(1);
+      if (ByteOffset != 0)
+        Addr = Ctx.B.CreateAdd(Base48, ConstantInt::get(Ctx.I64Ty, ByteOffset),
+                               "vsharp_addr");
+    } else {
+      Value *RegOff = Ctx.B.CreateZExt(Op.src(1), Ctx.I64Ty, "sbuf_roff");
+      if (Di.HasScaleOffset)
+        RegOff = Ctx.B.CreateMul(RegOff, ConstantInt::get(Ctx.I64Ty, LoadBytes),
+                                 "sbuf_roff_scaled");
+      Addr = Ctx.B.CreateAdd(Base48, RegOff, "vsharp_addr");
+    }
+
+    Value *Ptr = Ctx.B.CreateIntToPtr(Addr, Ctx.PtrGlobalTy);
+    for (int D = 0; D < LoadDwords; D++) {
+      Value *Ep = (D == 0) ? Ptr
+                           : Ctx.B.CreateInBoundsGEP(Ctx.I8Ty, Ptr,
+                                                     Ctx.B.getInt64(D * 4));
+      Ctx.Regs.storeSGPR32(Ctx.B, Dest.BaseIdx + D,
+                           Ctx.B.CreateLoad(Ctx.I32Ty, Ep, "sbuf_load"));
+    }
+    Hr.Handled = true;
+    return Hr;
+  }
+
   // gfx12+ scalar narrow loads: s_load_{u8,i8,u16,i16}. These fetch 1 or 2
   // bytes from a uniform address materialised in an SGPR-pair base and
   // zero/sign-extend the result into a 32-bit SGPR. MC operand shape
