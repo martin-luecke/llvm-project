@@ -421,6 +421,51 @@ HandlerResult handleValuCrossLane(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
 
+  // ---- v_permlane16_var_b32 / v_permlanex16_var_b32 ----
+  // gfx1250 variable-selector permute. Unlike the immediate-selector
+  // V_PERMLANE16_B32 above (8x4-bit selectors packed in src1/src2 scalars),
+  // the _var form takes a per-lane VGPR selector in src1. MCInst operand
+  // layout (VOP3_PERMLANE_VAR_Profile, VOP3OpSel):
+  //   [0] vdst                 [3] src1_modifiers <-- bc
+  //   [1] src0_modifiers <- fi [4] src1 (selector VGPR)
+  //   [2] src0 (value VGPR)    [5] vdst_in (tied) = old   [6] op_sel
+  // Lifts to `int_amdgcn_permlane{,x}16_var(old, src0, sel, i1 fi, i1 bc)`.
+  //
+  // Same-target gfx1250 (HasTensorOps): emit the native intrinsic; the
+  // backend re-selects the identical instruction. The call sits OUTSIDE any
+  // emitUnderExec diamond (the op is IntrConvergent -- all hardware lanes
+  // must participate); writeReg32 wraps the store for EXEC masking.
+  //
+  // Cross-target (gfx942 etc.): refuse loudly. The non-var sibling emulates
+  // via ds_bpermute only for the fi=1/bc=0 encoding; the _var sites in the
+  // corpus use fi=0/bc=0, whose inactive-lane semantics the ds_bpermute
+  // emulation does not reproduce, so a silent approximation is not emitted.
+  case CanonicalOp::V_PERMLANE16_VAR_B32:
+  case CanonicalOp::V_PERMLANEX16_VAR_B32: {
+    const bool IsX16 = (Sop == CanonicalOp::V_PERMLANEX16_VAR_B32);
+    if (!Ctx.TargetIsa.HasTensorOps) {
+      Hr.Failure = RaiseFailure::unsupportedShape(
+          Di, "VALU",
+          "v_permlane{,x}16_var_b32 is gfx1250-native; no cross-target "
+          "ds_bpermute emulation for the variable-selector fi=0 form yet.");
+      return Hr;
+    }
+    const bool Fi = (Op.srcMod(0) & SISrcMods::OP_SEL_0) != 0;
+    const bool Bc = (Op.srcMod(1) & SISrcMods::OP_SEL_0) != 0;
+    Value *Old = Ctx.Regs.readReg32(Ctx.B, Op.dst());
+    Value *Src0 = Op.src(0);
+    Value *Sel = Op.src(1);
+    Function *Fn = Intrinsic::getOrInsertDeclaration(
+        &Ctx.M, IsX16 ? Intrinsic::amdgcn_permlanex16_var
+                      : Intrinsic::amdgcn_permlane16_var);
+    Value *Result = Ctx.B.CreateCall(
+        Fn, {Old, Src0, Sel, Ctx.B.getInt1(Fi), Ctx.B.getInt1(Bc)},
+        IsX16 ? "permlanex16_var" : "permlane16_var");
+    Ctx.writeReg32(Op.dst(), Result);
+    Hr.Handled = true;
+    return Hr;
+  }
+
   // ---- v_permlane64_b32 ----
   // KNOWN LIMITATION -- see the v_permlane64_b32 row in the
   // unrewritable table of hotswap/docs/wave-size-translation.md §7:

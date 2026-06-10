@@ -660,6 +660,12 @@ enum class CanonicalOp : uint16_t {
   V_MAX_U32, V_MIN_U32, V_MAX_I32, V_MIN_I32,
   V_PERMLANE16_B32, V_PERMLANEX16_B32, V_PERMLANE64_B32,
   V_PERMLANE16_SWAP_B32, V_PERMLANE32_SWAP_B32,
+  // gfx1250 variable-selector permute: like V_PERMLANE16_B32 but the source-
+  // lane selector is a per-lane VGPR (src1) rather than packed immediate
+  // selector words. Lifts to `int_amdgcn_permlane{,x}16_var(old, src0, sel,
+  // fi, bc)` on gfx1250 (HasTensorOps); cross-target refuses (the var
+  // selector's fi=0 semantics have no proven ds_bpermute emulation yet).
+  V_PERMLANE16_VAR_B32, V_PERMLANEX16_VAR_B32,
 
   // -- VOPC (V_CMP_* and V_CMPX_*) --
   //
