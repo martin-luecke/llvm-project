@@ -155,6 +155,15 @@ static const Entry kCanonTable[] = {
     SMEM3(S_STORE_DWORDX2, S_STORE_B64),
     SMEM3(S_STORE_DWORDX4, S_STORE_B128),
 
+    // gfx12+ SMEM scalar prefetch hints (SM_Prefetch_Pseudo). Pure
+    // advisory cache hints with no architectural side effects -- lifted
+    // as no-ops in handle-smem.cpp. Single operand form (no IMM/SGPR
+    // triad), so listed directly rather than via SMEM3.
+    E(S_PREFETCH_INST,        S_PREFETCH),
+    E(S_PREFETCH_INST_PC_REL, S_PREFETCH),
+    E(S_PREFETCH_DATA,        S_PREFETCH),
+    E(S_PREFETCH_DATA_PC_REL, S_PREFETCH),
+
     // ---------------------------------------------------------------------
     // SOPC
     // ---------------------------------------------------------------------
@@ -659,6 +668,11 @@ static const Entry kCanonTable[] = {
     // `int_amdgcn_cvt_scalef32_pk8_fp8_f32`; cross-target paths with FP8
     // conversion support use the software emulation in handle-valu.cpp.
     E(V_CVT_SCALEF32_PK8_FP8_F32_e64, V_CVT_SCALEF32_PK8_FP8_F32),
+    // gfx1250-only packed-8 scaled FP8 conversion with stochastic rounding
+    // (VOP3, profile VOP_V2I32_V8F32_I32_F32). src1 is the i32 SR seed, src2
+    // the f32 scale. Same-target maps to native intrinsic
+    // `int_amdgcn_cvt_scalef32_sr_pk8_fp8_f32`.
+    E(V_CVT_SCALEF32_SR_PK8_FP8_F32_e64, V_CVT_SCALEF32_SR_PK8_FP8_F32),
     E(V_BFM_B32_e64, V_BFM_B32),
 
     // ---------------------------------------------------------------------

@@ -64,6 +64,19 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
   HandlerResult Hr;
   CanonicalOp Sop = Di.CanonOp;
 
+  // gfx12+ scalar prefetch hints (`s_prefetch_inst{,_pc_rel}`,
+  // `s_prefetch_data{,_pc_rel}`). These are pure advisory cache-prefetch
+  // hints: they touch no architectural registers and have no memory side
+  // effects, so the lift drops them as a no-op. The hint is uniform and
+  // side-effect-free, so this is correct for every (source, target) ISA
+  // pair (cf. the FLAT VMEM prefetches, which are divergent and therefore
+  // refuse loudly on cross-target lifts). The paired prefetch-completion
+  // is implicit in the cache, so there is no companion wait to model.
+  if (Sop == CanonicalOp::S_PREFETCH) {
+    Hr.Handled = true;
+    return Hr;
+  }
+
   if (Sop == CanonicalOp::S_LOAD_B32 || Sop == CanonicalOp::S_LOAD_B64 ||
       Sop == CanonicalOp::S_LOAD_B96 || Sop == CanonicalOp::S_LOAD_B128 ||
       Sop == CanonicalOp::S_LOAD_B256 || Sop == CanonicalOp::S_LOAD_B512) {

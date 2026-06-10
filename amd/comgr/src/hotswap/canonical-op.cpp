@@ -172,6 +172,7 @@ const char *canonicalOpName(CanonicalOp Op) {
     S(V_CVT_PK_BF16_F32) S(V_CVT_PK_BF8_F32) S(V_CVT_PK_FP8_F32)
     S(V_CVT_PKRTZ_F16_F32) S(V_CVT_PK_F16_F32)
     S(V_CVT_SCALEF32_PK_FP4_F32) S(V_CVT_SCALEF32_PK8_FP8_F32)
+    S(V_CVT_SCALEF32_SR_PK8_FP8_F32)
     S(V_BFM_B32)
     // VOP2/VOP3 FP64
     S(V_ADD_F64) S(V_MUL_F64) S(V_FMA_F64) S(V_FMAC_F64)
@@ -293,6 +294,8 @@ const char *canonicalOpName(CanonicalOp Op) {
     S(GLOBAL_LOAD_ASYNC_TO_LDS_B64) S(GLOBAL_LOAD_ASYNC_TO_LDS_B128)
     // FLAT VMEM prefetch (gfx1250-only, hint-class)
     S(GLOBAL_PREFETCH_B8) S(FLAT_PREFETCH_B8)
+    // SMEM scalar prefetch (gfx12+, hint-class)
+    S(S_PREFETCH)
     // AGPR
     S(V_ACCVGPR_READ_B32) S(V_ACCVGPR_WRITE_B32)
 

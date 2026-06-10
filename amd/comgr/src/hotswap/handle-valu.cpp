@@ -2420,6 +2420,50 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Hr.Handled = true;
     return Hr;
   }
+  // gfx1250 v_cvt_scalef32_sr_pk8_fp8_f32 vdst:64, src0:256 (<8 x f32>),
+  //   src1:32 (i32 stochastic-rounding seed), src2:32 (f32 Scale).
+  // Profile VOP_V2I32_V8F32_I32_F32 (VOP3Instructions.td:1907):
+  //   dst  = <2 x i32>   (8 packed FP8 bytes)
+  //   src0 = <8 x f32>   (8 consecutive VGPRs holding the f32 inputs)
+  //   src1 = i32         (per-lane stochastic-rounding seed)
+  //   src2 = f32         (broadcast Scale multiplier)
+  // Real operand example (Tensile epilogue):
+  //   v_cvt_scalef32_sr_pk8_fp8_f32 v[24:25], v[0:7], v13, s[Alpha]
+  //
+  // Same-target gfx1250: emit `int_amdgcn_cvt_scalef32_sr_pk8_fp8_f32`
+  // directly, which the backend re-selects to the identical instruction.
+  // Unlike the round-to-nearest sibling above, there is no portable
+  // `cvt_pk_fp8_f32` expansion that reproduces the stochastic-rounding
+  // perturbation from the seed, so cross-target lifts refuse loudly rather
+  // than silently dropping the SR bias (per the no-silent-fallback rule).
+  if (Sop == CanonicalOp::V_CVT_SCALEF32_SR_PK8_FP8_F32) {
+    ParsedReg SrcReg0 = Op.srcReg(0);
+    Value *Seed = Op.src(1);
+    if (Seed->getType() != Ctx.I32Ty)
+      Seed = Ctx.B.CreateBitCast(Seed, Ctx.I32Ty);
+    Value *Scale = Op.srcF(2);
+    if (Scale->getType() != Ctx.F32Ty)
+      Scale = Ctx.B.CreateBitCast(Scale, Ctx.F32Ty);
+
+    auto *V8F32Ty = FixedVectorType::get(Ctx.F32Ty, 8);
+    Value *Src8 = Ctx.Regs.readRegVec(Ctx.B, SrcReg0, V8F32Ty);
+
+    if (!Ctx.TargetIsa.HasTensorOps) {
+      Hr.Failure = RaiseFailure::unsupportedShape(
+          Di, "VOP3",
+          "v_cvt_scalef32_sr_pk8_fp8_f32 requires HasTensorOps (gfx1250 "
+          "native); stochastic-rounding FP8 conversion has no portable "
+          "cross-target emulation.");
+      return Hr;
+    }
+    Function *CvtFn = Intrinsic::getOrInsertDeclaration(
+        &Ctx.M, Intrinsic::amdgcn_cvt_scalef32_sr_pk8_fp8_f32);
+    Value *Result =
+        Ctx.B.CreateCall(CvtFn, {Src8, Seed, Scale}, "cvt_scalef32_sr_pk8_fp8");
+    Ctx.writeRegVec(Op.dst(), Result);
+    Hr.Handled = true;
+    return Hr;
+  }
   if (Sop == CanonicalOp::V_CVT_PK_FP8_F32) {
     Value *S0 = Op.srcF(0), *S1 = Op.srcF(1);
     if (S0->getType() != Ctx.F32Ty) S0 = Ctx.B.CreateBitCast(S0, Ctx.F32Ty);

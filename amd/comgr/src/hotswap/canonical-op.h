@@ -609,6 +609,14 @@ enum class CanonicalOp : uint16_t {
   // vector multiply by the broadcast scale on targets with FP8 conversion
   // support.
   V_CVT_SCALEF32_PK8_FP8_F32,
+  // gfx1250 packed-8 scaled FP8 conversion with stochastic rounding: same
+  // shape as V_CVT_SCALEF32_PK8_FP8_F32 plus an i32 stochastic-rounding seed
+  // (src1), with the f32 scale moving to src2. Lifts to
+  // `int_amdgcn_cvt_scalef32_sr_pk8_fp8_f32(<8 x f32>, i32 seed, f32 scale)`
+  // on gfx1250 (HasTensorOps). No cross-target emulation: stochastic rounding
+  // has no portable `cvt_pk_fp8` expansion, so non-gfx1250 targets refuse
+  // loudly rather than silently dropping the SR perturbation.
+  V_CVT_SCALEF32_SR_PK8_FP8_F32,
   V_BFM_B32,
 
   // -- VOP2/VOP3 FP64 --
@@ -1310,6 +1318,18 @@ enum class CanonicalOp : uint16_t {
   // Same operand layout and lift contract as GLOBAL_PREFETCH_B8
   // above.
   FLAT_PREFETCH_B8,
+
+  // -- gfx12+ SMEM scalar prefetch (SMEM, hint-class) --
+  //
+  // Covers the `s_prefetch_inst{,_pc_rel}` / `s_prefetch_data{,_pc_rel}`
+  // family (SMInstructions.td: SM_Prefetch_Pseudo). These are pure
+  // advisory cache-prefetch hints with no architectural side effects on
+  // registers or memory, so the lift models them as no-ops in
+  // handle-smem.cpp. Unlike the FLAT VMEM prefetches above (which carry
+  // a divergent per-lane pointer and a real cross-target capability gap),
+  // the scalar prefetch is uniform and side-effect-free, so dropping it
+  // is correct for every (source, target) pair.
+  S_PREFETCH,
 
   // -- AGPR --
   V_ACCVGPR_READ_B32, V_ACCVGPR_WRITE_B32,
