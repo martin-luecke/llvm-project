@@ -258,10 +258,13 @@ struct RaiseFailure {
                                              const llvm::Twine &Detail);
 };
 
-// Canonical human-readable rendering of a structured raise failure. Callers that
-// need a diagnostic string should use this instead of reassembling
+// Write the canonical human-readable rendering of a structured raise failure.
+// Callers that need diagnostics should use this instead of reassembling
 // reason/mnemonic/format/detail fields independently.
 void printRaiseFailure(llvm::raw_ostream &OS, const RaiseFailure &F);
+
+// Return the same canonical rendering as an owned string for APIs that cannot
+// stream directly.
 std::string formatRaiseFailure(const RaiseFailure &F);
 
 } // namespace COMGR::hotswap

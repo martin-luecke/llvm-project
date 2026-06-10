@@ -13,6 +13,7 @@
 
 namespace COMGR::hotswap {
 
+// Stable diagnostic token for each structured raise-failure category.
 const char *reasonString(RaiseFailureReason R) {
   switch (R) {
   case RaiseFailureReason::None:
@@ -57,6 +58,7 @@ const char *reasonString(RaiseFailureReason R) {
   llvm_unreachable("unhandled RaiseFailureReason");
 }
 
+// Emit the canonical diagnostic spelling without forcing callers to allocate.
 void printRaiseFailure(llvm::raw_ostream &OS, const RaiseFailure &F) {
   OS << reasonString(F.Reason);
   if (!F.Mnemonic.empty()) {
@@ -72,6 +74,7 @@ void printRaiseFailure(llvm::raw_ostream &OS, const RaiseFailure &F) {
     OS << " :: " << F.Detail;
 }
 
+// Return the canonical diagnostic spelling for APIs that need an owned string.
 std::string formatRaiseFailure(const RaiseFailure &F) {
   std::string Result;
   llvm::raw_string_ostream OS(Result);

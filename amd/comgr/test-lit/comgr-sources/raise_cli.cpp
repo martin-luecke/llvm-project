@@ -22,13 +22,15 @@
 // instructions were successfully raised before and after all blockers.
 //
 // Kernels that crashed in the child (signal, non-zero exit, incomplete
-// shm) are reported as a FAIL with mnemonic ``__crash__`` and format
-// ``signal_<N>`` so they still land in the kerneldex worklist instead of
-// being silently dropped.
+// shm) are reported as a FAIL with mnemonic ``__crash__`` and a bracketed
+// format such as ``signal_<N>``, ``exit_<N>``, or
+// ``status_incomplete`` so they still land in the kerneldex worklist
+// instead of being silently dropped.
 //
-// Exits 0 iff every kernel succeeded; otherwise 1.  ISA is auto-detected
-// from the filename (look for ``gfx<digits>[a-z]?``) when ``--isa=`` is
-// not passed.
+// In default mode, exits 0 iff every kernel succeeded, 1 if any kernel
+// failed/crashed, and a distinct non-zero infrastructure code when the
+// parent cannot set up or monitor a child. ISA is auto-detected from the
+// filename (look for ``gfx<digits>[a-z]?``) when ``--isa=`` is not passed.
 //
 // --emit-ir mode. Designed for lit tests. Runs raiseToIR in-process (no
 // fork), dumps the raised LLVM IR for a single kernel on stdout, and
@@ -109,6 +111,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
@@ -116,6 +119,7 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <cerrno>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -124,6 +128,7 @@
 #include <string>
 #include <sys/mman.h>
 #include <sys/wait.h>
+#include <utility>
 #include <unistd.h>
 
 namespace {
@@ -138,6 +143,23 @@ namespace cl = llvm::cl;
 // surfaced in the ALSO output as a truncation notice. The lifted/total count is
 // always accurate regardless of the cap.
 static constexpr int kMaxTrackedFailures = 32;
+static constexpr int kMmapFailedExitCode = 3;
+static constexpr int kChildOutputFileFailedExitCode = 4;
+static constexpr int kForkFailedExitCode = 5;
+static constexpr int kChildOutputWriteFailedExitCode = 6;
+
+// Stable identity for one emitted failure bucket. The detail string is omitted
+// deliberately: it is diagnostic text, not part of corpus bucketing.
+struct FailureBucketKey {
+  COMGR::hotswap::RaiseFailureReason Reason;
+  std::string Mnemonic;
+  std::string Format;
+};
+
+bool operator==(const FailureBucketKey &Lhs, const FailureBucketKey &Rhs) {
+  return Lhs.Reason == Rhs.Reason && Lhs.Mnemonic == Rhs.Mnemonic &&
+         Lhs.Format == Rhs.Format;
+}
 
 struct KernelRaiseStats {
   bool done;
@@ -208,15 +230,17 @@ cl::opt<bool> DisableWaveNativeOpt(
     "disable-wave-native",
                          cl::desc("Pin ModuloReplicationProjection."));
 
-std::string failureBucketKey(const COMGR::hotswap::RaiseFailure &Failure) {
-  std::string Key = COMGR::hotswap::reasonString(Failure.Reason);
-  Key.push_back('\0');
-  Key += Failure.Mnemonic.empty() ? "unknown" : Failure.Mnemonic;
-  Key.push_back('\0');
-  Key += Failure.Format.empty() ? "unknown" : Failure.Format;
-  return Key;
+// Batch output de-duplicates failures by the structured fields visible in
+// FAIL / ALSO lines.
+FailureBucketKey failureBucketKey(
+    const COMGR::hotswap::RaiseFailure &Failure) {
+  return {Failure.Reason,
+          Failure.Mnemonic.empty() ? std::string("unknown") : Failure.Mnemonic,
+          Failure.Format.empty() ? std::string("unknown") : Failure.Format};
 }
 
+// Append the structured fields that distinguish otherwise identical
+// mnemonic/format blockers in human diagnostics.
 void printBatchFailureSuffix(llvm::raw_ostream &OS,
                              const COMGR::hotswap::RaiseFailure &Failure) {
   OS << " reason=" << COMGR::hotswap::reasonString(Failure.Reason)
@@ -226,6 +250,8 @@ void printBatchFailureSuffix(llvm::raw_ostream &OS,
     OS << " :: " << Failure.Detail;
 }
 
+// Print one batch-mode failure record while preserving the historical
+// `FAIL/ALSO <kernel> -> <mnemonic> [<format>]` prefix.
 void printBatchFailureLine(llvm::raw_ostream &OS, llvm::StringRef Prefix,
                            llvm::StringRef KernelName,
                            const COMGR::hotswap::RaiseFailure &Failure,
@@ -239,6 +265,8 @@ void printBatchFailureLine(llvm::raw_ostream &OS, llvm::StringRef Prefix,
   OS << "\n";
 }
 
+// Replay the child's buffered stdout after it exits so parent-side OK / FAIL
+// records stay serialized even when a kernel crashes during raise.
 bool replayChildOutput(llvm::StringRef Path) {
   auto BufferOrErr = llvm::MemoryBuffer::getFile(Path);
   if (!BufferOrErr) {
@@ -248,6 +276,25 @@ bool replayChildOutput(llvm::StringRef Path) {
   }
   llvm::outs() << (*BufferOrErr)->getBuffer();
   return true;
+}
+
+// Map the child's wait status into the same bracketed crash format the batch
+// output already uses, so non-signal child failures remain diagnosable.
+std::string childCrashFormat(int Status, bool ShmDone) {
+  if (WIFSIGNALED(Status))
+    return "signal_" + std::to_string(WTERMSIG(Status));
+  if (WIFEXITED(Status)) {
+    int ExitCode = WEXITSTATUS(Status);
+    if (ExitCode == 0 && !ShmDone)
+      return "status_incomplete";
+    if (ExitCode == kChildOutputWriteFailedExitCode)
+      return "child_output_write_failed";
+    if (ExitCode != 0)
+      return "exit_" + std::to_string(ExitCode);
+  }
+  if (!ShmDone)
+    return "status_incomplete";
+  return "wait_status_unknown";
 }
 
 // Resolve an --enable-/--disable- toggle pair, later occurrence wins.
@@ -467,8 +514,12 @@ int main(int argc, char **argv) {
              MAP_SHARED | MAP_ANONYMOUS, -1, 0));
     if (shm == MAP_FAILED) {
       llvm::errs() << "raise_cli: mmap failed\n";
-      return 3;
+      return kMmapFailedExitCode;
     }
+    auto UnmapShm = llvm::scope_exit([&] {
+      if (munmap(shm, sizeof(KernelRaiseStats)) != 0)
+        llvm::errs() << "raise_cli: munmap failed: errno=" << errno << "\n";
+    });
     std::memset(shm, 0, sizeof(KernelRaiseStats));
 
     auto kernelOffsetOrErr = COMGR::hotswap::findKernelSymbolOffset(coData, kName);
@@ -480,7 +531,6 @@ int main(int argc, char **argv) {
       llvm::outs() << "FAIL " << kName
                    << " -> __kernel_offset__ "
                       "[KernelSymbolOffsetLookupFailed]\n";
-      munmap(shm, sizeof(KernelRaiseStats));
       continue;
     }
     uint64_t kernelOffset = *kernelOffsetOrErr;
@@ -495,9 +545,13 @@ int main(int argc, char **argv) {
             "raise-cli", "out", ChildOutputFD, ChildOutputPath)) {
       llvm::errs() << "raise_cli: could not create child output file: "
                    << EC.message() << "\n";
-      munmap(shm, sizeof(KernelRaiseStats));
-      return 3;
+      return kChildOutputFileFailedExitCode;
     }
+    auto RemoveChildOutput = llvm::scope_exit([&] {
+      if (std::error_code EC = llvm::sys::fs::remove(ChildOutputPath))
+        llvm::errs() << "raise_cli: could not remove child output file "
+                     << ChildOutputPath << ": " << EC.message() << "\n";
+    });
 
     pid_t pid = fork();
     if (pid == 0) {
@@ -531,12 +585,12 @@ int main(int argc, char **argv) {
         ChildOut << "OK " << kName << " (" << raised.LiftedCount << "/"
                  << raised.TotalCount << ")\n";
       } else {
-        llvm::SmallVector<std::string, kMaxTrackedFailures> Seen;
+        llvm::SmallVector<FailureBucketKey> Seen;
         int NumEmittedFailures = 0;
         auto EmitFailure = [&](const COMGR::hotswap::RaiseFailure &Failure,
                                llvm::StringRef Prefix) {
-          std::string Key = failureBucketKey(Failure);
-          for (const std::string &SeenKey : Seen) {
+          FailureBucketKey Key = failureBucketKey(Failure);
+          for (const FailureBucketKey &SeenKey : Seen) {
             if (SeenKey == Key)
               return;
           }
@@ -572,21 +626,33 @@ int main(int argc, char **argv) {
 
       ChildOut.flush();
       if (ChildOut.has_error())
-        _exit(4);
+        _exit(kChildOutputWriteFailedExitCode);
       _exit(0);
     }
 
-    close(ChildOutputFD);
+    if (close(ChildOutputFD) != 0)
+      llvm::errs() << "raise_cli: close child output file failed: errno="
+                   << errno << "\n";
 
     if (pid < 0) {
       llvm::errs() << "raise_cli: fork failed\n";
-      llvm::sys::fs::remove(ChildOutputPath);
-      munmap(shm, sizeof(KernelRaiseStats));
-      return 3;
+      return kForkFailedExitCode;
     }
 
     int st = 0;
-    waitpid(pid, &st, 0);
+    bool WaitFailed = false;
+    while (waitpid(pid, &st, 0) < 0) {
+      if (errno == EINTR)
+        continue;
+      llvm::errs() << "raise_cli: waitpid failed: errno=" << errno << "\n";
+      ++crashKernels;
+      llvm::outs() << "FAIL " << kName
+                   << " -> __crash__ [waitpid_failed]\n";
+      WaitFailed = true;
+      break;
+    }
+    if (WaitFailed)
+      continue;
 
     auto ReplayOrCrash = [&]() {
       if (!replayChildOutput(ChildOutputPath)) {
@@ -597,14 +663,14 @@ int main(int argc, char **argv) {
       return true;
     };
 
-    if (!shm->done || WIFSIGNALED(st) || (WIFEXITED(st) && WEXITSTATUS(st) != 0)) {
+    bool ChildExitedCleanly = WIFEXITED(st) && WEXITSTATUS(st) == 0;
+    if (!shm->done || !ChildExitedCleanly) {
       // Child never wrote the shm marker, or died by signal, or exited
       // with a nonzero status: surface this as a FAIL row with a
       // synthetic mnemonic so kerneldex still counts the kernel.
       ++crashKernels;
-      int sig = WIFSIGNALED(st) ? WTERMSIG(st) : 0;
-      llvm::outs() << "FAIL " << kName << " -> __crash__ [signal_" << sig
-                   << "]\n";
+      llvm::outs() << "FAIL " << kName << " -> __crash__ ["
+                   << childCrashFormat(st, shm->done) << "]\n";
     } else if (shm->success) {
       if (ReplayOrCrash())
         ++okKernels;
@@ -612,9 +678,6 @@ int main(int argc, char **argv) {
       if (ReplayOrCrash())
         ++failKernels;
     }
-
-    llvm::sys::fs::remove(ChildOutputPath);
-    munmap(shm, sizeof(KernelRaiseStats));
   }
 
   llvm::errs() << "raise_cli: " << totalKernels << " kernels, " << okKernels
