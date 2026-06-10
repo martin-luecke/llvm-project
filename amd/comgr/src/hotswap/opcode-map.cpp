@@ -1324,6 +1324,20 @@ static const Entry kCanonTable[] = {
     E(GLOBAL_LOAD_ASYNC_TO_LDS_B128,      GLOBAL_LOAD_ASYNC_TO_LDS_B128),
     E(GLOBAL_LOAD_ASYNC_TO_LDS_B128_SADDR,GLOBAL_LOAD_ASYNC_TO_LDS_B128),
 
+    // gfx1250 async global store-from-LDS family
+    // (`FLAT_Global_STORE_LDS_Pseudo`, FLATInstructions.td:427). Mirror of
+    // the async-load entries above: both the plain and SADDR variants per
+    // width collapse onto one CanonicalOp; `handleFLAT` uses `op.nSrcs()`
+    // (4 plain / 5 SADDR) to pick the operand-decoder path.
+    E(GLOBAL_STORE_ASYNC_FROM_LDS_B8,        GLOBAL_STORE_ASYNC_FROM_LDS_B8),
+    E(GLOBAL_STORE_ASYNC_FROM_LDS_B8_SADDR,  GLOBAL_STORE_ASYNC_FROM_LDS_B8),
+    E(GLOBAL_STORE_ASYNC_FROM_LDS_B32,       GLOBAL_STORE_ASYNC_FROM_LDS_B32),
+    E(GLOBAL_STORE_ASYNC_FROM_LDS_B32_SADDR, GLOBAL_STORE_ASYNC_FROM_LDS_B32),
+    E(GLOBAL_STORE_ASYNC_FROM_LDS_B64,       GLOBAL_STORE_ASYNC_FROM_LDS_B64),
+    E(GLOBAL_STORE_ASYNC_FROM_LDS_B64_SADDR, GLOBAL_STORE_ASYNC_FROM_LDS_B64),
+    E(GLOBAL_STORE_ASYNC_FROM_LDS_B128,      GLOBAL_STORE_ASYNC_FROM_LDS_B128),
+    E(GLOBAL_STORE_ASYNC_FROM_LDS_B128_SADDR,GLOBAL_STORE_ASYNC_FROM_LDS_B128),
+
     // ---------------------------------------------------------------------
     // FLAT VMEM prefetch (gfx1250 RDNA4 -- VFLAT 0x05D, hint-class).
     //

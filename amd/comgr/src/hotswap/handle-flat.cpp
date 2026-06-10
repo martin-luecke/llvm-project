@@ -902,6 +902,150 @@ HandlerResult handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
   }
 
   // ---------------------------------------------------------------------
+  // gfx1250 async global store FROM LDS: store-direction mirror of the
+  // GLOBAL_LOAD_ASYNC_TO_LDS_B* family above
+  // (`FLAT_Global_STORE_LDS_Pseudo`, FLATInstructions.td:427-448).
+  //
+  // Each active lane copies N bytes from a per-lane LDS source to the
+  // computed global address. `has_data = 1` (the `$vdata` VGPR holds the
+  // per-lane LDS base offset), `has_vdst = 0` (no result). Operand order
+  // (the `ins` DAG, which is what the decoder yields) is NOT the same as
+  // the async-load family -- the LDS base sits AFTER the address operands:
+  //
+  //   plain (4 srcs): vaddr:VGPR_64,            vdata:LDS, offset, cpol
+  //   SADDR (5 srcs): saddr:SReg_64, vaddr:VGPR_32, vdata:LDS, offset, cpol
+  //
+  // Same-target gfx1250 lifts to
+  // `int_amdgcn_global_store_async_from_lds_b{8,32,64,128}` (the store
+  // sibling of the async-load intrinsic; signature
+  // `(global_ptr dest, local_ptr lds_src, i32 offset, i32 cpol)`). The
+  // `IntrInaccessibleMemOrArgMemOnly` annotation pins ordering across the
+  // companion `s_wait_asynccnt` barriers, so the call is wrapped in
+  // `emitUnderExec` to honour per-lane EXEC gating exactly like the load
+  // family.
+  //
+  // Cross-target (gfx942 and earlier) is refused loudly: the synchronous
+  // LDS-load + global-store emulation carries the same out-of-range-lane
+  // fault subtleties as the load path (a masked lane's global address is
+  // intentionally OOB; a real store would fault), and that gating is not
+  // yet implemented for the store direction.
+  if (Sop == CanonicalOp::GLOBAL_STORE_ASYNC_FROM_LDS_B8 ||
+      Sop == CanonicalOp::GLOBAL_STORE_ASYNC_FROM_LDS_B32 ||
+      Sop == CanonicalOp::GLOBAL_STORE_ASYNC_FROM_LDS_B64 ||
+      Sop == CanonicalOp::GLOBAL_STORE_ASYNC_FROM_LDS_B128) {
+    if (!Ctx.TargetIsa.HasTensorOps) {
+      Hr.Failure = RaiseFailure::unsupportedShape(
+          Di, "FLAT",
+          "global_store_async_from_lds_b*: gfx1250-only async LDS->global "
+          "store; the synchronous cross-target emulation (with OOB-lane "
+          "gating mirroring global_load_async_to_lds_b*) is not yet "
+          "implemented.");
+      return Hr;
+    }
+
+    bool IsSaddr = false;
+    if (Op.nSrcs() == 5) {
+      IsSaddr = true;
+    } else if (Op.nSrcs() != 4) {
+      Hr.Failure = RaiseFailure::unsupportedShape(
+          Di, "FLAT",
+          "global_store_async_from_lds_b*: expected 4 srcs (plain) or "
+          "5 srcs (SADDR) per FLAT_Global_STORE_LDS_Pseudo");
+      return Hr;
+    }
+
+    Value *GlobalAddr = nullptr;
+    ParsedReg VdataPr;
+    unsigned ImmStart = 0;
+    if (IsSaddr) {
+      ParsedReg SaddrPr = Op.srcReg(0);
+      ParsedReg VaddrPr = Op.srcReg(1);
+      VdataPr = Op.srcReg(2);
+      if (SaddrPr.RegKind != ParsedReg::SGPR ||
+          VaddrPr.RegKind != ParsedReg::VGPR) {
+        Hr.Failure = RaiseFailure::unsupportedShape(
+            Di, "FLAT",
+            "global_store_async_from_lds_b* SADDR: expected "
+            "(SGPR_64, VGPR_32) for (saddr, vaddr)");
+        return Hr;
+      }
+      Value *Saddr = Ctx.Regs.readReg64(Ctx.B, SaddrPr);
+      // zext + add only (no scale_offset multiply in IR): the same-target
+      // intrinsic consumes cpol's SCAL bit and the backend applies the
+      // element-size scale on isel -- identical to the async-load SADDR
+      // same-target arm.
+      Value *Voff = Ctx.B.CreateZExt(
+          Ctx.Regs.readReg32(Ctx.B, VaddrPr), Ctx.I64Ty, "st_voff_zext");
+      GlobalAddr = Ctx.B.CreateAdd(Saddr, Voff, "st_saddr_vaddr");
+      ImmStart = 3;
+    } else {
+      ParsedReg VaddrPr = Op.srcReg(0);
+      VdataPr = Op.srcReg(1);
+      if (VaddrPr.RegKind != ParsedReg::VGPR) {
+        Hr.Failure = RaiseFailure::unsupportedShape(
+            Di, "FLAT",
+            "global_store_async_from_lds_b* plain: expected VGPR_64 for vaddr");
+        return Hr;
+      }
+      GlobalAddr = Ctx.Regs.readReg64(Ctx.B, VaddrPr);
+      ImmStart = 2;
+    }
+
+    if (VdataPr.RegKind != ParsedReg::VGPR) {
+      Hr.Failure = RaiseFailure::unsupportedShape(
+          Di, "FLAT",
+          "global_store_async_from_lds_b*: vdata (LDS-base operand) is "
+          "not a VGPR");
+      return Hr;
+    }
+    Value *LdsOff = Ctx.Regs.readReg32(Ctx.B, VdataPr);
+    Type *PtrLdsTy = PointerType::get(Ctx.C, /*addrspace=*/3);
+    Value *LdsPtr = Ctx.B.CreateIntToPtr(LdsOff, PtrLdsTy, "st_lds_ptr");
+
+    int64_t FlatOffset = 0;
+    int64_t CpolImm = 0;
+    bool SawOffset = false;
+    for (unsigned K = ImmStart; K < Op.nSrcs(); ++K) {
+      if (!Di.isImm(Op.srcIdx(K)))
+        continue;
+      int64_t V = Di.getImm(Op.srcIdx(K));
+      if (!SawOffset) {
+        FlatOffset = V;
+        SawOffset = true;
+      } else {
+        CpolImm = V;
+      }
+    }
+
+    Value *GlobalPtr = GlobalAddr;
+    if (GlobalPtr->getType() != Ctx.PtrGlobalTy)
+      GlobalPtr = Ctx.B.CreateIntToPtr(GlobalPtr, Ctx.PtrGlobalTy);
+
+    Intrinsic::ID Iid;
+    switch (Sop) {
+    case CanonicalOp::GLOBAL_STORE_ASYNC_FROM_LDS_B8:
+      Iid = Intrinsic::amdgcn_global_store_async_from_lds_b8; break;
+    case CanonicalOp::GLOBAL_STORE_ASYNC_FROM_LDS_B32:
+      Iid = Intrinsic::amdgcn_global_store_async_from_lds_b32; break;
+    case CanonicalOp::GLOBAL_STORE_ASYNC_FROM_LDS_B64:
+      Iid = Intrinsic::amdgcn_global_store_async_from_lds_b64; break;
+    case CanonicalOp::GLOBAL_STORE_ASYNC_FROM_LDS_B128:
+      Iid = Intrinsic::amdgcn_global_store_async_from_lds_b128; break;
+    default:
+      llvm_unreachable("dispatch matched async-from-LDS store family but width "
+                       "CanonicalOp fell through the switch");
+    }
+    Function *Fn = Intrinsic::getOrInsertDeclaration(&Ctx.M, Iid);
+    Value *OffsetArg = ConstantInt::get(Ctx.I32Ty, FlatOffset);
+    Value *CpolArg = ConstantInt::get(Ctx.I32Ty, CpolImm);
+    Ctx.emitUnderExec([&] {
+      Ctx.B.CreateCall(Fn, {GlobalPtr, LdsPtr, OffsetArg, CpolArg});
+    });
+    Hr.Handled = true;
+    return Hr;
+  }
+
+  // ---------------------------------------------------------------------
   // gfx1250 FLAT VMEM prefetch (VFLAT 0x05D -- flat_prefetch_b8 /
   // global_prefetch_b8).
   //

@@ -1256,6 +1256,23 @@ enum class CanonicalOp : uint16_t {
   GLOBAL_LOAD_ASYNC_TO_LDS_B64,
   GLOBAL_LOAD_ASYNC_TO_LDS_B128,
 
+  // -- gfx1250 async global store from LDS (FLAT, async) --
+  //
+  // The store-direction mirror of GLOBAL_LOAD_ASYNC_TO_LDS_B*
+  // (FLAT_Global_STORE_LDS_Pseudo, FLATInstructions.td:427). Each lane
+  // copies N bytes from a per-lane LDS source (the `$vdata` VGPR holds the
+  // LDS base offset) to the computed global address. Operand order differs
+  // from the load family: plain = (vaddr:VGPR_64, vdata:LDS, off, cpol);
+  // SADDR = (saddr:SGPR_64, vaddr:VGPR_32, vdata:LDS, off, cpol). Same-target
+  // gfx1250 lifts to `int_amdgcn_global_store_async_from_lds_b{8,32,64,128}`
+  // (the store sibling of the async-load intrinsic). Cross-target refuses
+  // loudly: the synchronous LDS-load + global-store emulation has the same
+  // OOB-lane fault subtleties as the load path and is not yet implemented.
+  GLOBAL_STORE_ASYNC_FROM_LDS_B8,
+  GLOBAL_STORE_ASYNC_FROM_LDS_B32,
+  GLOBAL_STORE_ASYNC_FROM_LDS_B64,
+  GLOBAL_STORE_ASYNC_FROM_LDS_B128,
+
   // -- gfx1250 VMEM prefetch (FLAT, hint-class) --
   //
   // FLAT advisory prefetch on a per-lane (divergent) VGPR pointer. The
