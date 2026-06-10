@@ -22,15 +22,15 @@
 // instructions were successfully raised before and after all blockers.
 //
 // Kernels that crashed in the child (signal, non-zero exit, incomplete
-// shm) are reported as a FAIL with mnemonic ``__crash__`` and a bracketed
-// format such as ``signal_<N>``, ``exit_<N>``, or
-// ``status_incomplete`` so they still land in the kerneldex worklist
+// shm) are reported as a FAIL with mnemonic `__crash__` and a bracketed
+// format such as `signal_<N>`, `exit_<N>`, or
+// `status_incomplete` so they still land in the kerneldex worklist
 // instead of being silently dropped.
 //
 // In default mode, exits 0 iff every kernel succeeded, 1 if any kernel
 // failed/crashed, and a distinct non-zero infrastructure code when the
 // parent cannot set up or monitor a child. ISA is auto-detected from the
-// filename (look for ``gfx<digits>[a-z]?``) when ``--isa=`` is not passed.
+// filename (look for `gfx<digits>[a-z]?`) when `--isa=` is not passed.
 //
 // --emit-ir mode. Designed for lit tests. Runs raiseToIR in-process (no
 // fork), dumps the raised LLVM IR for a single kernel on stdout, and
