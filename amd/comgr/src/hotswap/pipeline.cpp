@@ -244,6 +244,76 @@ bool isStrictMode() {
   return s_strict;
 }
 
+// Build the AMDHSA `.args:` YAML sequence (one entry per explicit source arg)
+// from the source kernel metadata. Hidden args are intentionally omitted: the
+// lifted kernel synthesizes them internally from the dispatch packet (see
+// source-hidden-args.cpp), so HIP must not be told to marshal them. Emitting
+// the real explicit args (with their source-ABI offsets/sizes/kinds) lets HIP's
+// chevron-launch (`<<<>>>`) argument marshalling place each host argument at the
+// correct kernarg offset -- without this, llc emits a single opaque `kargs`
+// blob and HIP miscopies every argument.
+static std::string buildExplicitArgsYaml(llvm::ArrayRef<KernelArgMeta> Args) {
+  std::string Out;
+  llvm::raw_string_ostream OS(Out);
+  for (const auto &A : Args) {
+    if (llvm::StringRef(A.ValueKind).starts_with("hidden_"))
+      continue;
+    OS << "      -";
+    bool First = true;
+    auto Field = [&](llvm::StringRef K, const llvm::Twine &V) {
+      if (First) {
+        OS << " " << K << " " << V << "\n";
+        First = false;
+      } else {
+        OS << "        " << K << " " << V << "\n";
+      }
+    };
+    if (A.AddressSpace == 1)
+      Field(".address_space:", "global");
+    Field(".offset:", llvm::Twine(A.Offset));
+    Field(".size:", llvm::Twine(A.Size));
+    Field(".value_kind:", A.ValueKind);
+  }
+  return Out;
+}
+
+// Replace the single placeholder `.args:` entry that llc emits (one opaque
+// `kargs` blob) with the real explicit-argument list from the source metadata.
+// Operates on the textual `.amdgpu_metadata` YAML in the `.s` before llvm-mc
+// turns it into the msgpack note. No-op when the source has no args.
+static bool rewriteAsmExplicitArgs(llvm::StringRef asmPath,
+                                   llvm::ArrayRef<KernelArgMeta> Args) {
+  if (Args.empty())
+    return true;
+  auto BufOrErr = llvm::MemoryBuffer::getFile(asmPath, /*IsText=*/true);
+  if (!BufOrErr)
+    return false;
+  std::string Text = (*BufOrErr)->getBuffer().str();
+  const std::string ArgsKey = "\n    .args:";
+  size_t Apos = Text.find(ArgsKey);
+  if (Apos == std::string::npos)
+    return true; // kernel without args block; nothing to do
+  size_t AfterArgsLine = Text.find('\n', Apos + 1);
+  if (AfterArgsLine == std::string::npos)
+    return false;
+  AfterArgsLine += 1; // first arg-item line
+  // Args items are indented 6+ spaces; the block ends at the next line that is
+  // not part of the sequence (e.g. a 4-space kernel key).
+  size_t P = AfterArgsLine;
+  while (P < Text.size()) {
+    size_t Eol = Text.find('\n', P);
+    if (Eol == std::string::npos)
+      Eol = Text.size();
+    llvm::StringRef Line(Text.data() + P, Eol - P);
+    if (!Line.starts_with("      "))
+      break;
+    P = (Eol == Text.size()) ? Eol : Eol + 1;
+  }
+  std::string NewArgs = buildExplicitArgsYaml(Args);
+  Text = Text.substr(0, AfterArgsLine) + NewArgs + Text.substr(P);
+  return writeFile(asmPath, Text);
+}
+
 // Raise one kernel to IR, compile to a relocatable .o via llc + llvm-mc.
 // On success, writes the .o to objPath and returns true.
 static bool raiseAndCompileKernel(const TextSection &text,
@@ -357,6 +427,15 @@ static bool raiseAndCompileKernel(const TextSection &text,
     return false;
   }
   result.Timings.llcSeconds += timingElapsed(options.CollectTimings, llcStart);
+
+  // Restore the real explicit-argument metadata so HIP's chevron-launch
+  // argument marshalling targets the correct kernarg offsets. llc emits a
+  // single opaque `kargs` blob from the lifted IR signature; overwrite it with
+  // the source kernel's explicit args before llvm-mc bakes the msgpack note.
+  if (!rewriteAsmExplicitArgs(asmPath, meta.Args)) {
+    llvm::errs() << "transpiler: WARNING: failed to rewrite .args metadata for '"
+                 << kernelName << "'\n";
+  }
 
   {
     auto readAsmStart = timingStart(options.CollectTimings);
