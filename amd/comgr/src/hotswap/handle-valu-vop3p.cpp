@@ -1106,30 +1106,28 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
       if (Idx < 0 || !Di.isImm(Idx)) return 0;
       return Di.getImm(Idx);
     };
-    auto NamedReg32 = [&](AMDGPU::OpName Name) -> Value * {
-      int Idx = AMDGPU::getNamedOperandIdx(Di.Inst.getOpcode(), Name);
-      if (Idx < 0 || !Di.isReg(Idx))
-        return ConstantInt::get(Ctx.I32Ty, 0);
-      ParsedReg Pr = Ctx.parseReg(Di.getReg(Idx), Idx);
-      if (Pr.RegKind == ParsedReg::OTHER || Pr.RegKind == ParsedReg::NOREG)
-        return ConstantInt::get(Ctx.I32Ty, 0);
-      return Ctx.Regs.readReg32(Ctx.B, Pr);
+    // scale_src0 / scale_src1 carry packed scale bytes. An absent or inline-0
+    // source means scale = 1.0 per K-block, whose byte encoding depends on the
+    // matrix_*_scale_fmt: E8M0 (0) -> 0x7f (2^0), E4M3 (2) -> 0x38 (1.0). The
+    // E8M0 sentinel would decode to NaN under E4M3. Other inline constants
+    // have no documented semantics and fail.
+    auto UnitScalePacked = [&](int64_t ScaleFmt) -> Value * {
+      uint32_t Byte = ScaleFmt == 2 /*E4M3*/ ? 0x38u : 0x7fu;
+      return ConstantInt::get(Ctx.I32Ty, Byte * 0x01010101U);
     };
-    // scale_src0 / scale_src1 carry packed scale bytes. An inline-0 means
-    // 0x7f per byte (scale = 1.0 per K-block), not a raw i32 0; other inline
-    // constants have no documented semantics and fail.
     bool ScaleSrcFailed = false;
-    auto NamedScaleSrc32 = [&](AMDGPU::OpName Name) -> Value * {
+    auto NamedScaleSrc32 = [&](AMDGPU::OpName Name,
+                               int64_t ScaleFmt) -> Value * {
       int Idx = AMDGPU::getNamedOperandIdx(Di.Inst.getOpcode(), Name);
       if (Idx < 0)
-        return ConstantInt::get(Ctx.I32Ty, 0x7f7f7f7fU);
+        return UnitScalePacked(ScaleFmt);
       if (Di.isReg(Idx)) {
         ParsedReg Pr = Ctx.parseReg(Di.getReg(Idx), Idx);
         if (Pr.RegKind != ParsedReg::OTHER && Pr.RegKind != ParsedReg::NOREG)
           return Ctx.Regs.readReg32(Ctx.B, Pr);
       }
       if (Di.isImm(Idx) && Di.getImm(Idx) == 0)
-        return ConstantInt::get(Ctx.I32Ty, 0x7f7f7f7fU);
+        return UnitScalePacked(ScaleFmt);
       ScaleSrcFailed = true;
       return ConstantInt::get(Ctx.I32Ty, 0);
     };
@@ -1143,22 +1141,22 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
         NamedImm(AMDGPU::OpName::src2_modifiers));
     Value *MatrixAScale = ConstantInt::get(
         Ctx.I32Ty, NamedImm(AMDGPU::OpName::matrix_a_scale));
-    Value *MatrixAScaleFmt = ConstantInt::get(
-        Ctx.I32Ty, NamedImm(AMDGPU::OpName::matrix_a_scale_fmt));
-    Value *ScaleSrc0 = NamedScaleSrc32(AMDGPU::OpName::scale_src0);
+    int64_t AScaleFmtImm = NamedImm(AMDGPU::OpName::matrix_a_scale_fmt);
+    Value *MatrixAScaleFmt = ConstantInt::get(Ctx.I32Ty, AScaleFmtImm);
+    Value *ScaleSrc0 = NamedScaleSrc32(AMDGPU::OpName::scale_src0, AScaleFmtImm);
     Value *MatrixBScale = ConstantInt::get(
         Ctx.I32Ty, NamedImm(AMDGPU::OpName::matrix_b_scale));
-    Value *MatrixBScaleFmt = ConstantInt::get(
-        Ctx.I32Ty, NamedImm(AMDGPU::OpName::matrix_b_scale_fmt));
-    Value *ScaleSrc1 = NamedScaleSrc32(AMDGPU::OpName::scale_src1);
+    int64_t BScaleFmtImm = NamedImm(AMDGPU::OpName::matrix_b_scale_fmt);
+    Value *MatrixBScaleFmt = ConstantInt::get(Ctx.I32Ty, BScaleFmtImm);
+    Value *ScaleSrc1 = NamedScaleSrc32(AMDGPU::OpName::scale_src1, BScaleFmtImm);
     if (ScaleSrcFailed) {
-      Hr.Failure = RaiseFailure::unsupportedShape(
+      Hr.Failure = RaiseFailure::unsupportedInstructionForm(
           Di, "VOP3P",
           "v_wmma_scale_f32_16x16x128_f8f6f4: scale_src0 / scale_src1 "
           "encoding not supported. Supported: register, or inline "
-          "constant 0 (decoded as packed 0x7f, scale = 1.0 per K-block "
-          "per the gfx1250 programming guide). Other inline constants "
-          "have no documented WMMA-scale semantics.");
+          "constant 0 (decoded as scale = 1.0 per K-block in the active "
+          "scale format, per the gfx1250 programming guide). Other inline "
+          "constants have no documented WMMA-scale semantics.");
       return Hr;
     }
     Value *MatrixAReuse = ConstantInt::get(
@@ -1226,7 +1224,7 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
       (void)MatrixAReuse;
       (void)MatrixBReuse;
       if (!ResultVal) {
-        Hr.Failure = RaiseFailure::unsupportedShape(
+        Hr.Failure = RaiseFailure::unsupportedInstructionForm(
             Di, "VOP3P",
             "emitWMMAScaleF8F6F4toMFMA refused this configuration. "
             "Supported in this draft: matrix_a_fmt / matrix_b_fmt in "

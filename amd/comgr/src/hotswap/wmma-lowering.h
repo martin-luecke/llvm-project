@@ -254,7 +254,8 @@ llvm::Value *emitWMMAScaleF8F6F4toScaledMFMA(
 /// (E5M3 deferred).
 ///
 /// \returns `<8 x float>` in wave32 D-layout, or `nullptr` for
-///          unsupported configurations (caller emits unsupportedShape).
+///          unsupported configurations (caller emits
+///          unsupportedInstructionForm).
 llvm::Value *emitWMMAScaleF8F6F4toMFMA(
     RaiseContext &ctx, llvm::Value *a, llvm::Value *b, llvm::Value *c,
     llvm::Value *matrixAFmt, llvm::Value *matrixBFmt, llvm::Value *cMod,
