@@ -111,17 +111,65 @@ HandlerResult handleSOPP(RaiseContext &Ctx, const DecodedInst &Di,
 
   // Source wait counters are ordering operations, not decorative no-ops.  The
   // TensorDescriptor MXFP upcast emits `s_wait_dscnt 0` between LDS stores /
-  // loads and split barriers; dropping it lets gfx942 reach `s_barrier` before
-  // the prior DS operation is complete, producing sparse nondeterministic sign
-  // flips after the LDS reshape.  Cross-target counter names do not map 1:1, so
-  // use the conservative gfx942-compatible wait-all form.
+  // loads and split barriers; dropping it lets the target reach `s_barrier`
+  // before the prior DS operation is complete, producing sparse
+  // nondeterministic sign flips after the LDS reshape.
+  //
+  // Lowering depends on the TARGET's wait-counter model:
+  //   * gfx9/gfx11 and earlier (combined waitcnt): emit the single
+  //     `llvm.amdgcn.s.waitcnt(0)` wait-all -- the conservative,
+  //     name-independent form. gfx12+ removed the combined encoding, so
+  //     emitting it there fails isel ("Cannot select: llvm.amdgcn.s.waitcnt").
+  //   * gfx12+ (gfx1250; split waitcnt): emit the matching split-counter
+  //     intrinsic(s) `llvm.amdgcn.s.wait.{loadcnt,storecnt,dscnt,kmcnt}(0)`.
+  //     For the combined `S_WAITCNT` (only appears on a gfx9 source lifted to
+  //     a gfx12 target) we emit all four as the wait-all. `S_WAIT_XCNT` has no
+  //     split-wait intrinsic; it gates only the gfx1250 X (cross-lane export)
+  //     counter and is dropped (the IR dataflow + the other counters carry the
+  //     observable ordering).
   if (Sop == CanonicalOp::S_WAITCNT || Sop == CanonicalOp::S_WAIT_LOADCNT ||
       Sop == CanonicalOp::S_WAIT_STORECNT ||
       Sop == CanonicalOp::S_WAIT_KMCNT || Sop == CanonicalOp::S_WAIT_DSCNT ||
       Sop == CanonicalOp::S_WAIT_XCNT || Sop == CanonicalOp::S_WAIT_LOADCNT_DSCNT) {
-    Function *WaitFn =
-        Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::amdgcn_s_waitcnt);
-    Ctx.B.CreateCall(WaitFn, {Ctx.B.getInt32(0)});
+    if (Ctx.TargetIsa.HasTensorOps) {
+      auto EmitSplit = [&](Intrinsic::ID Id) {
+        Function *F = Intrinsic::getOrInsertDeclaration(&Ctx.M, Id);
+        Ctx.B.CreateCall(F, {Ctx.B.getInt16(0)});
+      };
+      switch (Sop) {
+      case CanonicalOp::S_WAIT_LOADCNT:
+        EmitSplit(Intrinsic::amdgcn_s_wait_loadcnt);
+        break;
+      case CanonicalOp::S_WAIT_STORECNT:
+        EmitSplit(Intrinsic::amdgcn_s_wait_storecnt);
+        break;
+      case CanonicalOp::S_WAIT_KMCNT:
+        EmitSplit(Intrinsic::amdgcn_s_wait_kmcnt);
+        break;
+      case CanonicalOp::S_WAIT_DSCNT:
+        EmitSplit(Intrinsic::amdgcn_s_wait_dscnt);
+        break;
+      case CanonicalOp::S_WAIT_LOADCNT_DSCNT:
+        EmitSplit(Intrinsic::amdgcn_s_wait_loadcnt);
+        EmitSplit(Intrinsic::amdgcn_s_wait_dscnt);
+        break;
+      case CanonicalOp::S_WAITCNT:
+        EmitSplit(Intrinsic::amdgcn_s_wait_loadcnt);
+        EmitSplit(Intrinsic::amdgcn_s_wait_storecnt);
+        EmitSplit(Intrinsic::amdgcn_s_wait_dscnt);
+        EmitSplit(Intrinsic::amdgcn_s_wait_kmcnt);
+        break;
+      case CanonicalOp::S_WAIT_XCNT:
+        // No split-wait intrinsic; drop (see comment above).
+        break;
+      default:
+        break;
+      }
+    } else {
+      Function *WaitFn =
+          Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::amdgcn_s_waitcnt);
+      Ctx.B.CreateCall(WaitFn, {Ctx.B.getInt32(0)});
+    }
     Hr.Handled = true;
     return Hr;
   }
