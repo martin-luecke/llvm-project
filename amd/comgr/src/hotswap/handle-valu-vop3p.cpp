@@ -1020,39 +1020,19 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
 
   // 16x16x128 scaled WMMA, f8f6f4 mantissa-format family (gfx1250-only).
   //
-  // 18 MC pseudos (`{f4,f6,f8} A × {f4,f6,f8} B × _twoaddr/_threeaddr`)
-  // collapse onto this single CanonicalOp; the per-matrix vector width is
-  // encoded by the opcode's `_fA_fB_w32_*` suffix (per
-  // `WMMA_F8F6F4_Profiles` in VOP3PInstructions.td:1908) -- f8 -> 16
-  // dwords, f6 -> 12 dwords, f4 -> 8 dwords. The in-family element
-  // distinction (BF8 vs FP8 within f8; BF6 vs FP6 within f6) lives in
-  // the `matrix_a_fmt` / `matrix_b_fmt` named-immediate operands
-  // (`enum MatrixFMT`, SIDefines.h:1052-1058).
+  // 18 MC pseudos ({f4,f6,f8} A x {f4,f6,f8} B x _twoaddr/_threeaddr) collapse
+  // onto this CanonicalOp; the `_fA_fB_w32_*` suffix encodes per-matrix width
+  // (f8 -> 16, f6 -> 12, f4 -> 8 dwords). BF8/FP8 and BF6/FP6 are distinguished
+  // by the matrix_a_fmt / matrix_b_fmt named immediates (enum MatrixFMT).
   //
-  // Cross-target lowering paths for v_wmma_scale_f32_16x16x128_f8f6f4:
-  //
-  //   * gfx1250 (hasTensorOps): emit the native
-  //     `int_amdgcn_wmma_scale_f32_16x16x128_f8f6f4` intrinsic in place
-  //     (14-arg fast path below).
-  //   * gfx950 (hasGfx950Insts): rewrite to the gfx950 scaled MFMA via
-  //     `emitWMMAScaleF8F6F4toScaledMFMA` in `wmma-lowering.cpp`, which does
-  //     the wave32->wave64 lane redistribution and lowers to
-  //     `int_amdgcn_mfma_scale_f32_16x16x128_f8f6f4` (the gfx950 has
-  //     a near-1:1 MFMA equivalent for this WMMA, in the same K=128
-  //     F8F6F4 shape; only the wave size and per-lane fragment width
-  //     differ, both of which the redistribution helper handles).
-  //     Note `hasGfx950Insts` (NOT `hasMFMA`) -- gfx942 also has
-  //     hasMFMA == true but lacks the scaled F8F6F4 family.
-  //   * Otherwise (e.g. gfx942 -- has hasMFMA == true but not the scaled
-  //     F8F6F4 family): refuse loudly.  gfx942's MFMA family stops at
-  //     `mfma_f32_16x16x32_*` (non-scaled, K=32); a WMMA-scale
-  //     decomposition into multiple gfx942 MFMAs plus a software
-  //     scale-exponent application is *possible* but not implemented.
+  // Cross-target lowering of v_wmma_scale_f32_16x16x128_f8f6f4:
+  //   * gfx1250 (hasTensorOps): native int_amdgcn_wmma_scale intrinsic.
+  //   * gfx950 (hasGfx950Insts): scaled MFMA via emitWMMAScaleF8F6F4toScaledMFMA.
+  //   * gfx942 (hasFP8Insts): K-decomposed unscaled FP8/BF8 MFMA + software
+  //     scale via emitWMMAScaleF8F6F4toMFMA.
+  //   * Otherwise: refuse.
   case CanonicalOp::V_WMMA_SCALE_F32_16x16x128_F8F6F4: {
-    // Extract per-matrix dword count from the MC pseudo suffix
-    // (`*_fA_fB_w32_{twoaddr,threeaddr}`). MCInstrInfo names the
-    // pseudo verbatim from TableGen, so the suffix is the
-    // authoritative source of A/B widths.
+    // Per-matrix dword count from the MC pseudo's fA_fB suffix.
     auto FmtSuffixToDwords = [](StringRef Tag) -> unsigned {
       if (Tag == "f8") return 16;
       if (Tag == "f6") return 12;
@@ -1096,11 +1076,8 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
     if (!C)
       return Hr;
 
-    // Read named-immediate / named-register operands. Using
-    // `getNamedOperandIdx` instead of positional scan means any
-    // future TableGen reshuffle of the scaled-WMMA Ins64 layout
-    // flows in for free (mirrors the MFMA-scale handler in
-    // handle-mfma.cpp:175-194).
+    // Read named operands by name so a TableGen Ins64 reshuffle flows in for
+    // free (mirrors the MFMA-scale handler).
     auto NamedImm = [&](AMDGPU::OpName Name) -> int64_t {
       int Idx = AMDGPU::getNamedOperandIdx(Di.Inst.getOpcode(), Name);
       if (Idx < 0 || !Di.isImm(Idx)) return 0;

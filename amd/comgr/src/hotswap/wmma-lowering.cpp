@@ -245,15 +245,10 @@ static Value *selectByLaneGroup(IRBuilder<> &B, Value *LaneGroup,
 /// Redistribute A or B input from gfx12 WMMA layout (8 VGPRs, Wave32)
 /// to gfx942 MFMA layout (2 VGPRs × 2 passes, Wave64).
 ///
-/// NOTE: the per-lane K-distribution documented below is EMPIRICALLY
-/// CORRECT for the WMMA.B operand (v170-177 in matmul_fp16) as pinned
-/// by mode-7 / mode-9 instrumentation (see `hotswap/docs/matrix-
-/// translation.md §12.4.4 Session-5 per-dword characterization`).  The
-/// WMMA.A operand on gfx1250 has a DIFFERENT per-lane layout -- lanes
-/// 0-15 and lanes 16-31 hold the SAME K subset at the same GPR
-/// position but different cols -- which this redistribution does NOT
-/// handle correctly (see matrix-translation.md §12.4.4 and the refusal
-/// gate in `handle-valu-vop3p.cpp`).
+/// The per-lane K-distribution below was characterized for the 16-bit
+/// (F16/BF16) WMMA family and applies to both A and B. The K=128 F8F6F4 scale
+/// path reuses it; the gfx950 sibling (emitWMMAScaleF8F6F4toScaledMFMA) instead
+/// uses a linear-K model, not yet cross-checked here.
 ///
 /// The gfx12 WMMA k-distribution interleaves between the two lane halves:
 ///   Lanes 0-15:  GPR pairs {0,1}->k 0-3, {2,3}->k 8-11, {4,5}->k 16-19, {6,7}->k 24-27
@@ -1083,14 +1078,11 @@ llvm::Value *emitWMMAScaleF8F6F4toScaledMFMA(
                     FixedVectorType::get(ctx.F32Ty, 8));
 }
 
-// gfx1250 v_wmma_scale_f32_16x16x128_f8f6f4 -> gfx942.
-//
-// Decompose K=128 into 4 K=32 unscaled MFMAs
-// (int_amdgcn_mfma_f32_16x16x32_{fp8,bf8}_{fp8,bf8}) and apply the
-// K-constant per-block scale to each partial via fmuladd. FP6/BF6/FP4
-// widen in-line to FP8/BF8 so the redistribute + MFMA + scale + collect
-// pipeline stays format-agnostic. MODREP runs one pass; WaveNative
-// cross-widen runs two (GroupBase 0 and 32) combined by a laneId select.
+// gfx1250 v_wmma_scale_f32_16x16x128_f8f6f4 -> gfx942: decompose K=128 into 4
+// K=32 unscaled MFMAs and apply the per-block scale to each partial via
+// fmuladd. FP6/BF6/FP4 widen in-line to FP8/BF8 so the pipeline is
+// format-agnostic. MODREP runs one pass; WaveNative cross-widen runs two
+// (GroupBase 0 and 32) combined by a laneId select.
 
 namespace {
 
@@ -1164,8 +1156,7 @@ Value *widenF4NibbleVecToFP8(IRBuilder<> &B, Value *Nibbles) {
 }
 
 // Widen a full FP4 fragment (8 dwords / 64 nibbles per wave32 lane) to an
-// FP8 fragment (16 dwords). Element k -> byte k. M is unused here; kept for
-// signature uniformity with the FP6/BF6 wideners.
+// FP8 fragment (16 dwords). Element k -> byte k.
 void widenF4FragmentToFP8(IRBuilder<> &B, Module & /*M*/,
                            ArrayRef<Value *> SrcDwords,
                            SmallVectorImpl<Value *> &DstDwords) {
@@ -1575,15 +1566,20 @@ Value *emitWMMAScaleF8F6F4toMFMA(
     Value *AddrLo = B.CreateShl(LoLane, B.getInt32(2), "addr_lo");
     Value *AddrHi = B.CreateShl(HiLane, B.getInt32(2), "addr_hi");
 
-    // All 4 K-block scale bytes ride in one i32, so one bpermute per src
-    // suffices. Skip it for constant sources (bpermute of a uniform value
-    // is the identity and extractScaleByte then constant-folds).
-    Value *ScaleSrc0Pass = isa<Constant>(scaleSrc0)
-                               ? scaleSrc0
-                               : emitDSBpermute(B, M, AddrLo, scaleSrc0);
-    Value *ScaleSrc1Pass = isa<Constant>(scaleSrc1)
-                               ? scaleSrc1
-                               : emitDSBpermute(B, M, AddrLo, scaleSrc1);
+    // All 4 K-block scale bytes ride in one i32, so one redistribution per src
+    // suffices. The scale must follow its A/B data: even lane groups (0,2) read
+    // the lower W32 half (AddrLo), odd groups (1,3) the upper (AddrHi). Constant
+    // sources are lane-uniform, so skip the bpermute.
+    Value *IsOddGroup = B.CreateTrunc(LaneGroup, B.getInt1Ty(), "lg_odd");
+    auto RedistributeScale = [&](Value *ScaleSrc) -> Value * {
+      if (isa<Constant>(ScaleSrc))
+        return ScaleSrc;
+      Value *Lo = emitDSBpermute(B, M, AddrLo, ScaleSrc);
+      Value *Hi = emitDSBpermute(B, M, AddrHi, ScaleSrc);
+      return B.CreateSelect(IsOddGroup, Hi, Lo, "scale_redist");
+    };
+    Value *ScaleSrc0Pass = RedistributeScale(scaleSrc0);
+    Value *ScaleSrc1Pass = RedistributeScale(scaleSrc1);
 
     Value *MfmaC[4];
     redistributeAcc(B, M, cDwords, AddrLo, AddrHi, LaneGroup, MfmaC);

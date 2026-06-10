@@ -1,38 +1,11 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=wmma_scale_f32_16x16x128_bf6_bf6_kernel 2>&1 | %FileCheck %s --check-prefix=IR_GFX942
+; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=wmma_scale_f32_16x16x128_bf6_bf6_kernel | %FileCheck %s --check-prefix=IR_GFX942
 ;
 ; Cross-target lift (gfx1250 -> gfx942) with BF6 (E3M2) on both sides,
 ; pinning the BF6 -> BF8 (E5M2) widening branch of
 ; emitWMMAScaleF8F6F4toMFMA. BF6 shares extractF6Nibble with FP6 but
 ; widens to BF8: exp bias diff 12, mantissa width 2, subnormal renorm
 ; via ctlz on a 2-bit mantissa (lz = ctlz - 30).
-
-; IR_GFX942-LABEL: define amdgpu_kernel void @wmma_scale_f32_16x16x128_bf6_bf6_kernel(
-
-; Cross-dword bit unpack.
-; IR_GFX942-DAG: lshr i64
-
-; Subnormal renorm via ctlz, vectorized over 16 elements per chunk.
-; IR_GFX942-DAG: call <16 x i32> @llvm.ctlz.v16i32(
-
-; BF6-specific arithmetic: sub 12 (biased exp) and sub 30 (lz adjust).
-; IR_GFX942-DAG: sub <16 x i32> {{(splat \(i32 12\)|<i32 12)}}
-; IR_GFX942-DAG: sub <16 x i32> %{{[^,]+}}, {{(splat \(i32 30\)|<i32 30)}}
-
-; BF6 -> bf8.bf8 MFMA dispatch, 8 K-blocks total under WaveNative.
-; IR_GFX942: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.bf8.bf8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
-; IR_GFX942-COUNT-7: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.bf8.bf8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
-
-; Scale-on-output fmuladd.
-; IR_GFX942-DAG: call <4 x float> @llvm.fmuladd.v4f32(
-
-; Negatives: no LUT, no other MFMA combo, no scaled WMMA/MFMA dispatch.
-; IR_GFX942-NOT: @__const.
-; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.fp8.fp8
-; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.fp8.bf8
-; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.bf8.fp8
-; IR_GFX942-NOT: @llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4
-; IR_GFX942-NOT: @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
@@ -68,6 +41,32 @@ wmma_scale_f32_16x16x128_bf6_bf6_kernel:
 	v_mov_b64_e32 v[28:29], s[48:49]
 	v_mov_b64_e32 v[30:31], s[50:51]
 	s_delay_alu instid0(VALU_DEP_1)
+; IR_GFX942-LABEL: define amdgpu_kernel void @wmma_scale_f32_16x16x128_bf6_bf6_kernel(
+
+; Cross-dword bit unpack.
+; IR_GFX942-DAG: lshr i64
+
+; Subnormal renorm via ctlz, vectorized over 16 elements per chunk.
+; IR_GFX942-DAG: call <16 x i32> @llvm.ctlz.v16i32(
+
+; BF6-specific arithmetic: sub 12 (biased exp) and sub 30 (lz adjust).
+; IR_GFX942-DAG: sub <16 x i32> {{(splat \(i32 12\)|<i32 12)}}
+; IR_GFX942-DAG: sub <16 x i32> %{{[^,]+}}, {{(splat \(i32 30\)|<i32 30)}}
+
+; BF6 -> bf8.bf8 MFMA dispatch, 8 K-blocks total under WaveNative.
+; IR_GFX942: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.bf8.bf8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
+; IR_GFX942-COUNT-7: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.bf8.bf8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
+
+; Scale-on-output fmuladd.
+; IR_GFX942-DAG: call <4 x float> @llvm.fmuladd.v4f32(
+
+; Negatives: no LUT, no other MFMA combo, no scaled WMMA/MFMA dispatch.
+; IR_GFX942-NOT: @__const.
+; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.fp8.fp8
+; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.fp8.bf8
+; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.bf8.fp8
+; IR_GFX942-NOT: @llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4
+; IR_GFX942-NOT: @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4
 	v_wmma_scale_f32_16x16x128_f8f6f4 v[24:31], v[0:11], v[12:23], v[24:31], s42, s43 matrix_a_fmt:MATRIX_FMT_BF6 matrix_b_fmt:MATRIX_FMT_BF6
 	s_clause 0x1
 	global_store_b128 v40, v[28:31], s[40:41] offset:16

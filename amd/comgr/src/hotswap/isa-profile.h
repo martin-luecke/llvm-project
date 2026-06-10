@@ -71,13 +71,9 @@ struct ISAProfile {
   // v_prng_b32 (FeaturePrngInst). Targets without it have no selection
   // pattern for llvm.amdgcn.prng.b32, so lifts must expand it in IR.
   bool HasPrngInst = false;
-  // True iff the target exposes the FP8 / BF8 MFMA family
-  // (`int_amdgcn_mfma_f32_16x16x32_{fp8,bf8}_{fp8,bf8}` etc., gated on
-  // `FeatureFP8Insts` in AMDGPU.td; covers gfx942 + gfx950). Distinct from
-  // `HasMfma`, which is set on every gfx9-family MAI target -- gfx90a / gfx940
-  // have MAI but no FP8 MFMA pseudos and would silently miscompile if a
-  // cross-target lowering that emits the FP8 MFMA family gated only on
-  // `HasMfma`.
+  // Target exposes the FP8/BF8 MFMA family (FeatureFP8Insts; gfx942 + gfx950).
+  // Distinct from HasMfma, which is set on every gfx9 MAI target -- gfx90a /
+  // gfx940 have MAI but no FP8 MFMA pseudos.
   bool HasFP8Insts = false;
   // gfx125 widens compute_pgm_rsrc2.USER_SGPR_COUNT from the older 5-bit
   // GFX6-GFX120 field to a 6-bit field. Keep this as an ABI property rather

@@ -1,5 +1,5 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=wmma_scale_f32_16x16x128_f8f6f4_kernel 2>&1 | %FileCheck %s --check-prefix=IR_GFX942
+; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=wmma_scale_f32_16x16x128_f8f6f4_kernel | %FileCheck %s --check-prefix=IR_GFX942
 ;
 ; Cross-target lift fixture for v_wmma_scale_f32_16x16x128_f8f6f4
 ; (gfx1250 -> gfx942), pinning the emitWMMAScaleF8F6F4toMFMA path.
@@ -13,59 +13,16 @@
 ; Default WaveNative cross-widen runs two passes (8 MFMA calls total); the
 ; MODREP RUN line below pins the single-pass path (4 calls).
 
-; IR_GFX942-LABEL: define amdgpu_kernel void @wmma_scale_f32_16x16x128_f8f6f4_kernel(
-
-; First K-block of pass 0 pins the per-iteration emission order
-; (MFMA partial with zero accumulator, then ldexp scale, then fmuladd):
-; IR_GFX942: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.bf8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
-; IR_GFX942: sub i32 %{{[^,]+}}, 254
-; IR_GFX942: call float @llvm.ldexp.f32.i32(float 1.000000e+00, i32 %{{[^)]+}})
-; IR_GFX942: call <4 x float> @llvm.fmuladd.v4f32(
-;
-; Remaining 7 K-blocks (3 in pass 0, 4 in pass 1):
-; IR_GFX942-COUNT-7: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.bf8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
-
-; UE8M0 0xFF NaN-sentinel guard: scale byte == 255 selects qNaN.
-; IR_GFX942-DAG: icmp eq i32 %{{[^,]+}}, 255
-; IR_GFX942-DAG: select i1 %{{[^,]+}}, float +qnan, float %{{[^,]+}}
-
-; Scale-and-accumulate must stay fused as one fmuladd, not fmul + fadd.
-; IR_GFX942-NOT: fmul <4 x float>
-; IR_GFX942-NOT: fadd <4 x float>
-
-; WaveNative final per-lane select between pass 0 and pass 1.
-; IR_GFX942-DAG: icmp uge i32 %{{[^,]+}}, 32
-; IR_GFX942-DAG: select i1 %{{[^,]+}}, i32 %{{[^,]+}}, i32 %{{[^,]+}}
-
-; Lane redistribution marker (wave32 -> wave64).
-; IR_GFX942-DAG: call i32 @llvm.amdgcn.ds.bpermute(
-
-; No fall-through to the gfx1250 or gfx950 arms, no wrong fp8/bf8 combo.
-; IR_GFX942-NOT: @llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4
-; IR_GFX942-NOT: @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4
-; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.fp8.fp8
-; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.fp8.bf8
-; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.bf8.bf8
-
 ; MODREP fallback: single-pass path (4 MFMA calls, no select diamond).
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --disable-wave-native --emit-ir=wmma_scale_f32_16x16x128_f8f6f4_kernel 2>&1 | %FileCheck %s --check-prefix=IR_GFX942_MODREP
-
-; IR_GFX942_MODREP-LABEL: define amdgpu_kernel void @wmma_scale_f32_16x16x128_f8f6f4_kernel(
-; IR_GFX942_MODREP-COUNT-4: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.bf8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
-; IR_GFX942_MODREP-NOT: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.bf8.fp8(
-; IR_GFX942_MODREP-NOT: @llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4
-; IR_GFX942_MODREP-NOT: @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4
+; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --disable-wave-native --emit-ir=wmma_scale_f32_16x16x128_f8f6f4_kernel | %FileCheck %s --check-prefix=IR_GFX942_MODREP
 
 ; Refusal pin: gfx90a has MAI but no FP8 MFMA, so the gate must reject.
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %not raise_cli %t.hsaco --target-isa=gfx90a --emit-ir=wmma_scale_f32_16x16x128_f8f6f4_kernel 2>&1 | %FileCheck %s --check-prefix=STDERR_GFX90A
-; STDERR_GFX90A: raise_cli: kernel 'wmma_scale_f32_16x16x128_f8f6f4_kernel' failed to raise:
-; STDERR_GFX90A-SAME: v_wmma_scale_f32_16x16x128_f8f6f4
-; STDERR_GFX90A-SAME: hasFP8Insts
 
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && raise_cli %t.hsaco --target-isa=gfx1250 --emit-ir=wmma_scale_f32_16x16x128_f8f6f4_kernel 2>&1 | %FileCheck %s --check-prefix=IR
+; RUN:   && raise_cli %t.hsaco --target-isa=gfx1250 --emit-ir=wmma_scale_f32_16x16x128_f8f6f4_kernel | %FileCheck %s --check-prefix=IR
 ;
 ; Same-target (gfx1250 -> gfx1250) intrinsic-emit path, taken when
 ; hasTensorOps is true. The kernel compiles to the f8_f8 shape with
@@ -73,40 +30,14 @@
 ; The native intrinsic takes 14 args and is overloaded on D/A/B element
 ; types, so the f8_f8 form mangles to .v8f32.v16i32.v16i32.
 
-; IR-LABEL: define amdgpu_kernel void @wmma_scale_f32_16x16x128_f8f6f4_kernel(
-
-; Native scaled-WMMA: matrix_a_fmt=1 (BF8), matrix_b_fmt=0 (FP8), C_mod=0,
-; scales=0, scale_src0/1 are runtime VGPRs, reuse a/b = false.
-; IR: %wmma_scale{{[0-9]*}} = call <8 x float> @llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4.v8f32.v16i32.v16i32(
-; IR-SAME: i32 1, <16 x i32> %{{[^,]+}},
-; IR-SAME: i32 0, <16 x i32> %{{[^,]+}},
-; IR-SAME: i16 0, <8 x float> %{{[^,]+}},
-; IR-SAME: i32 0, i32 0, i32 %{{[^,]+}},
-; IR-SAME: i32 0, i32 0, i32 %{{[^,]+}},
-; IR-SAME: i1 false, i1 false)
-
-; Negative: no MFMA fallback, no non-scaled or other-K WMMA dispatch.
-; IR-NOT: @llvm.amdgcn.mfma.scale.
-; IR-NOT: @llvm.amdgcn.wmma.f32.16x16x128.f8f6f4(
-; IR-NOT: @llvm.amdgcn.wmma.f32.16x16x32.
-; IR-NOT: @llvm.amdgcn.wmma.f32.16x16x64.
-; IR-NOT: @llvm.amdgcn.wmma.f32.16x16x4.
-
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && %raise_cli %t.hsaco --target-isa=gfx950 --emit-ir=wmma_scale_f32_16x16x128_f8f6f4_kernel 2>&1 | %FileCheck %s --check-prefix=IR_GFX950
+; RUN:   && %raise_cli %t.hsaco --target-isa=gfx950 --emit-ir=wmma_scale_f32_16x16x128_f8f6f4_kernel | %FileCheck %s --check-prefix=IR_GFX950
 ;
 ; Cross-target lift fixture (gfx1250 -> gfx950), pinning the
 ; emitWMMAScaleF8F6F4toScaledMFMA path (gated on hasGfx950Insts, not
 ; hasMFMA, since gfx942 has MFMA but no scaled F8F6F4 family). The lift
 ; runs Wave32 -> Wave64 redistribution, applies C_mod, and emits the
 ; gfx950 native scaled MFMA intrinsic.
-;
-; IR_GFX950-LABEL: define amdgpu_kernel void @wmma_scale_f32_16x16x128_f8f6f4_kernel(
-; IR_GFX950: call <4 x float> @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4.
-
-; Negative: no gfx1250 scaled-WMMA or non-scaled WMMA in the gfx950 IR.
-; IR_GFX950-NOT: @llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4
-; IR_GFX950-NOT: @llvm.amdgcn.wmma.f32.16x16x
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
@@ -144,6 +75,75 @@ wmma_scale_f32_16x16x128_f8f6f4_kernel:
 	v_mov_b64_e32 v[36:37], s[48:49]
 	v_mov_b64_e32 v[38:39], s[50:51]
 	s_delay_alu instid0(VALU_DEP_1)
+; IR_GFX942-LABEL: define amdgpu_kernel void @wmma_scale_f32_16x16x128_f8f6f4_kernel(
+
+; First K-block of pass 0 pins the per-iteration emission order
+; (MFMA partial with zero accumulator, then ldexp scale, then fmuladd):
+; IR_GFX942: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.bf8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
+; IR_GFX942: sub i32 %{{[^,]+}}, 254
+; IR_GFX942: call float @llvm.ldexp.f32.i32(float 1.000000e+00, i32 %{{[^)]+}})
+; IR_GFX942: call <4 x float> @llvm.fmuladd.v4f32(
+;
+; Remaining 7 K-blocks (3 in pass 0, 4 in pass 1):
+; IR_GFX942-COUNT-7: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.bf8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
+
+; UE8M0 0xFF NaN-sentinel guard: scale byte == 255 selects qNaN.
+; IR_GFX942-DAG: icmp eq i32 %{{[^,]+}}, 255
+; IR_GFX942-DAG: select i1 %{{[^,]+}}, float +qnan, float %{{[^,]+}}
+
+; Scale-and-accumulate must stay fused as one fmuladd, not fmul + fadd.
+; IR_GFX942-NOT: fmul <4 x float>
+; IR_GFX942-NOT: fadd <4 x float>
+
+; WaveNative final per-lane select between pass 0 and pass 1.
+; IR_GFX942-DAG: icmp uge i32 %{{[^,]+}}, 32
+; IR_GFX942-DAG: select i1 %{{[^,]+}}, i32 %{{[^,]+}}, i32 %{{[^,]+}}
+
+; Lane redistribution marker (wave32 -> wave64).
+; IR_GFX942-DAG: call i32 @llvm.amdgcn.ds.bpermute(
+
+; No fall-through to the gfx1250 or gfx950 arms, no wrong fp8/bf8 combo.
+; IR_GFX942-NOT: @llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4
+; IR_GFX942-NOT: @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4
+; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.fp8.fp8
+; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.fp8.bf8
+; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.bf8.bf8
+
+; IR_GFX942_MODREP-LABEL: define amdgpu_kernel void @wmma_scale_f32_16x16x128_f8f6f4_kernel(
+; IR_GFX942_MODREP-COUNT-4: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.bf8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
+; IR_GFX942_MODREP-NOT: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.bf8.fp8(
+; IR_GFX942_MODREP-NOT: @llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4
+; IR_GFX942_MODREP-NOT: @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4
+
+; STDERR_GFX90A: raise_cli: kernel 'wmma_scale_f32_16x16x128_f8f6f4_kernel' failed to raise:
+; STDERR_GFX90A-SAME: v_wmma_scale_f32_16x16x128_f8f6f4
+; STDERR_GFX90A-SAME: hasFP8Insts
+
+; IR-LABEL: define amdgpu_kernel void @wmma_scale_f32_16x16x128_f8f6f4_kernel(
+
+; Native scaled-WMMA: matrix_a_fmt=1 (BF8), matrix_b_fmt=0 (FP8), C_mod=0,
+; scales=0, scale_src0/1 are runtime VGPRs, reuse a/b = false.
+; IR: %wmma_scale{{[0-9]*}} = call <8 x float> @llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4.v8f32.v16i32.v16i32(
+; IR-SAME: i32 1, <16 x i32> %{{[^,]+}},
+; IR-SAME: i32 0, <16 x i32> %{{[^,]+}},
+; IR-SAME: i16 0, <8 x float> %{{[^,]+}},
+; IR-SAME: i32 0, i32 0, i32 %{{[^,]+}},
+; IR-SAME: i32 0, i32 0, i32 %{{[^,]+}},
+; IR-SAME: i1 false, i1 false)
+
+; Negative: no MFMA fallback, no non-scaled or other-K WMMA dispatch.
+; IR-NOT: @llvm.amdgcn.mfma.scale.
+; IR-NOT: @llvm.amdgcn.wmma.f32.16x16x128.f8f6f4(
+; IR-NOT: @llvm.amdgcn.wmma.f32.16x16x32.
+; IR-NOT: @llvm.amdgcn.wmma.f32.16x16x64.
+; IR-NOT: @llvm.amdgcn.wmma.f32.16x16x4.
+
+; IR_GFX950-LABEL: define amdgpu_kernel void @wmma_scale_f32_16x16x128_f8f6f4_kernel(
+; IR_GFX950: call <4 x float> @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4.
+
+; Negative: no gfx1250 scaled-WMMA or non-scaled WMMA in the gfx950 IR.
+; IR_GFX950-NOT: @llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4
+; IR_GFX950-NOT: @llvm.amdgcn.wmma.f32.16x16x
 	v_wmma_scale_f32_16x16x128_f8f6f4 v[32:39], v[0:15], v[16:31], v[32:39], s42, s43 matrix_a_fmt:MATRIX_FMT_BF8
 	s_clause 0x1
 	global_store_b128 v40, v[36:39], s[40:41] offset:16

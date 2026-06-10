@@ -1,5 +1,5 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=wmma_scale_f32_16x16x128_fp4_fp4_kernel 2>&1 | %FileCheck %s --check-prefix=IR_GFX942
+; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=wmma_scale_f32_16x16x128_fp4_fp4_kernel | %FileCheck %s --check-prefix=IR_GFX942
 ;
 ; Cross-target lift (gfx1250 -> gfx942) with FP4 (E2M1) on both sides,
 ; pinning the FP4 -> FP8 (E4M3) widening branch of
@@ -7,29 +7,6 @@
 ; (sign << 7 | exp << 3 | mant << 2) with selects for the single
 ; subnormal (±0.5) and ±0; no LUT or memory access. After widening the
 ; fragment is 16 fp8 dwords / lane, so the downstream pipeline is unchanged.
-
-; IR_GFX942-LABEL: define amdgpu_kernel void @wmma_scale_f32_16x16x128_fp4_fp4_kernel(
-
-; Widening core, vectorized per source dword: subnormal-vs-normal select
-; and the mantissa-pad shift.
-; IR_GFX942-DAG: select <8 x i1>
-; IR_GFX942-DAG: shl <8 x i32>
-
-; FP4 -> fp8.fp8 MFMA dispatch, 8 K-blocks total under WaveNative.
-; IR_GFX942: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.fp8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
-; IR_GFX942-COUNT-7: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.fp8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
-
-; Scale-on-output fmuladd.
-; IR_GFX942-DAG: call <4 x float> @llvm.fmuladd.v4f32(
-
-; Negatives: no LUT/load, no other MFMA combo, no gfx950/gfx1250 dispatch.
-; IR_GFX942-NOT: @__const.
-; IR_GFX942-NOT: load i8
-; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.fp8.bf8
-; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.bf8.fp8
-; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.bf8.bf8
-; IR_GFX942-NOT: @llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4
-; IR_GFX942-NOT: @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
@@ -59,6 +36,28 @@ wmma_scale_f32_16x16x128_fp4_fp4_kernel:
 	v_mov_b64_e32 v[20:21], s[48:49]
 	v_mov_b64_e32 v[22:23], s[50:51]
 	s_delay_alu instid0(VALU_DEP_1)
+; IR_GFX942-LABEL: define amdgpu_kernel void @wmma_scale_f32_16x16x128_fp4_fp4_kernel(
+
+; Widening core, vectorized per source dword: subnormal-vs-normal select
+; and the mantissa-pad shift.
+; IR_GFX942-DAG: select <8 x i1>
+; IR_GFX942-DAG: shl <8 x i32>
+
+; FP4 -> fp8.fp8 MFMA dispatch, 8 K-blocks total under WaveNative.
+; IR_GFX942: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.fp8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
+; IR_GFX942-COUNT-7: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.fp8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
+
+; Scale-on-output fmuladd.
+; IR_GFX942-DAG: call <4 x float> @llvm.fmuladd.v4f32(
+
+; Negatives: no LUT/load, no other MFMA combo, no gfx950/gfx1250 dispatch.
+; IR_GFX942-NOT: @__const.
+; IR_GFX942-NOT: load i8
+; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.fp8.bf8
+; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.bf8.fp8
+; IR_GFX942-NOT: @llvm.amdgcn.mfma.f32.16x16x32.bf8.bf8
+; IR_GFX942-NOT: @llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4
+; IR_GFX942-NOT: @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4
 	v_wmma_scale_f32_16x16x128_f8f6f4 v[16:23], v[0:7], v[8:15], v[16:23], s42, s43 matrix_a_fmt:MATRIX_FMT_FP4 matrix_b_fmt:MATRIX_FMT_FP4
 	s_clause 0x1
 	global_store_b128 v40, v[20:23], s[40:41] offset:16

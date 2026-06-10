@@ -1,20 +1,11 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=wmma_scale_inline0_kernel 2>&1 | %FileCheck %s --check-prefix=IR_GFX942
+; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=wmma_scale_inline0_kernel | %FileCheck %s --check-prefix=IR_GFX942
 ;
 ; Inline-0 scale-source fixture. An inline 0 for scale_src0 / scale_src1
 ; means "scale = 1.0 per K-block", encoded as packed 0x7f bytes (E8M0
 ; 0x7f = 2^0), not the raw i32 0 (which would decode as 2^-127). The
 ; constant short-circuits the per-pass bpermute and folds through the
 ; E8M0 decode to ldexp(1.0, 0).
-
-; IR_GFX942-LABEL: define amdgpu_kernel void @wmma_scale_inline0_kernel(
-
-; IR_GFX942-DAG: call float @llvm.ldexp.f32.i32(float 1.000000e+00, i32 0)
-
-; Negative: no bpermute carries a constant scale payload.
-; IR_GFX942-NOT: call i32 @llvm.amdgcn.ds.bpermute(i32 %{{[^,]+}}, i32 2139062143)
-; IR_GFX942-NOT: call i32 @llvm.amdgcn.ds.bpermute(i32 %{{[^,]+}}, i32 0)
-; IR_GFX942-NOT: call i32 @llvm.amdgcn.ds.bpermute(i32 %{{[^,]+}}, i32 -16843010)
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
@@ -50,6 +41,14 @@ wmma_scale_inline0_kernel:
 	v_mov_b64_e32 v[28:29], s[48:49]
 	v_mov_b64_e32 v[30:31], s[50:51]
 	s_delay_alu instid0(VALU_DEP_1)
+; IR_GFX942-LABEL: define amdgpu_kernel void @wmma_scale_inline0_kernel(
+
+; IR_GFX942-DAG: call float @llvm.ldexp.f32.i32(float 1.000000e+00, i32 0)
+
+; Negative: no bpermute carries a constant scale payload.
+; IR_GFX942-NOT: call i32 @llvm.amdgcn.ds.bpermute(i32 %{{[^,]+}}, i32 2139062143)
+; IR_GFX942-NOT: call i32 @llvm.amdgcn.ds.bpermute(i32 %{{[^,]+}}, i32 0)
+; IR_GFX942-NOT: call i32 @llvm.amdgcn.ds.bpermute(i32 %{{[^,]+}}, i32 -16843010)
 	v_wmma_scale_f32_16x16x128_f8f6f4 v[24:31], v[0:15], v[16:31], v[24:31], 0, 0 matrix_a_fmt:MATRIX_FMT_BF8
 	s_clause 0x1
 	global_store_b128 v40, v[28:31], s[40:41] offset:16

@@ -244,18 +244,12 @@ llvm::Value *emitWMMAScaleF8F6F4toScaledMFMA(
     unsigned bDwords);
 
 /// Cross-target gfx1250 -> gfx942 lowering for
-/// `v_wmma_scale_f32_16x16x128_f8f6f4`.
-///
-/// gfx942 has neither the scaled-WMMA (gfx1250) nor scaled-MFMA F8F6F4
-/// (gfx950) family, only the unscaled K=32 fp8/bf8 MFMA family. The emitter
-/// decomposes the K=128 WMMA into 4 K=32 MFMAs, widens FP6/BF6/FP4 inputs to
-/// FP8/BF8 in-line, and applies the per-K-block scale on each partial via
-/// fmuladd. Covers {FP8,BF8,FP6,BF6,FP4}^2 with scale formats E8M0 / E4M3
-/// (E5M3 deferred).
-///
-/// \returns `<8 x float>` in wave32 D-layout, or `nullptr` for
-///          unsupported configurations (caller emits
-///          unsupportedInstructionForm).
+/// `v_wmma_scale_f32_16x16x128_f8f6f4`. gfx942 has only the unscaled K=32
+/// fp8/bf8 MFMA family, so this decomposes K=128 into 4 K=32 MFMAs, widens
+/// FP6/BF6/FP4 to FP8/BF8 in-line, and applies the per-K-block scale via
+/// fmuladd. Covers {FP8,BF8,FP6,BF6,FP4}^2, scale formats E8M0 / E4M3
+/// (E5M3 deferred). Returns `<8 x float>` in wave32 D-layout, or nullptr for
+/// unsupported configurations.
 llvm::Value *emitWMMAScaleF8F6F4toMFMA(
     RaiseContext &ctx, llvm::Value *a, llvm::Value *b, llvm::Value *c,
     llvm::Value *matrixAFmt, llvm::Value *matrixBFmt, llvm::Value *cMod,
