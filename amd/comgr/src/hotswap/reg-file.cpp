@@ -426,9 +426,12 @@ void AllocaRegFile::writeReg32(IRBuilder<> &B, ParsedReg Pr, Value *V) {
   if (Pr.RegKind == ParsedReg::VGPR) { storeVGPR32(B, Pr.BaseIdx, V); return; }
   if (Pr.RegKind == ParsedReg::AGPR) { storeAGPR32(B, Pr.BaseIdx, V); return; }
   if (Pr.RegKind == ParsedReg::VCC_HI_SCRATCH) {
+    // Wave32-source VCC_HI is a plain 32-bit data scalar (like an SGPR), so
+    // it never receives a pointer -- those only arise on address/control-flow
+    // registers (EXEC, SGPR pairs). Coerce any non-i32 scalar width to i32.
+    assert(!V->getType()->isPointerTy() &&
+           "VCC_HI_SCRATCH is a data scalar; pointer writes are a raiser bug");
     if (V->getType() != B.getInt32Ty()) {
-      if (V->getType()->isPointerTy())
-        V = B.CreatePtrToInt(V, B.getInt64Ty());
       unsigned Bits = V->getType()->getPrimitiveSizeInBits();
       V = Bits > 32 ? B.CreateTrunc(V, B.getInt32Ty())
                     : (Bits < 32 ? B.CreateZExt(V, B.getInt32Ty())
