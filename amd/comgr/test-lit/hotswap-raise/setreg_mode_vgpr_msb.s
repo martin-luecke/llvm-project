@@ -15,7 +15,9 @@
 ; dead-code elimination (DCE).
 
 ; CHECK-LABEL: define amdgpu_kernel void @setreg_mode_vgpr_msb_kernel(
-; CHECK: %Vgpr256{{[._0-9]*}} = phi i32 [ %cwd_writelane_rewritten
+; CHECK: [[V256:%Vgpr256[._0-9]*]] = phi i32 [ %cwd_writelane_rewritten
+; CHECK: [[V1:%Vgpr1[._0-9]*]] = phi i32 [ [[V256]]
+; CHECK: store i32 [[V1]], ptr addrspace(1)
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
