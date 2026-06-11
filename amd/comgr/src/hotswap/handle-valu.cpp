@@ -233,6 +233,13 @@ Value *readCarryInI1(RaiseContext &Ctx, const DecodedInst &Di,
         return Ctx.Projection.extractLaneBitFromWaveMask(Ctx.B, CondVal);
       }
       break;
+    case ParsedReg::VCC_HI_SCRATCH:
+    case ParsedReg::EXEC_HI_SCRATCH: {
+      // Wave32-source vcc_hi / exec_hi scratch (see ParsedReg::VCC_HI_SCRATCH):
+      // read the scratch slot and project per-lane, not loadVCC.
+      Value *CondVal = Ctx.Regs.readReg32(Ctx.B, CarryReg);
+      return Ctx.Projection.extractLaneBitFromWaveMask(Ctx.B, CondVal);
+    }
     case ParsedReg::NOREG:
       return ConstantInt::getFalse(Ctx.B.getInt1Ty());
     default:

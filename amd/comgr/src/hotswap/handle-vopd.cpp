@@ -84,6 +84,21 @@ Value *applyVopdSourceModifiers(RaiseContext &Ctx, Value *V,
   return V;
 }
 
+// Returns VCC_HI_SCRATCH / EXEC_HI_SCRATCH if Src is a wave32 vcc_hi/exec_hi
+// scratch scalar (the VOPD decoder reports both as Kind::VCC/EXEC but preserves
+// the raw reg in Src.Reg), otherwise OTHER. See ParsedReg::VCC_HI_SCRATCH.
+ParsedReg::Kind wave32HiScratchKind(RaiseContext &Ctx,
+                                    const DecodedInst::VopdSource &Src) {
+  if (!Ctx.Isa.isWave32() || !Src.Reg)
+    return ParsedReg::OTHER;
+  unsigned PseudoReg = AMDGPU::mc2PseudoReg(Src.Reg);
+  if (PseudoReg == AMDGPU::VCC_HI)
+    return ParsedReg::VCC_HI_SCRATCH;
+  if (PseudoReg == AMDGPU::EXEC_HI)
+    return ParsedReg::EXEC_HI_SCRATCH;
+  return ParsedReg::OTHER;
+}
+
 Value *readVopdSource(RaiseContext &Ctx, const DecodedInst::VopdSource &Src,
                       unsigned SrcSlot) {
   Value *V = nullptr;
@@ -114,11 +129,20 @@ Value *readVopdSource(RaiseContext &Ctx, const DecodedInst::VopdSource &Src,
     V = Ctx.B.CreateLoad(Ctx.I32Ty, Ctx.Regs.Ttmp[Src.BaseIdx], "vopd_ttmp");
     break;
   case DecodedInst::VopdSource::Kind::VCC:
-    V = readVopdVCCAsSource(Ctx);
+    if (wave32HiScratchKind(Ctx, Src) == ParsedReg::VCC_HI_SCRATCH) {
+      ParsedReg Pr;
+      Pr.RegKind = ParsedReg::VCC_HI_SCRATCH;
+      V = Ctx.Regs.readReg32(Ctx.B, Pr);
+    } else {
+      V = readVopdVCCAsSource(Ctx);
+    }
     break;
   case DecodedInst::VopdSource::Kind::EXEC: {
     ParsedReg Pr;
-    Pr.RegKind = ParsedReg::EXEC;
+    // Wave32 exec_hi is a scratch scalar, not a half of the EXEC mask.
+    Pr.RegKind = wave32HiScratchKind(Ctx, Src) == ParsedReg::EXEC_HI_SCRATCH
+                     ? ParsedReg::EXEC_HI_SCRATCH
+                     : ParsedReg::EXEC;
     Pr.BaseIdx = Src.BaseIdx;
     Pr.Width = Src.Width;
     V = Ctx.Regs.readReg32(Ctx.B, Pr);
@@ -178,8 +202,16 @@ Value *readVopdCond(RaiseContext &Ctx, const DecodedInst &Di,
         Di, "VOPD", "VOPD cndmask explicit condition is neither VCC nor SGPR");
     return nullptr;
   }
-  if (Src.SrcKind == DecodedInst::VopdSource::Kind::VCC)
+  if (Src.SrcKind == DecodedInst::VopdSource::Kind::VCC) {
+    if (wave32HiScratchKind(Ctx, Src) == ParsedReg::VCC_HI_SCRATCH) {
+      // Wave32 vcc_hi scratch condition: project the scratch slot per-lane.
+      ParsedReg Pr;
+      Pr.RegKind = ParsedReg::VCC_HI_SCRATCH;
+      Value *CondVal = Ctx.Regs.readReg32(Ctx.B, Pr);
+      return Ctx.Projection.extractLaneBitFromWaveMask(Ctx.B, CondVal);
+    }
     return Ctx.Regs.loadVCC(Ctx.B);
+  }
 
   if (Value *FreshCmp = Ctx.lookupSgprWaveMaskI1(Src.BaseIdx))
     return FreshCmp;
