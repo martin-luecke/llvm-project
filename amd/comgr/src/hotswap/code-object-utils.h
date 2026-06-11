@@ -38,6 +38,13 @@ struct TextSection {
   llvm::SmallVector<uint8_t> Bytes;
 };
 
+/// Resolved text-section extent for a kernel symbol. `Offset` is relative to
+/// `.text`; `Size` bounds decoding to the selected symbol's byte range.
+struct KernelSymbolExtent {
+  uint64_t Offset = 0;
+  uint64_t Size = 0;
+};
+
 /// One entry of the kernel argument table extracted from the AMDGPU MsgPack
 /// notes. Mirrors the AMDHSA `.args` schema; absent fields stay at the
 /// constructor defaults below.
@@ -153,6 +160,13 @@ llvm::Expected<KernelMeta> extractKernelMeta(llvm::MemoryBufferRef ElfData,
 /// `.text` section of `ElfData`.
 llvm::Expected<uint64_t> findKernelSymbolOffset(llvm::MemoryBufferRef ElfData,
                                                 llvm::StringRef KernelName);
+
+/// Resolve the byte offset and byte extent for `KernelName` within `.text`.
+/// When the ELF symbol size is missing or zero, the extent is bounded by the
+/// next `.text` function symbol where possible.
+llvm::Expected<KernelSymbolExtent>
+findKernelSymbolExtent(llvm::MemoryBufferRef ElfData,
+                       llvm::StringRef KernelName);
 
 } // namespace COMGR::hotswap
 
