@@ -1186,7 +1186,20 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
       BasicBlock *InsertBb = B.GetInsertBlock();
       if (!InsertBb->hasTerminator())
         B.CreateBr(BbIt->second);
-      B.SetInsertPoint(BbIt->second);
+      // A handler may have already terminated this leader (e.g. a waterfall
+      // back-edge); emit the fall-through stub body before that terminator,
+      // not after it.  Restore the debug location afterward: unlike the
+      // BasicBlock* overload, SetInsertPoint(Instruction*) adopts the
+      // terminator's debug location, and as raised IR carries no debug info
+      // that stale node would propagate onto following instructions and
+      // produce verifier-invalid !dbg attachments.
+      if (BbIt->second->getTerminator()) {
+        DebugLoc SavedDL = B.getCurrentDebugLocation();
+        B.SetInsertPoint(BbIt->second->getTerminator());
+        B.SetCurrentDebugLocation(SavedDL);
+      } else {
+        B.SetInsertPoint(BbIt->second);
+      }
       // LLVM's AMDGPULowerVGPREncoding pass resets VGPR MSB mode at every
       // basic-block boundary (both before terminators and at BB fall-through
       // exits).  Mirror that behaviour so we do not inherit stale MSB state
