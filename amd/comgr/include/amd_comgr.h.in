@@ -2900,6 +2900,14 @@ typedef enum amd_comgr_hotswap_transpile_option_flags_s {
    * Enable HotSwap strict mode for unsafe lowering refusals.
    */
   AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_STRICT = 1u << 2,
+  /**
+   * Only consult the translation cache: on a cache miss, fail immediately with
+   * @c AMD_COMGR_STATUS_ERROR instead of running the (expensive) transpile
+   * pipeline. Lets latency-sensitive callers (e.g. a runtime fatbin
+   * interposer) keep registration cheap while an out-of-band pre-population
+   * pass fills the cache.
+   */
+  AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_CACHE_LOOKUP_ONLY = 1u << 3,
 } amd_comgr_hotswap_transpile_option_flags_t;
 
 /**

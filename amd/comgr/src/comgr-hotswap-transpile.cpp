@@ -531,6 +531,21 @@ amd_comgr_status_t AMD_COMGR_API amd_comgr_hotswap_transpile_with_options(
     if (Lookup.Status == COMGR::hotswap::TranslationCacheStatus::Hit) {
       Pipeline = std::move(Lookup.Result);
       CacheHit = true;
+    } else if (hasFlag(
+                   options,
+                   AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_CACHE_LOOKUP_ONLY)) {
+      // Lookup-only: do not run the transpile pipeline on a miss.
+      HotswapTranspileResult Result;
+      fillResult(Result, CacheRequest.SourceGfx, CacheRequest.TargetGfx, false,
+                 false, lookupStatusFromCacheStatus(Lookup.Status),
+                 AMD_COMGR_HOTSWAP_CACHE_WRITE_NOT_ATTEMPTED,
+                 "cache lookup-only miss", nullptr, Lookup.key,
+                 Lookup.MetadataPath, Lookup.ObjectPath, "cache_lookup_only_miss",
+                 Lookup.Reason, finalTimingJson());
+      if (amd_comgr_status_t ResultStatus =
+              returnResult(std::move(Result), result))
+        return ResultStatus;
+      return AMD_COMGR_STATUS_ERROR;
     }
   }
 

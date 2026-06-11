@@ -647,7 +647,17 @@ PipelineResult runPipelineAllKernels(llvm::MemoryBufferRef codeObjectData,
                                  codeObjectData.getBufferStart()),
                              codeObjectData.getBufferSize()));
 
+  // When set, kernels that fail to raise/compile are skipped instead of
+  // aborting the whole object. This lets a code object that mixes supported
+  // kernels (e.g. fp32 elementwise) with currently-unsupported ones (e.g. f64
+  // transcendentals) still produce a usable transpiled object containing the
+  // supported kernels. Skipped kernels are simply absent from the merged
+  // object; launching one fails at dispatch time rather than at load time.
+  static const char *s_skipFailed = std::getenv("HSA_HOTSWAP_SKIP_FAILED");
+  const bool skipFailed = s_skipFailed && s_skipFailed[0] == '1';
+
   std::vector<std::string> objPaths;
+  size_t skipped = 0;
   for (size_t i = 0; i < kernelNames.size(); ++i) {
     const auto &kName = kernelNames[i];
     std::string objPath = tmpDir.filePath("k" + std::to_string(i) + ".o");
@@ -659,12 +669,26 @@ PipelineResult runPipelineAllKernels(llvm::MemoryBufferRef codeObjectData,
                                sourceISA, targetISA, tmpDir, objPath, result,
                                options)) {
       LLVM_DEBUG(llvm::dbgs() << "FAILED\n");
+      if (skipFailed) {
+        ++skipped;
+        continue;
+      }
       result.Success = false;
       return finish();
     }
     LLVM_DEBUG(llvm::dbgs() << "OK\n");
     objPaths.push_back(std::move(objPath));
   }
+
+  if (objPaths.empty()) {
+    llvm::errs() << "transpiler: all " << kernelNames.size()
+                 << " kernel(s) failed to transpile\n";
+    result.Success = false;
+    return finish();
+  }
+  if (skipped)
+    llvm::errs() << "transpiler: skipped " << skipped << "/"
+                 << kernelNames.size() << " unsupported kernel(s)\n";
 
   std::string hsacoPath = tmpDir.filePath("merged.Hsaco");
   auto linkStart = timingStart(options.CollectTimings);
