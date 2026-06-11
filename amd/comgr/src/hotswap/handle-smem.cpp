@@ -284,8 +284,15 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
     }
 
     unsigned OffIdx = Op.srcIdx(1);
-    Value *Offset = Di.isImm(OffIdx) ? Ctx.B.getInt32(Op.srcImm(1))
-                                     : Op.src(1);
+    Value *Offset = nullptr;
+    if (Di.isImm(OffIdx)) {
+      Offset = Ctx.B.getInt32(Op.srcImm(1));
+    } else {
+      Offset = Op.src(1);
+      if (Di.HasScaleOffset)
+        Offset = Ctx.B.CreateMul(Offset, Ctx.B.getInt32(LoadDwords * 4),
+                                 "sbuffer_roff_scaled");
+    }
     Type *LoadTy = LoadDwords == 1
                        ? Ctx.I32Ty
                        : static_cast<Type *>(
