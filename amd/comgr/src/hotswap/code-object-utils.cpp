@@ -14,8 +14,8 @@
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/BinaryFormat/MsgPackDocument.h"
+#include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/ObjectFile.h"
-#include "llvm/Object/SymbolSize.h"
 #include "llvm/Support/AMDHSAKernelDescriptor.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/raw_ostream.h"
@@ -309,15 +309,15 @@ findKernelSymbolExtent(llvm::MemoryBufferRef ElfData,
     llvm::Expected<llvm::StringRef> NameOrErr = Sec.getName();
     if (!NameOrErr)
       return NameOrErr.takeError();
-    if (*NameOrErr == ".text") {
-      TextSec = Sec;
-      TextBase = Sec.getAddress();
-      if (Sec.getSize() > UINT64_MAX - TextBase)
-        return makeHotswapError(
-            "findKernelSymbolExtent: .text address range overflows");
-      TextEnd = TextBase + Sec.getSize();
-      break;
-    }
+    if (*NameOrErr != ".text")
+      continue;
+    TextSec = Sec;
+    TextBase = Sec.getAddress();
+    if (Sec.getSize() > UINT64_MAX - TextBase)
+      return makeHotswapError(
+          "findKernelSymbolExtent: .text address range overflows");
+    TextEnd = TextBase + Sec.getSize();
+    break;
   }
   if (TextBase == UINT64_MAX)
     return makeHotswapError("findKernelSymbolExtent: no .text section in ELF");
@@ -343,14 +343,7 @@ findKernelSymbolExtent(llvm::MemoryBufferRef ElfData,
   KernelSymbolExtent Extent;
   Extent.Offset = *AddrOrErr - TextBase;
 
-  uint64_t SymbolSize = 0;
-  for (const auto &SymbolAndSize :
-       llvm::object::computeSymbolSizes(**ObjOrErr)) {
-    if (SymbolAndSize.first == *SymOrErr) {
-      SymbolSize = SymbolAndSize.second;
-      break;
-    }
-  }
+  uint64_t SymbolSize = llvm::object::ELFSymbolRef(*SymOrErr).getSize();
   if (SymbolSize != 0) {
     if (SymbolSize > TextEnd - *AddrOrErr)
       return makeHotswapError("findKernelSymbolExtent: symbol '" + KernelName +

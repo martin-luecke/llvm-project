@@ -469,7 +469,7 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   // decode did not reach. Decode every newly-discovered in-kernel target to a
   // fixpoint; crossing the selected symbol extent is a boundary violation, and
   // an in-extent target that cannot decode is a hard CFG recovery failure.
-  for (;;) {
+  while (true) {
     SetpcAnalysis = analyseSetPC(Insts, BlockStarts, Mc);
     llvm::DenseSet<uint64_t> InstOffsets = collectInstructionOffsets(Insts);
     bool AddedHelperRegion = false;
@@ -500,7 +500,6 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
     if (!AddedHelperRegion)
       break;
   }
-  SetpcAnalysis = analyseSetPC(Insts, BlockStarts, Mc);
   for (uint64_t Addr : SetpcAnalysis.ExtraBlockStarts) {
     if (Addr < KernelOffset || Addr >= DecodeLimit) {
       Result.Failure = RaiseFailure::kernelBoundaryViolation(

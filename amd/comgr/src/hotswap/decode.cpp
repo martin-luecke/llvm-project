@@ -29,6 +29,7 @@
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Format.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <climits>
@@ -663,7 +664,7 @@ void collectBranchTargets(const DecodedInst &Di, uint64_t Off,
     int64_t Imm = Inst.getOperand(0).getImm();
     uint64_t Target = 0;
     if (Imm < 0) {
-      uint64_t Back = static_cast<uint64_t>(-(Imm + 1)) + 1;
+      uint64_t Back = llvm::AbsoluteValue(Imm);
       if (Back > Base)
         return;
       Target = Base - Back;

@@ -11,6 +11,7 @@
 #include "SIDefines.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
+#include "llvm/Support/MathExtras.h"
 
 #include <climits>
 
@@ -22,8 +23,7 @@ namespace {
 
 bool computeSoppTarget(const DecodedInst &Di, uint64_t &Target) {
   int64_t Raw = Di.getImm(0);
-  int64_t BrOff = static_cast<int64_t>(
-      static_cast<int16_t>(static_cast<uint16_t>(Raw & 0xFFFF)));
+  int64_t BrOff = SignExtend64<16>(static_cast<uint64_t>(Raw));
   if (Di.Offset > UINT64_MAX - 4)
     return false;
   uint64_t Base = Di.Offset + 4;
