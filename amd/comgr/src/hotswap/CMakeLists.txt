@@ -52,6 +52,19 @@ else()
   find_package(LLVM REQUIRED CONFIG)
 endif()
 
+# Out-of-tree against an install/dist LLVM (e.g. TheRock): it exposes imported
+# targets + public headers but not the AMDGPU private/generated headers the
+# raiser needs. Let the super-project point us at the LLVM build/source trees
+# (imported targets still come from the find_package above).
+if(DEFINED HOTSWAP_LLVM_BUILD_DIR AND HOTSWAP_LLVM_BUILD_DIR)
+  set(LLVM_BINARY_DIR "${HOTSWAP_LLVM_BUILD_DIR}")
+  message(STATUS "Hotswap LLVM build tree override: ${LLVM_BINARY_DIR}")
+endif()
+if(DEFINED HOTSWAP_LLVM_SRC_DIR AND HOTSWAP_LLVM_SRC_DIR)
+  set(LLVM_BUILD_MAIN_SRC_DIR "${HOTSWAP_LLVM_SRC_DIR}")
+  message(STATUS "Hotswap LLVM source tree override: ${LLVM_BUILD_MAIN_SRC_DIR}")
+endif()
+
 if(NOT DEFINED LLVM_BUILD_MAIN_SRC_DIR OR NOT LLVM_BUILD_MAIN_SRC_DIR OR
    NOT DEFINED LLVM_BINARY_DIR OR NOT LLVM_BINARY_DIR)
   message(FATAL_ERROR
@@ -321,3 +334,29 @@ target_link_libraries(hotswap-transpiler
 # Per-file gtests live under amd/comgr/test-unit/ and follow the 3-tier
 # llvm_gtest / find_package(GTest CONFIG) / LLVM-installed fallback discovery
 # there. No standalone gtest target lives in this subdirectory.
+
+# HSA_TOOLS_LIB hotswap tool (libamd_comgr_hotswap_tool.so): ROCR loads it via
+# HSA_TOOLS_LIB; it wraps hsa_code_object_reader_create_from_memory and per code
+# object does TRANSPILE / REWRITE / PASS through the comgr hotswap APIs. Built
+# here (coupled to comgr); gated by HOTSWAP_BUILD_TOOL. HSA headers come from
+# HOTSWAP_TOOL_HSA_INCLUDE_ROOT, supplied by the super-project.
+option(HOTSWAP_BUILD_TOOL "Build the HSA_TOOLS_LIB hotswap tool" ON)
+if(HOTSWAP_BUILD_TOOL)
+  # Need inc/hsa.h; skip gracefully (rather than fail the build) when the HSA
+  # headers are unavailable, e.g. a comgr build without HSA_TOOLS support.
+  find_path(HOTSWAP_TOOL_HSA_INC inc/hsa.h HINTS "${HOTSWAP_TOOL_HSA_INCLUDE_ROOT}")
+  if(NOT HOTSWAP_TOOL_HSA_INC)
+    message(STATUS "HotSwap tool: inc/hsa.h not found; skipping amd_comgr_hotswap_tool")
+  else()
+    add_library(amd_comgr_hotswap_tool SHARED comgr-hotswap-tool.cpp)
+    set_target_properties(amd_comgr_hotswap_tool PROPERTIES
+      CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
+    target_include_directories(amd_comgr_hotswap_tool PRIVATE
+      "${HOTSWAP_TOOL_HSA_INC}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/../.."          # comgr src (amd_comgr.h consumers)
+      "${HOTSWAP_COMGR_BINARY_DIR}/include")       # generated amd_comgr.h
+    target_link_libraries(amd_comgr_hotswap_tool PRIVATE amd_comgr)
+    install(TARGETS amd_comgr_hotswap_tool
+      LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT amd-comgr)
+  endif()
+endif()
