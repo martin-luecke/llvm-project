@@ -26,6 +26,7 @@
 #include <cstdlib>
 #include <set>
 #include <string>
+#include <vector>
 
 #define DEBUG_TYPE "transpiler"
 
@@ -607,6 +608,15 @@ bool parseKernelAllowlist(llvm::StringRef Spec, std::set<std::string> &Out,
   return true;
 }
 
+void setKernelAllowlistFailure(PipelineResult &Result,
+                               llvm::StringRef Detail) {
+  Result.FailKernel = "__kernel_allowlist__";
+  Result.FailMnemonic = "__kernel_allowlist__";
+  Result.FailReason = "KernelAllowlistInvalid";
+  Result.FailFormat = "KernelAllowlistInvalid";
+  Result.FailDetail = Detail.str();
+}
+
 void collectTargetPrivateSegmentMetadata(PipelineResult &result,
                                          llvm::ArrayRef<std::string> kernelNames) {
   using namespace llvm::amdhsa;
@@ -745,11 +755,26 @@ PipelineResult runPipelineAllKernels(llvm::MemoryBufferRef codeObjectData,
     if (!parseKernelAllowlist(options.KernelAllowlist, Allowlist,
                               AllowlistError)) {
       llvm::errs() << "transpiler: " << AllowlistError << "\n";
-      result.FailKernel = "__kernel_allowlist__";
-      result.FailMnemonic = "__kernel_allowlist__";
-      result.FailReason = "KernelAllowlistInvalid";
-      result.FailFormat = "KernelAllowlistInvalid";
-      result.FailDetail = AllowlistError;
+      setKernelAllowlistFailure(result, AllowlistError);
+      return finish();
+    }
+    if (Allowlist.empty()) {
+      std::string Detail = "kernel allowlist did not name any kernels";
+      llvm::errs() << "transpiler: " << Detail << "\n";
+      setKernelAllowlistFailure(result, Detail);
+      return finish();
+    }
+    std::set<std::string> KnownKernelNames(kernelNames.begin(),
+                                           kernelNames.end());
+    std::vector<std::string> UnknownNames;
+    for (const std::string &Name : Allowlist)
+      if (!KnownKernelNames.count(Name))
+        UnknownNames.push_back(Name);
+    if (!UnknownNames.empty()) {
+      std::string Detail = "kernel allowlist contains unknown kernel(s): " +
+                           llvm::join(UnknownNames, ", ");
+      llvm::errs() << "transpiler: " << Detail << "\n";
+      setKernelAllowlistFailure(result, Detail);
       return finish();
     }
     LLVM_DEBUG(llvm::dbgs() << "transpiler: Kernel allowlist mode enabled for "
@@ -803,7 +828,15 @@ PipelineResult runPipelineAllKernels(llvm::MemoryBufferRef codeObjectData,
         objPaths.push_back(std::move(objPath));
     } else {
       auto metaOrErr = extractKernelMeta(codeObjectData, kName);
-      KernelMeta meta = metaOrErr ? std::move(*metaOrErr) : KernelMeta{};
+      if (!metaOrErr) {
+        std::string Detail =
+            "failed to read metadata for trap-stubbed kernel '" + kName +
+            "': " + llvm::toString(metaOrErr.takeError());
+        llvm::errs() << "transpiler: " << Detail << "\n";
+        setKernelAllowlistFailure(result, Detail);
+        return finish();
+      }
+      KernelMeta meta = std::move(*metaOrErr);
       TrapStubs.push_back({kName, std::move(meta)});
       Ok = true;
     }
