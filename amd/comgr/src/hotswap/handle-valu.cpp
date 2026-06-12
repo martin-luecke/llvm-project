@@ -108,6 +108,53 @@ std::optional<True16OpSel> readTrue16OpSel(const DecodedInst &Di,
   return Sel;
 }
 
+struct True16TernaryOpSel {
+  bool Src0Hi = false;
+  bool Src1Hi = false;
+  bool Src2Hi = false;
+  bool DstHi = false;
+};
+
+// Ternary analogue of readTrue16OpSel: src0..src2 each carry an op_sel bit
+// selecting their i16 half, and src0 additionally carries the dst op_sel bit.
+// Any modifier other than op_sel is refused rather than silently dropped.
+std::optional<True16TernaryOpSel>
+readTrue16TernaryOpSel(const DecodedInst &Di, OpResolver &Op,
+                       HandlerResult &Hr, StringRef OpName) {
+  if (Op.nSrcs() < 3) {
+    Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+        Di, "VOP3",
+        (Twine(OpName) +
+         " has too few source operands; expected src0/src1/src2")
+            .str());
+    return std::nullopt;
+  }
+
+  unsigned Src0Mods = Op.srcMod(0);
+  unsigned Src1Mods = Op.srcMod(1);
+  unsigned Src2Mods = Op.srcMod(2);
+  constexpr unsigned AllowedSrc0Mods =
+      SISrcMods::OP_SEL_0 | SISrcMods::DST_OP_SEL;
+  constexpr unsigned AllowedSrcMods = SISrcMods::OP_SEL_0;
+  if ((Src0Mods & ~AllowedSrc0Mods) != 0 ||
+      (Src1Mods & ~AllowedSrcMods) != 0 ||
+      (Src2Mods & ~AllowedSrcMods) != 0) {
+    Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+        Di, "VOP3",
+        (Twine(OpName) +
+         " has unsupported source modifiers; only op_sel bits are modeled")
+            .str());
+    return std::nullopt;
+  }
+
+  True16TernaryOpSel Sel;
+  Sel.Src0Hi = (Src0Mods & SISrcMods::OP_SEL_0) != 0;
+  Sel.Src1Hi = (Src1Mods & SISrcMods::OP_SEL_0) != 0;
+  Sel.Src2Hi = (Src2Mods & SISrcMods::OP_SEL_0) != 0;
+  Sel.DstHi = (Src0Mods & SISrcMods::DST_OP_SEL) != 0;
+  return Sel;
+}
+
 // Extract the selected true16 source half from the containing 32-bit value.
 Value *extractU16Half(RaiseContext &Ctx, Value *Bits, bool HighHalf) {
   if (HighHalf)
@@ -2035,6 +2082,53 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Hr.Handled = true;
     return Hr;
   }
+  // VOP3 true16 unsigned multiply-add with op_sel half selection on all
+  // sources and dst. Unclamped hardware wraps to 16 bits; clamp=1 saturates to
+  // 0xffff before writing the selected half.
+  if (Sop == CanonicalOp::V_MAD_U16) {
+    StringRef OpName = "v_mad_u16";
+    std::optional<bool> Clamp = readVOP3Clamp(Di, Hr, OpName);
+    if (!Clamp)
+      return Hr;
+    std::optional<True16TernaryOpSel> Sel =
+        readTrue16TernaryOpSel(Di, Op, Hr, OpName);
+    if (!Sel)
+      return Hr;
+
+    Type *I16Ty = Type::getInt16Ty(Ctx.C);
+    Value *A = extractU16Half(Ctx, Op.src(0), Sel->Src0Hi);
+    Value *B = extractU16Half(Ctx, Op.src(1), Sel->Src1Hi);
+    Value *C = extractU16Half(Ctx, Op.src(2), Sel->Src2Hi);
+    Value *Result = nullptr;
+    if (*Clamp) {
+      // i32 holds the exact product+sum: 0xFFFF*0xFFFF + 0xFFFF = 0xFFFF0000,
+      // which fits in u32, so the clamp below sees the true value (no pre-clamp
+      // wraparound, and no need for the i64 widening v_mad_i32_i24 requires).
+      // All inputs are unsigned so only the upper bound can be exceeded; a
+      // single llvm.umin to 0xffff is the full unsigned saturation.
+      Value *WideA = Ctx.B.CreateZExt(A, Ctx.I32Ty, "mad_u16_a_wide");
+      Value *WideB = Ctx.B.CreateZExt(B, Ctx.I32Ty, "mad_u16_b_wide");
+      Value *WideC = Ctx.B.CreateZExt(C, Ctx.I32Ty, "mad_u16_c_wide");
+      Value *Wide = Ctx.B.CreateAdd(
+          Ctx.B.CreateMul(WideA, WideB, "mad_u16_mul_wide"), WideC,
+          "mad_u16_wide");
+      Function *UminFn =
+          Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::umin,
+                                            {Ctx.I32Ty});
+      Value *Sat = Ctx.B.CreateCall(
+          UminFn, {Wide, ConstantInt::get(Ctx.I32Ty, 0xFFFFu)},
+          "mad_u16_clamp");
+      Result = Ctx.B.CreateTrunc(Sat, I16Ty, "mad_u16_clamp_i16");
+    } else {
+      Result = Ctx.B.CreateAdd(Ctx.B.CreateMul(A, B, "mad_u16_mul"), C,
+                               "mad_u16");
+    }
+    writeSelectedU16Half(Ctx, Op.dst(), Result, Sel->DstHi,
+                         Sel->DstHi ? "mad_u16_merge_hi"
+                                    : "mad_u16_merge_lo");
+    Hr.Handled = true;
+    return Hr;
+  }
   // gfx1250 v_add_min/max_s/u32: dst = (s/u)(min/max)((s/u)addsat(src0, src1), src2).
   //
   // LLVM also exposes llvm.amdgcn.add.(min/max).(i/u)32 with an immediate clamp bit, but
@@ -2136,6 +2230,31 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Value *M01 = Ctx.B.CreateCall(SmaxFn, {S0, S1}, "vmax3_i32_lo");
     Ctx.writeReg32(Op.dst(),
                    Ctx.B.CreateCall(SmaxFn, {M01, S2}, "vmax3_i32"));
+    Hr.Handled = true;
+    return Hr;
+  }
+  // VOP3 true16 signed 3-way max: smax(smax(src0, src1), src2). op_sel selects
+  // the i16 half of each source and the dst half that receives the result; the
+  // other dst half is preserved per the RDNA3+ true16 ISA. The clamp bit is a
+  // structural no-op here -- the signed max of in-range i16 inputs is already in
+  // range -- so it is intentionally not read, matching the V_MAX3_U32 sibling
+  // above and the packed V_PK_MAX_I16/V_PK_MAX3_I16 forms.
+  if (Sop == CanonicalOp::V_MAX3_I16) {
+    std::optional<True16TernaryOpSel> Sel =
+        readTrue16TernaryOpSel(Di, Op, Hr, "v_max3_i16");
+    if (!Sel)
+      return Hr;
+    Type *I16Ty = Type::getInt16Ty(Ctx.C);
+    Value *S0 = extractU16Half(Ctx, Op.src(0), Sel->Src0Hi);
+    Value *S1 = extractU16Half(Ctx, Op.src(1), Sel->Src1Hi);
+    Value *S2 = extractU16Half(Ctx, Op.src(2), Sel->Src2Hi);
+    Function *SmaxFn =
+        Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::smax, {I16Ty});
+    Value *M01 = Ctx.B.CreateCall(SmaxFn, {S0, S1}, "vmax3_i16_m01");
+    Value *M = Ctx.B.CreateCall(SmaxFn, {M01, S2}, "vmax3_i16");
+    writeSelectedU16Half(Ctx, Op.dst(), M, Sel->DstHi,
+                         Sel->DstHi ? "vmax3_i16_merge_hi"
+                                    : "vmax3_i16_merge_lo");
     Hr.Handled = true;
     return Hr;
   }
