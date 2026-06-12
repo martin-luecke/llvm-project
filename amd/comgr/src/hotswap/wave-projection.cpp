@@ -65,6 +65,24 @@ Value *WaveProjection::emitWorkitemIdX(IRBuilder<> &B) const {
   return B.CreateCall(Fn, {}, "tid");
 }
 
+Value *ModuloReplicationProjection::emitWorkitemIdX(IRBuilder<> &B) const {
+  Value *Raw = WaveProjection::emitWorkitemIdX(B);
+  // When the target wave is wider than the source workgroup, the upper target
+  // lanes [MaxFlatWG, WaveSize) carry no source workitem, so their raw workitem
+  // id is just the hardware lane index. Clamp those lanes to workitem 0 so they
+  // replicate lane 0's in-bounds addressing; real lanes are unchanged and every
+  // committed result is identical. See hotswap/docs/modrep-predicate-chain.md
+  // for why these lanes can still issue memory ops despite the modeled EXEC.
+  if (Tgt.WaveSize > Src.WaveSize && MaxFlatWG > 0 &&
+      MaxFlatWG < Tgt.WaveSize) {
+    Value *Limit = ConstantInt::get(I32Ty, MaxFlatWG);
+    Value *IsRealLane = B.CreateICmpULT(Raw, Limit, "tid_is_real_lane");
+    Raw = B.CreateSelect(IsRealLane, Raw, ConstantInt::get(I32Ty, 0),
+                         "tid_phantom_clamp");
+  }
+  return Raw;
+}
+
 Value *WaveProjection::emitInitialExec(IRBuilder<> &B) const {
   // Default: the architectural boot state of a dispatched wave is
   // "every source lane active", i.e. all-ones in the source-width
