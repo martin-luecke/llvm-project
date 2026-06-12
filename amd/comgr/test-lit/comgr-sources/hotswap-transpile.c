@@ -75,6 +75,7 @@ static void print_result_if_present(amd_comgr_hotswap_transpile_result_t Result)
       AMD_COMGR_HOTSWAP_CACHE_WRITE_NOT_ATTEMPTED;
   char SourceGfx[64] = "";
   char TargetGfx[64] = "";
+  char CacheKey[128] = "";
 
   amd_comgr_(hotswap_transpile_result_get_info(
       Result, AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_SUCCESS, &Success));
@@ -92,12 +93,15 @@ static void print_result_if_present(amd_comgr_hotswap_transpile_result_t Result)
                     SourceGfx, sizeof(SourceGfx));
   get_result_string(Result, AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_TARGET_GFX,
                     TargetGfx, sizeof(TargetGfx));
+  get_result_string(Result, AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_CACHE_KEY,
+                    CacheKey, sizeof(CacheKey));
 
   printf("RESULT_INFO: success=%d cache_hit=%d cache_lookup=%s "
-         "cache_write=%s source_gfx=%s target_gfx=%s lifted=%lld total=%lld\n",
+         "cache_write=%s source_gfx=%s target_gfx=%s lifted=%lld total=%lld "
+         "cache_key=%s\n",
          Success ? 1 : 0, CacheHit ? 1 : 0, lookup_status_name(Lookup),
          write_status_name(Write), SourceGfx, TargetGfx, (long long)Lifted,
-         (long long)Total);
+         (long long)Total, CacheKey);
 }
 
 int main(int argc, char *argv[]) {
@@ -166,6 +170,9 @@ int main(int argc, char *argv[]) {
     Options.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_CACHE_READONLY;
   if (getenv("HSA_HOTSWAP_STRICT"))
     Options.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_STRICT;
+  if (getenv("HSA_HOTSWAP_ASSUME_HIP_GLOBAL_OFFSET_ZERO"))
+    Options.flags |=
+        AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_ASSUME_HIP_GLOBAL_OFFSET_ZERO;
 
   amd_comgr_status_t Status =
       amd_comgr_hotswap_transpile_with_options(

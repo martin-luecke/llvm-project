@@ -36,6 +36,7 @@ struct SourceHiddenArgContext {
   llvm::Type *I32Ty;
   llvm::Type *I64Ty;
   llvm::ArrayRef<KernelArgMeta> Args;
+  bool AssumeHipGlobalOffsetZero = false;
 };
 
 struct SourceHiddenArgValue {

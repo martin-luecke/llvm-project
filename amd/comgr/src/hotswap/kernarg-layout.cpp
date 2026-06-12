@@ -10,14 +10,20 @@
 
 #include "llvm/ADT/StringRef.h"
 
+#include <cstdint>
+
 using namespace llvm;
 
 namespace COMGR::hotswap {
 
 SourceHiddenArgByte classifySourceHiddenArgByte(ArrayRef<KernelArgMeta> Args,
                                                 int ByteOffset) {
+  if (ByteOffset < 0)
+    return {};
+  uint32_t Offset = static_cast<uint32_t>(ByteOffset);
+
   for (const KernelArgMeta &Arg : Args) {
-    if (ByteOffset < Arg.Offset || ByteOffset >= Arg.Offset + Arg.Size)
+    if (Offset < Arg.Offset || Offset >= Arg.Offset + Arg.Size)
       continue;
 
     StringRef Kind(Arg.ValueKind);
@@ -48,6 +54,12 @@ SourceHiddenArgByte classifySourceHiddenArgByte(ArrayRef<KernelArgMeta> Args,
       Result.Kind = SourceHiddenArgKind::HiddenRemainderZ;
     else if (Kind == "hidden_grid_dims")
       Result.Kind = SourceHiddenArgKind::HiddenGridDims;
+    else if (Kind == "hidden_global_offset_x")
+      Result.Kind = SourceHiddenArgKind::HiddenGlobalOffsetX;
+    else if (Kind == "hidden_global_offset_y")
+      Result.Kind = SourceHiddenArgKind::HiddenGlobalOffsetY;
+    else if (Kind == "hidden_global_offset_z")
+      Result.Kind = SourceHiddenArgKind::HiddenGlobalOffsetZ;
     else
       Result.Kind = SourceHiddenArgKind::UnsupportedHidden;
     return Result;

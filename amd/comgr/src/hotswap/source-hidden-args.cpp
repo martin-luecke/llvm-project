@@ -19,9 +19,11 @@ namespace {
 
 // Offsets in the HSA AQL `hsa_kernel_dispatch_packet_t` as defined by the
 // public HSA runtime header.  Do not use SI::KernelInputOffsets here: those are
-// LLVM's kernel-input/implicit-buffer offsets (`NGROUPS`, `LOCAL_SIZE`), not the
-// AQL dispatch-packet layout addressed by `llvm.amdgcn.dispatch.ptr`.
+// LLVM's kernel-input/implicit-buffer offsets (`NGROUPS`, `LOCAL_SIZE`), not
+// the AQL dispatch-packet layout addressed by `llvm.amdgcn.dispatch.ptr`.
 namespace DispatchPacket {
+constexpr unsigned SetupOffset = 2;
+constexpr unsigned SetupDimensionsMask = 0x3;
 constexpr unsigned WorkgroupSizeXOffset = 4;
 constexpr unsigned WorkgroupSizeYOffset = 6;
 constexpr unsigned WorkgroupSizeZOffset = 8;
@@ -66,9 +68,8 @@ Value *loadDispatchU16(SourceHiddenArgContext &Ctx, unsigned ByteOffset,
                        const Twine &Name) {
   Value *Ptr =
       Ctx.B.CreateConstInBoundsGEP1_32(Ctx.I8Ty, dispatchPtr(Ctx), ByteOffset);
-  return Ctx.B.CreateZExt(
-      Ctx.B.CreateLoad(Type::getInt16Ty(Ctx.C), Ptr, Name), Ctx.I32Ty,
-      Name + "_zext");
+  return Ctx.B.CreateZExt(Ctx.B.CreateLoad(Type::getInt16Ty(Ctx.C), Ptr, Name),
+                          Ctx.I32Ty, Name + "_zext");
 }
 
 Value *loadDispatchU32(SourceHiddenArgContext &Ctx, unsigned ByteOffset,
@@ -101,14 +102,9 @@ Value *emitHiddenRemainder(SourceHiddenArgContext &Ctx, unsigned Dim) {
 }
 
 Value *emitGridDims(SourceHiddenArgContext &Ctx) {
-  Value *GridY = emitDispatchGridSize(Ctx, 1);
-  Value *GridZ = emitDispatchGridSize(Ctx, 2);
-  Value *HasZ = Ctx.B.CreateICmpUGT(GridZ, Ctx.B.getInt32(1), "grid_has_z");
-  Value *HasY = Ctx.B.CreateICmpUGT(GridY, Ctx.B.getInt32(1), "grid_has_y");
-  return Ctx.B.CreateSelect(
-      HasZ, Ctx.B.getInt32(3),
-      Ctx.B.CreateSelect(HasY, Ctx.B.getInt32(2), Ctx.B.getInt32(1),
-                         "grid_dims_y_or_x"),
+  return Ctx.B.CreateAnd(
+      loadDispatchU16(Ctx, DispatchPacket::SetupOffset, "dispatch_setup"),
+      Ctx.B.getInt32(DispatchPacket::SetupDimensionsMask),
       "source_hidden_grid_dims");
 }
 
@@ -147,7 +143,16 @@ SourceHiddenArgValue emitHiddenArgValue(SourceHiddenArgContext &Ctx,
     Result.Value = emitHiddenRemainder(Ctx, 2);
   else if (Kind == SourceHiddenArgKind::HiddenGridDims)
     Result.Value = emitGridDims(Ctx);
-  else
+  else if (Kind == SourceHiddenArgKind::HiddenGlobalOffsetX ||
+           Kind == SourceHiddenArgKind::HiddenGlobalOffsetY ||
+           Kind == SourceHiddenArgKind::HiddenGlobalOffsetZ) {
+    if (!Ctx.AssumeHipGlobalOffsetZero)
+      return unsupportedHiddenKind("hidden_global_offset_{x,y,z}");
+    // The HotSwap runtime path intercepts HIP-launched kernels. HIP's launch
+    // APIs do not expose a non-zero HSA grid-global offset, so the source ABI's
+    // hidden_global_offset fields are the all-zero 64-bit value.
+    Result.Value = Ctx.B.getInt64(0);
+  } else
     return unsupportedHiddenKind("<unknown>");
   return Result;
 }

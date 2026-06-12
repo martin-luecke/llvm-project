@@ -29,6 +29,11 @@ struct PipelineOptions {
   bool EnableWritelaneRewrite = true;
   bool EnableWaveNative = true;
   bool CollectTimings = false;
+  // HIP launch APIs do not expose a non-zero HSA grid-global offset. COMGR's
+  // HotSwap runtime path sets this so hidden_global_offset_{x,y,z} can be
+  // synthesized as zero; standalone callers leave it false and refuse instead
+  // of guessing another frontend's launch contract.
+  bool AssumeHipGlobalOffsetZero = false;
 };
 
 struct PipelineResult {

@@ -106,6 +106,7 @@ struct RaiseContext {
   // created" in `computeMode`).  So applying the same 8-bit state to both
   // halves is correct.
   uint8_t VgprMsBs = 0;
+  bool AssumeHipGlobalOffsetZero = false;
 
   // Per-instruction VGPR index adjustment, indexed by MCInst operand index.
   // Computed from vgprMSBs before each instruction dispatch.
@@ -226,6 +227,45 @@ struct RaiseContext {
   void storeVGPR64(int Idx, llvm::Value *V);
   void storeAGPR32(int Idx, llvm::Value *V);
 
+  enum class KernargPtrProvenance {
+    LiveEntry,
+    Clobbered,
+    Unknown,
+  };
+
+  bool isEntryKernargSegmentPtrSgpr(ParsedReg Base) const {
+    if (Layout == nullptr || Base.RegKind != ParsedReg::SGPR)
+      return false;
+    int KernargPtrSgpr = Layout->KernargSegmentPtrSgpr;
+    return KernargPtrSgpr >= 0 && Base.BaseIdx == KernargPtrSgpr;
+  }
+
+  KernargPtrProvenance getKernargPtrProvenance() const {
+    return CurrentKernargPtrProvenance;
+  }
+
+  void noteSgprWriteForKernargProvenance(int Idx) {
+    if (Layout == nullptr)
+      return;
+    int KernargPtrSgpr = Layout->KernargSegmentPtrSgpr;
+    if (KernargPtrSgpr < 0 ||
+        (Idx != KernargPtrSgpr && Idx != KernargPtrSgpr + 1))
+      return;
+    CurrentKernargPtrProvenance = KernargPtrProvenance::Clobbered;
+  }
+
+  void setKernargPtrProvenanceForBlock(llvm::BasicBlock *BB,
+                                       KernargPtrProvenance Provenance) {
+    KernargSegmentPtrProvenanceByBB[BB] = Provenance;
+  }
+
+  void enterKernargPtrProvenanceForBlock(llvm::BasicBlock *BB) {
+    auto It = KernargSegmentPtrProvenanceByBB.find(BB);
+    CurrentKernargPtrProvenance = It == KernargSegmentPtrProvenanceByBB.end()
+                                      ? KernargPtrProvenance::Unknown
+                                      : It->second;
+  }
+
   // emitUnderExec(body) wraps `body()` in an `if (lane_active)` diamond:
   //
   //   %active = emitLaneActiveBit()
@@ -341,6 +381,15 @@ struct RaiseContext {
   llvm::SmallVector<llvm::AllocaInst *> SgprWaveMaskExecShadow;
   llvm::SmallVector<llvm::AllocaInst *> SgprWaveMaskValidShadow;
 
+  // Conservative kernarg-pointer provenance for the strict hidden-arg SMEM
+  // gate. Filled before instruction lowering by a fixed-point over the decoded
+  // CFG. Mixed incoming states become Unknown and keep strict mode loud.
+  llvm::DenseMap<llvm::BasicBlock *, KernargPtrProvenance>
+      KernargSegmentPtrProvenanceByBB =
+          llvm::DenseMap<llvm::BasicBlock *, KernargPtrProvenance>();
+  KernargPtrProvenance CurrentKernargPtrProvenance =
+      KernargPtrProvenance::Unknown;
+
   // Record the per-lane compare i1 produced by a V_CMP_*_e64 write
   // to SGPR baseIdx in the current BB. Overwrites any prior entry
   // (last-writer wins -- a later V_CMP obviates the earlier value
@@ -402,6 +451,7 @@ struct RaiseContext {
   // over-invalidation: a single-SGPR wave32 entry at K-1 is
   // unrelated to a scalar write at K and must NOT be invalidated.
   void invalidateSgprWaveMaskI1(int BaseIdx) {
+    noteSgprWriteForKernargProvenance(BaseIdx);
     LastSgprWaveMaskI1.erase(BaseIdx);
     if (BaseIdx >= 0 &&
         static_cast<size_t>(BaseIdx) < SgprWaveMaskValidShadow.size())
