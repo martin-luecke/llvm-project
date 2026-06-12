@@ -7,13 +7,6 @@
 ; target-independent lift is the two-step llvm.smax.i32 chain.
 
 ; CHECK-LABEL: define amdgpu_kernel void @v_max3_i32_kernel(
-;
-; CHECK: %vmax3_i32_lo{{[0-9]*}} = call i32 @llvm.smax.i32(i32 %{{[^,]+}}, i32 %{{[^)]+}})
-; CHECK: %vmax3_i32{{[0-9]*}} = call i32 @llvm.smax.i32(i32 %vmax3_i32_lo{{[0-9]*}}, i32 %{{[^)]+}})
-;
-; Negative checks: this is signed integer max, not unsigned max or FP maxnum.
-; CHECK-NOT: call {{.*}}@llvm.umax
-; CHECK-NOT: call {{.*}}@llvm.maxnum
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
@@ -45,10 +38,12 @@ v_max3_i32_kernel:
 	v_lshl_add_u64 v[0:1], v[0:1], 2, s[2:3]
 	global_load_b96 v[0:2], v[0:1], off
 	s_wait_loadcnt 0x0
-	;;#ASMSTART
+; CHECK: %vmax3_i32_lo{{[0-9]*}} = call i32 @llvm.smax.i32(i32 %{{[^,]+}}, i32 %{{[^)]+}})
+; CHECK: %vmax3_i32{{[0-9]*}} = call i32 @llvm.smax.i32(i32 %vmax3_i32_lo{{[0-9]*}}, i32 %{{[^)]+}})
+; Negative checks: this is signed integer max, not unsigned max or FP maxnum.
+; CHECK-NOT: call {{.*}}@llvm.umax
+; CHECK-NOT: call {{.*}}@llvm.maxnum
 	v_max3_i32 v0, v0, v1, v2
-
-	;;#ASMEND
 	global_store_b32 v3, v0, s[0:1] scale_offset
 	s_endpgm
 	.section	.rodata,"a",@progbits
