@@ -21,6 +21,17 @@ using namespace llvm;
 
 namespace COMGR::hotswap {
 
+namespace {
+
+Value *addStaticSmemByteOffset64(RaiseContext &Ctx, const DecodedInst &Di,
+                                 Value *Offset, const char *Name) {
+  if (!Di.HasStaticOffset || Di.StaticOffset == 0)
+    return Offset;
+  return Ctx.B.CreateAdd(Offset, Ctx.B.getInt64(Di.StaticOffset), Name);
+}
+
+} // namespace
+
 HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
                          OpResolver &Op) {
   HandlerResult Hr;
@@ -189,7 +200,9 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
         if (Di.HasScaleOffset)
           RegOff = Ctx.B.CreateMul(RegOff,
                                    ConstantInt::get(Ctx.I64Ty, LoadBytes),
-                              "smem_roff_scaled");
+                                   "smem_roff_scaled");
+        RegOff = addStaticSmemByteOffset64(Ctx, Di, RegOff,
+                                           "smem_roff_plus_imm");
         Ptr = Ctx.B.CreateInBoundsGEP(Ctx.I8Ty, Ptr, RegOff);
       }
       for (int D = 0; D < LoadDwords; D++) {
@@ -315,6 +328,8 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
         RegOff = Ctx.B.CreateMul(RegOff,
                                  ConstantInt::get(Ctx.I64Ty, NarrowBytes),
                             "smem_nroff_scaled");
+      RegOff = addStaticSmemByteOffset64(Ctx, Di, RegOff,
+                                         "smem_nroff_plus_imm");
       Ptr = Ctx.B.CreateInBoundsGEP(Ctx.I8Ty, Ptr, RegOff);
     }
 
@@ -361,7 +376,9 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
         if (Di.HasScaleOffset)
           RegOff = Ctx.B.CreateMul(RegOff,
                                    ConstantInt::get(Ctx.I64Ty, StoreBytes),
-                              "smem_st_roff_scaled");
+                                   "smem_st_roff_scaled");
+        RegOff = addStaticSmemByteOffset64(Ctx, Di, RegOff,
+                                           "smem_st_roff_plus_imm");
         Ptr = Ctx.B.CreateInBoundsGEP(Ctx.I8Ty, Ptr, RegOff);
       }
     }
@@ -512,6 +529,8 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
     if (Di.HasScaleOffset)
       RegOff = Ctx.B.CreateMul(RegOff, ConstantInt::get(Ctx.I64Ty, 4),
                                "smem_at_roff_scaled");
+    RegOff = addStaticSmemByteOffset64(Ctx, Di, RegOff,
+                                       "smem_at_roff_plus_imm");
     Ptr = Ctx.B.CreateInBoundsGEP(Ctx.I8Ty, Ptr, RegOff);
   }
 
