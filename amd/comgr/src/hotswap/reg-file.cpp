@@ -83,21 +83,27 @@ void AllocaRegFile::init(IRBuilder<> &B, Type *I32Ty, Type *I1Ty,
 
   const unsigned NSgpr = MRI.getRegClass(AMDGPU::SGPR_32RegClassID).getNumRegs();
   Sgpr.assign(NSgpr, nullptr);
-  for (unsigned I = 0; I < NSgpr; ++I)
+  for (unsigned I = 0; I < NSgpr; ++I) {
     Sgpr[I] = B.CreateAlloca(I32Ty, nullptr, "Sgpr" + std::to_string(I));
+    B.CreateStore(ConstantInt::get(I32Ty, 0), Sgpr[I]);
+  }
 
   // VGPR storage is explicitly oversized relative to TableGen's VGPR_32
   // class (see `KVGPRCap` docs in reg-file.h). AGPR storage mirrors
   // the VGPR size because AGPRs share the same index space under MFMA
   // encoding conventions.
   Vgpr.assign(KVGPRCap, nullptr);
-  for (unsigned I = 0; I < KVGPRCap; ++I)
+  for (unsigned I = 0; I < KVGPRCap; ++I) {
     Vgpr[I] = B.CreateAlloca(I32Ty, nullptr, "Vgpr" + std::to_string(I));
+    B.CreateStore(ConstantInt::get(I32Ty, 0), Vgpr[I]);
+  }
 
   if (Isa.HasAgpr) {
     Agpr.assign(KVGPRCap, nullptr);
-    for (unsigned I = 0; I < KVGPRCap; ++I)
+    for (unsigned I = 0; I < KVGPRCap; ++I) {
       Agpr[I] = B.CreateAlloca(I32Ty, nullptr, "Agpr" + std::to_string(I));
+      B.CreateStore(ConstantInt::get(I32Ty, 0), Agpr[I]);
+    }
   }
 
   // Condition-carrying scalar registers are initialised to zero so that a
@@ -131,8 +137,10 @@ void AllocaRegFile::init(IRBuilder<> &B, Type *I32Ty, Type *I1Ty,
 
   const unsigned NTtmp = MRI.getRegClass(AMDGPU::TTMP_32RegClassID).getNumRegs();
   Ttmp.assign(NTtmp, nullptr);
-  for (unsigned I = 0; I < NTtmp; ++I)
+  for (unsigned I = 0; I < NTtmp; ++I) {
     Ttmp[I] = B.CreateAlloca(I32Ty, nullptr, "ttmp" + std::to_string(I));
+    B.CreateStore(ConstantInt::get(I32Ty, 0), Ttmp[I]);
+  }
 }
 
 void AllocaRegFile::storeSGPR32(IRBuilder<> &B, int Idx, Value *V) {
@@ -297,6 +305,12 @@ Value *AllocaRegFile::loadExec(IRBuilder<> &B) {
 void AllocaRegFile::storeExec(IRBuilder<> &B, Value *V) {
   if (V->getType() != ExecTy)
     V = B.CreateBitOrPointerCast(V, ExecTy);
+  if (ExecLimitMask) {
+    Value *Limit = ExecLimitMask;
+    if (Limit->getType() != ExecTy)
+      Limit = B.CreateBitOrPointerCast(Limit, ExecTy);
+    V = B.CreateAnd(V, Limit, "exec_limited");
+  }
   B.CreateStore(V, Exec);
   if (OnExecWritten)
     OnExecWritten();
@@ -327,6 +341,17 @@ Value *AllocaRegFile::readReg32(IRBuilder<> &B, ParsedReg Pr) {
     Type *I32Ty = B.getInt32Ty();
     if (V->getType() == I32Ty)
       return V;
+    if (Projection && Projection->sourceWaveScopedLaneOps() && Pr.Width == 1 &&
+        Pr.BaseIdx == 0) {
+      Value *Lo = B.CreateTrunc(V, I32Ty, "exec_src_wave_lo");
+      Value *Hi =
+          B.CreateTrunc(B.CreateLShr(V, 32), I32Ty, "exec_src_wave_hi");
+      Value *Lane = Projection->emitLaneIdx(B);
+      Value *Upper =
+          B.CreateICmpUGE(Lane, ConstantInt::get(I32Ty, 32),
+                          "exec_src_wave_upper");
+      return B.CreateSelect(Upper, Hi, Lo, "exec_src_wave_mask");
+    }
     // wave64 EXEC is i64; pick the correct half when reading a 32-bit
     // slice. width==2 reads are handled by readReg64 / readExecWidth;
     // this path is the width==1 case where baseIdx selects LO/HI.

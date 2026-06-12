@@ -49,6 +49,7 @@ struct RaiseResult {
   bool UsesScratchPrivateSegment = false;
   uint32_t SourcePrivateSegmentFixedSize = 0;
   bool HasDivergentExec = false;
+  bool HasEnumeratedSetpcDispatch = false;
 };
 
 RaiseResult raiseToIR(llvm::ArrayRef<uint8_t> TextBytes,
@@ -56,6 +57,7 @@ RaiseResult raiseToIR(llvm::ArrayRef<uint8_t> TextBytes,
                       llvm::StringRef KernelName,
                       const KernelMeta &Meta,
                       uint64_t KernelOffset = 0,
+                      uint64_t KernelSize = 0,
                       llvm::StringRef CompilationTargetIsa = "",
                       bool EnableWritelaneRewrite = true,
                       bool EnableWaveNative = true);

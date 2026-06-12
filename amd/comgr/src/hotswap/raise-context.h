@@ -158,6 +158,12 @@ struct RaiseContext {
   // caching.
   llvm::Value *emitLaneIdx();
 
+  // Emit the source kernel's wave id within the workgroup. gfx12 source kernels
+  // read this either through TTMP8 bitfields or IB_STS2. The value is based on
+  // the source-visible flattened local id, not just workitem.id.x, because
+  // multidimensional blocks use Y/Z coordinates for subsequent source waves.
+  llvm::Value *emitSourceWaveIdInWorkgroup();
+
   // ==== SIMT Predicated Execution (SPE) helpers
   // (see hotswap/docs/wave-size-translation.md §5.1). ================
   //
@@ -339,6 +345,15 @@ struct RaiseContext {
   llvm::SmallVector<llvm::AllocaInst *> SgprWaveMaskExecShadow;
   llvm::SmallVector<llvm::AllocaInst *> SgprWaveMaskValidShadow;
 
+  // Provenance for SGPR pairs that are statically known to hold
+  // `llvm.amdgcn.kernarg.segment.ptr() + constant`. Some gfx12 ATen kernels
+  // derive secondary kernarg bases with scalar add/addc pairs before issuing
+  // immediate `s_load_*` instructions. Those loads must remain addrspace(4)
+  // scalar kernarg loads; lowering the derived pointer as addrspace(1) can
+  // select vector global loads for hidden kernarg fields.
+  llvm::DenseMap<int, int64_t> KernargPtrByteOffsets =
+      llvm::DenseMap<int, int64_t>();
+
   // Record the per-lane compare i1 produced by a V_CMP_*_e64 write
   // to SGPR baseIdx in the current BB. Overwrites any prior entry
   // (last-writer wins -- a later V_CMP obviates the earlier value
@@ -422,6 +437,24 @@ struct RaiseContext {
   // IR (see sgpr-wave-mask-translation.md section 7 evolution
   // path) can upgrade this to a proper per-BB merge.
   void clearSgprWaveMaskShadow() { LastSgprWaveMaskI1.clear(); }
+
+  void recordKernargPtrOffset(int BaseIdx, int64_t ByteOffset) {
+    KernargPtrByteOffsets[BaseIdx] = ByteOffset;
+  }
+
+  void invalidateKernargPtrOffset(int BaseIdx) {
+    KernargPtrByteOffsets.erase(BaseIdx);
+    if (BaseIdx > 0)
+      KernargPtrByteOffsets.erase(BaseIdx - 1);
+  }
+
+  bool lookupKernargPtrOffset(int BaseIdx, int64_t &ByteOffset) const {
+    auto It = KernargPtrByteOffsets.find(BaseIdx);
+    if (It == KernargPtrByteOffsets.end())
+      return false;
+    ByteOffset = It->second;
+    return true;
+  }
 
   void collectSgprWaveMaskShadowAllocas(
       llvm::SmallVectorImpl<llvm::AllocaInst *> &Out) const {

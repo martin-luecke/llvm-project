@@ -1,40 +1,29 @@
-; Negative fixture: the DPP cross-widen rewrite must refuse
-; loudly on any `dpp_ctrl` outside the supported family
-; (quad_perm / row_shl / row_shr / row_xmask).  This fixture pins the
-; refusal diagnostic for `row_ror:1` (ctrl = 0x121); the
-; companion positive fixture is `c2_dpp_quad_perm.s`.
+; Positive canary for DPP16 `row_ror:N` under cross-widening.
+; row_ror stays inside each 16-lane row:
 ;
-; Contract: `raise_cli` under cross-widening (gfx1250 -> gfx942)
-; must exit non-zero AND the stderr must name the specific
-; unsupported ctrl.  This closes the pair with the positive
-; fixture: together they pin BOTH sides of the rewrite's
-; all-or-nothing symmetry invariant.
-
+;   lane[n].src0 = lane[(n & 0x30) + (((n & 0xf) - N) & 0xf)].src0
+;
+; Since the source index is computed entirely in the low 4 within-row bits,
+; this is wave-size-oblivious for gfx1250 wave32 -> gfx942/gfx950 wave64.
+;
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && %not raise_cli %t.hsaco \
+; RUN:   && %raise_cli %t.hsaco \
 ; RUN:     --target-isa=gfx942 --emit-ir=c2_dpp_row_ror_refuse_kernel \
-; RUN:   2>&1 \
+; RUN:   2>/dev/null \
 ; RUN:   | %FileCheck %s
 
-; The refusal diagnostic MUST name:
-;
-;   1. The failing kernel, so `grep function '` pinpoints it in a
-;      batch-raise run.
-;   2. The specific unsupported ctrl, so the extension path is
-;      obvious (add the case to `buildDppLaneMap` + widen
-;      `isDppCtrlRewritable`).
-;   3. The reference to wave-size-translation.md §5.3, so the next
-;      session can read the rewrite invariant without digging
-;      through the rewrite pass's source.
-;
-; CHECK-DAG: function 'c2_dpp_row_ror_refuse_kernel'
-; CHECK-DAG: unsupported row_ror:1
-; CHECK-DAG: wave-size-translation.md
-
-; And the supported-family list MUST appear so a reviewer seeing a
-; new refusal knows the current rewrite scope without cross-
-; referencing source.
-; CHECK-DAG: quad_perm, row_shl:N, row_shr:N and row_xmask:N
+; CHECK-LABEL: define amdgpu_kernel void @c2_dpp_row_ror_refuse_kernel(
+; CHECK-NOT: call i32 @llvm.amdgcn.update.dpp.i32(
+; CHECK-DAG: %cwd_dpp_within_row = and i32 %{{.+}}, 15
+; CHECK-DAG: %cwd_dpp_row_base = and i32 %{{.+}}, -16
+; CHECK-DAG: %cwd_dpp_ror_biased = add i32 %cwd_dpp_within_row, 15
+; CHECK-DAG: %cwd_dpp_ror_src = and i32 %cwd_dpp_ror_biased, 15
+; CHECK-DAG: %cwd_dpp_src_safe = select i1 true, i32 %cwd_dpp_ror_src, i32 0
+; CHECK-DAG: %cwd_dpp_src_abs = or i32 %cwd_dpp_row_base, %cwd_dpp_src_safe
+; CHECK-DAG: %cwd_dpp_selector = shl i32 %cwd_dpp_src_abs, 2
+; CHECK: call i32 @llvm.amdgcn.ds.bpermute(i32 %cwd_dpp_selector, i32 %{{[^,]+}})
+; CHECK-NOT: call i32 @llvm.amdgcn.update.dpp.i32(
+; CHECK: declare i32 @llvm.amdgcn.ds.bpermute(i32, i32)
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6

@@ -28,17 +28,18 @@ struct RaiseContext;
 ///
 /// Per-variant divergence inside `runGroupPass`:
 ///
-///   F16    -> 2× mfma_f32_16x16x16f16,        AB pack `<4 x half>`,  acc f32
-///   BF16   -> 2× mfma_f32_16x16x16bf16_1k,    AB pack `<4 x i16>`,   acc f32
+///   F16    -> gfx950: 1× mfma_f32_16x16x32f16,    AB pack `<8 x half>`,   acc f32
+///             older MFMA targets: 2× mfma_f32_16x16x16f16, `<4 x half>`
+///   BF16   -> gfx950: 1× mfma_f32_16x16x32bf16,   AB pack `<8 x bfloat>`, acc f32
+///             older MFMA targets: 2× mfma_f32_16x16x16bf16_1k, `<4 x i16>`
 ///   FP8_*  -> 2× mfma_f32_16x16x32_<a>_<b>,   AB pack `i64`,         acc f32
 ///   BF8_*  -> 2× mfma_f32_16x16x32_<a>_<b>,   AB pack `i64`,         acc f32
 ///   IU8    -> 2× mfma_i32_16x16x32_i8,        AB pack `i64`,         acc i32
 ///
-/// The 2× MFMA decomposition is invariant across variants: a WMMA
-/// computes a 16x16 result for K=32 (16-bit) or K=64 (8-bit), and we
-/// always split that K dimension in half so each MFMA covers K=16
-/// (16-bit MFMA) or K=32 (8-bit MFMA) per call. Per-Wave64-lane MFMA
-/// fragment is exactly 2 dwords either way.
+/// The generic decomposition splits a WMMA's K dimension in half so each MFMA
+/// covers K=16 (16-bit MFMA) or K=32 (8-bit MFMA) per call. gfx950 is an
+/// important exception for F16/BF16: it has direct K=32 16-bit MFMA shapes, so
+/// the lowering uses one same-K MFMA per virtual Wave32 group.
 ///
 /// The bf8/fp8 16-bit->i16 / fp8/i8->i64 bitcasts are principled: the
 /// CDNA MFMA intrinsics for these element types were defined before

@@ -276,9 +276,9 @@ static bool raiseAndCompileKernel(const TextSection &text,
                  << "', using empty metadata\n";
   }
 
-  auto kernelOffsetOrErr = findKernelSymbolOffset(codeObjectData, kernelName);
-  if (!kernelOffsetOrErr) {
-    std::string err = llvm::toString(kernelOffsetOrErr.takeError());
+  auto kernelExtentOrErr = findKernelSymbolExtent(codeObjectData, kernelName);
+  if (!kernelExtentOrErr) {
+    std::string err = llvm::toString(kernelExtentOrErr.takeError());
     llvm::errs() << "transpiler: " << err << "\n";
     result.FailKernel = kernelName;
     result.FailMnemonic = "__kernel_offset__";
@@ -288,14 +288,15 @@ static bool raiseAndCompileKernel(const TextSection &text,
     result.Timings.raiseSeconds += timingElapsed(options.CollectTimings, raiseStart);
     return false;
   }
-  uint64_t kernelOffset = *kernelOffsetOrErr;
+  uint64_t kernelOffset = kernelExtentOrErr->Offset;
+  uint64_t kernelSize = kernelExtentOrErr->Size;
   LLVM_DEBUG(if (kernelOffset > 0)
     llvm::dbgs() << "transpiler: Kernel '" << kernelName
                  << "' at .text offset 0x" << llvm::utohexstr(kernelOffset)
-                 << "\n");
+                 << " size 0x" << llvm::utohexstr(kernelSize) << "\n");
 
   auto raised = raiseToIR(text.Bytes, sourceISA, kernelName, meta, kernelOffset,
-                           targetISA, options.EnableWritelaneRewrite,
+                           kernelSize, targetISA, options.EnableWritelaneRewrite,
                            options.EnableWaveNative);
   if (!raised.Success) {
     static const char *s_dumpFailInput =
@@ -352,7 +353,7 @@ static bool raiseAndCompileKernel(const TextSection &text,
   // the tail and truncates the head when the full name would blow the
   // budget; the symbol name inside the IR stays untouched, so debug
   // tooling can still resolve the long name from the LLVM module.
-  std::string fileStem = makeSafeBasename(kernelName, /*reservedSuffixBytes=*/5);
+  std::string fileStem = makeSafeBasename(kernelName, /*reservedSuffixBytes=*/8);
   std::string irPath  = tmpDir.filePath(fileStem + ".ll");
   std::string asmPath = tmpDir.filePath(fileStem + ".s");
 
@@ -366,11 +367,39 @@ static bool raiseAndCompileKernel(const TextSection &text,
   result.Timings.writeIrSeconds +=
       timingElapsed(options.CollectTimings, writeIrStart);
 
+  std::string optBin = std::string(LLVM_TOOLS_DIR) + "/opt";
+  std::string optIrPath = tmpDir.filePath(fileStem + ".opt.ll");
+  llvm::StringRef LlvmIrForLlc = optIrPath;
+  bool hasWholeWaveExecRepair =
+      llvm::StringRef(raised.IrText).contains("llvm.amdgcn.init.whole.wave");
+  if (raised.HasEnumeratedSetpcDispatch || hasWholeWaveExecRepair) {
+    // Enumerated setpc/swap_pc dispatch regions are intentionally emitted as
+    // br-cascades. The generic O1/O2 pipeline can restructure those irreducible
+    // regions into switch/predicate-chain forms that AMDGPU lowers into
+    // non-converging EXEC mask loops (pinned by the Qwen Cijk replay fixture).
+    // The post-raise IR is already mem2reg-promoted and verified by the raiser,
+    // and llc can compile it directly while preserving the source control flow.
+    //
+    // WaveNative kernels also carry explicit `init.whole.wave` repairs on every
+    // return path. The generic O2 pipeline can merge repaired return blocks into
+    // an unrepaired common `ret`, letting a kernel exit with physical EXEC
+    // narrowed on some paths and poisoning the next dispatch. Preserve the
+    // verified post-raise return shape until a dedicated post-opt repair pass
+    // exists.
+    LlvmIrForLlc = irPath;
+  } else {
+    if (runTool(optBin, {optBin, "-S", "-passes=default<O2>", "-o", optIrPath,
+                         irPath}) != 0) {
+      llvm::errs() << "transpiler: opt failed for '" << kernelName << "'\n";
+      return false;
+    }
+  }
+
   std::string llcBin = std::string(LLVM_TOOLS_DIR) + "/llc";
   std::string mcpuLlc = ("-mcpu=" + targetISA).str();
   auto llcStart = timingStart(options.CollectTimings);
   if (runTool(llcBin, {llcBin, "-march=amdgcn", mcpuLlc, "-filetype=asm", "-o",
-                       asmPath, irPath}) != 0) {
+                       asmPath, LlvmIrForLlc}) != 0) {
     result.Timings.llcSeconds += timingElapsed(options.CollectTimings, llcStart);
     llvm::errs() << "transpiler: llc failed for '" << kernelName << "'\n";
     return false;
@@ -605,11 +634,11 @@ bool parseKernelAllowlist(llvm::StringRef Spec, std::set<std::string> &Out,
   return true;
 }
 
-void collectTargetPrivateSegmentMetadata(PipelineResult &result,
+bool collectTargetPrivateSegmentMetadata(PipelineResult &result,
                                          llvm::ArrayRef<std::string> kernelNames) {
   using namespace llvm::amdhsa;
   if (!result.Hsaco || result.Hsaco->getBufferSize() == 0)
-    return;
+    return true;
   llvm::MemoryBufferRef hsacoBuf = result.Hsaco->getMemBufferRef();
   for (llvm::StringRef kernelName : kernelNames) {
     llvm::Expected<KernelMeta> metaOrErr =
@@ -629,6 +658,7 @@ void collectTargetPrivateSegmentMetadata(PipelineResult &result,
          (1u << COMPUTE_PGM_RSRC2_ENABLE_PRIVATE_SEGMENT_SHIFT)) != 0;
     result.TargetEnablePrivateSegment |= enabled;
   }
+  return true;
 }
 
 PipelineResult runPipeline(llvm::MemoryBufferRef codeObjectData,
@@ -699,7 +729,11 @@ PipelineResult runPipeline(llvm::MemoryBufferRef codeObjectData,
   }
   std::string kernelNameStr = kernelName.str();
   auto collectMetadataStart = timingStart(options.CollectTimings);
-  collectTargetPrivateSegmentMetadata(result, {kernelNameStr});
+  if (!collectTargetPrivateSegmentMetadata(result, {kernelNameStr})) {
+    result.Timings.collectMetadataSeconds +=
+        timingElapsed(options.CollectTimings, collectMetadataStart);
+    return finish();
+  }
   result.Timings.collectMetadataSeconds +=
       timingElapsed(options.CollectTimings, collectMetadataStart);
 
@@ -823,6 +857,23 @@ PipelineResult runPipelineAllKernels(llvm::MemoryBufferRef codeObjectData,
     objPaths.push_back(std::move(objPath));
     llvm::errs() << "transpiler: partial HotSwap emitted "
                  << TrapStubs.size() << " trap-stub kernel(s)\n";
+    if (const char *LogTrapStubs = std::getenv("HSA_HOTSWAP_LOG_TRAP_STUBS");
+        LogTrapStubs && LogTrapStubs[0]) {
+      constexpr size_t MaxStubNamesToLog = 24;
+      llvm::errs() << "transpiler: trap-stub kernel inventory begin\n";
+      for (size_t I = 0; I < TrapStubs.size(); ++I) {
+        if (I < MaxStubNamesToLog ||
+            I + MaxStubNamesToLog >= TrapStubs.size()) {
+          llvm::errs() << "transpiler: trap-stub[" << I << "] "
+                       << TrapStubs[I].first << "\n";
+        } else if (I == MaxStubNamesToLog) {
+          llvm::errs() << "transpiler: trap-stub[...] "
+                       << (TrapStubs.size() - (2 * MaxStubNamesToLog))
+                       << " omitted\n";
+        }
+      }
+      llvm::errs() << "transpiler: trap-stub kernel inventory end\n";
+    }
   }
 
   std::string hsacoPath = tmpDir.filePath("merged.Hsaco");
@@ -846,7 +897,11 @@ PipelineResult runPipelineAllKernels(llvm::MemoryBufferRef codeObjectData,
     return finish();
   }
   auto collectMetadataStart = timingStart(options.CollectTimings);
-  collectTargetPrivateSegmentMetadata(result, kernelNames);
+  if (!collectTargetPrivateSegmentMetadata(result, kernelNames)) {
+    result.Timings.collectMetadataSeconds +=
+        timingElapsed(options.CollectTimings, collectMetadataStart);
+    return finish();
+  }
   result.Timings.collectMetadataSeconds +=
       timingElapsed(options.CollectTimings, collectMetadataStart);
 

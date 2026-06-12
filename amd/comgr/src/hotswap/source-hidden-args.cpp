@@ -8,9 +8,12 @@
 
 #include "source-hidden-args.h"
 
+#include "llvm/ADT/Twine.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/Format.h"
 
 using namespace llvm;
 
@@ -62,6 +65,21 @@ Value *dispatchPtr(SourceHiddenArgContext &Ctx) {
   return Ctx.B.CreateCall(DispatchPtrFn, {}, "dispatch_ptr");
 }
 
+Value *loadDispatchDwordScalar(SourceHiddenArgContext &Ctx, unsigned ByteOffset,
+                               const Twine &Name) {
+  unsigned AlignedOffset = ByteOffset & ~3u;
+  Value *PtrInt = Ctx.B.CreatePtrToInt(dispatchPtr(Ctx), Ctx.I64Ty,
+                                       "dispatch_ptr_i64");
+  auto *AsmTy = FunctionType::get(Ctx.I32Ty, {Ctx.I64Ty}, false);
+  std::string AsmText;
+  raw_string_ostream Os(AsmText);
+  Os << "s_load_dword $0, $1, 0x" << format_hex_no_prefix(AlignedOffset, 1)
+     << "\n\ts_waitcnt lgkmcnt(0)";
+  InlineAsm *Asm =
+      InlineAsm::get(AsmTy, Os.str(), "=s,s", /*hasSideEffects=*/true);
+  return Ctx.B.CreateCall(Asm, {PtrInt}, Name);
+}
+
 Value *queuePtrInt(SourceHiddenArgContext &Ctx) {
   Function *QueuePtrFn =
       Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::amdgcn_queue_ptr);
@@ -71,28 +89,34 @@ Value *queuePtrInt(SourceHiddenArgContext &Ctx) {
 
 Value *loadDispatchU16(SourceHiddenArgContext &Ctx, unsigned ByteOffset,
                        const Twine &Name) {
-  Value *Ptr =
-      Ctx.B.CreateConstInBoundsGEP1_32(Ctx.I8Ty, dispatchPtr(Ctx), ByteOffset);
-  return Ctx.B.CreateZExt(
-      Ctx.B.CreateLoad(Type::getInt16Ty(Ctx.C), Ptr, Name), Ctx.I32Ty,
-      Name + "_zext");
+  Value *Dword = loadDispatchDwordScalar(Ctx, ByteOffset, Name + "_dword");
+  unsigned Shift = (ByteOffset & 3u) * 8u;
+  if (Shift != 0)
+    Dword = Ctx.B.CreateLShr(Dword, Ctx.B.getInt32(Shift), Name + "_shift");
+  return Ctx.B.CreateAnd(Dword, Ctx.B.getInt32(0xffff), Name + "_u16");
 }
 
 Value *loadDispatchU32(SourceHiddenArgContext &Ctx, unsigned ByteOffset,
                        const Twine &Name) {
-  Value *Ptr =
-      Ctx.B.CreateConstInBoundsGEP1_32(Ctx.I8Ty, dispatchPtr(Ctx), ByteOffset);
-  return Ctx.B.CreateLoad(Ctx.I32Ty, Ptr, Name);
+  return loadDispatchDwordScalar(Ctx, ByteOffset, Name);
 }
 
 Value *emitDispatchWorkgroupSize(SourceHiddenArgContext &Ctx, unsigned Dim) {
-  return loadDispatchU16(Ctx, DispatchPacket::dispatchWorkgroupSizeOffset(Dim),
-                         Twine("source_hidden_wg_size_") + Twine(Dim));
+  Value *Size =
+      loadDispatchU16(Ctx, DispatchPacket::dispatchWorkgroupSizeOffset(Dim),
+                      Twine("source_hidden_wg_size_") + Twine(Dim));
+  return Ctx.B.CreateSelect(Ctx.B.CreateICmpEQ(Size, Ctx.B.getInt32(0)),
+                            Ctx.B.getInt32(1), Size,
+                            Twine("source_hidden_wg_size_norm_") + Twine(Dim));
 }
 
 Value *emitDispatchGridSize(SourceHiddenArgContext &Ctx, unsigned Dim) {
-  return loadDispatchU32(Ctx, DispatchPacket::dispatchGridSizeOffset(Dim),
-                         Twine("source_hidden_grid_size_") + Twine(Dim));
+  Value *Size =
+      loadDispatchU32(Ctx, DispatchPacket::dispatchGridSizeOffset(Dim),
+                      Twine("source_hidden_grid_size_") + Twine(Dim));
+  return Ctx.B.CreateSelect(
+      Ctx.B.CreateICmpEQ(Size, Ctx.B.getInt32(0)), Ctx.B.getInt32(1), Size,
+      Twine("source_hidden_grid_size_norm_") + Twine(Dim));
 }
 
 Value *emitHiddenBlockCount(SourceHiddenArgContext &Ctx, unsigned Dim) {

@@ -78,6 +78,10 @@ struct AllocaRegFile {
   // (i32 on wave32 source, i64 on wave64 source). Distinct from the
   // target-hardware wave mask width owned by `WaveProjection`.
   llvm::Type *ExecTy = nullptr;
+  // Optional EXEC mask that is ANDed into every EXEC write. WaveNative uses
+  // this to prevent source EXEC mutations from reactivating target lanes that
+  // are outside the source launch's valid workgroup range.
+  llvm::Value *ExecLimitMask = nullptr;
 
   // Non-owning pointer to the cross-wave projection policy. Used by
   // VCC read/write paths inside the reg file (ballot for per-lane-i1 ->
@@ -133,6 +137,7 @@ struct AllocaRegFile {
   void init(llvm::IRBuilder<> &B, llvm::Type *I32Ty, llvm::Type *I1Ty,
             const ISAProfile &Isa, const llvm::MCRegisterInfo &MRI,
             const WaveProjection &Proj);
+  void setExecLimitMask(llvm::Value *Mask) { ExecLimitMask = Mask; }
 
   // Direct per-class store/load helpers. All are predicated on `idx`
   // being in range for the corresponding class; bounds failures surface

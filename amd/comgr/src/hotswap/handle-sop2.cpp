@@ -208,6 +208,34 @@ static void recordDerivedWaveMaskI1(RaiseContext &Ctx, ParsedReg DstReg,
   }
 }
 
+static bool tryGetKernargOffsetPlusImm(RaiseContext &Ctx, OpResolver &Op,
+                                       unsigned RegSrc, unsigned ImmSrc,
+                                       int64_t &ByteOffset) {
+  if (!Op.isSrcReg(RegSrc) || Op.isSrcReg(ImmSrc))
+    return false;
+  ParsedReg SrcReg = Op.srcReg(RegSrc);
+  if (SrcReg.RegKind != ParsedReg::SGPR)
+    return false;
+  int64_t BaseOffset = 0;
+  if (!Ctx.lookupKernargPtrOffset(SrcReg.BaseIdx, BaseOffset))
+    return false;
+  ByteOffset = BaseOffset + Op.srcImm(ImmSrc);
+  return true;
+}
+
+static bool isSameSgpr(ParsedReg Reg, int BaseIdx) {
+  return Reg.RegKind == ParsedReg::SGPR && Reg.BaseIdx == BaseIdx;
+}
+
+static void storeSccFromWaveMaskI1(RaiseContext &Ctx, llvm::Value *I1,
+                                    const Twine &Name) {
+  Value *Mask = Ctx.Projection.ballotI1ToWidth(Ctx.B, I1, Ctx.Regs.ExecTy,
+                                               Name + "_ballot");
+  Ctx.Regs.storeSCC(
+      Ctx.B, Ctx.B.CreateICmpNE(Mask, Constant::getNullValue(Mask->getType()),
+                                Name + "_nonzero"));
+}
+
 HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
                          OpResolver &Op) {
   HandlerResult Hr;
@@ -232,6 +260,8 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
     if (S0I1 && S1I1) {
       Value *AndI1 = Ctx.B.CreateAnd(S0I1, S1I1, "wave_mask_and");
       recordDerivedWaveMaskI1(Ctx, Op.dst(), AndI1);
+      storeSccFromWaveMaskI1(Ctx, AndI1, "wave_mask_and_scc");
+      Hr.SccHandled = true;
     }
     Hr.Handled = true;
     return Hr;
@@ -244,6 +274,8 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
     if (S0I1 && S1I1) {
       Value *OrI1 = Ctx.B.CreateOr(S0I1, S1I1, "wave_mask_or");
       recordDerivedWaveMaskI1(Ctx, Op.dst(), OrI1);
+      storeSccFromWaveMaskI1(Ctx, OrI1, "wave_mask_or_scc");
+      Hr.SccHandled = true;
     }
     Hr.Handled = true;
     return Hr;
@@ -271,6 +303,12 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
     Value *Src0 = Op.src(0), *Src1 = Op.src(1);                                 // Read source operands -- resolves SGPR, VGPR, or immediate to LLVM Value*
     Value *Res = Ctx.B.CreateAdd(Src0, Src1, "add");                             // Emit LLVM IR: %add = add i32 %src0, %src1
     Ctx.Regs.writeReg32(Ctx.B, Op.dst(), Res);                                   // Store result into destination register's alloca (later promoted to SSA)
+    ParsedReg DstReg = Op.dst();
+    int64_t KernargOffset = 0;
+    if (DstReg.RegKind == ParsedReg::SGPR &&
+        (tryGetKernargOffsetPlusImm(Ctx, Op, 0, 1, KernargOffset) ||
+         tryGetKernargOffsetPlusImm(Ctx, Op, 1, 0, KernargOffset)))
+      Ctx.recordKernargPtrOffset(DstReg.BaseIdx, KernargOffset);
     auto *Ov = Ctx.B.CreateIntrinsic(Intrinsic::uadd_with_overflow, {Ctx.I32Ty}, // Compute carry-out using LLVM's uadd.with.overflow intrinsic
                                      {Src0, Src1});
     Ctx.Regs.storeSCC(Ctx.B, Ctx.B.CreateExtractValue(Ov, 1));                   // Extract the overflow bit and write it to SCC (Scalar Condition Code)
@@ -291,6 +329,19 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
 
   // Special SCC semantics -- handler writes SCC explicitly
   if (Sop == CanonicalOp::S_ADDC_U32) {
+    ParsedReg DstReg = Op.dst();
+    int64_t LowKernargOffset = 0;
+    bool PreserveKernargPair = false;
+    if (DstReg.RegKind == ParsedReg::SGPR && DstReg.BaseIdx > 0 &&
+        Ctx.lookupKernargPtrOffset(DstReg.BaseIdx - 1, LowKernargOffset)) {
+      bool Src0HighSrc1Zero =
+          Op.isSrcReg(0) && !Op.isSrcReg(1) &&
+          isSameSgpr(Op.srcReg(0), DstReg.BaseIdx) && Op.srcImm(1) == 0;
+      bool Src1HighSrc0Zero =
+          Op.isSrcReg(1) && !Op.isSrcReg(0) &&
+          isSameSgpr(Op.srcReg(1), DstReg.BaseIdx) && Op.srcImm(0) == 0;
+      PreserveKernargPair = Src0HighSrc1Zero || Src1HighSrc0Zero;
+    }
     Value *Src0 = Op.src(0), *Src1 = Op.src(1);
     Value *Cin = Ctx.B.CreateZExt(Ctx.Regs.loadSCC(Ctx.B), Ctx.I32Ty);
     Function *UaddOv = Intrinsic::getOrInsertDeclaration(
@@ -302,6 +353,8 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
     Value *Res = Ctx.B.CreateExtractValue(Step2, 0, "addc");
     Value *C2 = Ctx.B.CreateExtractValue(Step2, 1);
     Ctx.Regs.writeReg32(Ctx.B, Op.dst(), Res);
+    if (PreserveKernargPair)
+      Ctx.recordKernargPtrOffset(DstReg.BaseIdx - 1, LowKernargOffset);
     Ctx.Regs.storeSCC(Ctx.B, Ctx.B.CreateOr(C1, C2));
     Hr.SccHandled = true;
     Hr.Handled = true;
@@ -590,6 +643,8 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
     if (S0I1 && S1I1) {
       Value *XorI1 = Ctx.B.CreateXor(S0I1, S1I1, "wave_mask_xor");
       recordDerivedWaveMaskI1(Ctx, Op.dst(), XorI1);
+      storeSccFromWaveMaskI1(Ctx, XorI1, "wave_mask_xor_scc");
+      Hr.SccHandled = true;
     }
     Hr.Handled = true;
     return Hr;
@@ -700,18 +755,7 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
       int64_t CtrlImm = Op.srcImm(1);
       if (SrcPr.RegKind == ParsedReg::TTMP && SrcPr.BaseIdx == 8 &&
           CtrlImm == 0x50019) {
-        unsigned SrcWaveBits = Ctx.Isa.WaveSize;
-        if (SrcWaveBits != 32 && SrcWaveBits != 64)
-          report_fatal_error(
-              "S_BFE_U32 wave_id lift: unsupported source wave size " +
-              Twine(SrcWaveBits) +
-              " (expected 32 or 64); extend the shift-amount dispatch "
-              "before using this path on a new source ISA.");
-        unsigned LogWs = (SrcWaveBits == 64) ? 6 : 5;
-        Value *Tid = Ctx.Projection.emitWorkitemIdX(Ctx.B);
-        Tid->setName("wave_id_lift_tid");
-        Value *WaveId = Ctx.B.CreateLShr(
-            Tid, ConstantInt::get(Ctx.I32Ty, LogWs), "wave_id_in_wg");
+        Value *WaveId = Ctx.emitSourceWaveIdInWorkgroup();
         Value *Masked = Ctx.B.CreateAnd(
             WaveId, ConstantInt::get(Ctx.I32Ty, 0x1F), "wave_id_masked");
         Hr.SccResult = Masked;
@@ -851,18 +895,29 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
   if (Sop == CanonicalOp::S_CSELECT_B32) {
+    Value *S0I1 = tryGetSrcWaveMaskI1(Ctx, Op, 0);
+    Value *S1I1 = tryGetSrcWaveMaskI1(Ctx, Op, 1);
+    Value *Scc = Ctx.Regs.loadSCC(Ctx.B);
     Ctx.Regs.writeReg32(
-        Ctx.B, Op.dst(),
-        Ctx.B.CreateSelect(Ctx.Regs.loadSCC(Ctx.B), Op.src(0), Op.src(1),
-                           "csel"));
+        Ctx.B, Op.dst(), Ctx.B.CreateSelect(Scc, Op.src(0), Op.src(1), "csel"));
+    if (S0I1 && S1I1) {
+      Value *SelI1 = Ctx.B.CreateSelect(Scc, S0I1, S1I1, "wave_mask_csel");
+      recordDerivedWaveMaskI1(Ctx, Op.dst(), SelI1);
+    }
     Hr.Handled = true;
     return Hr;
   }
   if (Sop == CanonicalOp::S_CSELECT_B64) {
+    Value *S0I1 = tryGetSrcWaveMaskI1(Ctx, Op, 0);
+    Value *S1I1 = tryGetSrcWaveMaskI1(Ctx, Op, 1);
+    Value *Scc = Ctx.Regs.loadSCC(Ctx.B);
     Ctx.Regs.writeReg64(
-        Ctx.B, Op.dst(),
-        Ctx.B.CreateSelect(Ctx.Regs.loadSCC(Ctx.B), Op.src64(0), Op.src64(1),
-                           "csel"));
+        Ctx.B, Op.dst(), Ctx.B.CreateSelect(Scc, Op.src64(0), Op.src64(1),
+                                            "csel"));
+    if (S0I1 && S1I1) {
+      Value *SelI1 = Ctx.B.CreateSelect(Scc, S0I1, S1I1, "wave_mask_csel");
+      recordDerivedWaveMaskI1(Ctx, Op.dst(), SelI1);
+    }
     Hr.Handled = true;
     return Hr;
   }
@@ -920,6 +975,8 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
     if (S0I1 && S1I1) {
       Value *OrI1 = Ctx.B.CreateOr(S0I1, S1I1, "wave_mask_or64");
       recordDerivedWaveMaskI1(Ctx, Op.dst(), OrI1);
+      storeSccFromWaveMaskI1(Ctx, OrI1, "wave_mask_or64_scc");
+      Hr.SccHandled = true;
     }
     Hr.SccResult = Res;
     Hr.Handled = true;
@@ -933,6 +990,8 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
     if (S0I1 && S1I1) {
       Value *AndI1 = Ctx.B.CreateAnd(S0I1, S1I1, "wave_mask_and64");
       recordDerivedWaveMaskI1(Ctx, Op.dst(), AndI1);
+      storeSccFromWaveMaskI1(Ctx, AndI1, "wave_mask_and64_scc");
+      Hr.SccHandled = true;
     }
     Hr.SccResult = Res;
     Hr.Handled = true;
@@ -948,6 +1007,8 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
       Value *AndN2I1 =
           Ctx.B.CreateAnd(S0I1, Ctx.B.CreateNot(S1I1), "wave_mask_andn2_64");
       recordDerivedWaveMaskI1(Ctx, Op.dst(), AndN2I1);
+      storeSccFromWaveMaskI1(Ctx, AndN2I1, "wave_mask_andn2_64_scc");
+      Hr.SccHandled = true;
     }
     Hr.Handled = true;
     return Hr;
@@ -962,6 +1023,8 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
       Value *OrN2I1 =
           Ctx.B.CreateOr(S0I1, Ctx.B.CreateNot(S1I1), "wave_mask_orn2_64");
       recordDerivedWaveMaskI1(Ctx, Op.dst(), OrN2I1);
+      storeSccFromWaveMaskI1(Ctx, OrN2I1, "wave_mask_orn2_64_scc");
+      Hr.SccHandled = true;
     }
     Hr.Handled = true;
     return Hr;
@@ -976,6 +1039,8 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
       Value *AndN2I1 =
           Ctx.B.CreateAnd(S0I1, Ctx.B.CreateNot(S1I1), "wave_mask_andn2");
       recordDerivedWaveMaskI1(Ctx, Op.dst(), AndN2I1);
+      storeSccFromWaveMaskI1(Ctx, AndN2I1, "wave_mask_andn2_scc");
+      Hr.SccHandled = true;
     }
     Hr.Handled = true;
     return Hr;
@@ -989,6 +1054,8 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
       Value *OrN2I1 =
           Ctx.B.CreateOr(S0I1, Ctx.B.CreateNot(S1I1), "wave_mask_orn2");
       recordDerivedWaveMaskI1(Ctx, Op.dst(), OrN2I1);
+      storeSccFromWaveMaskI1(Ctx, OrN2I1, "wave_mask_orn2_scc");
+      Hr.SccHandled = true;
     }
     Hr.Handled = true;
     return Hr;
@@ -1008,6 +1075,8 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
       Value *NandI1 =
           Ctx.B.CreateNot(Ctx.B.CreateAnd(S0I1, S1I1), "wave_mask_nand");
       recordDerivedWaveMaskI1(Ctx, Op.dst(), NandI1);
+      storeSccFromWaveMaskI1(Ctx, NandI1, "wave_mask_nand_scc");
+      Hr.SccHandled = true;
     }
     Hr.Handled = true;
     return Hr;
@@ -1022,6 +1091,8 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
       Value *NandI1 =
           Ctx.B.CreateNot(Ctx.B.CreateAnd(S0I1, S1I1), "wave_mask_nand64");
       recordDerivedWaveMaskI1(Ctx, Op.dst(), NandI1);
+      storeSccFromWaveMaskI1(Ctx, NandI1, "wave_mask_nand64_scc");
+      Hr.SccHandled = true;
     }
     Hr.Handled = true;
     return Hr;
@@ -1036,6 +1107,8 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
       Value *NorI1 =
           Ctx.B.CreateNot(Ctx.B.CreateOr(S0I1, S1I1), "wave_mask_nor");
       recordDerivedWaveMaskI1(Ctx, Op.dst(), NorI1);
+      storeSccFromWaveMaskI1(Ctx, NorI1, "wave_mask_nor_scc");
+      Hr.SccHandled = true;
     }
     Hr.Handled = true;
     return Hr;
@@ -1050,6 +1123,8 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
       Value *NorI1 =
           Ctx.B.CreateNot(Ctx.B.CreateOr(S0I1, S1I1), "wave_mask_nor64");
       recordDerivedWaveMaskI1(Ctx, Op.dst(), NorI1);
+      storeSccFromWaveMaskI1(Ctx, NorI1, "wave_mask_nor64_scc");
+      Hr.SccHandled = true;
     }
     Hr.Handled = true;
     return Hr;
@@ -1064,6 +1139,8 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
       Value *XnorI1 =
           Ctx.B.CreateNot(Ctx.B.CreateXor(S0I1, S1I1), "wave_mask_xnor");
       recordDerivedWaveMaskI1(Ctx, Op.dst(), XnorI1);
+      storeSccFromWaveMaskI1(Ctx, XnorI1, "wave_mask_xnor_scc");
+      Hr.SccHandled = true;
     }
     Hr.Handled = true;
     return Hr;
@@ -1078,6 +1155,8 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
       Value *XnorI1 =
           Ctx.B.CreateNot(Ctx.B.CreateXor(S0I1, S1I1), "wave_mask_xnor64");
       recordDerivedWaveMaskI1(Ctx, Op.dst(), XnorI1);
+      storeSccFromWaveMaskI1(Ctx, XnorI1, "wave_mask_xnor64_scc");
+      Hr.SccHandled = true;
     }
     Hr.Handled = true;
     return Hr;

@@ -477,6 +477,12 @@ amd_comgr_status_t AMD_COMGR_API amd_comgr_hotswap_transpile_with_options(
   CacheRequest.CacheReadonly =
       hasFlag(options, AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_CACHE_READONLY);
   CacheRequest.CollectTimings = CollectTimings;
+  if (const char *DisableWaveNative =
+          std::getenv("HSA_HOTSWAP_DISABLE_WAVE_NATIVE");
+      DisableWaveNative && DisableWaveNative[0] &&
+      std::strcmp(DisableWaveNative, "0") != 0) {
+    CacheRequest.EnableWaveNative = false;
+  }
 
   auto listKernelsStart = timingStart(CollectTimings);
   llvm::Expected<llvm::SmallVector<std::string>> KernelNamesOrErr =

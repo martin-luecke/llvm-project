@@ -16,6 +16,7 @@
 
 #include "llvm/ADT/Twine.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
 #include "llvm/Support/raw_ostream.h"
@@ -627,8 +628,11 @@ HandlerResult handleValuCrossLane(RaiseContext &Ctx, const DecodedInst &Di,
                                          "rfl_target_lane");
       Value *Addr = Ctx.B.CreateShl(TargetLane, Ctx.B.getInt32(2),
                                     "rfl_bperm_addr");
-      Function *Bperm = Intrinsic::getOrInsertDeclaration(
-          &Ctx.M, Intrinsic::amdgcn_ds_bpermute);
+      auto *AsmTy =
+          FunctionType::get(Ctx.I32Ty, {Ctx.I32Ty, Ctx.I32Ty}, false);
+      InlineAsm *Bperm = InlineAsm::get(
+          AsmTy, "ds_bpermute_b32 $0, $1, $2\n\ts_waitcnt lgkmcnt(0)",
+          "=v,v,v", /*hasSideEffects=*/true);
       Val = Ctx.B.CreateCall(Bperm, {Addr, Src}, "readfirstlane_srcwave");
     } else {
       Function *Rfl = Intrinsic::getOrInsertDeclaration(

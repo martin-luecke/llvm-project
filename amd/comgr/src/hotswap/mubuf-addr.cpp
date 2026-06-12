@@ -13,6 +13,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -146,6 +147,41 @@ bool constantI32(Value *V, uint32_t &Out) {
   return false;
 }
 
+Value *readFirstLaneSourceWave(RaiseContext &Ctx, Value *Word,
+                               const Twine &Name) {
+  Value *LaneId = Ctx.emitLaneIdx();
+  const uint32_t SourceMask = Ctx.Isa.WaveSize - 1;
+  Value *GroupBase = Ctx.B.CreateAnd(LaneId, Ctx.B.getInt32(~SourceMask),
+                                     Name + "_source_wave_base");
+
+  Value *Exec = Ctx.Regs.loadExec(Ctx.B);
+  Value *ShiftAmt =
+      Ctx.B.CreateZExtOrTrunc(GroupBase, Exec->getType(), Name + "_exec_shift");
+  Value *SourceExecWide =
+      Ctx.B.CreateLShr(Exec, ShiftAmt, Name + "_exec_at_srcwave");
+  Value *SourceExec =
+      Ctx.B.CreateTrunc(SourceExecWide, Ctx.I32Ty, Name + "_exec");
+  Function *Cttz =
+      Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::cttz, {Ctx.I32Ty});
+  Value *FirstSet = Ctx.B.CreateCall(
+      Cttz, {SourceExec, ConstantInt::getFalse(Ctx.I1Ty)}, Name + "_first_set");
+  Value *ExecIsZero = Ctx.B.CreateICmpEQ(SourceExec, Ctx.B.getInt32(0),
+                                         Name + "_exec_is_zero");
+  Value *SourceLane =
+      Ctx.B.CreateSelect(ExecIsZero, Ctx.B.getInt32(0), FirstSet,
+                         Name + "_source_lane");
+  Value *TargetLane =
+      Ctx.B.CreateOr(GroupBase, SourceLane, Name + "_target_lane");
+  Value *Addr = Ctx.B.CreateShl(TargetLane, Ctx.B.getInt32(2),
+                                Name + "_bperm_addr");
+
+  auto *AsmTy = FunctionType::get(Ctx.I32Ty, {Ctx.I32Ty, Ctx.I32Ty}, false);
+  InlineAsm *Bperm = InlineAsm::get(
+      AsmTy, "ds_bpermute_b32 $0, $1, $2\n\ts_waitcnt lgkmcnt(0)", "=v,v,v",
+      /*hasSideEffects=*/true);
+  return Ctx.B.CreateCall(Bperm, {Addr, Word}, Name);
+}
+
 // Build a gfx942-compatible raw buffer descriptor <4 x i32> from the
 // source SRSRC dwords. Same-wave descriptors are routed through
 // `amdgcn.readfirstlane` so they land in SGPRs directly. Cross-widening MUBUF
@@ -221,7 +257,7 @@ Value *buildMubufSRD(RaiseContext &Ctx, const SRSRCDwords &Dw) {
                           &Ctx.M, Intrinsic::amdgcn_readfirstlane, {Ctx.I32Ty});
   auto ScalarizeDescriptorWord = [&](Value *Word, const char *Name) -> Value * {
     if (CrossWidening)
-      return Word;
+      return readFirstLaneSourceWave(Ctx, Word, Name);
     return Ctx.B.CreateCall(Readfirstlane, {Word}, Name);
   };
   Value *Dw1NonBaseBits =
@@ -341,8 +377,22 @@ MubufAddr decodeMubufAddr(RaiseContext &Ctx, const DecodedInst &Di,
                                          "mubuf_raw_num_records");
   Value *CleanDw1 =
       Ctx.B.CreateAnd(Dw.Dw1, ConstantInt::get(Ctx.I32Ty, 0xFFFF));
-  Value *BaseLo = Ctx.B.CreateZExt(Dw.Dw0, Ctx.I64Ty);
-  Value *BaseHi = Ctx.B.CreateShl(Ctx.B.CreateZExt(CleanDw1, Ctx.I64Ty), 32);
+  const bool CrossWidening = Ctx.TargetIsa.WaveSize > Ctx.Isa.WaveSize;
+  Function *Readfirstlane =
+      CrossWidening ? nullptr
+                    : Intrinsic::getOrInsertDeclaration(
+                          &Ctx.M, Intrinsic::amdgcn_readfirstlane, {Ctx.I32Ty});
+  auto ScalarizeDescriptorWord = [&](Value *Word, const char *Name) -> Value * {
+    if (CrossWidening)
+      return readFirstLaneSourceWave(Ctx, Word, Name);
+    return Ctx.B.CreateCall(Readfirstlane, {Word}, Name);
+  };
+  Value *RawBaseLo = ScalarizeDescriptorWord(Dw.Dw0, "mubuf_raw_base_lo");
+  Value *RawBaseHi = ScalarizeDescriptorWord(CleanDw1, "mubuf_raw_base_hi");
+  Value *RawNumRecords =
+      ScalarizeDescriptorWord(NumRecords, "mubuf_raw_num_records_sgpr");
+  Value *BaseLo = Ctx.B.CreateZExt(RawBaseLo, Ctx.I64Ty);
+  Value *BaseHi = Ctx.B.CreateShl(Ctx.B.CreateZExt(RawBaseHi, Ctx.I64Ty), 32);
   Value *Base = Ctx.B.CreateOr(BaseLo, BaseHi, "mubuf_raw_base");
   Value *BasePtr =
       Ctx.B.CreateIntToPtr(Base, PointerType::get(Ctx.C, 1), "mubuf_raw_base_ptr");
@@ -352,7 +402,7 @@ MubufAddr decodeMubufAddr(RaiseContext &Ctx, const DecodedInst &Di,
   Out.RawPtrRsrc = Ctx.B.CreateCall(
       MakeRsrc,
       {BasePtr, ConstantInt::get(Type::getInt16Ty(Ctx.C), 0),
-       Ctx.B.CreateZExt(NumRecords, Ctx.I64Ty),
+       Ctx.B.CreateZExt(RawNumRecords, Ctx.I64Ty),
        ConstantInt::get(Ctx.I32Ty, 0x27000)},
       "mubuf_raw_ptr_rsrc");
   Out.AuxFlags = ConstantInt::get(Ctx.I32Ty, 0);

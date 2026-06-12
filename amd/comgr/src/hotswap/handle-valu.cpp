@@ -73,6 +73,13 @@ struct True16OpSel {
   bool DstHi = false;
 };
 
+struct True16TernaryOpSel {
+  bool Src0Hi = false;
+  bool Src1Hi = false;
+  bool Src2Hi = false;
+  bool DstHi = false;
+};
+
 std::optional<True16OpSel> readTrue16OpSel(const DecodedInst &Di,
                                            OpResolver &Op, HandlerResult &Hr,
                                            StringRef OpName) {
@@ -103,6 +110,43 @@ std::optional<True16OpSel> readTrue16OpSel(const DecodedInst &Di,
   True16OpSel Sel;
   Sel.Src0Hi = (Src0Mods & SISrcMods::OP_SEL_0) != 0;
   Sel.Src1Hi = (Src1Mods & SISrcMods::OP_SEL_0) != 0;
+  Sel.DstHi = (Src0Mods & SISrcMods::DST_OP_SEL) != 0;
+  return Sel;
+}
+
+std::optional<True16TernaryOpSel>
+readTrue16TernaryOpSel(const DecodedInst &Di, OpResolver &Op,
+                       HandlerResult &Hr, StringRef OpName) {
+  if (Op.nSrcs() < 3) {
+    Hr.Failure = RaiseFailure::unsupportedShape(
+        Di, "VOP3",
+        (Twine(OpName) +
+         " has too few source operands; expected src0/src1/src2")
+            .str());
+    return std::nullopt;
+  }
+
+  unsigned Src0Mods = Op.srcMod(0);
+  unsigned Src1Mods = Op.srcMod(1);
+  unsigned Src2Mods = Op.srcMod(2);
+  constexpr unsigned AllowedSrc0Mods =
+      SISrcMods::OP_SEL_0 | SISrcMods::DST_OP_SEL;
+  constexpr unsigned AllowedSrcMods = SISrcMods::OP_SEL_0;
+  if ((Src0Mods & ~AllowedSrc0Mods) != 0 ||
+      (Src1Mods & ~AllowedSrcMods) != 0 ||
+      (Src2Mods & ~AllowedSrcMods) != 0) {
+    Hr.Failure = RaiseFailure::unsupportedShape(
+        Di, "VOP3",
+        (Twine(OpName) +
+         " has unsupported source modifiers; only op_sel bits are modeled")
+            .str());
+    return std::nullopt;
+  }
+
+  True16TernaryOpSel Sel;
+  Sel.Src0Hi = (Src0Mods & SISrcMods::OP_SEL_0) != 0;
+  Sel.Src1Hi = (Src1Mods & SISrcMods::OP_SEL_0) != 0;
+  Sel.Src2Hi = (Src2Mods & SISrcMods::OP_SEL_0) != 0;
   Sel.DstHi = (Src0Mods & SISrcMods::DST_OP_SEL) != 0;
   return Sel;
 }
@@ -1130,6 +1174,16 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
   }
   // v_writelane_b32 / v_readlane_b32 are handled in handle-valu-cross-lane.cpp.
 
+  // v_bcnt_u32_b32: D.u32 = popcount(S0.u32) + S1.u32.
+  if (Sop == CanonicalOp::V_BCNT_U32_B32) {
+    Function *Ctpop = Intrinsic::getOrInsertDeclaration(
+        &Ctx.M, Intrinsic::ctpop, {Ctx.I32Ty});
+    Value *Count = Ctx.B.CreateCall(Ctpop, {Op.src(0)}, "vbcnt_pop");
+    Ctx.writeReg32(Op.dst(), Ctx.B.CreateAdd(Count, Op.src(1), "vbcnt"));
+    Hr.Handled = true;
+    return Hr;
+  }
+
   // v_bfe_u32: Bit Field Extract Unsigned
   // D.u = (S0.u >> S1.u[4:0]) & ((1 << S2.u[4:0]) - 1)
   if (Sop == CanonicalOp::V_BFE_U32) {
@@ -1255,6 +1309,16 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Function *Rcp = Intrinsic::getOrInsertDeclaration(
         &Ctx.M, Intrinsic::amdgcn_rcp, {F64Ty});
     Value *R = Ctx.B.CreateCall(Rcp, {S}, "vrcp_f64");
+    Ctx.writeReg64(Op.dst(), Ctx.B.CreateBitCast(R, Ctx.I64Ty));
+    Hr.Handled = true;
+    return Hr;
+  }
+  if (Sop == CanonicalOp::V_RSQ_F64) {
+    auto *F64Ty = Type::getDoubleTy(Ctx.C);
+    Value *S = Ctx.B.CreateBitCast(Op.src64(0), F64Ty);
+    Function *Rsq = Intrinsic::getOrInsertDeclaration(
+        &Ctx.M, Intrinsic::amdgcn_rsq, {F64Ty});
+    Value *R = Ctx.B.CreateCall(Rsq, {S}, "vrsq_f64");
     Ctx.writeReg64(Op.dst(), Ctx.B.CreateBitCast(R, Ctx.I64Ty));
     Hr.Handled = true;
     return Hr;
@@ -1946,6 +2010,45 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Hr.Handled = true;
     return Hr;
   }
+  // VOP3 true16 unsigned multiply-add with op_sel half selection on all
+  // sources and dst. Unclamped hardware wraps to 16 bits; clamp=1 saturates to
+  // 0xffff before writing the selected half.
+  if (Sop == CanonicalOp::V_MAD_U16) {
+    StringRef OpName = "v_mad_u16";
+    std::optional<bool> Clamp = readVOP3Clamp(Di, Hr, OpName);
+    if (!Clamp)
+      return Hr;
+    std::optional<True16TernaryOpSel> Sel =
+        readTrue16TernaryOpSel(Di, Op, Hr, OpName);
+    if (!Sel)
+      return Hr;
+
+    Type *I16Ty = Type::getInt16Ty(Ctx.C);
+    Value *A = extractU16Half(Ctx, Op.src(0), Sel->Src0Hi);
+    Value *B = extractU16Half(Ctx, Op.src(1), Sel->Src1Hi);
+    Value *C = extractU16Half(Ctx, Op.src(2), Sel->Src2Hi);
+    Value *Result = nullptr;
+    if (*Clamp) {
+      Value *WideA = Ctx.B.CreateZExt(A, Ctx.I32Ty, "mad_u16_a_wide");
+      Value *WideB = Ctx.B.CreateZExt(B, Ctx.I32Ty, "mad_u16_b_wide");
+      Value *WideC = Ctx.B.CreateZExt(C, Ctx.I32Ty, "mad_u16_c_wide");
+      Value *Wide = Ctx.B.CreateAdd(
+          Ctx.B.CreateMul(WideA, WideB, "mad_u16_mul_wide"), WideC,
+          "mad_u16_wide");
+      Value *Hi = ConstantInt::get(Ctx.I32Ty, UINT16_MAX);
+      Wide = Ctx.B.CreateSelect(Ctx.B.CreateICmpUGT(Wide, Hi), Hi, Wide,
+                                "mad_u16_clamp");
+      Result = Ctx.B.CreateTrunc(Wide, I16Ty, "mad_u16_clamp_i16");
+    } else {
+      Result = Ctx.B.CreateAdd(Ctx.B.CreateMul(A, B, "mad_u16_mul"), C,
+                               "mad_u16");
+    }
+    writeSelectedU16Half(Ctx, Op.dst(), Result, Sel->DstHi,
+                         Sel->DstHi ? "mad_u16_merge_hi"
+                                    : "mad_u16_merge_lo");
+    Hr.Handled = true;
+    return Hr;
+  }
   // gfx1250 v_add_min/max_s/u32: dst = (s/u)(min/max)((s/u)addsat(src0, src1), src2).
   //
   // LLVM also exposes llvm.amdgcn.add.(min/max).(i/u)32 with an immediate clamp bit, but
@@ -2033,6 +2136,19 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
                                           {Ctx.I32Ty});
     Value *M01 = Ctx.B.CreateCall(UmaxFn, {S0, S1}, "vmax3_lo");
     Ctx.writeReg32(Op.dst(), Ctx.B.CreateCall(UmaxFn, {M01, S2}, "vmax3"));
+    Hr.Handled = true;
+    return Hr;
+  }
+  if (Sop == CanonicalOp::V_MAX3_I16) {
+    Type *I16Ty = Type::getInt16Ty(Ctx.C);
+    Value *S0 = Ctx.B.CreateTrunc(Op.src(0), I16Ty);
+    Value *S1 = Ctx.B.CreateTrunc(Op.src(1), I16Ty);
+    Value *S2 = Ctx.B.CreateTrunc(Op.src(2), I16Ty);
+    Value *M01 = Ctx.B.CreateSelect(Ctx.B.CreateICmpSGT(S0, S1), S0, S1,
+                                    "vmax3_i16_m01");
+    Value *M = Ctx.B.CreateSelect(Ctx.B.CreateICmpSGT(M01, S2), M01, S2,
+                                  "vmax3_i16");
+    Ctx.writeReg32(Op.dst(), Ctx.B.CreateZExt(M, Ctx.I32Ty));
     Hr.Handled = true;
     return Hr;
   }

@@ -542,12 +542,15 @@ static const Entry kCanonTable[] = {
     E(V_SUB_NC_U16_e64, V_SUB_NC_U16),
     E(V_ADD_I16_e64, V_ADD_NC_I16),
     E(V_SUB_I16_e64, V_SUB_NC_I16),
+    E(V_MAD_U16_e64, V_MAD_U16),
+    E(V_MAD_U16_gfx9_e64, V_MAD_U16),
     // gfx1250 add-then-min/max VOP3. The real subtarget opcodes canonicalize
     // through this pseudo via AMDGPU::getMCOpcode-derived tables.
     E(V_ADD_MIN_U32_e64, V_ADD_MIN_U32),
     E(V_ADD_MAX_U32_e64, V_ADD_MAX_U32),
     E(V_ADD_MIN_I32_e64, V_ADD_MIN_I32),
     E(V_ADD_MAX_I32_e64, V_ADD_MAX_I32),
+    E(V_BCNT_U32_B32_e64, V_BCNT_U32_B32),
     E(V_BFE_U32_e64, V_BFE_U32),
     E(V_BFE_I32_e64, V_BFE_I32),
     // gfx6+ VOP3 bit-field insert. Ternary, e64-only (no VOP1/VOP2
@@ -684,6 +687,7 @@ static const Entry kCanonTable[] = {
     // form is collapsed to e64 by getVOPe64 before lookup, so a
     // single e64 entry covers both encodings.
     E(V_RCP_F64_e64, V_RCP_F64),
+    E(V_RSQ_F64_e64, V_RSQ_F64),
     E(V_LDEXP_F64_e64, V_LDEXP_F64),
 
     // ---------------------------------------------------------------------
@@ -732,17 +736,21 @@ static const Entry kCanonTable[] = {
     // leave the matching CanonicalOps unmapped until one appears.
     E(V_PK_MOV_B32, V_PK_MOV_B32),
     // Packed `<2 x i16>` int family. LLVM emits the bare TableGen pseudo
-    // (`V_PK_ADD_U16` / `V_PK_LSHLREV_B16` / `V_PK_LSHRREV_B16` /
-    // `V_PK_MUL_LO_U16`); the
+    // (`V_PK_MAD_U16` / `V_PK_ADD_U16` / `V_PK_LSHLREV_B16` /
+    // `V_PK_LSHRREV_B16` / `V_PK_MUL_LO_U16`); the
     // gfx10/gfx11/gfx12/vi realtriples (`_gfx10`, `_vi`, etc.) all
     // canonicalize back to it through the pseudo-alias step. Remaining
-    // siblings V_PK_ASHRREV_I16 / V_PK_SUB_U16 / V_PK_MAX_{I,U}16 /
-    // V_PK_MIN_{I,U}16 share the same handler shape and remain
-    // unenumerated until a corpus producer appears.
+    // siblings V_PK_ASHRREV_I16 / V_PK_SUB_U16 / V_PK_MIN_{I,U}16 share
+    // the same handler shape and remain unenumerated until a corpus producer
+    // appears.
+    E(V_PK_MAD_U16, V_PK_MAD_U16),
     E(V_PK_ADD_U16, V_PK_ADD_U16),
     E(V_PK_LSHLREV_B16, V_PK_LSHLREV_B16),
     E(V_PK_LSHRREV_B16, V_PK_LSHRREV_B16),
     E(V_PK_MUL_LO_U16, V_PK_MUL_LO_U16),
+    E(V_PK_MAX_I16, V_PK_MAX_I16),
+    E(V_PK_MAX3_I16, V_PK_MAX3_I16),
+    E(V_MAX3_I16_e64, V_MAX3_I16),
 
     // ---------------------------------------------------------------------
     // 64-bit vector
@@ -1078,6 +1086,10 @@ static const Entry kCanonTable[] = {
     // through the same CanonicalOp.
     E(DS_WRITE_B16_D16_HI, DS_WRITE_B16_D16_HI),
     E(DS_WRITE_B8_D16_HI, DS_WRITE_B8_D16_HI),
+    // LDS atomic add without return. The DS real/pseudo keeps the
+    // same operand shape across the gfx families this raiser handles;
+    // handle-ds.cpp lowers it to addrspace(3) atomicrmw add.
+    E(DS_ADD_U32, DS_ADD_U32),
     E(DS_BPERMUTE_B32, DS_BPERMUTE_B32),
     // ds_swizzle_b32 -- wave-width-specific cross-lane shuffle. The
     // handler refuses with `unsupportedShape` until the P6 rewrite

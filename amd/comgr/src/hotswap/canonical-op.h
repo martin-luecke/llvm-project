@@ -473,12 +473,17 @@ enum class CanonicalOp : uint16_t {
   // dst op_sel is set so the preserved half survives the
   // read-modify-write.
   V_ADD_NC_U16, V_SUB_NC_U16, V_ADD_NC_I16, V_SUB_NC_I16,
+  // VOP3 true16 unsigned multiply-add:
+  //   dst.u16 = src0.u16 * src1.u16 + src2.u16
+  // with op_sel half selection on all sources and dst. The unclamped form wraps
+  // to the low 16 bits; clamp=1 saturates to 0xffff before the half write.
+  V_MAD_U16,
   // gfx1250 VOP3 add-then-min/max: (s/u)(min/max)((s/u)addsat(src0, src1), src2).
   V_ADD_MIN_U32,
   V_ADD_MAX_U32,
   V_ADD_MIN_I32,
   V_ADD_MAX_I32,
-  V_BFE_U32, V_BFE_I32, V_BFI_B32, V_PERM_B32,
+  V_BCNT_U32_B32, V_BFE_U32, V_BFE_I32, V_BFI_B32, V_PERM_B32,
   V_MBCNT_LO_U32_B32, V_MBCNT_HI_U32_B32,
   V_READLANE_B32, V_WRITELANE_B32,
   V_MED3_F32, V_MAX3_F32, V_MIN3_F32, V_MAX3_NUM_F32,
@@ -635,6 +640,10 @@ enum class CanonicalOp : uint16_t {
   // sequence on gfx942 unless `arcp`/fast-math flags are set, which
   // would be a silent semantics change versus the source op.
   V_RCP_F64,
+  // VOP1/VOP3 FP64 reciprocal square-root approximation. Lowered through
+  // `llvm.amdgcn.rsq.f64` so target codegen emits the hardware TRANS op rather
+  // than expanding to generic sqrt+divide.
+  V_RSQ_F64,
   // VOP3 FP64 ldexp: F64 src0 * 2^(I32 src1). Lifted to the generic
   // `llvm.ldexp.f64.i32` intrinsic; the AMDGPU backend lowers this back
   // to v_ldexp_f64 on targets that have the op natively. No e32 form
@@ -707,6 +716,8 @@ enum class CanonicalOp : uint16_t {
   // analogue to the V_PK_F32 32-bit-element family, because the
   // literal width matches the operand width here.
   //
+  // V_PK_MAD_U16:     dst = src0 * src1 + src2         (lane-wise modular
+  //                   i16 multiply-add)
   // V_PK_ADD_U16:     dst = src0 + src1                (lane-wise i16 add)
   // V_PK_LSHLREV_B16: dst = src1 << (src0 & 15)        (clshl_rev_16
   //                   SDAG: shift count is src0, value is src1, low 4
@@ -729,13 +740,14 @@ enum class CanonicalOp : uint16_t {
   // Sibling V_PK_ASHRREV_I16 shares the same handler shape (only the
   // IR opcode differs: ashr), but remains unenumerated until a corpus
   // producer appears.
-  V_PK_ADD_U16, V_PK_LSHLREV_B16, V_PK_LSHRREV_B16, V_PK_MUL_LO_U16,
+  V_PK_MAD_U16, V_PK_ADD_U16, V_PK_LSHLREV_B16, V_PK_LSHRREV_B16,
+  V_PK_MUL_LO_U16, V_PK_MAX_I16, V_PK_MAX3_I16,
 
   V_BITOP3_B32, V_BITOP3_B16,
 
   // GFX9 VOP3-only v_add/sub_i32 -- plain add/sub when clamp=0,
   // saddsat/ssubsat when clamp=1.
-  V_ADD_I32, V_SUB_I32,
+  V_ADD_I32, V_SUB_I32, V_MAX3_I16,
 
   // -- 64-bit vector ops --
   V_LSHLREV_B64,
@@ -896,6 +908,10 @@ enum class CanonicalOp : uint16_t {
   // are not yet on the worklist; if they surface, add them here as
   // a separate set with their own tied-source dest_in handling.
   DS_WRITE_B16_D16_HI, DS_WRITE_B8_D16_HI,
+  // LDS atomic add without return. Hardware performs an atomic
+  // read-modify-write of i32 at addr+offset and discards the old value.
+  // Lifted as an EXEC-gated `atomicrmw add` in addrspace(3).
+  DS_ADD_U32,
   DS_BPERMUTE_B32,
   // Class 2 DsSwizzle (hotswap/docs/wave-size-translation.md §6).
   // Wave-width-specific cross-lane shuffle. The handler refuses with

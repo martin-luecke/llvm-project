@@ -55,7 +55,8 @@ struct DecodeResult {
 DecodeResult decodeKernel(const MCState &Mc,
                           const OpcodeMap &OpcMap,
                           llvm::ArrayRef<uint8_t> TextBytes,
-                          uint64_t KernelOffset);
+                          uint64_t KernelOffset,
+                          uint64_t KernelEndOffset = 0);
 
 } // namespace COMGR::hotswap
 

@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "raise-context.h"
+#include "source-hidden-args.h"
 
 #include "MCTargetDesc/AMDGPUMCTargetDesc.h" // AMDGPU::VCC, AMDGPU::EXEC, ...
 #include "SIDefines.h"                        // AMDGPU::HWEncoding::*
@@ -309,6 +310,17 @@ Value *RaiseContext::readOp32(const DecodedInst &Di, unsigned OpIdx) {
       Value *V = Regs.loadExec(B);
       if (V->getType() == I32Ty)
         return V;
+    if (Projection.sourceWaveScopedLaneOps() && Pr.Width < 2 &&
+        Pr.BaseIdx == 0) {
+      Value *Lo = B.CreateTrunc(V, I32Ty, "exec_src_wave_lo");
+      Value *Hi =
+          B.CreateTrunc(B.CreateLShr(V, 32), I32Ty, "exec_src_wave_hi");
+      Value *Lane = emitLaneIdx();
+      Value *Upper =
+          B.CreateICmpUGE(Lane, ConstantInt::get(I32Ty, 32),
+                          "exec_src_wave_upper");
+      return B.CreateSelect(Upper, Hi, Lo, "exec_src_wave_mask");
+    }
       if (Pr.Width < 2 && Pr.BaseIdx == 1)
         V = B.CreateLShr(V, 32, "exec_hi_shr");
       return B.CreateTrunc(V, I32Ty,
@@ -337,23 +349,24 @@ Value *RaiseContext::readOp32(const DecodedInst &Di, unsigned OpIdx) {
     // model it" channel, used today for runtime-defined aperture
     // registers (SRC_SHARED_BASE / SRC_FLAT_SCRATCH_BASE_LO etc.,
     // see parseReg's switch). Surface a clean unsupported-shape
-    // failure on the dispatch loop and return undef so we don't
-    // crash mid-handler -- the next instruction-boundary check in
-    // raiser.cpp will abort the kernel raise.
+    // failure on the dispatch loop and return a deterministic zero so we don't
+    // crash mid-handler or let LLVM poison/undef feed later control/dataflow --
+    // the next instruction-boundary check in raiser.cpp will abort the kernel
+    // raise.
     if (Pr.RegKind == ParsedReg::OTHER) {
       recordReadFailure(RaiseFailure::unsupportedShape(
           Di, "operand-read",
           (Twine("readOp32 saw unmodeled register '") +
            Mc.RegInfo->getName(Di.getReg(OpIdx)) + "' in " + Di.Mnemonic)
               .str()));
-      return UndefValue::get(I32Ty);
+      return Constant::getNullValue(I32Ty);
     }
     Value *V = Regs.readReg32(B, Pr);
     if (!V) {
       errs() << "transpiler: unreadable register '"
              << Mc.RegInfo->getName(Di.getReg(OpIdx)) << "' in " << Di.Mnemonic
              << "\n";
-      return UndefValue::get(I32Ty);
+      return Constant::getNullValue(I32Ty);
     }
     return V;
   }
@@ -368,7 +381,7 @@ Value *RaiseContext::readOp32(const DecodedInst &Di, unsigned OpIdx) {
   }
   errs() << "transpiler: readOp32 unresolvable operand " << OpIdx << " in "
          << Di.Mnemonic << "\n";
-  return UndefValue::get(I32Ty);
+  return Constant::getNullValue(I32Ty);
 }
 
 Value *RaiseContext::readOp64(const DecodedInst &Di, unsigned OpIdx) {
@@ -410,14 +423,14 @@ Value *RaiseContext::readOp64(const DecodedInst &Di, unsigned OpIdx) {
           (Twine("readOp64 saw unmodeled register '") +
            Mc.RegInfo->getName(Di.getReg(OpIdx)) + "' in " + Di.Mnemonic)
               .str()));
-      return UndefValue::get(I64Ty);
+      return Constant::getNullValue(I64Ty);
     }
     Value *V = Regs.readReg64(B, Pr);
     if (!V) {
       errs() << "transpiler: unreadable register64 '"
              << Mc.RegInfo->getName(Di.getReg(OpIdx)) << "' in " << Di.Mnemonic
              << "\n";
-      return UndefValue::get(I64Ty);
+      return Constant::getNullValue(I64Ty);
     }
     return V;
   }
@@ -430,7 +443,7 @@ Value *RaiseContext::readOp64(const DecodedInst &Di, unsigned OpIdx) {
   }
   errs() << "transpiler: readOp64 unresolvable operand " << OpIdx << " in "
          << Di.Mnemonic << "\n";
-  return UndefValue::get(I64Ty);
+  return Constant::getNullValue(I64Ty);
 }
 
 Value *RaiseContext::emitUpdateDpp(Value *OldVal, Value *Src, uint16_t Ctrl,
@@ -507,6 +520,55 @@ Value *RaiseContext::emitLaneIdx() {
   CachedLaneIdx = Projection.emitLaneIdx(B);
   CachedLaneIdxBb = B.GetInsertBlock();
   return CachedLaneIdx;
+}
+
+Value *RaiseContext::emitSourceWaveIdInWorkgroup() {
+  auto LoadHiddenGroupSize = [&](StringRef ValueKind) -> Value * {
+    for (const KernelArgMeta &Arg : Kernargs.Args) {
+      if (Arg.ValueKind != ValueKind)
+        continue;
+      SourceHiddenArgContext HiddenCtx{C, M, B, I8Ty, I32Ty, I64Ty,
+                                       Kernargs.Args};
+      SourceHiddenArgValue Hidden = emitSourceHiddenInteger(
+          HiddenCtx, static_cast<int>(Arg.Offset),
+          static_cast<unsigned>(Arg.Size), /*IsSigned=*/false);
+      if (Hidden.Matched && Hidden.Value)
+        return Hidden.Value;
+      return nullptr;
+    }
+    return nullptr;
+  };
+
+  Value *GroupX = LoadHiddenGroupSize("hidden_group_size_x");
+  Value *GroupY = LoadHiddenGroupSize("hidden_group_size_y");
+  if (!GroupX)
+    GroupX = ConstantInt::get(I32Ty, Isa.WaveSize);
+  if (!GroupY)
+    GroupY = ConstantInt::get(I32Ty, 1);
+
+  Value *TidX = Projection.emitWorkitemIdX(B);
+  TidX->setName("source_wave_tid_x");
+  Function *WorkitemY =
+      Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_workitem_id_y);
+  Function *WorkitemZ =
+      Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_workitem_id_z);
+  Value *TidY = B.CreateCall(WorkitemY, {}, "source_wave_tid_y");
+  Value *TidZ = B.CreateCall(WorkitemZ, {}, "source_wave_tid_z");
+
+  Value *LinearY = B.CreateMul(TidY, GroupX, "source_wave_linear_y");
+  Value *GroupXY = B.CreateMul(GroupX, GroupY, "source_wave_group_xy");
+  Value *LinearZ = B.CreateMul(TidZ, GroupXY, "source_wave_linear_z");
+  Value *Linear =
+      B.CreateAdd(B.CreateAdd(TidX, LinearY, "source_wave_linear_xy"),
+                  LinearZ, "source_wave_linear_tid");
+
+  unsigned SrcWaveBits = Isa.WaveSize;
+  if (SrcWaveBits != 32 && SrcWaveBits != 64)
+    report_fatal_error("source wave-id lift: unsupported source wave size " +
+                       Twine(SrcWaveBits) + " (expected 32 or 64)");
+  unsigned LogWs = (SrcWaveBits == 64) ? 6 : 5;
+  return B.CreateLShr(Linear, ConstantInt::get(I32Ty, LogWs),
+                      "source_wave_id_in_wg");
 }
 
 Value *RaiseContext::emitLaneActiveBit() {

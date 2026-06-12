@@ -273,7 +273,9 @@ HandlerResult handleSOP1(RaiseContext &Ctx, const DecodedInst &Di,
     Value *Src = Op.srcExecWidth(0);
     Ctx.Regs.writeRegExecWidth(Ctx.B, Op.dst(), OldExec);
     RecordOldExecShadowOnDst(OldExec);
-    Value *NewExec = Ctx.B.CreateAnd(OldExec, Ctx.B.CreateNot(Src), "new_exec");
+    // LLVM's S_ANDN2_SAVEEXEC is the gfx10+/gfx12
+    // s_and_not1_saveexec spelling: EXEC = src & ~old_exec, dst = old_exec.
+    Value *NewExec = Ctx.B.CreateAnd(Src, Ctx.B.CreateNot(OldExec), "new_exec");
     Ctx.Regs.storeExec(Ctx.B, NewExec);
     Hr.SccResult = NewExec;
     Hr.Handled = true;
@@ -284,7 +286,9 @@ HandlerResult handleSOP1(RaiseContext &Ctx, const DecodedInst &Di,
     Value *Src = Op.srcExecWidth(0);
     Ctx.Regs.writeRegExecWidth(Ctx.B, Op.dst(), OldExec);
     RecordOldExecShadowOnDst(OldExec);
-    Value *NewExec = Ctx.B.CreateOr(OldExec, Ctx.B.CreateNot(Src), "new_exec");
+    // LLVM's S_ORN2_SAVEEXEC is the gfx10+/gfx12
+    // s_or_not1_saveexec spelling: EXEC = src | ~old_exec, dst = old_exec.
+    Value *NewExec = Ctx.B.CreateOr(Src, Ctx.B.CreateNot(OldExec), "new_exec");
     Ctx.Regs.storeExec(Ctx.B, NewExec);
     Hr.SccResult = NewExec;
     Hr.Handled = true;

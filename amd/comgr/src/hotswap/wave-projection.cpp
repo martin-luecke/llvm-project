@@ -76,6 +76,10 @@ Value *WaveProjection::emitInitialExec(IRBuilder<> &B) const {
   return ConstantInt::getSigned(execStorageTy(), -1);
 }
 
+void WaveProjection::emitBeforeReturn(IRBuilder<> &B) const {
+  (void)B;
+}
+
 Value *WaveProjection::wrapAsWWMValue(IRBuilder<> &B, Value *V,
                                         const Twine &Name) const {
   if (providesFullWaveExecInvariant())
@@ -292,6 +296,13 @@ Value *WaveNativeProjection::emitInitialExec(IRBuilder<> &B) const {
   // overload of `llvm.amdgcn.ballot` selected is the backend-
   // supported one for this subtarget.
   return ballotI1ToWidth(B, OriginalActive, WaveMaskTy, "saved_exec");
+}
+
+void WaveNativeProjection::emitBeforeReturn(IRBuilder<> &B) const {
+  Module *M = B.GetInsertBlock()->getModule();
+  Function *InitWw = Intrinsic::getOrInsertDeclaration(
+      M, Intrinsic::amdgcn_init_whole_wave);
+  B.CreateCall(InitWw, {}, "return_full_wave");
 }
 
 Value *WaveNativeProjection::emitLaneActiveBit(IRBuilder<> &B,

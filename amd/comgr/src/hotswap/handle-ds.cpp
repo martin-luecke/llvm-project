@@ -717,6 +717,38 @@ HandlerResult handleDS(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
 
+  if (Sop == CanonicalOp::DS_ADD_U32) {
+    unsigned Opc = Di.Inst.getOpcode();
+    int GdsIdx = AMDGPU::getNamedOperandIdx(Opc, AMDGPU::OpName::gds);
+    if (GdsIdx >= 0 && static_cast<unsigned>(GdsIdx) < Di.Inst.getNumOperands() &&
+        Di.Inst.getOperand(static_cast<unsigned>(GdsIdx)).isImm() &&
+        Di.Inst.getOperand(static_cast<unsigned>(GdsIdx)).getImm() != 0) {
+      Hr.Failure = RaiseFailure::unsupportedShape(
+          Di, "DS", "ds_add_u32 with GDS addressing is not LDS addrspace(3)");
+      return Hr;
+    }
+
+    Value *Addr = Ctx.B.CreateZExt(Op.src(0), Ctx.I64Ty, "ds_atomic_addr");
+    int OffIdx = AMDGPU::getNamedOperandIdx(Opc, AMDGPU::OpName::offset);
+    if (OffIdx >= 0 && static_cast<unsigned>(OffIdx) < Di.Inst.getNumOperands() &&
+        Di.Inst.getOperand(static_cast<unsigned>(OffIdx)).isImm()) {
+      int64_t Imm = Di.Inst.getOperand(static_cast<unsigned>(OffIdx)).getImm();
+      if (Imm != 0)
+        Addr = Ctx.B.CreateAdd(Addr, ConstantInt::get(Ctx.I64Ty, Imm),
+                               "ds_atomic_off");
+    }
+
+    Value *Ptr = Ctx.B.CreateIntToPtr(Addr, PointerType::get(Ctx.C, 3),
+                                      "ds_atomic_ptr");
+    Value *Data = Ctx.Regs.readReg32(Ctx.B, Op.srcReg(1));
+    Ctx.emitUnderExec([&] {
+      Ctx.B.CreateAtomicRMW(AtomicRMWInst::Add, Ptr, Data, Align(4),
+                            AtomicOrdering::Monotonic);
+    });
+    Hr.Handled = true;
+    return Hr;
+  }
+
   if (Sop == CanonicalOp::DS_BPERMUTE_B32) {
     // Backwards permute: per-lane GATHER. Each lane reads the `src1`
     // value from a *source* lane whose index is `src0 >> 2` (the

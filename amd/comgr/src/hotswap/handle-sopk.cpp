@@ -211,6 +211,19 @@ static unsigned extractHwregId(int64_t Simm16) {
   return static_cast<unsigned>(Simm16 & 0x3f);
 }
 
+static unsigned extractHwregOffset(int64_t Simm16) {
+  return static_cast<unsigned>((Simm16 >> 6) & 0x1f);
+}
+
+static unsigned extractHwregWidth(int64_t Simm16) {
+  return static_cast<unsigned>(((Simm16 >> 11) & 0x1f) + 1);
+}
+
+static bool isModeReplayModeWrite(unsigned HwregId, int64_t Simm16) {
+  return HwregId == AMDGPU::Hwreg::ID_MODE &&
+         extractHwregOffset(Simm16) == 25 && extractHwregWidth(Simm16) == 1;
+}
+
 static Value *getSimm16(RaiseContext &Ctx, const DecodedInst &Di,
                         unsigned OperandIdx, HandlerResult &Hr) {
   if (OperandIdx >= Di.Inst.getNumOperands() || !Di.isImm(OperandIdx)) {
@@ -372,6 +385,22 @@ HandlerResult handleSOPK(RaiseContext &Ctx, const DecodedInst &Di,
     HwregPolicy Policy = classifyHwreg(HwregId);
 
     if (Sop == CanonicalOp::S_GETREG_B32) {
+      for (unsigned I = 0; I < Di.numOps(); ++I) {
+        if (!Di.isImm(I))
+          continue;
+        int64_t MaybeHwreg = Di.getImm(I);
+        if (extractHwregId(MaybeHwreg) == AMDGPU::Hwreg::ID_IB_STS2 &&
+            extractHwregOffset(MaybeHwreg) == 6 &&
+            extractHwregWidth(MaybeHwreg) == 4) {
+          // IB_STS2[9:6] is WG_in_Cluster on gfx12+/MI400. Non-cluster
+          // PyTorch kernels run as singleton workgroups, so the architectural
+          // value is zero. The source wave id lives in TTMP8[29:25] and is
+          // handled by the narrow S_BFE_U32 ttmp8 lift in handle-sop2.cpp.
+          Ctx.Regs.writeReg32(Ctx.B, Op.dst(), ConstantInt::get(Ctx.I32Ty, 0));
+          Hr.Handled = true;
+          return Hr;
+        }
+      }
       if (Policy.Read == HwregRead::Abort) {
         errs() << "transpiler: " << Di.Mnemonic
                << " reads load-bearing or unknown HWREG id=" << HwregId
@@ -396,6 +425,16 @@ HandlerResult handleSOPK(RaiseContext &Ctx, const DecodedInst &Di,
       return Hr;
     }
     if (Policy.Write == HwregWrite::Preserve) {
+      int64_t Simm16 = Di.getImm(Simm16OpIdx);
+      if (isModeReplayModeWrite(HwregId, Simm16)) {
+        // MODE[25] is the source replay-mode field emitted by gfx12 kernels.
+        // It is a memory replay scheduling control, not a value-level compute
+        // semantic, and preserving it on target hardware can perturb VMEM
+        // execution. Drop only this exact field; other MODE writes stay
+        // faithfully re-emitted below.
+        Hr.Handled = true;
+        return Hr;
+      }
       // Re-emit the write via `@llvm.amdgcn.s.setreg(i32 immarg
       // hwmode, i32 value)` so the target backend lowers it to
       // `s_setreg_imm32_b32 <same simm16>, <same value>` byte-for-
@@ -405,7 +444,6 @@ HandlerResult handleSOPK(RaiseContext &Ctx, const DecodedInst &Di,
       // immediate at MCInst op 0 (`imm` in the TableGen `ins`
       // ordering); S_SETREG_B32 has the value in a scalar register
       // at MCInst op 0 (`sdst`), which we read through `op.src(0)`.
-      int64_t Simm16 = Di.getImm(Simm16OpIdx);
       Value *ValArg = nullptr;
       if (Sop == CanonicalOp::S_SETREG_IMM32_B32) {
         // MCInst operand 0 is the i32 immediate value; the simm16 is

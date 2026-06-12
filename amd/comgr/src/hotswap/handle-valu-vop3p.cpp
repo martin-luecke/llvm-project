@@ -552,8 +552,9 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
   }
 
   // ---- VOP3P packed-pair `<2 x i16>` int ops ----
-  // V_PK_ADD_U16 / V_PK_LSHLREV_B16 / V_PK_LSHRREV_B16 / V_PK_MUL_LO_U16. Operand profile is
-  // VOP_V2I16_V2I16_V2I16: 32-bit dst / 32-bit src0 / 32-bit src1, each
+  // V_PK_MAD_U16 / V_PK_ADD_U16 / V_PK_LSHLREV_B16 / V_PK_LSHRREV_B16 /
+  // V_PK_MUL_LO_U16. Binary forms use VOP_V2I16_V2I16_V2I16; MAD uses
+  // VOP_V2I16_V2I16_V2I16_V2I16. Each source is a packed i32
   // bitcast to `<2 x i16>` for the lane-wise op and back to i32 for the
   // VGPR write-back. Shared handler shape; per-CanonicalOp dispatch picks the
   // IR opcode (`add` vs the reversed `clshl_rev_16` shape vs lane-wise
@@ -565,16 +566,24 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
   // shape -- one extra `case` + IR-opcode dispatch in the inner switch
   // and they're done -- but they're held out per the "no fallback / design
   // what the corpus exercises" discipline.
+  case CanonicalOp::V_PK_MAD_U16:
   case CanonicalOp::V_PK_ADD_U16:
   case CanonicalOp::V_PK_LSHLREV_B16:
   case CanonicalOp::V_PK_LSHRREV_B16:
-  case CanonicalOp::V_PK_MUL_LO_U16: {
+  case CanonicalOp::V_PK_MUL_LO_U16:
+  case CanonicalOp::V_PK_MAX_I16:
+  case CanonicalOp::V_PK_MAX3_I16: {
     auto *I16Ty = Type::getInt16Ty(Ctx.C);
 
     constexpr unsigned KnownPkI16Mods =
         SISrcMods::OP_SEL_0 | SISrcMods::OP_SEL_1;
     unsigned Mods[3] = {};
-    if (!readPackedSrcMods(Di, Op, 2, KnownPkI16Mods, Mods, Hr))
+    const unsigned NumSrcs =
+        (Sop == CanonicalOp::V_PK_MAD_U16 ||
+         Sop == CanonicalOp::V_PK_MAX3_I16)
+            ? 3
+            : 2;
+    if (!readPackedSrcMods(Di, Op, NumSrcs, KnownPkI16Mods, Mods, Hr))
       return Hr;
 
     PackedSrcOptions Opts;
@@ -584,6 +593,12 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
 
     Value *Res = nullptr;
     switch (Sop) {
+    case CanonicalOp::V_PK_MAD_U16: {
+      Value *S2 = readPacked2Src(Ctx, Op, 2, I16Ty, Mods[2], Opts);
+      Res = Ctx.B.CreateAdd(Ctx.B.CreateMul(S0, S1, "pk_mad_u16_mul"), S2,
+                            "pk_mad_u16");
+      break;
+    }
     case CanonicalOp::V_PK_ADD_U16:
       Res = Ctx.B.CreateAdd(S0, S1, "pk_add_u16");
       break;
@@ -593,6 +608,18 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
       // signed vs unsigned doesn't change the low half of the product.
       Res = Ctx.B.CreateMul(S0, S1, "pk_mul_lo_u16");
       break;
+    case CanonicalOp::V_PK_MAX_I16:
+      Res = Ctx.B.CreateSelect(Ctx.B.CreateICmpSGT(S0, S1), S0, S1,
+                               "pk_max_i16");
+      break;
+    case CanonicalOp::V_PK_MAX3_I16: {
+      Value *S2 = readPacked2Src(Ctx, Op, 2, I16Ty, Mods[2], Opts);
+      Value *M01 = Ctx.B.CreateSelect(Ctx.B.CreateICmpSGT(S0, S1), S0, S1,
+                                      "pk_max3_i16_m01");
+      Res = Ctx.B.CreateSelect(Ctx.B.CreateICmpSGT(M01, S2), M01, S2,
+                               "pk_max3_i16");
+      break;
+    }
     case CanonicalOp::V_PK_LSHLREV_B16: {
       // clshl_rev_16 SDAG: dst = src1 << (src0 & 15). Reversed-operand
       // convention (shift count is src0, value is src1) AND a hardware

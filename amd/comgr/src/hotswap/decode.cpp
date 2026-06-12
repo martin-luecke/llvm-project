@@ -31,6 +31,7 @@
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
 #include <climits>
 #include <optional>
 #include <string>
@@ -312,6 +313,20 @@ void decodeScaleOffset(DecodedInst &Di) {
     return;
   int64_t Cpol = Mop.getImm();
   Di.HasScaleOffset = (Cpol & AMDGPU::CPol::SCAL) != 0;
+}
+
+void decodeStaticOffset(DecodedInst &Di) {
+  const MCInst &Inst = Di.Inst;
+  int OffsetIdx =
+      AMDGPU::getNamedOperandIdx(Inst.getOpcode(), AMDGPU::OpName::offset);
+  if (OffsetIdx < 0 ||
+      static_cast<unsigned>(OffsetIdx) >= Inst.getNumOperands())
+    return;
+  const MCOperand &Mop = Inst.getOperand(static_cast<unsigned>(OffsetIdx));
+  if (!Mop.isImm())
+    return;
+  Di.HasStaticOffset = true;
+  Di.StaticOffset = static_cast<uint64_t>(Mop.getImm());
 }
 
 // Decode DPP16 modifier operands (dpp_ctrl / row_mask / bank_mask /
@@ -649,6 +664,7 @@ void decodeVopd(DecodedInst &Di, const MCInstrInfo &MCII,
 
 void collectBranchTargets(const DecodedInst &Di, uint64_t Off,
                           uint64_t InstSize,
+                          uint64_t DecodeLimit,
                           std::set<uint64_t> &BlockStarts) {
   const MCInst &Inst = Di.Inst;
   for (unsigned I = 0; I < Inst.getNumOperands(); ++I) {
@@ -657,9 +673,11 @@ void collectBranchTargets(const DecodedInst &Di, uint64_t Off,
     int64_t Raw = Inst.getOperand(I).getImm();
     int64_t BrOff = static_cast<int64_t>(
         static_cast<int16_t>(static_cast<uint16_t>(Raw & 0xFFFF)));
-    BlockStarts.insert(Off + 4 + BrOff * 4);
+    uint64_t Target = Off + 4 + BrOff * 4;
+    if (Target < DecodeLimit)
+      BlockStarts.insert(Target);
   }
-  if (Di.IsConditionalBranch)
+  if (Di.IsConditionalBranch && Off + InstSize < DecodeLimit)
     BlockStarts.insert(Off + InstSize);
 }
 
@@ -668,7 +686,8 @@ void collectBranchTargets(const DecodedInst &Di, uint64_t Off,
 DecodeResult decodeKernel(const MCState &Mc,
                           const OpcodeMap &OpcMap,
                           ArrayRef<uint8_t> TextBytes,
-                          uint64_t KernelOffset) {
+                          uint64_t KernelOffset,
+                          uint64_t KernelEndOffset) {
   DecodeResult Out;
   Out.BlockStarts.insert(KernelOffset);
 
@@ -676,7 +695,10 @@ DecodeResult decodeKernel(const MCState &Mc,
     errs() << "transpiler: Starting disassembly at kernel offset 0x"
            << utohexstr(KernelOffset) << "\n";
 
-  const uint64_t TotalSize = TextBytes.size();
+  const uint64_t TotalSize =
+      KernelEndOffset == 0 ? static_cast<uint64_t>(TextBytes.size())
+                           : std::min<uint64_t>(KernelEndOffset,
+                                                TextBytes.size());
   uint64_t Off = KernelOffset;
   while (Off < TotalSize) {
     MCInst Inst;
@@ -711,6 +733,7 @@ DecodeResult decodeKernel(const MCState &Mc,
     Di.FirstSrcIdx = Desc.getNumDefs();
 
     decodeScaleOffset(Di);
+    decodeStaticOffset(Di);
     decodeDppModifiers(Di);
     decodeDsSwizzleImm(Di);
     decodeVopd(Di, *Mc.InstrInfo, *Mc.RegInfo, OpcMap);
@@ -720,7 +743,7 @@ DecodeResult decodeKernel(const MCState &Mc,
     classifyImplicitDefs(Di, Desc);
 
     if (Di.IsBranch)
-      collectBranchTargets(Di, Off, InstSize, Out.BlockStarts);
+      collectBranchTargets(Di, Off, InstSize, TotalSize, Out.BlockStarts);
 
     bool IsEnd = (Di.CanonOp == CanonicalOp::S_ENDPGM);
     Out.Insts.push_back(std::move(Di));

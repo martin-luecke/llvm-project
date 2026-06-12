@@ -442,6 +442,43 @@ static void runGroupPass(IRBuilder<> &B, Module &M, RaiseContext &Ctx,
   Function *MfmaFn = Intrinsic::getOrInsertDeclaration(&M, MfmaId);
   Value *Cbsz = B.getInt32(0), *Abid = B.getInt32(0), *Blgp = B.getInt32(0);
 
+  // gfx950 has direct K=32 MFMA shapes for 16-bit inputs. Prefer those over the
+  // gfx942-compatible 2xK16 decomposition: they match the source WMMA K-shape,
+  // avoid the extra accumulator boundary, and materially reduce live ranges in
+  // large Tensile kernels.
+  if (Ctx.TargetIsa.HasGfx950Insts &&
+      (InputType == WMMAInputType::F16 || InputType == WMMAInputType::BF16)) {
+    Value *MfmaA[4] = {MfmaALo[0], MfmaALo[1], MfmaAHi[0], MfmaAHi[1]};
+    Value *MfmaB[4] = {MfmaBLo[0], MfmaBLo[1], MfmaBHi[0], MfmaBHi[1]};
+    Type *DirectAbPackTy =
+        InputType == WMMAInputType::F16
+            ? static_cast<Type *>(FixedVectorType::get(Ctx.F16Ty, 8))
+            : static_cast<Type *>(FixedVectorType::get(Type::getBFloatTy(Ctx.C), 8));
+    Intrinsic::ID DirectMfmaId =
+        InputType == WMMAInputType::F16
+            ? Intrinsic::amdgcn_mfma_f32_16x16x32_f16
+            : Intrinsic::amdgcn_mfma_f32_16x16x32_bf16;
+    Function *DirectMfmaFn =
+        Intrinsic::getOrInsertDeclaration(&M, DirectMfmaId);
+    Value *SrcA = packDwords(B, MfmaA, 4, Ctx.I32Ty, DirectAbPackTy);
+    Value *SrcB = packDwords(B, MfmaB, 4, Ctx.I32Ty, DirectAbPackTy);
+    Value *Mfma = Ctx.Projection.wrapAsWWMValue(
+        B,
+        B.CreateCall(DirectMfmaFn,
+                     {SrcA, SrcB, Acc, Cbsz, Abid, Blgp}, "mfma"),
+        "mfma_wwm");
+
+    Value *MfmaDst[4];
+    unpackDwords(B, Mfma, 4, Ctx.I32Ty, MfmaDst);
+
+    Value *W32Lane = B.CreateAnd(LaneId, B.getInt32(31), "w32_lane");
+    collectResult(B, M, MfmaDst, W32Lane, ResultDwords);
+    for (unsigned I = 0; I < 8; ++I)
+      ResultDwords[I] =
+          Ctx.Projection.wrapAsWWMValue(B, ResultDwords[I], "wmma_collect_wwm");
+    return;
+  }
+
   // MFMA is EXEC-gated on its WRITE: a lane with EXEC=0 skips
   // updating its destination VGPR.  Under `WaveNativeProjection` the
   // kernel-entry `init_whole_wave` keeps HW EXEC=-1 kernel-wide so

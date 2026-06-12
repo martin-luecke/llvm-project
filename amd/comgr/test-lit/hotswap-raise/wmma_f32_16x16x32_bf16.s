@@ -1,5 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --enable-wave-native --emit-ir=wmma_f32_16x16x32_bf16_kernel 2>/dev/null | %FileCheck %s
+; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
+; RUN:   && raise_cli %t.hsaco --target-isa=gfx950 --enable-wave-native --emit-ir=wmma_f32_16x16x32_bf16_kernel 2>/dev/null | %FileCheck %s --check-prefix=GFX950
 ;
 ; Lift test for v_wmma_f32_16x16x32_bf16 (gfx1250 RDNA4 VOP3P opcode
 ; 0x062) lowered to gfx942 (CDNA3) via emitWMMAtoMFMA(..., BF16).
@@ -110,6 +112,18 @@
 ; Negative pin: native gfx12 WMMA intrinsic must NOT appear (target
 ; is gfx942 which does NOT have hasWMMA12).
 ; CHECK-NOT: @llvm.amdgcn.wmma.f32.16x16x32.bf16
+
+; gfx950 has a direct K=32 BF16 MFMA shape, so this target should use
+; one MFMA per virtual Wave32 group instead of decomposing K=32 into
+; two K=16 `_1k` calls. This pins the gfx950 Template-A path.
+; GFX950-LABEL: define amdgpu_kernel void @wmma_f32_16x16x32_bf16_kernel(
+; GFX950: call i1 @llvm.amdgcn.init.whole.wave()
+; GFX950: bitcast <4 x i32> %{{.*}} to <8 x bfloat>
+; GFX950: %mfma = call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.bf16(<8 x bfloat> %{{[^,]+}}, <8 x bfloat> %{{[^,]+}}, <4 x float> %{{[^,]+}}, i32 0, i32 0, i32 0)
+; GFX950: %mfma{{[0-9]+}} = call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.bf16(<8 x bfloat> %{{[^,]+}}, <8 x bfloat> %{{[^,]+}}, <4 x float> %{{[^,]+}}, i32 0, i32 0, i32 0)
+; GFX950-NOT: @llvm.amdgcn.mfma.f32.16x16x16bf16.1k
+; GFX950-NOT: @llvm.amdgcn.mfma.f32.16x16x16f16
+; GFX950-NOT: @llvm.amdgcn.wmma.f32.16x16x32.bf16
 
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"

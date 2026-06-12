@@ -123,6 +123,19 @@ public:
   // ordinary.
   virtual llvm::Value *emitInitialExec(llvm::IRBuilder<> &B) const;
 
+  // Emit any projection-specific hardware EXEC repair required immediately
+  // before a raised source `s_endpgm` becomes an LLVM `ret`.
+  //
+  // Most projections keep hardware EXEC and modeled EXEC aligned, so they need
+  // no epilogue. Wave-native cross-widening deliberately decouples them:
+  // `emitInitialExec` forces hardware EXEC to full-wave while source EXEC is
+  // tracked in the alloca. Backend lowering of divergent diamonds may still
+  // leave physical EXEC narrowed at a return site; if `s_endpgm` is emitted
+  // under that narrowed mask, AMDGPU can synthesize a divergent-return tail that
+  // re-enters remaining lanes. The wave-native override reasserts the
+  // full-wave EXEC invariant at each return.
+  virtual void emitBeforeReturn(llvm::IRBuilder<> &B) const;
+
   // True iff a 32-bit write to EXEC_LO carries "replicate across the
   // full widened EXEC" semantics rather than the source-architectural
   // "replace the low half, keep the high half" semantics. Only wave-
@@ -403,6 +416,7 @@ public:
   unsigned numSourceWavesPerTarget() const override { return 2; }
 
   llvm::Value *emitInitialExec(llvm::IRBuilder<> &B) const override;
+  void emitBeforeReturn(llvm::IRBuilder<> &B) const override;
   llvm::Value *emitLaneActiveBit(llvm::IRBuilder<> &B,
                                   llvm::Value *ExecVal) const override;
   llvm::Value *ballotI1ToWidth(llvm::IRBuilder<> &B, llvm::Value *Pred,
