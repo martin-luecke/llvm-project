@@ -201,22 +201,33 @@ static void recordDerivedWaveMaskI1(RaiseContext &Ctx, ParsedReg DstReg,
   }
 }
 
+// SOP2 bitwise ops normally set SCC from the scalar destination. For mask ops
+// whose scalar result bits match the propagated i1 shadow (and/or/xor/andn2),
+// use the full derived mask instead so SCC observes every modeled lane, not
+// just the source-width scalar fallback. This follows the projection's ballot
+// model, so it is scoped to lanes active under the modeled EXEC rather than
+// trying to recover out-of-EXEC bits the per-lane i1 shadow cannot represent.
+static void storeSccFromWaveMaskI1(RaiseContext &Ctx, llvm::Value *I1,
+                                   const Twine &Name) {
+  Value *Mask = Ctx.Projection.ballotI1ToWidth(Ctx.B, I1, Ctx.Regs.ExecTy,
+                                               Name + "_ballot");
+  Ctx.Regs.storeSCC(
+      Ctx.B, Ctx.B.CreateICmpNE(Mask, Constant::getNullValue(Mask->getType()),
+                                Name + "_nonzero"));
+}
+
 HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
                          OpResolver &Op) {
   HandlerResult Hr;
   CanonicalOp Sop = Di.CanonOp;
 
-  // 32-bit binary ops -- auto SCC via sccResult.
+  // 32-bit binary ops -- auto SCC via sccResult unless the operands are known
+  // wave masks, in which case SCC is derived from the full propagated shadow.
   //
-  // Shadow propagation: when BOTH sources are SGPRs whose most-recent
-  // V_CMP writer in this BB is cached in
-  // `RaiseContext::lastSgprWaveMaskI1`, compute the per-lane i1 of
-  // the result and re-record the shadow after the scalar write has
-  // invalidated the cache via `onSgprWritten`.  Prevents the
-  // cross-widening narrow-mask-fallback bug that canary_tl_sort_fp32_n4
-  // hit on the Triton gfx1250 tl.sort BLOCK_N=4 idiom (commit
-  // `compare_correctness: tl.sort N=4 probe` landed the regression
-  // probe).
+  // Shadow propagation: when both sources carry per-lane wave-mask i1s, compute
+  // the result in i1-space and re-record the shadow after the scalar write has
+  // invalidated the cache via `onSgprWritten`. This keeps later mask consumers
+  // and SCC from falling back to source-width scalar bits.
   if (Sop == CanonicalOp::S_AND_B32) {
     Value *S0I1 = tryGetSrcWaveMaskI1(Ctx, Op, 0);
     Value *S1I1 = tryGetSrcWaveMaskI1(Ctx, Op, 1);
@@ -225,6 +236,8 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
     if (S0I1 && S1I1) {
       Value *AndI1 = Ctx.B.CreateAnd(S0I1, S1I1, "wave_mask_and");
       recordDerivedWaveMaskI1(Ctx, Op.dst(), AndI1);
+      storeSccFromWaveMaskI1(Ctx, AndI1, "wave_mask_and_scc");
+      Hr.SccHandled = true;
     }
     Hr.Handled = true;
     return Hr;
@@ -237,6 +250,8 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
     if (S0I1 && S1I1) {
       Value *OrI1 = Ctx.B.CreateOr(S0I1, S1I1, "wave_mask_or");
       recordDerivedWaveMaskI1(Ctx, Op.dst(), OrI1);
+      storeSccFromWaveMaskI1(Ctx, OrI1, "wave_mask_or_scc");
+      Hr.SccHandled = true;
     }
     Hr.Handled = true;
     return Hr;
@@ -582,6 +597,8 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
     if (S0I1 && S1I1) {
       Value *XorI1 = Ctx.B.CreateXor(S0I1, S1I1, "wave_mask_xor");
       recordDerivedWaveMaskI1(Ctx, Op.dst(), XorI1);
+      storeSccFromWaveMaskI1(Ctx, XorI1, "wave_mask_xor_scc");
+      Hr.SccHandled = true;
     }
     Hr.Handled = true;
     return Hr;
@@ -594,6 +611,8 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
     if (S0I1 && S1I1) {
       Value *XorI1 = Ctx.B.CreateXor(S0I1, S1I1, "wave_mask_xor64");
       recordDerivedWaveMaskI1(Ctx, Op.dst(), XorI1);
+      storeSccFromWaveMaskI1(Ctx, XorI1, "wave_mask_xor64_scc");
+      Hr.SccHandled = true;
     }
     Hr.Handled = true;
     return Hr;
@@ -901,8 +920,11 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
     if (S0I1 && S1I1) {
       Value *OrI1 = Ctx.B.CreateOr(S0I1, S1I1, "wave_mask_or64");
       recordDerivedWaveMaskI1(Ctx, Op.dst(), OrI1);
+      storeSccFromWaveMaskI1(Ctx, OrI1, "wave_mask_or64_scc");
+      Hr.SccHandled = true;
     }
-    Hr.SccResult = Res;
+    if (!Hr.SccHandled)
+      Hr.SccResult = Res;
     Hr.Handled = true;
     return Hr;
   }
@@ -914,8 +936,11 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
     if (S0I1 && S1I1) {
       Value *AndI1 = Ctx.B.CreateAnd(S0I1, S1I1, "wave_mask_and64");
       recordDerivedWaveMaskI1(Ctx, Op.dst(), AndI1);
+      storeSccFromWaveMaskI1(Ctx, AndI1, "wave_mask_and64_scc");
+      Hr.SccHandled = true;
     }
-    Hr.SccResult = Res;
+    if (!Hr.SccHandled)
+      Hr.SccResult = Res;
     Hr.Handled = true;
     return Hr;
   }
@@ -929,10 +954,16 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
       Value *AndN2I1 =
           Ctx.B.CreateAnd(S0I1, Ctx.B.CreateNot(S1I1), "wave_mask_andn2_64");
       recordDerivedWaveMaskI1(Ctx, Op.dst(), AndN2I1);
+      storeSccFromWaveMaskI1(Ctx, AndN2I1, "wave_mask_andn2_64_scc");
+      Hr.SccHandled = true;
     }
     Hr.Handled = true;
     return Hr;
   }
+  // ORN2 complements src1 without masking the complemented bits back down with
+  // src0, so scalar SCC may observe complement bits outside the modeled mask.
+  // The propagated i1 shadow is still sound for later per-lane mask consumers;
+  // only whole-register SCC must stay on the scalar result.
   if (Sop == CanonicalOp::S_ORN2_B64) {
     Value *S0I1 = tryGetSrcWaveMaskI1(Ctx, Op, 0);
     Value *S1I1 = tryGetSrcWaveMaskI1(Ctx, Op, 1);
@@ -957,10 +988,14 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
       Value *AndN2I1 =
           Ctx.B.CreateAnd(S0I1, Ctx.B.CreateNot(S1I1), "wave_mask_andn2");
       recordDerivedWaveMaskI1(Ctx, Op.dst(), AndN2I1);
+      storeSccFromWaveMaskI1(Ctx, AndN2I1, "wave_mask_andn2_scc");
+      Hr.SccHandled = true;
     }
     Hr.Handled = true;
     return Hr;
   }
+  // See the ORN2_B64 note above: preserve scalar SCC, but keep the propagated
+  // i1 shadow for downstream per-lane mask consumers.
   if (Sop == CanonicalOp::S_ORN2_B32) {
     Value *S0I1 = tryGetSrcWaveMaskI1(Ctx, Op, 0);
     Value *S1I1 = tryGetSrcWaveMaskI1(Ctx, Op, 1);
@@ -975,7 +1010,11 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
   // s_{nand,nor,xnor}_b{32,64} -- negated bitops, `dst = ~(src0 OP src1)`.
-  // SCC follows writeReg32/64's standard rule (set when result != 0).
+  // SCC follows writeReg32/64's standard rule (set when result != 0). Do not
+  // derive SCC from the propagated i1 shadow here: the scalar complement also
+  // flips bits outside the modeled lane mask, which is architecturally visible
+  // to SCC. The shadow remains sound because later consumers extract only the
+  // current lane's bit under the projection's mask model.
   // Each opcode uses the same SOP2 operand triplet (sdst, src0, src1)
   // and identical sign-/zero-extension semantics as their non-negated
   // siblings (S_AND_B32 etc.), so we can reuse op.src/op.src64 directly.
