@@ -184,6 +184,17 @@ HandlerResult handleSOP1(RaiseContext &Ctx, const DecodedInst &Di,
   if (Sop == CanonicalOp::S_MOV_B32) {
     ParsedReg Dst = Op.dst();
     ParsedReg SrcReg = Op.isSrcReg(0) ? Op.srcReg(0) : ParsedReg{};
+    // s_mov_b32 vcc_lo, sN: if sN has a fresh per-lane shadow, store it
+    // directly; the default 32-bit path re-widens the truncated mask and loses
+    // the upper lanes (see hotswap/docs/sgpr-wave-mask-translation.md).
+    if (Dst.RegKind == ParsedReg::VCC && SrcReg.RegKind == ParsedReg::SGPR &&
+        SrcReg.BaseIdx >= 0) {
+      if (Value *Shadow = Ctx.lookupSgprWaveMaskI1(SrcReg.BaseIdx)) {
+        Ctx.Regs.storeVCC(Ctx.B, Shadow);
+        Hr.Handled = true;
+        return Hr;
+      }
+    }
     Value *Src = Op.src(0);
     Ctx.Regs.writeReg32(Ctx.B, Dst, Src);
     if (Dst.RegKind == ParsedReg::SGPR && SrcReg.RegKind == ParsedReg::EXEC) {
