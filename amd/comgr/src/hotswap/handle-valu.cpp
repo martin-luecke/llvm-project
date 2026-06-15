@@ -2289,7 +2289,14 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
   if (Sop == CanonicalOp::V_SWAP_B32) {
     // vdst = old src0; vdst_in(== src0's slot) = old vdst.
     ParsedReg DstA = Op.dst(0);
-    ParsedReg DstB = (Di.NumDefs >= 2) ? Op.dst(1) : Op.srcReg(0);
+    // DstB writes back to src0's slot (the src0_out def, tied to src0); like
+    // permlane16_swap's src0_out it must land in src0's own VGPR_MSB bank.
+    // Op.dst(1) would parse it as a def slot, and computeVGPRAdjust assigns the
+    // destination bank to every def slot -- when vdst and src0 sit in different
+    // banks that misroutes the swap to the destination-bank alias of src0,
+    // leaving src0's real bank stale. Use src0's own (correctly bank-adjusted)
+    // register instead.
+    ParsedReg DstB = Op.srcReg(0);
     Value *VA = Ctx.Regs.readReg32(Ctx.B, DstA);
     Value *VB = Ctx.Regs.readReg32(Ctx.B, DstB);
     Ctx.writeReg32(DstA, VB);
