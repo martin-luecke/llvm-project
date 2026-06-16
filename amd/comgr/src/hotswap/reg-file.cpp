@@ -50,6 +50,7 @@ const char *kindName(ParsedReg::Kind K) {
   case ParsedReg::SRC_EXECZ:  return "SRC_EXECZ";
   case ParsedReg::SRC_SCC:    return "SRC_SCC";
   case ParsedReg::VCC_HI_SCRATCH: return "VCC_HI_SCRATCH";
+  case ParsedReg::EXEC_HI_SCRATCH: return "EXEC_HI_SCRATCH";
   case ParsedReg::NOREG:      return "NOREG";
   case ParsedReg::OTHER:      return "OTHER";
   }

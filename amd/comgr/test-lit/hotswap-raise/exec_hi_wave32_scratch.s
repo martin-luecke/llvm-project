@@ -6,27 +6,26 @@
 ; it to its own scratch slot, not the real EXEC or VCC. See
 ; ParsedReg::VCC_HI_SCRATCH.
 
-; CHECK-LABEL: define amdgpu_kernel void @exec_hi_cndmask_kernel(
-; The exec_hi scratch is promoted to SSA, not left as a private alloca:
-; CHECK-NOT: %ExecHiScratch = alloca
-; CHECK: %vcmp = icmp slt
-; The cndmask condition is the per-lane bit of the exec_hi scratch, not %vcmp:
-; CHECK: %[[LANEBIT:wn_mask_lane_i1[0-9]*]] = icmp ne i64 %{{.*}}, 0
-; CHECK: %cndmask = select i1 %[[LANEBIT]], i32 {{.*}}, i32 %tid
-; CHECK-NOT: %cndmask = select i1 %vcmp
-; The exec_hi read-back propagates the scratch constant 42:
-; CHECK: store i32 42, ptr addrspace(3)
-
         .amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
         .amdhsa_code_object_version 6
         .text
         .globl  exec_hi_cndmask_kernel
         .p2align        8
         .type   exec_hi_cndmask_kernel,@function
+; CHECK-LABEL: define amdgpu_kernel void @exec_hi_cndmask_kernel(
+; The exec_hi scratch is promoted to SSA, not left as a private alloca:
+; CHECK-NOT: %ExecHiScratch = alloca
 exec_hi_cndmask_kernel:
         s_mov_b32 exec_hi, 42
+; CHECK: %vcmp = icmp slt
         v_cmp_lt_i32 vcc_lo, v0, v1
+; The cndmask condition is the per-lane bit of the exec_hi scratch, not %vcmp:
+; CHECK: %[[LANEBIT:wn_mask_lane_i1[0-9]*]] = icmp ne i64 %{{.*}}, 0
+; CHECK: %cndmask = select i1 %[[LANEBIT]], i32 {{.*}}, i32 %tid
+; CHECK-NOT: %cndmask = select i1 %vcmp
         v_cndmask_b32 v5, v0, v1, exec_hi
+; The exec_hi read-back propagates the scratch constant 42:
+; CHECK: store i32 42, ptr addrspace(3)
         v_mov_b32 v2, exec_hi
         ds_store_b32 v3, v2
         ds_store_b32 v6, v5

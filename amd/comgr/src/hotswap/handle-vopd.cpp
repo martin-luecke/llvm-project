@@ -196,22 +196,27 @@ Value *readVopdSource64(RaiseContext &Ctx, const DecodedInst::VopdSource &Src,
 
 Value *readVopdCond(RaiseContext &Ctx, const DecodedInst &Di,
                     const DecodedInst::VopdSource &Src, HandlerResult &Hr) {
+  // On a wave32 source both vcc_hi and exec_hi are free scratch scalars the
+  // compiler may name as the condition (vcc_hi decodes as Kind::VCC, exec_hi
+  // as Kind::EXEC). Route both through their scratch slot and project
+  // per-lane, before the generic Kind check below rejects exec_hi.
+  ParsedReg::Kind HiScratch = wave32HiScratchKind(Ctx, Src);
+  if (HiScratch == ParsedReg::VCC_HI_SCRATCH ||
+      HiScratch == ParsedReg::EXEC_HI_SCRATCH) {
+    ParsedReg Pr;
+    Pr.RegKind = HiScratch;
+    Value *CondVal = Ctx.Regs.readReg32(Ctx.B, Pr);
+    return Ctx.Projection.extractLaneBitFromWaveMask(Ctx.B, CondVal);
+  }
+
   if (Src.SrcKind != DecodedInst::VopdSource::Kind::VCC &&
       Src.SrcKind != DecodedInst::VopdSource::Kind::SGPR) {
     Hr.Failure = RaiseFailure::unsupportedInstructionForm(
         Di, "VOPD", "VOPD cndmask explicit condition is neither VCC nor SGPR");
     return nullptr;
   }
-  if (Src.SrcKind == DecodedInst::VopdSource::Kind::VCC) {
-    if (wave32HiScratchKind(Ctx, Src) == ParsedReg::VCC_HI_SCRATCH) {
-      // Wave32 vcc_hi scratch condition: project the scratch slot per-lane.
-      ParsedReg Pr;
-      Pr.RegKind = ParsedReg::VCC_HI_SCRATCH;
-      Value *CondVal = Ctx.Regs.readReg32(Ctx.B, Pr);
-      return Ctx.Projection.extractLaneBitFromWaveMask(Ctx.B, CondVal);
-    }
+  if (Src.SrcKind == DecodedInst::VopdSource::Kind::VCC)
     return Ctx.Regs.loadVCC(Ctx.B);
-  }
 
   if (Value *FreshCmp = Ctx.lookupSgprWaveMaskI1(Src.BaseIdx))
     return FreshCmp;

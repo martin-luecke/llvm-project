@@ -5,22 +5,21 @@
 ; A wave32 vcc_hi used as a v_cndmask condition must route to its own scratch
 ; slot, not the real VCC. See ParsedReg::VCC_HI_SCRATCH.
 
-; CHECK-LABEL: define amdgpu_kernel void @vcc_hi_cndmask_cond_kernel(
-; CHECK: %vcmp = icmp slt
-; The cndmask condition is the per-lane bit of the vcc_hi scratch, not %vcmp:
-; CHECK: %{{.*}} = and i64 %{{.*}}, 1
-; CHECK: %cndmask = select i1 %wn_mask_lane_i1{{[0-9]*}}, i32 {{.*}}, i32 %tid
-; CHECK-NOT: %cndmask = select i1 %vcmp
-
         .amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
         .amdhsa_code_object_version 6
         .text
         .globl  vcc_hi_cndmask_cond_kernel
         .p2align        8
         .type   vcc_hi_cndmask_cond_kernel,@function
+; CHECK-LABEL: define amdgpu_kernel void @vcc_hi_cndmask_cond_kernel(
 vcc_hi_cndmask_cond_kernel:
+; CHECK: %vcmp = icmp slt
         v_cmp_lt_i32 vcc_lo, v0, v1
         s_mov_b32 vcc_hi, s4
+; The cndmask condition is the per-lane bit of the vcc_hi scratch, not %vcmp:
+; CHECK: %{{.*}} = and i64 %{{.*}}, 1
+; CHECK: %cndmask = select i1 %wn_mask_lane_i1{{[0-9]*}}, i32 {{.*}}, i32 %tid
+; CHECK-NOT: %cndmask = select i1 %vcmp
         v_cndmask_b32 v5, v0, v1, vcc_hi
         ds_store_b32 v6, v5
         ds_store_b32 v7, v2

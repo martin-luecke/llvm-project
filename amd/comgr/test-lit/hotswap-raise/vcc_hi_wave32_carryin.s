@@ -5,24 +5,22 @@
 ; A wave32 vcc_hi used as a carry-in must route to its own scratch slot, not the
 ; real VCC. See ParsedReg::VCC_HI_SCRATCH.
 
-; CHECK-LABEL: define amdgpu_kernel void @vcc_hi_carryin_kernel(
-; CHECK: %vcmp = icmp slt
-; The carry-in is the per-lane bit of the vcc_hi scratch, not %vcmp:
-; CHECK: %[[LANEBIT:wn_mask_lane_i1[0-9]*]] = icmp ne i64 %{{.*}}, 0
-; CHECK: %[[CIN:[0-9]+]] = zext i1 %[[LANEBIT]] to i32
-; CHECK: call { i32, i1 } @llvm.uadd.with.overflow.i32(i32 %{{.*}}, i32 %[[CIN]])
-; The VCC compare must NOT be the carry-in source:
-; CHECK-NOT: zext i1 %vcmp
-
         .amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
         .amdhsa_code_object_version 6
         .text
         .globl  vcc_hi_carryin_kernel
         .p2align        8
         .type   vcc_hi_carryin_kernel,@function
+; CHECK-LABEL: define amdgpu_kernel void @vcc_hi_carryin_kernel(
 vcc_hi_carryin_kernel:
         s_mov_b32 vcc_hi, s4
+; CHECK: %vcmp = icmp slt
         v_cmp_lt_i32 vcc_lo, v0, v1
+; The carry-in is the per-lane bit of the vcc_hi scratch, not %vcmp:
+; CHECK: %[[LANEBIT:wn_mask_lane_i1[0-9]*]] = icmp ne i64 %{{.*}}, 0
+; CHECK: %[[CIN:[0-9]+]] = zext i1 %[[LANEBIT]] to i32
+; CHECK: call { i32, i1 } @llvm.uadd.with.overflow.i32(i32 %{{.*}}, i32 %[[CIN]])
+; CHECK-NOT: zext i1 %vcmp
         v_add_co_ci_u32_e64 v5, s6, v0, v1, vcc_hi
         ds_store_b32 v6, v5
         ds_store_b32 v7, v2
