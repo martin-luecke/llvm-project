@@ -273,7 +273,6 @@ HandlerResult handleSOP1(RaiseContext &Ctx, const DecodedInst &Di,
     Value *Src = Op.srcExecWidth(0);
     Ctx.Regs.writeRegExecWidth(Ctx.B, Op.dst(), OldExec);
     RecordOldExecShadowOnDst(OldExec);
-    // Hardware: EXEC = SRC & ~EXEC (NOT applied to EXEC, not SRC).
     Value *NewExec = Ctx.B.CreateAnd(Src, Ctx.B.CreateNot(OldExec), "new_exec");
     Ctx.Regs.storeExec(Ctx.B, NewExec);
     Hr.SccResult = NewExec;
@@ -285,7 +284,6 @@ HandlerResult handleSOP1(RaiseContext &Ctx, const DecodedInst &Di,
     Value *Src = Op.srcExecWidth(0);
     Ctx.Regs.writeRegExecWidth(Ctx.B, Op.dst(), OldExec);
     RecordOldExecShadowOnDst(OldExec);
-    // Hardware: EXEC = SRC | ~EXEC (NOT applied to EXEC, not SRC).
     Value *NewExec = Ctx.B.CreateOr(Src, Ctx.B.CreateNot(OldExec), "new_exec");
     Ctx.Regs.storeExec(Ctx.B, NewExec);
     Hr.SccResult = NewExec;
