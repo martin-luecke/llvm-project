@@ -75,8 +75,16 @@ Value *ModuloReplicationProjection::emitWorkitemIdX(IRBuilder<> &B) const {
   // for why these lanes can still issue memory ops despite the modeled EXEC.
   if (Tgt.WaveSize > Src.WaveSize && MaxFlatWG > 0 &&
       MaxFlatWG < Tgt.WaveSize) {
+    // The "real lane" test is the flat local id, not workitem.id.x. Under
+    // modulo replication the target lane index is the flat local id (lanes are
+    // laid out in flat order), so a lane is real iff its index is below the
+    // flattened workgroup size. Comparing workitem.id.x against MaxFlatWG would
+    // only be correct for 1D workgroups, where tid.x == flat local id; for a
+    // multidimensional workgroup tid.x is just the X coordinate while MaxFlatWG
+    // is the flattened total.
     Value *Limit = ConstantInt::get(I32Ty, MaxFlatWG);
-    Value *IsRealLane = B.CreateICmpULT(Raw, Limit, "tid_is_real_lane");
+    Value *FlatLaneId = emitLaneIdx(B);
+    Value *IsRealLane = B.CreateICmpULT(FlatLaneId, Limit, "tid_is_real_lane");
     Raw = B.CreateSelect(IsRealLane, Raw, ConstantInt::get(I32Ty, 0),
                          "tid_phantom_clamp");
   }
