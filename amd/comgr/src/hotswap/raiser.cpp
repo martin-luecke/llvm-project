@@ -184,28 +184,50 @@ static bool isSemOpInRange(CanonicalOp Op, CanonicalOp First, CanonicalOp Last) 
 // Register identity comes from MC register classes and TableGen-declared defs.
 // Do not infer writes from mnemonic text or TSFlags here: a missed def silently
 // lets a stale source hidden-arg interpretation survive across an overwrite.
+enum class KernargPtrEffect {
+  Preserves,
+  Clobbers,
+  Unknown,
+};
+
+struct KernargPrepassDef {
+  enum class Kind {
+    NotTracked,
+    IndexedSgpr,
+    Unknown,
+  };
+
+  Kind DefKind = Kind::Unknown;
+  unsigned Index = 0;
+};
+
 struct KernargProvenanceBlock {
+  // Source byte offset for this recovered block leader.
   uint64_t Start = 0;
+  // Inclusive instruction-index range covered by this block. The range starts
+  // at the instruction whose offset is `Start` and ends at the first decoded
+  // block terminator or at the instruction before the next recovered block.
   unsigned FirstIdx = 0;
   unsigned LastIdx = 0;
+  // False for block-start offsets that do not correspond to a decoded
+  // instruction, such as an out-of-range branch target.
   bool HasInsts = false;
-  bool WritesKernargPtr = false;
+  // Program-order transfer summary for the kernarg SGPR pair within this
+  // block. Applied to the block's entry provenance during fixed-point
+  // propagation.
+  KernargPtrEffect Effect = KernargPtrEffect::Preserves;
   SmallVector<unsigned, 2> Successors;
 };
 
-static std::optional<unsigned> kernargPrepassSgprIdx(const MCRegisterInfo &MRI,
-                                                     MCRegister Reg) {
+static KernargPrepassDef classifyKernargPrepassDef(const MCRegisterInfo &MRI,
+                                                   MCRegister Reg) {
   if (!Reg)
-    return std::nullopt;
+    return {KernargPrepassDef::Kind::Unknown, 0};
   MCRegister Lane = MRI.getSubReg(Reg, AMDGPU::sub0);
   if (!Lane)
     Lane = Reg;
   Lane = AMDGPU::mc2PseudoReg(Lane);
   switch (Lane) {
-  case AMDGPU::VCC_LO:
-  case AMDGPU::VCC_HI:
-  case AMDGPU::EXEC_LO:
-  case AMDGPU::EXEC_HI:
   case AMDGPU::SCC:
   case AMDGPU::MODE:
   case AMDGPU::M0:
@@ -216,20 +238,17 @@ static std::optional<unsigned> kernargPrepassSgprIdx(const MCRegisterInfo &MRI,
   case AMDGPU::XNACK_MASK_LO:
   case AMDGPU::XNACK_MASK_HI:
   case AMDGPU::LDS_DIRECT:
-    return std::nullopt;
+    return {KernargPrepassDef::Kind::NotTracked, 0};
   default:
     break;
   }
   unsigned Enc = MRI.getEncodingValue(Reg);
   if (Enc & (AMDGPU::HWEncoding::IS_VGPR | AMDGPU::HWEncoding::IS_AGPR))
-    return std::nullopt;
-  bool IsSgpr = MRI.getRegClass(AMDGPU::SGPR_32RegClassID).contains(Lane) ||
-                MRI.getRegClass(AMDGPU::SGPR_64RegClassID).contains(Reg) ||
-                MRI.getRegClass(AMDGPU::SGPR_128RegClassID).contains(Reg) ||
-                MRI.getRegClass(AMDGPU::SGPR_256RegClassID).contains(Reg);
-  if (!IsSgpr)
-    return std::nullopt;
-  return Enc & AMDGPU::HWEncoding::REG_IDX_MASK;
+    return {KernargPrepassDef::Kind::NotTracked, 0};
+  if (!AMDGPU::isSGPR(Lane, &MRI))
+    return {KernargPrepassDef::Kind::NotTracked, 0};
+  return {KernargPrepassDef::Kind::IndexedSgpr,
+          Enc & AMDGPU::HWEncoding::REG_IDX_MASK};
 }
 
 // Match RaiseContext::parseReg's "number of contiguous 32-bit lanes" rule
@@ -248,25 +267,52 @@ static unsigned kernargPrepassRegWidth32(const MCRegisterInfo &MRI,
   return W ? W : 1;
 }
 
-static bool instructionWritesKernargPtr(const MCRegisterInfo &MRI,
-                                        const MCInstrInfo &MII,
-                                        const DecodedInst &Di,
-                                        int KernargPtrSgpr) {
-  if (KernargPtrSgpr < 0)
-    return false;
+static KernargPtrEffect
+instructionKernargPtrEffect(const MCRegisterInfo &MRI, const MCInstrInfo &MII,
+                            const DecodedInst &Di, unsigned KernargPtrSgpr) {
   const MCInstrDesc &Desc = MII.get(Di.Inst.getOpcode());
   for (unsigned I = 0; I < Desc.getNumDefs(); ++I) {
     if (!Di.isReg(I))
+      return KernargPtrEffect::Unknown;
+    KernargPrepassDef Def = classifyKernargPrepassDef(MRI, Di.getReg(I));
+    if (Def.DefKind == KernargPrepassDef::Kind::Unknown)
+      return KernargPtrEffect::Unknown;
+    if (Def.DefKind == KernargPrepassDef::Kind::NotTracked)
       continue;
-    std::optional<unsigned> DefIdx = kernargPrepassSgprIdx(MRI, Di.getReg(I));
-    if (!DefIdx)
-      continue;
-    unsigned DefEnd = *DefIdx + kernargPrepassRegWidth32(MRI, Di.getReg(I)) - 1;
-    if (*DefIdx <= static_cast<unsigned>(KernargPtrSgpr + 1) &&
-        DefEnd >= static_cast<unsigned>(KernargPtrSgpr))
-      return true;
+    unsigned DefEnd =
+        Def.Index + kernargPrepassRegWidth32(MRI, Di.getReg(I)) - 1;
+    if (Def.Index <= KernargPtrSgpr + 1 && DefEnd >= KernargPtrSgpr)
+      return KernargPtrEffect::Clobbers;
   }
-  return false;
+  return KernargPtrEffect::Preserves;
+}
+
+static RaiseContext::KernargPtrProvenance applyKernargPtrEffect(
+    RaiseContext::KernargPtrProvenance Provenance,
+    KernargPtrEffect Effect) {
+  using ProvenanceKind = RaiseContext::KernargPtrProvenance;
+  switch (Effect) {
+  case KernargPtrEffect::Preserves:
+    return Provenance;
+  case KernargPtrEffect::Clobbers:
+    return ProvenanceKind::Clobbered;
+  case KernargPtrEffect::Unknown:
+    return ProvenanceKind::Unknown;
+  }
+  llvm_unreachable("unknown kernarg pointer effect");
+}
+
+static KernargPtrEffect composeKernargPtrEffect(KernargPtrEffect BlockEffect,
+                                                KernargPtrEffect InstEffect) {
+  switch (InstEffect) {
+  case KernargPtrEffect::Preserves:
+    return BlockEffect;
+  case KernargPtrEffect::Clobbers:
+    return KernargPtrEffect::Clobbers;
+  case KernargPtrEffect::Unknown:
+    return KernargPtrEffect::Unknown;
+  }
+  llvm_unreachable("unknown kernarg pointer effect");
 }
 
 static RaiseFailure preloadedHiddenArgFailure(StringRef KernelName,
@@ -344,6 +390,8 @@ computeKernargPtrProvenance(RaiseContext &Ctx, ArrayRef<DecodedInst> Insts,
   using Provenance = RaiseContext::KernargPtrProvenance;
   if (Ctx.Layout == nullptr || Ctx.Layout->KernargSegmentPtrSgpr < 0)
     return;
+  unsigned KernargPtrSgpr =
+      static_cast<unsigned>(Ctx.Layout->KernargSegmentPtrSgpr);
   const MCRegisterInfo &MRI = *Ctx.Mc.RegInfo;
   const MCInstrInfo &MII = *Ctx.Mc.InstrInfo;
 
@@ -370,9 +418,9 @@ computeKernargPtrProvenance(RaiseContext &Ctx, ArrayRef<DecodedInst> Insts,
       for (unsigned J = Block.FirstIdx;
            J < Insts.size() && Insts[J].Offset < NextStart; ++J) {
         Block.LastIdx = J;
-        if (instructionWritesKernargPtr(MRI, MII, Insts[J],
-                                        Ctx.Layout->KernargSegmentPtrSgpr))
-          Block.WritesKernargPtr = true;
+        Block.Effect = composeKernargPtrEffect(
+            Block.Effect,
+            instructionKernargPtrEffect(MRI, MII, Insts[J], KernargPtrSgpr));
         if (decodedInstEndsBlock(Insts[J]))
           break;
       }
@@ -413,14 +461,16 @@ computeKernargPtrProvenance(RaiseContext &Ctx, ArrayRef<DecodedInst> Insts,
   if (EntryIt != BlockIndexByOffset.end())
     MergeInto(EntryIt->second, Provenance::LiveEntry);
 
+  // This finite-height lattice only moves a block from unseen to its first
+  // incoming fact, then at most once more to Unknown when incoming paths
+  // disagree. Unknown is absorbing, so backedges converge.
   bool Changed = true;
   while (Changed) {
     Changed = false;
     for (unsigned I = 0; I < Blocks.size(); ++I) {
       if (!Seen[I])
         continue;
-      Provenance Out =
-          Blocks[I].WritesKernargPtr ? Provenance::Clobbered : State[I];
+      Provenance Out = applyKernargPtrEffect(State[I], Blocks[I].Effect);
       for (unsigned Succ : Blocks[I].Successors)
         Changed |= MergeInto(Succ, Out);
     }
