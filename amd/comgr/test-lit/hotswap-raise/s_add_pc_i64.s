@@ -30,10 +30,10 @@
 ; LIT64-LABEL: define amdgpu_kernel void @add_pc_i64_lit64_kernel(
 ; FE/lit64 form is 12 bytes total (4-byte SOP1 + 8-byte literal).
 ; target = 0x08 (site) + 0x0c (size) + 8 (imm) = 0x1c
-; LIT64: br label %bb_0x1c
+; LIT64: br label %bb_0x1C
 ; LIT64-NOT: indirectbr
 ; LIT64-NOT: unreachable
-; LIT64: bb_0x1c:
+; LIT64: bb_0x1C:
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
