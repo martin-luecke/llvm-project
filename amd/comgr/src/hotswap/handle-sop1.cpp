@@ -469,28 +469,14 @@ HandlerResult handleSOP1(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
   if (Sop == CanonicalOp::S_ADD_PC_I64) {
-    int64_t Imm;
-    const MCOperand &Src0 = Di.Inst.getOperand(0);
-    if (Di.isImm(0)) {
-      Imm = Di.getImm(0);
-    } else if (Src0.isExpr()) {
-      // lit64-encoded offset: extract via evaluateAsAbsolute to handle both
-      // AMDGPUMCExpr (AGVK_Lit64) and MCConstantExpr forms uniformly.
-      int64_t Val;
-      if (!Src0.getExpr()->evaluateAsAbsolute(Val)) {
-        Hr.Failure = RaiseFailure::unsupportedInstructionForm(
-            Di, "SOP1",
-            "s_add_pc_i64 with non-constant MCExpr source");
-        return Hr;
-      }
-      Imm = Val;
-    } else {
+    std::optional<int64_t> ConstOpt = evalOperandAsConst(Di.Inst, 0);
+    if (!ConstOpt) {
       Hr.Failure = RaiseFailure::unsupportedInstructionForm(
           Di, "SOP1",
           "s_add_pc_i64 with non-literal source (SGPR-pair form unsupported)");
       return Hr;
     }
-    uint64_t Target = Di.Offset + Di.Size + static_cast<uint64_t>(Imm);
+    uint64_t Target = Di.Offset + Di.Size + static_cast<uint64_t>(*ConstOpt);
     Ctx.B.CreateBr(Ctx.lookupBB(Target));
     Hr.Handled = true;
     return Hr;

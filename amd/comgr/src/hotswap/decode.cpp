@@ -655,24 +655,11 @@ void collectBranchTargets(const DecodedInst &Di, uint64_t Off,
   const MCInst &Inst = Di.Inst;
   // s_add_pc_i64 carries a signed i64 PC-relative offset, not the SOPP form.
   if (Di.CanonOp == CanonicalOp::S_ADD_PC_I64) {
-    const MCOperand &Src0 = Inst.getOperand(0);
-    int64_t Imm;
-    if (Src0.isImm()) {
-      Imm = Src0.getImm();
-    } else if (Src0.isExpr()) {
-      // lit64-encoded offset (SSRC0=0xFE): the MCDecoder yields an MCExpr
-      // (AMDGPUMCExpr with AGVK_Lit64) when the upper 32 bits are zero, or a
-      // plain MCConstantExpr otherwise. Use evaluateAsAbsolute so we handle
-      // both without depending on the concrete MCExpr subtype.
-      int64_t Val;
-      if (!Src0.getExpr()->evaluateAsAbsolute(Val))
-        report_fatal_error("transpiler: s_add_pc_i64 with non-constant MCExpr "
-                           "source (symbolic relocation not supported)");
-      Imm = Val;
-    } else {
-      report_fatal_error("transpiler: s_add_pc_i64 with non-immediate source "
-                         "(only the immediate-literal form is supported)");
-    }
+    std::optional<int64_t> ConstOpt = evalOperandAsConst(Inst, 0);
+    if (!ConstOpt)
+      report_fatal_error("transpiler: s_add_pc_i64 with non-constant source "
+                         "(only immediate-literal and lit64 forms are supported)");
+    int64_t Imm = *ConstOpt;
     if (InstSize > UINT64_MAX - Off)
       return;
     uint64_t Base = Off + InstSize;
