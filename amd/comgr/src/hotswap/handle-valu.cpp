@@ -1535,21 +1535,31 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
       ScaleNumerator = true;    // (n, d, n)
     } else if (Src0EqSrc1 && !Src0EqSrc2) {
       ScaleNumerator = false;   // (d, d, n)
+    } else if (Src0EqSrc1 && Src0EqSrc2) {
+      // Degenerate x/x shape: src0 == src1 == src2.  Both scale-numer
+      // and scale-denom routes produce identical hardware behaviour (the
+      // scaled operand equals the reciprocal-estimate target, so the
+      // two-iteration Newton refinement and div_fixup collapse to 1.0
+      // regardless of which flag we pass). We canonicalise to
+      // scale-numerator (flag=1) because that is the flag the Triton
+      // AMDGPU backend emits for the 1.0/sqrt(var+eps) numerator path
+      // when the numerator happens to equal the denominator (e.g. in
+      // a layer-norm or group-norm reciprocal-stddev computation where
+      // the masked value is 1.0/1.0).
+      ScaleNumerator = true;
     } else {
-      // All three sources matching is the degenerate `x/x` shape
-      // (ambiguous between scale-numer and scale-denom); src2 not
-      // matching either of src0/src1 would break the hardware's own
-      // divide-protocol and is unreachable from any known codegen
-      // emitter.  Refuse loudly rather than guess -- consistent with
-      // the "refuse when uncertain" rule in
-      // hotswap/docs/wave-size-translation.md.
+      // src2 matches neither src0 nor src1 -- no known codegen emitter
+      // produces this shape, and the hardware's operand-identity
+      // protocol requires one of the two known equalities.  Refuse
+      // loudly rather than guess.
       Hr.Failure = RaiseFailure::unsupportedInstructionForm(
           Di, "VOP3",
           "v_div_scale_f32 operand triple does not match a known "
           "divide-scaling shape: expected (numer, denom, numer) with "
-          "src0 == src2 for scale-numerator, or (denom, denom, numer) "
-          "with src0 == src1 for scale-denominator.  See handle-valu.cpp "
-          "for the decode rule.");
+          "src0 == src2 for scale-numerator, (denom, denom, numer) "
+          "with src0 == src1 for scale-denominator, or (x, x, x) for "
+          "the degenerate x/x case.  See handle-valu.cpp for the "
+          "decode rule.");
       return Hr;
     }
 

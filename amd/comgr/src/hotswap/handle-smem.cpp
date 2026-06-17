@@ -207,8 +207,11 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
     // VMEM lowering. The lift no longer hand-picks the addrspace --
     // tracking pointer provenance at lift time was redundant with the
     // backend's own analysis.
+    // GFX1250 Triton kernels occasionally use VCC as a scalar pair for
+    // pointer arithmetic (e.g. `s_lshl_b64 vcc, ...; s_load_b32 sN, vcc, 0`).
+    // Route through `readReg64` which handles SGPR, VCC, and EXEC uniformly.
     {
-      Value *BaseAddr = Ctx.Regs.loadSGPR64(Ctx.B, Base.BaseIdx);
+      Value *BaseAddr = Ctx.Regs.readReg64(Ctx.B, Base);
       Value *Ptr = Ctx.B.CreateIntToPtr(BaseAddr, Ctx.PtrGlobalTy);
       if (ImmOffset) {
         if (ByteOffset != 0)
@@ -286,7 +289,7 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
     bool BaseIsKernargPair =
         (Base.RegKind == ParsedReg::SGPR && KernargPtrSgpr >= 0 &&
          Base.BaseIdx == KernargPtrSgpr);
-    Value *BaseAddr = Ctx.Regs.loadSGPR64(Ctx.B, Base.BaseIdx);
+    Value *BaseAddr = Ctx.Regs.readReg64(Ctx.B, Base);
     Value *Ptr = Ctx.B.CreateIntToPtr(BaseAddr, Ctx.PtrGlobalTy);
     unsigned OffIdx = Op.srcIdx(1);
     if (Di.isImm(OffIdx)) {
@@ -498,7 +501,7 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
     Data = Ctx.Regs.readReg32(Ctx.B, DataDst);
   }
 
-  Value *BaseAddr = Ctx.Regs.loadSGPR64(Ctx.B, Base.BaseIdx);
+  Value *BaseAddr = Ctx.Regs.readReg64(Ctx.B, Base);
   Value *Ptr = Ctx.B.CreateIntToPtr(BaseAddr, Ctx.PtrGlobalTy);
 
   // Positional source index of the offset operand in OpResolver's

@@ -121,6 +121,12 @@ void AllocaRegFile::init(IRBuilder<> &B, Type *I32Ty, Type *I1Ty,
   // Symmetric with VccHiScratch; zero-initialised.
   ExecHiScratch = B.CreateAlloca(I32Ty, nullptr, "ExecHiScratch");
   B.CreateStore(ConstantInt::get(I32Ty, 0), ExecHiScratch);
+  // VCC scalar-pair shadow: tracks the raw i64 value when VCC is used
+  // as a B64 register pair (pointer arithmetic, SMEM base address).
+  VccRaw = B.CreateAlloca(B.getInt64Ty(), nullptr, "VccRaw");
+  B.CreateStore(B.getInt64(0), VccRaw);
+  VccRawValid = B.CreateAlloca(I1Ty, nullptr, "VccRawValid");
+  B.CreateStore(ConstantInt::getFalse(I1Ty), VccRawValid);
   Scc = B.CreateAlloca(I1Ty, nullptr, "Scc");
   B.CreateStore(ConstantInt::getFalse(I1Ty), Scc);
   Exec = B.CreateAlloca(ExecTy, nullptr, "exec");
@@ -285,6 +291,10 @@ void AllocaRegFile::storeVCC(IRBuilder<> &B, Value *V) {
   if (V->getType() != B.getInt1Ty())
     V = B.CreateICmpNE(V, Constant::getNullValue(V->getType()));
   B.CreateStore(V, Vcc);
+  // A wave-mask write invalidates the VCC scalar-pair shadow; any
+  // subsequent B64 scalar read must use the ballot path until the next
+  // B64 scalar write restores VccRaw.
+  invalidateVCCRaw(B);
 }
 
 Value *AllocaRegFile::loadVCC(IRBuilder<> &B) {
@@ -317,6 +327,30 @@ Value *AllocaRegFile::readVCCAsWaveMask(IRBuilder<> &B, Type *ResultTy) {
   assert(Projection && "readVCCAsWaveMask requires a WaveProjection -- "
                         "call init() before using this reg-file");
   return Projection->ballotI1ToWidth(B, loadVCC(B), ResultTy, "vcc_ballot");
+}
+
+void AllocaRegFile::storeVCCRaw(IRBuilder<> &B, Value *V) {
+  // Coerce to i64 if necessary (e.g. i32 from wave32 B64 ops).
+  if (V->getType() != B.getInt64Ty())
+    V = B.CreateZExtOrTrunc(V, B.getInt64Ty(), "vcc_raw_cast");
+  B.CreateStore(V, VccRaw);
+  B.CreateStore(ConstantInt::getTrue(B.getInt1Ty()), VccRawValid);
+}
+
+void AllocaRegFile::invalidateVCCRaw(IRBuilder<> &B) {
+  B.CreateStore(ConstantInt::getFalse(B.getInt1Ty()), VccRawValid);
+}
+
+Value *AllocaRegFile::loadVCCRawOrWaveMask(IRBuilder<> &B, Type *ResultTy) {
+  // If VccRaw holds a current scalar value (from a B64 scalar VCC write),
+  // return it as the raw i64 value (zero-extended or truncated to ResultTy).
+  // Otherwise fall back to the wave-mask ballot path.
+  Value *Valid = B.CreateLoad(B.getInt1Ty(), VccRawValid, "vcc_raw_valid");
+  Value *Raw = B.CreateLoad(B.getInt64Ty(), VccRaw, "vcc_raw");
+  if (Raw->getType() != ResultTy)
+    Raw = B.CreateZExtOrTrunc(Raw, ResultTy, "vcc_raw_cast");
+  Value *Mask = readVCCAsWaveMask(B, ResultTy);
+  return B.CreateSelect(Valid, Raw, Mask, "vcc_raw_or_mask");
 }
 
 Value *AllocaRegFile::readReg32(IRBuilder<> &B, ParsedReg Pr) {
@@ -382,14 +416,14 @@ Value *AllocaRegFile::readReg64(IRBuilder<> &B, ParsedReg Pr) {
     return B.CreateZExt(B.CreateLoad(B.getInt32Ty(), VccHiScratch), B.getInt64Ty());
   if (Pr.RegKind == ParsedReg::EXEC_HI_SCRATCH)
     return B.CreateZExt(B.CreateLoad(B.getInt32Ty(), ExecHiScratch), B.getInt64Ty());
-  // VCC as a 64-bit scalar read: route through the wave-mask ballot.
-  // Previous implementations used `SExt(i1 -> i64)`, which replicates
-  // the CURRENT LANE's VCC bit across all 64 bits -- a silent lie when
-  // the consumer expects a wave-level mask (e.g. `s_and_b64 vcc, exec,
-  // vcc`). All direct VCC reads must materialise the full per-lane
-  // collection via `amdgcn.ballot`.
+  // VCC as a 64-bit read: if VCC holds a raw scalar pair (written by a
+  // B64 scalar op like s_lshl_b64 or s_add_nc_u64), return that raw
+  // value so that SMEM base-address reads and scalar-pair arithmetic
+  // get the correct bits. If VCC was last written as a wave mask (by a
+  // v_cmp_* or s_*_saveexec_b*), fall back to the ballot path so that
+  // `s_and_b64 exec, exec, vcc` still gets the per-lane mask.
   if (Pr.RegKind == ParsedReg::VCC)
-    return readVCCAsWaveMask(B, B.getInt64Ty());
+    return loadVCCRawOrWaveMask(B, B.getInt64Ty());
   if (Pr.RegKind == ParsedReg::EXEC) {
     Value *V = loadExec(B);
     if (V->getType() != B.getInt64Ty())
@@ -543,7 +577,13 @@ void AllocaRegFile::writeReg64(IRBuilder<> &B, ParsedReg Pr, Value *V) {
   if (Pr.RegKind == ParsedReg::VGPR) { storeVGPR64(B, Pr.BaseIdx, V); return; }
   if (Pr.RegKind == ParsedReg::VCC) {
     assert(Projection && "writeReg64(VCC) requires a WaveProjection");
+    // Save the raw i64 in the VCC scalar-pair shadow BEFORE updating
+    // the wave-mask per-lane i1 (storeVCC() invalidates VccRaw).
+    storeVCCRaw(B, V);
     storeVCC(B, Projection->extractLaneBitFromWaveMask(B, V));
+    // Restore the raw shadow (storeVCC invalidated it, but this B64
+    // write is authoritative -- re-mark valid after the wave-mask store).
+    storeVCCRaw(B, V);
     return;
   }
   if (Pr.RegKind == ParsedReg::EXEC) {
@@ -695,6 +735,8 @@ void AllocaRegFile::collectAllocas(SmallVectorImpl<AllocaInst *> &Out) {
   if (VccHiScratch) Out.push_back(VccHiScratch);
   // ExecHiScratch is promoted for the same reason as VccHiScratch above.
   if (ExecHiScratch) Out.push_back(ExecHiScratch);
+  if (VccRaw) Out.push_back(VccRaw);
+  if (VccRawValid) Out.push_back(VccRawValid);
   if (Scc) Out.push_back(Scc);
   if (Exec) Out.push_back(Exec);
   if (M0) Out.push_back(M0);

@@ -382,7 +382,7 @@ Value *RaiseContext::readOp64(const DecodedInst &Di, unsigned OpIdx) {
   if (Di.isReg(OpIdx)) {
     ParsedReg Pr = parseReg(Di.getReg(OpIdx), OpIdx);
     if (Pr.RegKind == ParsedReg::VCC)
-      return Regs.readVCCAsWaveMask(B, I64Ty);
+      return Regs.loadVCCRawOrWaveMask(B, I64Ty);
     if (Pr.RegKind == ParsedReg::EXEC) {
       Value *V = Regs.loadExec(B);
       if (V->getType() != I64Ty)

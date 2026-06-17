@@ -78,6 +78,12 @@ struct AllocaRegFile {
   // ISA is wave32; on wave64 sources EXEC_HI is a real half of the EXEC mask
   // and routes through Exec.
   llvm::AllocaInst *ExecHiScratch = nullptr;
+  // Raw i64 alloca that mirrors VCC_LO:VCC_HI when VCC is used as a
+  // scalar register pair (pointer arithmetic, SMEM base address).
+  // Written by writeReg64(VCC, V); invalidated by storeVCC() (wave-mask
+  // writes). Used by readReg64(VCC) and SMEM base-address reads.
+  llvm::AllocaInst *VccRaw = nullptr;
+  llvm::AllocaInst *VccRawValid = nullptr;  // i1 — true when VccRaw is current
   llvm::AllocaInst *Scc = nullptr;
   llvm::AllocaInst *Exec = nullptr;
   llvm::AllocaInst *M0 = nullptr;
@@ -160,6 +166,15 @@ struct AllocaRegFile {
 
   void storeVCC(llvm::IRBuilder<> &B, llvm::Value *V);
   llvm::Value *loadVCC(llvm::IRBuilder<> &B);
+  // Store a raw i64 value to the VCC scalar-pair shadow (written when
+  // VCC is used as a B64 register pair, e.g. s_lshl_b64 vcc, ...).
+  void storeVCCRaw(llvm::IRBuilder<> &B, llvm::Value *V);
+  // Mark VccRaw as stale (called when VCC is overwritten as a wave mask).
+  void invalidateVCCRaw(llvm::IRBuilder<> &B);
+  // Read VCC as a raw i64 scalar pair if the shadow is valid, else
+  // fall back to the wave-mask ballot at the requested width.
+  llvm::Value *loadVCCRawOrWaveMask(llvm::IRBuilder<> &B,
+                                    llvm::Type *ResultTy);
   void storeSCC(llvm::IRBuilder<> &B, llvm::Value *V);
   llvm::Value *loadSCC(llvm::IRBuilder<> &B);
   llvm::Value *loadExec(llvm::IRBuilder<> &B);
