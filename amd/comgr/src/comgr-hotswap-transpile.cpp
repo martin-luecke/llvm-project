@@ -38,6 +38,7 @@
 #include <cstdlib>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
 #include <new>
 #include <string>
 #include <utility>
@@ -549,10 +550,20 @@ amd_comgr_status_t AMD_COMGR_API amd_comgr_hotswap_transpile_with_options(
         CacheRequest.EnableWritelaneRewrite;
     PipelineOptions.EnableWaveNative = CacheRequest.EnableWaveNative;
     PipelineOptions.CollectTimings = CollectTimings;
-    Pipeline = COMGR::hotswap::runPipelineAllKernels(InputBuf,
-                                                 SourceIdent.Processor.str(),
-                                                 TargetIdent.Processor.str(),
-                                                 PipelineOptions);
+    // `runPipelineAllKernels` drives the LLVM IR raiser and the LLC/lld
+    // subprocesses in-process.  LLVM's global registries (TargetRegistry,
+    // ManagedStatic singletons, etc.) are not designed for concurrent use
+    // from multiple threads sharing a single process image.  Serialise all
+    // pipeline calls here so that two concurrent hipModuleLoadData calls on
+    // different PyTorch worker threads cannot race inside the LLVM layer.
+    {
+      static std::mutex s_pipelineMutex;
+      std::lock_guard<std::mutex> pipelineLock(s_pipelineMutex);
+      Pipeline = COMGR::hotswap::runPipelineAllKernels(InputBuf,
+                                                   SourceIdent.Processor.str(),
+                                                   TargetIdent.Processor.str(),
+                                                   PipelineOptions);
+    }
     addPipelineTimings(Timings, Pipeline.Timings);
   }
 

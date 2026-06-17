@@ -352,8 +352,22 @@ static bool raiseAndCompileKernel(const TextSection &text,
   result.Timings.writeIrSeconds +=
       timingElapsed(options.CollectTimings, writeIrStart);
 
+  // targetISA may be a bare CPU name ("gfx950") or a full AMDGPU triple
+  // ("amdgcn-amd-amdhsa--gfx950[:feat...]").  LLC and llvm-mc -mcpu= only
+  // accept the bare CPU name; extract the component that follows "--" when
+  // present, stripping any feature suffixes at the first ':'.
+  auto extractCpuName = [](llvm::StringRef ISA) -> std::string {
+    size_t ddash = ISA.find("--");
+    if (ddash != llvm::StringRef::npos) {
+      llvm::StringRef tail = ISA.drop_front(ddash + 2);
+      return tail.split(':').first.str();
+    }
+    return ISA.str();
+  };
+  std::string cpuName = extractCpuName(targetISA);
+
   std::string llcBin = std::string(LLVM_TOOLS_DIR) + "/llc";
-  std::string mcpuLlc = ("-mcpu=" + targetISA).str();
+  std::string mcpuLlc = "-mcpu=" + cpuName;
   auto llcStart = timingStart(options.CollectTimings);
   if (runTool(llcBin, {llcBin, "-march=amdgcn", mcpuLlc, "-filetype=asm", "-o",
                        asmPath, irPath}) != 0) {
@@ -380,7 +394,7 @@ static bool raiseAndCompileKernel(const TextSection &text,
   }
 
   std::string mcBin = std::string(LLVM_TOOLS_DIR) + "/llvm-mc";
-  std::string mcpuMc = ("-mcpu=" + targetISA).str();
+  std::string mcpuMc = "-mcpu=" + cpuName;
   auto llvmMcStart = timingStart(options.CollectTimings);
   if (runTool(mcBin, {mcBin, "-triple=amdgcn-amd-amdhsa", mcpuMc,
                       "-filetype=obj", "-o", objPath, asmPath}) != 0) {
