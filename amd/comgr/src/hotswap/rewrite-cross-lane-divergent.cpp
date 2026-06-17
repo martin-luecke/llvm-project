@@ -793,7 +793,7 @@ void rewriteReadfirstlaneCall(CallInst *CI, Value *LaneId,
 // ============================================================================
 
 // Pure predicate: is `dpp_ctrl` in the supported family (QUAD_PERM /
-// ROW_SHL / ROW_SHR)?  Split out from `buildDppLaneMap` so the pre-
+// ROW_SHL / ROW_SHR / ROW_XMASK)?  Split out from `buildDppLaneMap` so the pre-
 // flight phase can answer "is this ctrl rewritable?" without running
 // an IRBuilder and without relying on IRBuilder's implicit constant-
 // folding to make the dummy-inputs decode into pure constants.
@@ -868,7 +868,11 @@ struct DppLaneMap {
 //     Target-lane L (within-row W) reads source within-row W - N.
 //     Out-of-range iff W < N.
 //
-// All three families keep the source lane within the same 16-lane
+//   * ROW_XMASK:N        (0x160..0x16F)  -- row XOR-mask by N.
+//     Target-lane L (within-row W) reads source within-row W ^ N.
+//     Always in-range: W ^ N stays within the 16-lane row.
+//
+// All four families keep the source lane within the same 16-lane
 // row as the target lane.  Since a 16-lane row is a topology
 // invariant of every AMDGPU wave size >= 16, the `rowBase(L) |
 // srcWithinRow` computation produces identical source-lane indices
@@ -907,10 +911,6 @@ struct DppLaneMap {
 //   * ROW_SHARE:N (gfx10+).  Broadcasts lane N of each row to all
 //     other lanes in that row.  Expressible via srcWithinRow = N,
 //     inRange = true -- no corpus demand yet.
-//
-//   * ROW_XMASK:N (gfx10+).  Each lane reads from its XOR-N partner
-//     within the row.  Expressible via srcWithinRow = withinRow ^ N
-//     -- no corpus demand yet.
 //
 // When extending this table, prefer a one-case-per-ctrl-family
 // layout and document the in-range predicate and source-lane
@@ -1301,8 +1301,8 @@ CrossLaneDivergentRewriteReport rewriteCrossLaneDivergent(
          << "' has an update.dpp site with unsupported "
          << describeDppCtrl(Ctrl)
          << ". The cross-widen rewrite only covers quad_perm, "
-            "row_shl:N and row_shr:N today (all stay within a "
-            "single 16-lane row, hence wave-size-oblivious). "
+            "row_shl:N, row_shr:N and row_xmask:N today (all stay "
+            "within a single 16-lane row, hence wave-size-oblivious). "
             "Extending the supported set requires a per-ctrl "
             "correctness argument in buildDppLaneMap and a new "
             "lit fixture; refusing rather than silently miscompiling. "
