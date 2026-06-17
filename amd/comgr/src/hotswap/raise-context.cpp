@@ -10,6 +10,7 @@
 
 #include "MCTargetDesc/AMDGPUMCTargetDesc.h" // AMDGPU::VCC, AMDGPU::EXEC, ...
 #include "SIDefines.h"                        // AMDGPU::HWEncoding::*
+#include "Utils/AMDGPUBaseInfo.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/IR/BasicBlock.h"
@@ -46,22 +47,47 @@ void RaiseContext::computeVGPRAdjust(const DecodedInst &Di) {
   if (VgprMsBs == 0)
     return;
 
-  // vgprMSBs is an 8-bit state shared by single-issue instructions and both
-  // halves of a VOPD pair.  Layout: src0[1:0], src1[3:2], src2[5:4], dst[7:6].
-  unsigned DstMsb = (static_cast<unsigned>(VgprMsBs >> 6) & 0x3u) * 256u;
-  unsigned SrcMsb[3] = {
-      (static_cast<unsigned>(VgprMsBs >> 0) & 0x3u) * 256u,
-      (static_cast<unsigned>(VgprMsBs >> 2) & 0x3u) * 256u,
-      (static_cast<unsigned>(VgprMsBs >> 4) & 0x3u) * 256u,
-  };
+  // The low byte of the S_SET_VGPR_MSB immediate holds four 2-bit MSB fields,
+  // one per slot, that form bits [9:8] of the VGPR address (i.e. extend the
+  // index by field * 256) -- the mechanism gfx1250 uses to reach all 1024
+  // VGPRs. VgprMsBs holds the active state, which persists until the next
+  // S_SET_VGPR_MSB.
+  //
+  // The slot->operand mapping is instruction-format-specific, so resolve it
+  // through getVGPRLoweringOperandTables -- the same per-format tables the
+  // AMDGPU backend (AMDGPULowerVGPREncoding / AMDGPUInstPrinter) uses to lower
+  // VGPR encoding -- rather than assuming VALU's src0/src1/src2/vdst order:
+  // VBUFFER maps slot 0 to vaddr and slot 3 to vdata, VDS maps slots 0/1/2 to
+  // addr/data0/data1, and so on. Formats with no table (e.g. V_WMMA_LD_SCALE,
+  // which the ISA defines to ignore the MSBs) get no adjustment, matching the
+  // backend.
+  //
+  // Only the single-issue (X) table is consulted: VOPD dual-issue packets do
+  // not flow through CurrentVgprAdjust -- handle-vopd.cpp applies their MSBs
+  // directly via applyVopdVGPRMsb.
+  unsigned Opc = Di.Inst.getOpcode();
+  const AMDGPU::OpName *Ops =
+      AMDGPU::getVGPRLoweringOperandTables(Mc.InstrInfo->get(Opc)).first;
+  if (!Ops)
+    return;
 
-  for (unsigned I = 0; I < Di.NumDefs && I < KMaxOps; I++)
-    CurrentVgprAdjust[I] = DstMsb;
-
-  for (unsigned I = 0; I < Di.NumSrcs && I < 3; I++) {
-    unsigned OpIdx = Di.SrcMap[I];
-    if (OpIdx < KMaxOps)
-      CurrentVgprAdjust[OpIdx] = SrcMsb[I];
+  for (unsigned Slot = 0; Slot != 4; ++Slot) {
+    // NUM_OPERAND_NAMES marks a slot this format does not use (e.g. VBUFFER
+    // leaves slots 1 and 2 empty).
+    if (Ops[Slot] == AMDGPU::OpName::NUM_OPERAND_NAMES)
+      continue;
+    // Slot N is the 2-bit field at bits [2N+1:2N]; its value is the high VGPR
+    // bank, so the operand's index offset is bank * 256.
+    unsigned Adjust =
+        ((static_cast<unsigned>(VgprMsBs) >> (Slot * 2)) & 0x3u) * 256u;
+    if (Adjust == 0)
+      continue;
+    // Resolve the slot's role to this instruction's operand index and record
+    // the offset parseReg() will apply. getNamedOperandIdx returns -1 if the
+    // operand is absent; KMaxOps bounds the CurrentVgprAdjust table.
+    int OpIdx = AMDGPU::getNamedOperandIdx(Opc, Ops[Slot]);
+    if (OpIdx >= 0 && static_cast<unsigned>(OpIdx) < KMaxOps)
+      CurrentVgprAdjust[OpIdx] = Adjust;
   }
 }
 
