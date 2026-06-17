@@ -15,7 +15,6 @@
 #include "canonical-op.h"
 
 #include "MCTargetDesc/AMDGPUMCTargetDesc.h" // AMDGPU::EXEC, VCC, SCC, ...
-#include "MCTargetDesc/AMDGPUMCExpr.h"
 #include "Utils/AMDGPUBaseInfo.h"
 
 #include "llvm/ADT/StringRef.h"

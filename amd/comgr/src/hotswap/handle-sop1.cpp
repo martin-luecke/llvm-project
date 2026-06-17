@@ -18,10 +18,8 @@
 #include "llvm/IR/IntrinsicsAMDGPU.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include "MCTargetDesc/AMDGPUMCExpr.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
-
 using namespace llvm;
 
 namespace COMGR::hotswap {
@@ -471,8 +469,6 @@ HandlerResult handleSOP1(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
   if (Sop == CanonicalOp::S_ADD_PC_I64) {
-    // The lit64 encoding surfaces the offset as an MCExpr rather than a plain
-    // immediate; extract the value from whichever form was decoded.
     int64_t Imm;
     const MCOperand &Src0 = Di.Inst.getOperand(0);
     if (Di.isImm(0)) {
