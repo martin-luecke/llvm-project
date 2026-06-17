@@ -655,8 +655,6 @@ void collectBranchTargets(const DecodedInst &Di, uint64_t Off,
   const MCInst &Inst = Di.Inst;
   // s_add_pc_i64 carries a signed i64 PC-relative offset, not the SOPP form.
   if (Di.CanonOp == CanonicalOp::S_ADD_PC_I64) {
-    // The lit64 encoding (SSRC0=0xFE, 8-byte literal) surfaces as an MCExpr
-    // operand rather than a plain immediate; handle both forms uniformly.
     const MCOperand &Src0 = Inst.getOperand(0);
     int64_t Imm;
     if (Src0.isImm()) {
