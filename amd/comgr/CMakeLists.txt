@@ -652,7 +652,13 @@ if(BUILD_TESTING)
   if (NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     set_property(GLOBAL APPEND PROPERTY LLVM_ADDITIONAL_TEST_TARGETS check-comgr)
   endif()
-  add_subdirectory(test)
+  # The gtest suite under test/ does find_package(hip), which pulls in the
+  # system ROCm AMDDeviceLibs and collides with the in-tree device-libs
+  # external project. Gate it so hotswap lit coverage can build without it.
+  option(COMGR_BUILD_GTEST_TESTS "Build the HIP-dependent gtest suite" ON)
+  if(COMGR_BUILD_GTEST_TESTS)
+    add_subdirectory(test)
+  endif()
   add_subdirectory(test-lit)
   add_subdirectory(test-unit)
 endif()
