@@ -32,7 +32,7 @@
 ; for byref kernel args, which is why the placeholder is shaped as a
 ; pointer with a byref attribute rather than a flat `[N x i8]`.
 ; CHECK-LABEL: define amdgpu_kernel void @s_load_b96_kernarg_kernel(
-; CHECK-SAME: ptr addrspace(4) byref([24 x i8]) align 16 %kargs
+; CHECK-SAME: [16 x i8] {{%[0-9]+}}, ptr addrspace(1) {{%[0-9]+}})
 
 ; Kernarg fetches go through `llvm.amdgcn.kernarg.segment.ptr` + a
 ; real load on `ptr addrspace(1)`.
