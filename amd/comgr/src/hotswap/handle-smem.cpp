@@ -330,16 +330,17 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
       int NarrowBytes = IsHalfWord ? 2 : 1;
       Value *RegOff = Ctx.B.CreateZExt(Op.src(1), Ctx.I64Ty, "smem_nroff");
       if (Di.HasScaleOffset && NarrowBytes != 1)
-        RegOff =
-            Ctx.B.CreateMul(RegOff, ConstantInt::get(Ctx.I64Ty, NarrowBytes),
+        RegOff = Ctx.B.CreateMul(RegOff,
+                                 ConstantInt::get(Ctx.I64Ty, NarrowBytes),
                             "smem_nroff_scaled");
       Ptr = Ctx.B.CreateInBoundsGEP(Ctx.I8Ty, Ptr, RegOff);
     }
 
-    Value *Narrow =
-        Ctx.B.CreateAlignedLoad(NarrowTy, Ptr, NarrowAlign, NarrowLoadName);
-    Value *Ext = IsSigned ? Ctx.B.CreateSExt(Narrow, Ctx.I32Ty, ExtName)
-                          : Ctx.B.CreateZExt(Narrow, Ctx.I32Ty, ExtName);
+    Value *Narrow = Ctx.B.CreateAlignedLoad(NarrowTy, Ptr, NarrowAlign,
+                                             NarrowLoadName);
+    Value *Ext = IsSigned
+                     ? Ctx.B.CreateSExt(Narrow, Ctx.I32Ty, ExtName)
+                     : Ctx.B.CreateZExt(Narrow, Ctx.I32Ty, ExtName);
     Ctx.Regs.storeSGPR32(Ctx.B, Dest.BaseIdx, Ext);
     Hr.Handled = true;
     return Hr;
