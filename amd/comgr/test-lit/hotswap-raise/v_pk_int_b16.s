@@ -1,8 +1,8 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && raise_cli %t.hsaco --target-isa=gfx1250 --emit-ir=v_pk_int_b16_kernel 2>/dev/null | %FileCheck %s
+; RUN:   && %raise_cli %t.hsaco --target-isa=gfx1250 --emit-ir=v_pk_int_b16_kernel 2>/dev/null | %FileCheck %s
 ;
 ; Lift test for the VOP3P packed-pair `<2 x i16>` int family
-; (V_PK_LSHLREV_B16 + V_PK_ADD_U16). Pins both:
+; (V_PK_LSHLREV_B16 + V_PK_ADD_U16 + V_PK_ASHRREV_I16). Pins both:
 ;
 ;   * The shared operand-decode shape — `bitcast i32 -> <2 x i16>`
 ;     for each source (lo i16 = bits[15:0], hi i16 = bits[31:16]),
@@ -16,7 +16,8 @@
 ;   * The per-opcode IR dispatch — `shl <2 x i16>` (after an
 ;     explicit `and <2 x i16> ..., <i16 15, i16 15>` shift-count
 ;     mask matching the AMDGPU clshl_rev_16 hardware clamp) for
-;     V_PK_LSHLREV_B16, and `add <2 x i16>` for V_PK_ADD_U16.
+;     V_PK_LSHLREV_B16, `add <2 x i16>` for V_PK_ADD_U16, and
+;     `ashr <2 x i16>` for V_PK_ASHRREV_I16.
 ;
 ; Same-target lift (gfx1250 -> gfx1250) because the V_PK packed-int
 ; family is identical-on-the-wire across gfx9+ (no cross-arch
@@ -46,6 +47,8 @@
 ; CHECK: %pk_lshlrev_amt{{[0-9]*}} = and <2 x i16> {{.+}}, splat (i16 15)
 ; CHECK: %pk_lshlrev{{[0-9]*}} = shl <2 x i16> %{{[^,]+}}, %pk_lshlrev_amt{{[0-9]*}}
 ; CHECK: %pk_i16_pack{{[0-9]*}} = bitcast <2 x i16> %pk_lshlrev{{[0-9]*}} to i32
+; CHECK-NOT: shl <2 x f32>
+; CHECK-NOT: zext <2 x i16> %pk_lshlrev{{[0-9]*}} to <2 x i32>
 
 ; V_PK_ADD_U16 over the same source (val, shifted). Lane-wise i16
 ; add; same bitcast/insert/extract decode; `add <2 x i16>` IR opcode
@@ -56,16 +59,16 @@
 ; auto-renames duplicates). The `[0-9]*` glob covers both forms.
 ; CHECK: %pk_add_u16{{[0-9]*}} = add <2 x i16> %{{[^,]+}}, %{{[^)]+}}
 ; CHECK: %pk_i16_pack{{[0-9]*}} = bitcast <2 x i16> %pk_add_u16{{[0-9]*}} to i32
-
-; Negative assertions: must NOT take the F32 packed path (which would
-; mis-extract `<2 x f32>` lanes), must NOT use sub/mul/lshr/ashr
-; (silent miscompile of the i16 add or shift), must NOT zext the i16
-; result to i32 (which would lose the high lane).
-; CHECK-NOT: shl <2 x f32>
 ; CHECK-NOT: sub <2 x i16>
+
+; V_PK_ASHRREV_I16 arithmetic right-shifts each i16 lane of src1 by the
+; low 4 bits of the corresponding src0 lane (reversed operands: count in
+; src0, value in src1). The raiser must materialize the lane-wise mask and
+; use `ashr <2 x i16>`.
+; CHECK: %pk_ashrrev_amt{{[0-9]*}} = and <2 x i16> {{.+}}, splat (i16 15)
+; CHECK: %pk_ashrrev{{[0-9]*}} = ashr <2 x i16> %{{[^,]+}}, %pk_ashrrev_amt{{[0-9]*}}
+; CHECK: %pk_i16_pack{{[0-9]*}} = bitcast <2 x i16> %pk_ashrrev{{[0-9]*}} to i32
 ; CHECK-NOT: lshr <2 x i16>
-; CHECK-NOT: ashr <2 x i16>
-; CHECK-NOT: zext <2 x i16> %pk_lshlrev{{[0-9]*}} to <2 x i32>
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
@@ -98,6 +101,7 @@ v_pk_int_b16_kernel:
 	;;#ASMSTART
 	v_pk_lshlrev_b16 v0, 0x60002, v0
 	v_pk_add_u16 v1, v0, v0
+	v_pk_ashrrev_i16 v1, 0x10001, v1
 	
 	;;#ASMEND
 	v_ashrrev_i32_e32 v3, 31, v2
