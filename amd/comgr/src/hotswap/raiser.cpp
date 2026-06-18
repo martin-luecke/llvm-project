@@ -394,13 +394,13 @@ computeKernargPtrProvenance(RaiseContext &Ctx, ArrayRef<DecodedInst> Insts,
   const MCRegisterInfo &MRI = *Ctx.Mc.RegInfo;
   const MCInstrInfo &MII = *Ctx.Mc.InstrInfo;
 
-  SmallVector<uint64_t, 32> Starts(BlockStarts.begin(), BlockStarts.end());
+  SmallVector<uint64_t> Starts(BlockStarts.begin(), BlockStarts.end());
   DenseMap<uint64_t, unsigned> BlockIndexByOffset;
   DenseMap<uint64_t, unsigned> InstIndexByOffset;
   for (unsigned I = 0; I < Insts.size(); ++I)
     InstIndexByOffset[Insts[I].Offset] = I;
 
-  SmallVector<KernargProvenanceBlock, 32> Blocks;
+  SmallVector<KernargProvenanceBlock> Blocks;
   Blocks.reserve(Starts.size());
   for (unsigned I = 0; I < Starts.size(); ++I) {
     BlockIndexByOffset[Starts[I]] = I;
@@ -444,7 +444,7 @@ computeKernargPtrProvenance(RaiseContext &Ctx, ArrayRef<DecodedInst> Insts,
     }
   }
 
-  SmallVector<Provenance, 32> State(Blocks.size(), Provenance::Unknown);
+  SmallVector<Provenance> State(Blocks.size(), Provenance::Unknown);
   BitVector Seen(Blocks.size());
   auto MergeInto = [&](unsigned I, Provenance Incoming) {
     if (!Seen[I]) {
