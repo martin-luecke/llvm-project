@@ -227,12 +227,21 @@ struct RaiseContext {
   void storeVGPR64(int Idx, llvm::Value *V);
   void storeAGPR32(int Idx, llvm::Value *V);
 
+  // Entry fact for the source-ABI kernarg-segment pointer SGPR pair at a
+  // recovered source BB leader.
+  //
+  //   LiveEntry - all incoming CFG paths still carry the entry kernarg pointer.
+  //   Clobbered - all incoming CFG paths have overwritten either half.
+  //   Unknown   - paths disagree, are unreachable, or include an unclassified
+  //               write; strict hidden-arg lowering refuses in this state.
   enum class KernargPtrProvenance {
     LiveEntry,
     Clobbered,
     Unknown,
   };
 
+  // True when `Base` names the descriptor-provided kernarg pointer SGPR pair.
+  // Kernels that do not enable that user SGPR never match.
   bool isEntryKernargSegmentPtrSgpr(ParsedReg Base) const {
     if (Layout == nullptr || Base.RegKind != ParsedReg::SGPR)
       return false;
@@ -244,6 +253,8 @@ struct RaiseContext {
     return CurrentKernargPtrProvenance;
   }
 
+  // Update the intra-BB cursor after an SGPR write. Only writes to either
+  // kernarg-pointer lane change this provenance fact.
   void noteSgprWriteForKernargProvenance(int Idx) {
     if (Layout == nullptr)
       return;
@@ -254,11 +265,13 @@ struct RaiseContext {
     CurrentKernargPtrProvenance = KernargPtrProvenance::Clobbered;
   }
 
+  // Record the prepass-computed entry fact for a recovered source BB.
   void setKernargPtrProvenanceForBlock(llvm::BasicBlock *BB,
                                        KernargPtrProvenance Provenance) {
     KernargSegmentPtrProvenanceByBB[BB] = Provenance;
   }
 
+  // Load the prepass entry fact when lowering reaches a recovered source BB.
   void enterKernargPtrProvenanceForBlock(llvm::BasicBlock *BB) {
     auto It = KernargSegmentPtrProvenanceByBB.find(BB);
     CurrentKernargPtrProvenance = It == KernargSegmentPtrProvenanceByBB.end()
