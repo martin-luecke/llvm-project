@@ -773,53 +773,32 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   auto *F32Ty = Type::getFloatTy(C);
   auto *PtrGlobalTy = PointerType::get(C, 1);
 
-  // Build function signature: a single opaque
-  // `ptr byref([N x i8]) align 16` placeholder whose only job is to
-  // make the AMDGPU backend emit `kernarg_segment_size = N` and
-  // `kernarg_segment_align = 16` in the lifted kernel's KD/metadata,
-  // so the runtime's kernarg buffer reaches the kernel intact and
-  // the metadata reports the AMDGPU ABI's 16-byte minimum.
+  // Build a typed function signature from the source kernel's `.args`
+  // metadata via `buildKernargParamTypes`: one IR parameter per
+  // non-hidden source argument (ptr addrspace(1) for global-buffer /
+  // image arguments, integer scalars for by_value arguments).  The
+  // AMDGPU backend derives each parameter's `.args` metadata entry from
+  // the function signature, giving HIP's kernelParams dispatch path the
+  // per-argument offsets and sizes it needs to marshal correctly.
   //
-  // The handlers do NOT read this argument -- kernarg loads lift to
-  // GEP+load against `amdgcn_kernarg_segment_ptr` and let the AMDGPU
-  // backend re-select `s_load_*` against the kernarg segment. The
-  // typed source-ABI signature (ptr addrspace(1) / i32 / i64 / per-
-  // dword aggregate split) is therefore unnecessary on the lifted
-  // side.
+  // When no non-hidden args exist (or `Meta.Args` is empty), we fall
+  // back to a single opaque `ptr byref([N x i8]) align 16` placeholder.
+  // The byref+align combo is needed because AMDGPULowerKernelArguments
+  // only honours the `align` parameter attribute for byref kernel args,
+  // which is what keeps `kernarg_segment_align` at the ABI's 16-byte
+  // minimum in the fallback case.
   //
-  // Why `byref` + `align`: AMDGPULowerKernelArguments consults the
-  // `align` parameter attribute only for byref kernel args (see
-  // `MaybeAlign ParamAlign = IsByRef ? Arg.getParamAlign() :
-  // std::nullopt;` in LLVM's `AMDGPULowerKernelArguments.cpp`). For
-  // a non-byref `[N x i8]` arg, the IR-level alignment is the
-  // type's natural alignment (1 byte), and the YAML metadata's
-  // `.kernarg_segment_align` field reports a smaller value than the
-  // ABI's 16-byte minimum. Using `byref` with an explicit
-  // `align(16)` lets the backend honour the alignment without
-  // forcing a vector or padding type, and the byref semantics --
-  // "pointer to an aggregate that's actually placed in the kernarg
-  // segment" -- match the placeholder's intent: a stable region of
-  // `kernarg_segment_size` bytes that handlers don't need a typed
-  // view of.
-  //
-  // AMDGPULowerKernelArguments skips load emission for arguments
-  // that are `use_empty()` but still bumps the cumulative arg
-  // offset, so the unused placeholder still contributes to
-  // `kernarg_segment_size`.
-  //
-  // Test back-reference: every lit fixture under `lit_tests/` pins
-  // either a `ptr addrspace(4)` GEP shape or an addrspace(1) global
-  // GEP shape against the segment_ptr intrinsic -- none of them rely
-  // on the kernarg buffer being a typed Function argument list.
-  SmallVector<Type *, 1> ParamTypes;
+  // Either way the IR body reads args via `amdgcn_kernarg_segment_ptr`;
+  // the typed params are unused-in-body and exist solely for `.args`
+  // metadata.
+  SmallVector<Type *, 8> ParamTypes;
   KernargLayout Kernargs;
-  int ParamIdx = 0;
   Type *KernargByrefTy = nullptr;
-  if (Meta.KernargSegmentSize > 0) {
+  bool TypedKernargs = buildKernargParamTypes(C, Meta, ParamTypes);
+  if (!TypedKernargs && Meta.KernargSegmentSize > 0) {
     KernargByrefTy =
         ArrayType::get(I8Ty, static_cast<uint64_t>(Meta.KernargSegmentSize));
     ParamTypes.push_back(PointerType::get(C, /*addrspace=*/4));
-    ParamIdx = 1;
   }
   Kernargs.ImplicitArgsBase = Meta.implicitArgsBase();
   Kernargs.Args = Meta.Args;
@@ -869,12 +848,10 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
     F->addFnAttr("amdgpu-no-completion-action");
     F->addFnAttr("amdgpu-no-default-queue");
     F->addFnAttr("amdgpu-no-dispatch-id");
-    // dispatch-ptr is suppressed conditionally after the raise loop:
-    // source hidden-arg synthesis may materialise values such as
-    // hidden_group_size_* and hidden_block_count_* from the AQL dispatch
-    // packet via amdgcn_dispatch_ptr, so we must not suppress it eagerly
-    // here.  Instead we check use_empty() once the body is complete
-    // (see below, just before Phase 6).
+    // Do not suppress dispatch-ptr: source hidden-arg synthesis materialises
+    // values such as hidden_group_size_* and hidden_block_count_* from the
+    // target dispatch packet, because the lifted HSACO intentionally does not
+    // ask HIP to append source-ABI hidden args after the opaque kargs blob.
     F->addFnAttr("amdgpu-no-heap-ptr");
     F->addFnAttr("amdgpu-no-hostcall-ptr");
     F->addFnAttr("amdgpu-no-implicitarg-ptr");
@@ -915,7 +892,7 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
     F->addFnAttr("amdgpu-lds-size", SizeStr + "," + SizeStr);
   }
 
-  if (ParamIdx > 0)
+  if (KernargByrefTy)
     F->getArg(0)->setName("kargs");
 
   errs() << "transpiler: Kernel '" << KernelName
@@ -1527,20 +1504,6 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   // If any instructions failed to raise, skip Phases 6-7.
   if (!Result.AllFailures.empty()) {
     return Result;
-  }
-
-  // Suppress dispatch-ptr in the lifted KD when the body never actually calls
-  // llvm.amdgcn.dispatch.ptr -- neither the source dispatch_ptr SGPR seed nor
-  // hidden-arg synthesis materialised a use.  Without this suppression the
-  // backend conservatively inserts dispatch_ptr for every kernel, adding two
-  // user-SGPRs ahead of kernarg_segment_ptr and shifting the kernarg base
-  // register (s[0:1] -> s[2:3]), which diverges from the source ABI the
-  // launch path expects.
-  {
-    Function *FnDisp = M.getFunction(
-        llvm::Intrinsic::getName(llvm::Intrinsic::amdgcn_dispatch_ptr));
-    if (!FnDisp || FnDisp->use_empty())
-      F->addFnAttr("amdgpu-no-dispatch-ptr");
   }
 
   // ==== Phase 6: Promote allocas to SSA ====
