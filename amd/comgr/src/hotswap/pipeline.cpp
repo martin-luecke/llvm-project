@@ -395,6 +395,156 @@ static bool raiseAndCompileKernel(const TextSection &text,
   return true;
 }
 
+static void emitTrapStubFunction(llvm::Module &M, llvm::StringRef kernelName,
+                                 const KernelMeta &meta) {
+  llvm::LLVMContext &C = M.getContext();
+
+  auto *VoidTy = llvm::Type::getVoidTy(C);
+  auto *I8Ty = llvm::Type::getInt8Ty(C);
+  // Mirror the structured-signature logic of the main raiser (see
+  // buildKernargParamTypes) so even a refused/trap-stub kernel advertises the
+  // source's `.args` metadata, keeping per-argument (kernelParams) launches
+  // marshalling-consistent.
+  llvm::SmallVector<llvm::Type *, 8> ParamTypes;
+  llvm::Type *KernargByrefTy = nullptr;
+  bool TypedKernargs = buildKernargParamTypes(C, meta, ParamTypes);
+  if (!TypedKernargs && meta.KernargSegmentSize > 0) {
+    KernargByrefTy =
+        llvm::ArrayType::get(I8Ty, static_cast<uint64_t>(meta.KernargSegmentSize));
+    ParamTypes.push_back(llvm::PointerType::get(C, /*addrspace=*/4));
+  }
+
+  auto *FuncTy = llvm::FunctionType::get(VoidTy, ParamTypes, false);
+  llvm::Function *F = llvm::Function::Create(
+      FuncTy, llvm::GlobalValue::ExternalLinkage, kernelName, &M);
+  F->setCallingConv(llvm::CallingConv::AMDGPU_KERNEL);
+  if (KernargByrefTy) {
+    F->addParamAttr(0, llvm::Attribute::getWithByRefType(C, KernargByrefTy));
+    F->addParamAttr(0, llvm::Attribute::getWithAlignment(C, llvm::Align(16)));
+    F->getArg(0)->setName("kargs");
+  }
+
+  int MaxWg = meta.MaxFlatWorkgroupSize > 0 ? meta.MaxFlatWorkgroupSize : 1024;
+  F->addFnAttr("amdgpu-flat-work-group-size",
+               std::to_string(MaxWg) + "," + std::to_string(MaxWg));
+  F->addFnAttr("uniform-work-group-size", "true");
+  F->addFnAttr("amdgpu-no-cluster-id-x");
+  F->addFnAttr("amdgpu-no-cluster-id-y");
+  F->addFnAttr("amdgpu-no-cluster-id-z");
+  F->addFnAttr("amdgpu-no-completion-action");
+  F->addFnAttr("amdgpu-no-default-queue");
+  F->addFnAttr("amdgpu-no-dispatch-id");
+  F->addFnAttr("amdgpu-no-heap-ptr");
+  F->addFnAttr("amdgpu-no-hostcall-ptr");
+  F->addFnAttr("amdgpu-no-implicitarg-ptr");
+  F->addFnAttr("amdgpu-no-lds-kernel-id");
+  F->addFnAttr("amdgpu-no-multigrid-sync-arg");
+  F->addFnAttr("amdgpu-no-queue-ptr");
+  F->addFnAttr("amdgpu-no-workitem-id-x");
+  F->addFnAttr("amdgpu-no-workitem-id-y");
+  F->addFnAttr("amdgpu-no-workitem-id-z");
+  if (meta.GroupSegmentFixedSize > 0) {
+    std::string SizeStr = std::to_string(meta.GroupSegmentFixedSize);
+    F->addFnAttr("amdgpu-lds-size", SizeStr + "," + SizeStr);
+  }
+
+  llvm::BasicBlock *Entry = llvm::BasicBlock::Create(C, "entry", F);
+  llvm::IRBuilder<> B(Entry);
+  llvm::Function *Trap =
+      llvm::Intrinsic::getOrInsertDeclaration(&M, llvm::Intrinsic::trap);
+  B.CreateCall(Trap);
+  B.CreateUnreachable();
+}
+
+static std::string buildTrapStubIr(
+    llvm::StringRef targetISA,
+    llvm::ArrayRef<std::pair<std::string, KernelMeta>> kernels) {
+  llvm::LLVMContext C;
+  llvm::Module M("hotswap_trap_stub_module", C);
+  M.setTargetTriple(llvm::Triple("amdgcn-amd-amdhsa"));
+
+  std::string Err;
+  llvm::TargetOptions Opts;
+  std::unique_ptr<llvm::TargetMachine> Tm;
+  llvm::Triple TheTriple(M.getTargetTriple());
+  const llvm::Target *Target =
+      llvm::TargetRegistry::lookupTarget("amdgcn", TheTriple, Err);
+  if (Target) {
+    Tm.reset(Target->createTargetMachine(M.getTargetTriple(), targetISA, "",
+                                         Opts, llvm::Reloc::PIC_));
+    if (Tm)
+      M.setDataLayout(Tm->createDataLayout());
+  }
+
+  for (const auto &K : kernels)
+    emitTrapStubFunction(M, K.first, K.second);
+
+  std::string Ir;
+  llvm::raw_string_ostream Os(Ir);
+  M.print(Os, nullptr);
+  return Os.str();
+}
+
+static bool compileTrapStubKernels(
+    llvm::ArrayRef<std::pair<std::string, KernelMeta>> kernels,
+    llvm::StringRef targetISA, const DumpDir &tmpDir, llvm::StringRef objPath,
+    PipelineResult &result, const PipelineOptions &options) {
+  if (kernels.empty())
+    return true;
+
+  std::string irPath = tmpDir.filePath("trap_stubs.ll");
+  std::string asmPath = tmpDir.filePath("trap_stubs.s");
+  std::string Ir = buildTrapStubIr(targetISA, kernels);
+  if (!writeFile(irPath, Ir)) {
+    result.FailKernel = "__trap_stubs__";
+    result.FailMnemonic = "__trap_stub_ir_write__";
+    result.FailReason = "TrapStubIrWriteFailed";
+    result.FailFormat = "TrapStub";
+    result.FailDetail = "failed to write trap-stub LLVM IR";
+    return false;
+  }
+  if (!result.IrText.empty())
+    result.IrText += "\n";
+  result.IrText += Ir;
+
+  std::string llcBin = std::string(LLVM_TOOLS_DIR) + "/llc";
+  std::string mcpuLlc = ("-mcpu=" + targetISA).str();
+  auto llcStart = timingStart(options.CollectTimings);
+  if (runTool(llcBin, {llcBin, "-march=amdgcn", mcpuLlc, "-filetype=asm",
+                       "-o", asmPath, irPath}) != 0) {
+    result.Timings.llcSeconds += timingElapsed(options.CollectTimings, llcStart);
+    llvm::errs() << "transpiler: llc failed for trap-stub module with "
+                 << kernels.size() << " kernel(s)\n";
+    result.FailKernel = "__trap_stubs__";
+    result.FailMnemonic = "__trap_stub_llc__";
+    result.FailReason = "TrapStubLlcFailed";
+    result.FailFormat = "TrapStub";
+    result.FailDetail = "llc failed for trap-stub kernel";
+    return false;
+  }
+  result.Timings.llcSeconds += timingElapsed(options.CollectTimings, llcStart);
+
+  std::string mcBin = std::string(LLVM_TOOLS_DIR) + "/llvm-mc";
+  std::string mcpuMc = ("-mcpu=" + targetISA).str();
+  auto llvmMcStart = timingStart(options.CollectTimings);
+  if (runTool(mcBin, {mcBin, "-triple=amdgcn-amd-amdhsa", mcpuMc,
+                      "-filetype=obj", "-o", objPath, asmPath}) != 0) {
+    result.Timings.llvmMcSeconds +=
+        timingElapsed(options.CollectTimings, llvmMcStart);
+    llvm::errs() << "transpiler: llvm-mc failed for trap-stub module with "
+                 << kernels.size() << " kernel(s)\n";
+    result.FailKernel = "__trap_stubs__";
+    result.FailMnemonic = "__trap_stub_llvm_mc__";
+    result.FailReason = "TrapStubLlvmMcFailed";
+    result.FailFormat = "TrapStub";
+    result.FailDetail = "llvm-mc failed for trap-stub kernel";
+    return false;
+  }
+  result.Timings.llvmMcSeconds +=
+      timingElapsed(options.CollectTimings, llvmMcStart);
+  return true;
+}
+
 // Link one or more relocatable .o files into a shared HSACO.
 static bool linkObjects(llvm::ArrayRef<std::string> objPaths,
                         llvm::StringRef hsacoPath) {
