@@ -898,10 +898,10 @@ SetPcAnalysis analyseSetPC(ArrayRef<DecodedInst> Insts,
     }
 
     // Compute CFG successors.
-    bool HasNext = (Bi + 1) < Blocks.size();
-    uint64_t NextOff = HasNext ? Blocks[Bi + 1].Offset : 0;
-    Bd.Successors = computeDecodedBlockSuccessors(Insts[Bd.LastIdx], NextOff,
-                                                  HasNext);
+    std::optional<uint64_t> NextOff;
+    if ((Bi + 1) < Blocks.size())
+      NextOff = Blocks[Bi + 1].Offset;
+    Bd.Successors = computeDecodedBlockSuccessors(Insts[Bd.LastIdx], NextOff);
   }
 
   // ---------------------------------------------------------------

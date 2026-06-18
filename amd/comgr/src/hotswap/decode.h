@@ -62,13 +62,13 @@ DecodeResult decodeKernel(const MCState &Mc,
                               std::nullopt);
 
 // Compute the decoded CFG successors for a block ending in LastInst.
-// NextBlockOffset is the linear fallthrough block start and NextBlockExists
-// says whether such a block exists. The model is intentionally conservative and
-// matches the successor model used by setpc analysis and the raiser's
-// provenance prepasses.
-llvm::SmallVector<uint64_t, 2>
+// NextBlockOffset is the linear fallthrough block start, or std::nullopt when
+// no decoded linear fallthrough block exists. The model is intentionally
+// conservative and matches the successor model used by setpc analysis and the
+// raiser's provenance prepasses.
+llvm::SmallVector<uint64_t>
 computeDecodedBlockSuccessors(const DecodedInst &LastInst,
-                              uint64_t NextBlockOffset, bool NextBlockExists);
+                              std::optional<uint64_t> NextBlockOffset);
 
 // Compute the absolute byte offset of a SOPP branch target. SOPP branch
 // immediates are signed 16-bit dword offsets from the next instruction

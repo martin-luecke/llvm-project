@@ -728,10 +728,10 @@ uint64_t computeSoppBranchTarget(uint64_t Off, int64_t RawImm) {
 // edges must consult the SetPcAnalysis table after this helper returns the
 // local decoded model.
 //
-SmallVector<uint64_t, 2>
+SmallVector<uint64_t>
 computeDecodedBlockSuccessors(const DecodedInst &LastInst,
-                              uint64_t NextBlockOffset, bool NextBlockExists) {
-  SmallVector<uint64_t, 2> Result;
+                              std::optional<uint64_t> NextBlockOffset) {
+  SmallVector<uint64_t> Result;
   auto BranchTargetFromImm = [&](unsigned OpIdx) -> uint64_t {
     if (OpIdx >= LastInst.Inst.getNumOperands())
       report_fatal_error("transpiler: branch target operand missing");
@@ -748,20 +748,20 @@ computeDecodedBlockSuccessors(const DecodedInst &LastInst,
   // s_swap_pc_i64 ends the recovered block, but setpc-analysis models its
   // return-site fallthrough separately from ordinary branch metadata.
   if (LastInst.CanonOp == CanonicalOp::S_SWAP_PC_I64) {
-    if (NextBlockExists)
-      Result.push_back(NextBlockOffset);
+    if (NextBlockOffset)
+      Result.push_back(*NextBlockOffset);
     return Result;
   }
 
   if (LastInst.IsBranch) {
     Result.push_back(BranchTargetFromImm(0));
-    if (LastInst.IsConditionalBranch && NextBlockExists)
-      Result.push_back(NextBlockOffset);
+    if (LastInst.IsConditionalBranch && NextBlockOffset)
+      Result.push_back(*NextBlockOffset);
     return Result;
   }
 
-  if (NextBlockExists)
-    Result.push_back(NextBlockOffset);
+  if (NextBlockOffset)
+    Result.push_back(*NextBlockOffset);
   return Result;
 }
 

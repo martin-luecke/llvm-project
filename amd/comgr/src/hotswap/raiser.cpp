@@ -348,15 +348,14 @@ static RaiseFailure preloadedImplicitArgFailure(StringRef KernelName,
 }
 
 static SmallVector<uint64_t, 4> computeKernargProvenanceSuccessors(
-    const DecodedInst &LastInst, uint64_t NextBlockOffset, bool NextBlockExists,
+    const DecodedInst &LastInst, std::optional<uint64_t> NextBlockOffset,
     const SetPcAnalysis *SetpcAnalysis) {
   // Ordinary SOPP successors use the shared decoded CFG model.  SETPC/SWAPPC
   // successors are recovered by setpc-analysis after decode, so consult its
   // classification table instead of guessing a fallthrough edge.
   if (LastInst.CanonOp != CanonicalOp::S_SET_PC_I64 &&
       LastInst.CanonOp != CanonicalOp::S_SWAP_PC_I64)
-    return computeDecodedBlockSuccessors(LastInst, NextBlockOffset,
-                                         NextBlockExists);
+    return computeDecodedBlockSuccessors(LastInst, NextBlockOffset);
 
   SmallVector<uint64_t, 4> Result;
   if (SetpcAnalysis == nullptr)
@@ -432,10 +431,11 @@ computeKernargPtrProvenance(RaiseContext &Ctx, ArrayRef<DecodedInst> Insts,
     KernargProvenanceBlock &Block = Blocks[I];
     if (!Block.HasInsts)
       continue;
-    uint64_t NextStart = I + 1 < Starts.size() ? Starts[I + 1] : 0;
-    bool HasNext = I + 1 < Starts.size();
+    std::optional<uint64_t> NextStart;
+    if (I + 1 < Starts.size())
+      NextStart = Starts[I + 1];
     for (uint64_t SuccOffset : computeKernargProvenanceSuccessors(
-             Insts[Block.LastIdx], NextStart, HasNext, Ctx.SetpcAnalysis)) {
+             Insts[Block.LastIdx], NextStart, Ctx.SetpcAnalysis)) {
       auto SuccIt = BlockIndexByOffset.find(SuccOffset);
       if (SuccIt != BlockIndexByOffset.end())
         Block.Successors.push_back(SuccIt->second);
