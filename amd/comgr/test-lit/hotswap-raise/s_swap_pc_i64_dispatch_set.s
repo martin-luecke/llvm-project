@@ -74,7 +74,7 @@
 ;     terminator (Phase 5 kept it) but failed to fire the rewrite
 ;     hook for it (would leave a binary-PC-shaped `extractvalue`
 ;     flowing into the phi instead of a constant).
-;   * The cascade shape (`%swap_call_target_marker = or i64 ...`
+;   * The cascade shape (`%swap_call_target_marker = or disjoint i64 ...`
 ;     followed by `dispatch_0x30_cmp_N` + `br i1 ..., label
 ;     %bb_<target>, label %dispatch_0x30_{N+1_or_unreachable}`)
 ;     pins that the swap site's terminator chain enumerates exactly
@@ -93,7 +93,7 @@
 ;     `br label %bb_<callee>` and never names anything
 ;     `swap_call_target_marker` / `dispatch_*_cmp_*`, so a
 ;     regression that mis-classifies the site as DirectA would fail
-;     the CHECK on `%swap_call_target_marker = or i64 ...`. We
+;     the CHECK on `%swap_call_target_marker = or disjoint i64 ...`. We
 ;     deliberately do NOT use a `CHECK-NOT br label %bb_0x<dst>$`
 ;     guard because the SPE (Scalar Predicate Emulation) lowering
 ;     for the pinned `v_mov_b32` / `scratch_store_b8` instructions
@@ -141,7 +141,7 @@
 ;   bb_0x30 (step 0 lives here) -> dispatch_0x30_unreachable
 ;   (pre-created) -> dispatch_0x30_1 (step 1 lives here)
 ; These CHECKs follow that emitted order.
-; CHECK: %swap_call_target_marker = or i64 %{{[^ ]+}}, %{{[^ ]+}}
+; CHECK: %swap_call_target_marker = or disjoint i64 %{{[^ ]+}}, %{{[^ ]+}}
 ; CHECK-NEXT: %dispatch_0x38_cmp_0 = icmp eq i64 %swap_call_target_marker, 68
 ; CHECK-NEXT: br i1 %dispatch_0x38_cmp_0, label %bb_0x44, label %dispatch_0x38_1
 

@@ -20,7 +20,7 @@
 ; CHECK: %{{.*}} = zext i16 %{{.*}} to i32
 ; CHECK: %fma_mixhi_f16_old_lo = and i32 %{{.*}}, 65535
 ; CHECK: %fma_mixhi_f16_hi_bits = shl i32 %{{.*}}, 16
-; CHECK: %fma_mixhi_f16_pack = or i32 %fma_mixhi_f16_old_lo, %fma_mixhi_f16_hi_bits
+; CHECK: %fma_mixhi_f16_pack = or disjoint i32 %fma_mixhi_f16_old_lo, %fma_mixhi_f16_hi_bits
 
 ; BF16 high-half form uses the same selection/writeback shape with bfloat.
 ; CHECK-DAG: %mixhi_cvt_bf16 = fpext bfloat %{{.*}} to float
@@ -33,7 +33,7 @@
 ; CHECK: %{{.*}} = zext i16 %{{.*}} to i32
 ; CHECK: %fma_mixhi_bf16_old_lo = and i32 %{{.*}}, 65535
 ; CHECK: %fma_mixhi_bf16_hi_bits = shl i32 %{{.*}}, 16
-; CHECK: %fma_mixhi_bf16_pack = or i32 %fma_mixhi_bf16_old_lo, %fma_mixhi_bf16_hi_bits
+; CHECK: %fma_mixhi_bf16_pack = or disjoint i32 %fma_mixhi_bf16_old_lo, %fma_mixhi_bf16_hi_bits
 ; CHECK-NOT: unsupported instruction
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"

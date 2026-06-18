@@ -140,7 +140,7 @@
 ;   bb_0x30 (step 0 lives here) -> dispatch_0x30_unreachable
 ;   (pre-created)                -> dispatch_0x30_1 (step 1 lives here)
 ; These CHECKs follow that emitted order.
-; CHECK: %ret_pc_marker = or i64 %{{[^ ]+}}, %{{[^ ]+}}
+; CHECK: %ret_pc_marker = or disjoint i64 %{{[^ ]+}}, %{{[^ ]+}}
 ; CHECK-NEXT: %dispatch_0x38_cmp_0 = icmp eq i64 %ret_pc_marker, 60
 ; CHECK-NEXT: br i1 %dispatch_0x38_cmp_0, label %bb_0x3C, label %dispatch_0x38_1
 

@@ -25,7 +25,7 @@
 
 ; Low-half writeback preserves the old destination high half explicitly.
 ; CHECK: %fma_mixlo_bf16_old_hi = and i32 %{{.*}}, -65536
-; CHECK: %fma_mixlo_bf16_pack = or i32 %fma_mixlo_bf16_old_hi, %{{.*}}
+; CHECK: %fma_mixlo_bf16_pack = or disjoint i32 %fma_mixlo_bf16_old_hi, %{{.*}}
 ; CHECK-NOT: unsupported instruction
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"

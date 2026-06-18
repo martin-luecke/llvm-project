@@ -16,7 +16,7 @@
 ; CHECK: %fma_mixlo_f16_clamp = call half @llvm.minnum.f16(half %fma_mixlo_f16_clamp_lo,
 ; CHECK: bitcast half %fma_mixlo_f16_clamp to i16
 ; CHECK: %fma_mixlo_f16_old_hi = and i32 %{{.*}}, -65536
-; CHECK: %fma_mixlo_f16_pack = or i32 %fma_mixlo_f16_old_hi, %{{.*}}
+; CHECK: %fma_mixlo_f16_pack = or disjoint i32 %fma_mixlo_f16_old_hi, %{{.*}}
 
 ; BF16 high-half form: f32 FMA -> bf16 round -> bf16 clamp -> high-half pack.
 ; CHECK: %fma_mixhi_bf16 = call float @llvm.fma.f32(
@@ -26,7 +26,7 @@
 ; CHECK: bitcast bfloat %fma_mixhi_bf16_clamp to i16
 ; CHECK: %fma_mixhi_bf16_old_lo = and i32 %{{.*}}, 65535
 ; CHECK: %fma_mixhi_bf16_hi_bits = shl i32 %{{.*}}, 16
-; CHECK: %fma_mixhi_bf16_pack = or i32 %fma_mixhi_bf16_old_lo, %fma_mixhi_bf16_hi_bits
+; CHECK: %fma_mixhi_bf16_pack = or disjoint i32 %fma_mixhi_bf16_old_lo, %fma_mixhi_bf16_hi_bits
 ; CHECK-NOT: unsupported instruction
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"

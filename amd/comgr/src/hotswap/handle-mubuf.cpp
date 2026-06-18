@@ -127,14 +127,14 @@ HandlerResult handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
             // _D16: place datum in lo 16, preserve hi 16 of prior.
             Value *PriorHi =
                 Ctx.B.CreateAnd(Prior, ConstantInt::get(Ctx.I32Ty, 0xFFFF0000));
-            Merged = Ctx.B.CreateOr(PriorHi, Ext32, "d16_lo_merge");
+            Merged = Ctx.B.CreateDisjointOr(PriorHi, Ext32, "d16_lo_merge");
           } else {
             // _D16_HI: place datum in hi 16, preserve lo 16 of prior.
             Value *PriorLo =
                 Ctx.B.CreateAnd(Prior, ConstantInt::get(Ctx.I32Ty, 0x0000FFFF));
             Value *Shifted =
                 Ctx.B.CreateShl(Ext32, ConstantInt::get(Ctx.I32Ty, 16));
-            Merged = Ctx.B.CreateOr(PriorLo, Shifted, "d16_hi_merge");
+            Merged = Ctx.B.CreateDisjointOr(PriorLo, Shifted, "d16_hi_merge");
           }
           Ctx.writeReg32(Vdata, Merged);
         }

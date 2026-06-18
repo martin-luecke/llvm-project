@@ -210,7 +210,7 @@ SourceHiddenArgValue emitSourceHiddenInteger(SourceHiddenArgContext &Ctx,
     if (I != 0)
       Part = Ctx.B.CreateShl(Part, Ctx.B.getInt32(I * 8),
                              "source_hidden_byte_place");
-    Acc = Ctx.B.CreateOr(Acc, Part, "source_hidden_dword");
+    Acc = Ctx.B.CreateDisjointOr(Acc, Part, "source_hidden_dword");
   }
   if (IsSigned && ByteWidth < 4) {
     Type *NarrowTy = Type::getIntNTy(Ctx.C, ByteWidth * 8);

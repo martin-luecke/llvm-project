@@ -830,7 +830,7 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
     Value *Lo = Ctx.B.CreateAnd(Op.src(0), ConstantInt::get(Ctx.I32Ty, 0xFFFF));
     Value *Hi = Ctx.B.CreateShl(
         Ctx.B.CreateAnd(Op.src(1), ConstantInt::get(Ctx.I32Ty, 0xFFFF)), 16);
-    Ctx.Regs.writeReg32(Ctx.B, Op.dst(), Ctx.B.CreateOr(Lo, Hi, "pack_ll"));
+    Ctx.Regs.writeReg32(Ctx.B, Op.dst(), Ctx.B.CreateDisjointOr(Lo, Hi, "pack_ll"));
     Hr.Handled = true;
     return Hr;
   }
@@ -838,7 +838,7 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
     Value *Lo = Ctx.B.CreateAnd(Op.src(0), ConstantInt::get(Ctx.I32Ty, 0xFFFF));
     Value *Hi =
         Ctx.B.CreateAnd(Op.src(1), ConstantInt::get(Ctx.I32Ty, 0xFFFF0000u));
-    Ctx.Regs.writeReg32(Ctx.B, Op.dst(), Ctx.B.CreateOr(Lo, Hi, "pack_lh"));
+    Ctx.Regs.writeReg32(Ctx.B, Op.dst(), Ctx.B.CreateDisjointOr(Lo, Hi, "pack_lh"));
     Hr.Handled = true;
     return Hr;
   }

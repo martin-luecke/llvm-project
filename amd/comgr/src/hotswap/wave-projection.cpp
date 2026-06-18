@@ -226,7 +226,7 @@ Value *ModuloReplicationProjection::extractLaneBitFromWaveMask(
     Value *Zext = B.CreateZExt(V, TargetTy);
     Value *Shifted = B.CreateShl(
         Zext, ConstantInt::get(TargetTy, SrcBits), "mask_widen_shl");
-    V = B.CreateOr(Zext, Shifted, "mask_widen_replicate");
+    V = B.CreateDisjointOr(Zext, Shifted, "mask_widen_replicate");
   } else if (SrcBits > DstBits) {
     V = B.CreateTrunc(V, TargetTy);
   } else if (V->getType() != TargetTy) {
@@ -405,7 +405,7 @@ Value *WaveNativeProjection::extractLaneBitFromWaveMask(IRBuilder<> &B,
     // predicated store -> s_mov_b32 exec_lo, -1` shape working.
     Value *Zext = B.CreateZExt(V, TargetTy);
     Value *Shifted = B.CreateShl(Zext, SrcBits);
-    V = B.CreateOr(Zext, Shifted, "wn_mask_widen");
+    V = B.CreateDisjointOr(Zext, Shifted, "wn_mask_widen");
   } else if (SrcBits > DstBits) {
     V = B.CreateTrunc(V, TargetTy);
   } else if (V->getType() != TargetTy) {

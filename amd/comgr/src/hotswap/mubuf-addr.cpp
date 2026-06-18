@@ -343,7 +343,7 @@ MubufAddr decodeMubufAddr(RaiseContext &Ctx, const DecodedInst &Di,
       Ctx.B.CreateAnd(Dw.Dw1, ConstantInt::get(Ctx.I32Ty, 0xFFFF));
   Value *BaseLo = Ctx.B.CreateZExt(Dw.Dw0, Ctx.I64Ty);
   Value *BaseHi = Ctx.B.CreateShl(Ctx.B.CreateZExt(CleanDw1, Ctx.I64Ty), 32);
-  Value *Base = Ctx.B.CreateOr(BaseLo, BaseHi, "mubuf_raw_base");
+  Value *Base = Ctx.B.CreateDisjointOr(BaseLo, BaseHi, "mubuf_raw_base");
   Value *BasePtr =
       Ctx.B.CreateIntToPtr(Base, PointerType::get(Ctx.C, 1), "mubuf_raw_base_ptr");
   Function *MakeRsrc = Intrinsic::getOrInsertDeclaration(

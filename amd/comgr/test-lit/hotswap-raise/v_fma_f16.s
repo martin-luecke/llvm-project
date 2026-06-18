@@ -35,14 +35,14 @@
 ; BASIC: bitcast half %fma_f16 to i16
 ; BASIC: zext i16 {{.*}} to i32
 ; BASIC: and i32 {{.*}}, -65536
-; BASIC: %f16_merge_lo = or i32
+; BASIC: %f16_merge_lo = or disjoint i32
 ; BASIC-NOT: unsupported instruction
 
 ; OPSEL-LABEL: define amdgpu_kernel void @v_fma_f16_opsel_kernel(
 ; OPSEL-DAG: %f16_src_hi = lshr i32 {{.*}}, 16
 ; OPSEL-DAG: %f16_src_hi{{[0-9]+}} = lshr i32 {{.*}}, 16
 ; OPSEL: %fma_f16 = call half @llvm.fma.f16(
-; OPSEL: %f16_merge_lo = or i32
+; OPSEL: %f16_merge_lo = or disjoint i32
 ; OPSEL-NOT: unsupported instruction
 
 ; DSTHI-LABEL: define amdgpu_kernel void @v_fma_f16_dsthi_kernel(
@@ -51,7 +51,7 @@
 ; DSTHI: zext i16 {{.*}} to i32
 ; DSTHI: and i32 {{.*}}, 65535
 ; DSTHI: shl i32 {{.*}}, 16
-; DSTHI: %f16_merge_hi = or i32
+; DSTHI: %f16_merge_hi = or disjoint i32
 ; DSTHI-NOT: unsupported instruction
 
 ; NEG-LABEL: define amdgpu_kernel void @v_fma_f16_neg_kernel(

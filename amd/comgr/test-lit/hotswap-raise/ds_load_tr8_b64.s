@@ -61,7 +61,7 @@
 ; previous accumulator).
 ; CHECK: %tr8_p = inttoptr i64 %{{[^ ]+}} to ptr addrspace(3)
 ; CHECK: %tr8_b = load i8, ptr addrspace(3) %tr8_p, align 1
-; CHECK: %tr8_pack = or i32 0, %{{[^ ]+}}
+; CHECK: %tr8_pack = or disjoint i32 0, %{{[^ ]+}}
 
 ; Honest refusal: if the handler ever regresses to emitting the
 ; gfx1250 intrinsic directly, the lift will silently miscompile on

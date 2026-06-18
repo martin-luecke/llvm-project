@@ -127,7 +127,7 @@
 ; ret-pair load's `or` result `ret_pc_marker` and the cascade BB /
 ; cmp by the dispatching-instruction offset (0x38); this pins
 ; both the lowering shape and the marker-comparison direction.
-; CHECK: %ret_pc_marker = or i64 %{{[^ ]+}}, %{{[^ ]+}}
+; CHECK: %ret_pc_marker = or disjoint i64 %{{[^ ]+}}, %{{[^ ]+}}
 ; CHECK-NEXT: %dispatch_0x40_cmp_0 = icmp eq i64 %ret_pc_marker, 48
 ; CHECK-NEXT: br i1 %dispatch_0x40_cmp_0, label %bb_0x30, label %dispatch_0x40_unreachable
 

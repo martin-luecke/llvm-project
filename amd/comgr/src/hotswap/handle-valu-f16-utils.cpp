@@ -142,13 +142,13 @@ void writeOpSelF16(RaiseContext &Ctx, OpResolver &Op, Value *Result,
   if (!DstHigh) {
     Value *High =
         Ctx.B.CreateAnd(Old, ConstantInt::get(Ctx.I32Ty, 0xFFFF0000u));
-    Ctx.writeReg32(Op.dst(), Ctx.B.CreateOr(High, Bits, MergeLoName));
+    Ctx.writeReg32(Op.dst(), Ctx.B.CreateDisjointOr(High, Bits, MergeLoName));
     return;
   }
 
   Value *Low = Ctx.B.CreateAnd(Old, ConstantInt::get(Ctx.I32Ty, 0x0000FFFFu));
   Value *Shifted = Ctx.B.CreateShl(Bits, 16);
-  Ctx.writeReg32(Op.dst(), Ctx.B.CreateOr(Low, Shifted, MergeHiName));
+  Ctx.writeReg32(Op.dst(), Ctx.B.CreateDisjointOr(Low, Shifted, MergeHiName));
 }
 
 } // namespace COMGR::hotswap

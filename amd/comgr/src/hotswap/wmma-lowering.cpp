@@ -1213,7 +1213,7 @@ Value *extractF6Nibble(IRBuilder<> &B, ArrayRef<Value *> Dwords,
   Type *I32Ty = B.getInt32Ty();
   Value *Lo = B.CreateZExt(Dwords[dwIdx], I64Ty, "f6_lo");
   Value *Hi = B.CreateZExt(Dwords[dwIdx + 1], I64Ty, "f6_hi");
-  Value *Combined = B.CreateOr(
+  Value *Combined = B.CreateDisjointOr(
       Lo, B.CreateShl(Hi, B.getInt64(32)), "f6_pair");
   Value *Shifted =
       B.CreateLShr(Combined, B.getInt64(bitInDw), "f6_shr64");

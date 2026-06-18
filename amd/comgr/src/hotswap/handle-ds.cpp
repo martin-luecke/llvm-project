@@ -275,7 +275,7 @@ HandlerResult handleDS(RaiseContext &Ctx, const DecodedInst &Di,
           Value *ValI32 = Ctx.B.CreateZExt(ValI8, Ctx.I32Ty);
           Value *Shifted = Ctx.B.CreateShl(ValI32,
                               Ctx.B.getInt32(8 * I));
-          Acc = Ctx.B.CreateOr(Acc, Shifted, "tr8_pack");
+          Acc = Ctx.B.CreateDisjointOr(Acc, Shifted, "tr8_pack");
         }
         OutDw[J] = Acc;
       }
@@ -385,7 +385,7 @@ HandlerResult handleDS(RaiseContext &Ctx, const DecodedInst &Di,
         // Pack two i16 into one i32: (hi << 16) | lo
         Value *Lo32 = Ctx.B.CreateZExt(ValLo, Ctx.I32Ty);
         Value *Hi32 = Ctx.B.CreateZExt(ValHi, Ctx.I32Ty);
-        OutDw[J] = Ctx.B.CreateOr(
+        OutDw[J] = Ctx.B.CreateDisjointOr(
             Ctx.B.CreateShl(Hi32, Ctx.B.getInt32(16)), Lo32, "tr_out");
       }
 
