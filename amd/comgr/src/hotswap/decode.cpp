@@ -741,31 +741,27 @@ computeDecodedBlockSuccessors(const DecodedInst &LastInst,
     return computeSoppBranchTarget(LastInst.Offset, Op.getImm());
   };
 
-  switch (LastInst.CanonOp) {
-  case CanonicalOp::S_BRANCH: {
-    Result.push_back(BranchTargetFromImm(0));
-    break;
-  }
-  case CanonicalOp::S_CBRANCH_SCC0:
-  case CanonicalOp::S_CBRANCH_SCC1:
-  case CanonicalOp::S_CBRANCH_VCCZ:
-  case CanonicalOp::S_CBRANCH_VCCNZ:
-  case CanonicalOp::S_CBRANCH_EXECZ:
-  case CanonicalOp::S_CBRANCH_EXECNZ: {
-    Result.push_back(BranchTargetFromImm(0));
+  if (LastInst.CanonOp == CanonicalOp::S_ENDPGM ||
+      LastInst.CanonOp == CanonicalOp::S_SET_PC_I64)
+    return Result;
+
+  // s_swap_pc_i64 ends the recovered block, but setpc-analysis models its
+  // return-site fallthrough separately from ordinary branch metadata.
+  if (LastInst.CanonOp == CanonicalOp::S_SWAP_PC_I64) {
     if (NextBlockExists)
       Result.push_back(NextBlockOffset);
-    break;
+    return Result;
   }
-  case CanonicalOp::S_ENDPGM:
-  case CanonicalOp::S_SET_PC_I64:
-    break;
-  case CanonicalOp::S_SWAP_PC_I64:
-  default:
-    if (NextBlockExists)
+
+  if (LastInst.IsBranch) {
+    Result.push_back(BranchTargetFromImm(0));
+    if (LastInst.IsConditionalBranch && NextBlockExists)
       Result.push_back(NextBlockOffset);
-    break;
+    return Result;
   }
+
+  if (NextBlockExists)
+    Result.push_back(NextBlockOffset);
   return Result;
 }
 
