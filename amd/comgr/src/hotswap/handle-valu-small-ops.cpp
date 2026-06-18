@@ -383,6 +383,61 @@ HandlerResult handleValuSmallOps(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
 
+  // ---- f16 unary special functions / rounding ----
+  // Same 16-bit-in-32-bit-VGPR convention as V_FLOOR_F16 above; each maps to
+  // the matching hardware intrinsic on the f16 type, which the gfx1151 backend
+  // re-lowers to the native v_*_f16 instruction (RDNA3.5 has the full set).
+  case CanonicalOp::V_RCP_F16:
+  case CanonicalOp::V_RSQ_F16:
+  case CanonicalOp::V_SQRT_F16:
+  case CanonicalOp::V_EXP_F16:
+  case CanonicalOp::V_LOG_F16:
+  case CanonicalOp::V_SIN_F16:
+  case CanonicalOp::V_COS_F16:
+  case CanonicalOp::V_RNDNE_F16:
+  case CanonicalOp::V_TRUNC_F16:
+  case CanonicalOp::V_CEIL_F16:
+  case CanonicalOp::V_FRACT_F16: {
+    if (!requireDefaultOutputModsIfPresent(Di, Hr))
+      return Hr;
+    Intrinsic::ID Id;
+    switch (Di.CanonOp) {
+    case CanonicalOp::V_RCP_F16:   Id = Intrinsic::amdgcn_rcp; break;
+    case CanonicalOp::V_RSQ_F16:   Id = Intrinsic::amdgcn_rsq; break;
+    case CanonicalOp::V_SQRT_F16:  Id = Intrinsic::amdgcn_sqrt; break;
+    case CanonicalOp::V_EXP_F16:   Id = Intrinsic::amdgcn_exp2; break;
+    case CanonicalOp::V_LOG_F16:   Id = Intrinsic::amdgcn_log; break;
+    case CanonicalOp::V_SIN_F16:   Id = Intrinsic::amdgcn_sin; break;
+    case CanonicalOp::V_COS_F16:   Id = Intrinsic::amdgcn_cos; break;
+    case CanonicalOp::V_RNDNE_F16: Id = Intrinsic::roundeven; break;
+    case CanonicalOp::V_TRUNC_F16: Id = Intrinsic::trunc; break;
+    case CanonicalOp::V_CEIL_F16:  Id = Intrinsic::ceil; break;
+    case CanonicalOp::V_FRACT_F16: Id = Intrinsic::amdgcn_fract; break;
+    default: llvm_unreachable("filtered by outer switch");
+    }
+    Value *S = Ctx.B.CreateBitCast(Ctx.B.CreateTrunc(Op.srcF(0), I16Ty),
+                                    Ctx.F16Ty);
+    Function *Fn =
+        Intrinsic::getOrInsertDeclaration(&Ctx.M, Id, {Ctx.F16Ty});
+    Value *Res =
+        Ctx.B.CreateBitCast(Ctx.B.CreateCall(Fn, {S}, "f16unary"), I16Ty);
+    Ctx.writeReg32(Op.dst(), Ctx.B.CreateZExt(Res, Ctx.I32Ty));
+    Hr.Handled = true;
+    return Hr;
+  }
+
+  // ---- v_bcnt_u32_b32: D0.u32 = popcount(S0.u32) + S1.u32 ----
+  // (instruction_manual_1250: "Count the number of 1 bits ... store"; the
+  // accumulating second source is the standard BCNT contract.)
+  case CanonicalOp::V_BCNT_U32_B32: {
+    Function *Ctpop = Intrinsic::getOrInsertDeclaration(
+        &Ctx.M, Intrinsic::ctpop, {Ctx.I32Ty});
+    Value *Cnt = Ctx.B.CreateCall(Ctpop, {Op.src(0)}, "bcnt");
+    Ctx.writeReg32(Op.dst(), Ctx.B.CreateAdd(Cnt, Op.src(1), "bcnt_acc"));
+    Hr.Handled = true;
+    return Hr;
+  }
+
   // ---- 16-bit integer min/max ----
   case CanonicalOp::V_MAX_U16:
   case CanonicalOp::V_MIN_U16:
@@ -423,6 +478,26 @@ HandlerResult handleValuSmallOps(RaiseContext &Ctx, const DecodedInst &Di,
     case CanonicalOp::V_MUL_LO_U16: Res = Ctx.B.CreateMul(A, B, "vmullo16"); break;
     default: llvm_unreachable("filtered by outer switch");
     }
+    Ctx.writeReg32(Op.dst(), Ctx.B.CreateZExt(Res, Ctx.I32Ty));
+    Hr.Handled = true;
+    return Hr;
+  }
+
+  // ---- 16-bit unsigned integer multiply-add ----
+  // v_mad_u16: D0.u16 = S0.u16 * S1.u16 + S2.u16 (instruction_manual_1250
+  // 17.6.124 / 95118). Operands are 16-bit carried in 32-bit VGPR containers,
+  // so the result is the low 16 bits (wrapping mul+add) zero-extended back.
+  // The manual's optional unsigned saturation is the VOP3 clamp=1 form; the
+  // output-mod guard refuses that shape until it is modeled exactly, so the
+  // plain wrapping path below is correct by construction.
+  case CanonicalOp::V_MAD_U16: {
+    if (!requireDefaultOutputModsIfPresent(Di, Hr))
+      return Hr;
+    Value *A = Ctx.B.CreateTrunc(Op.src(0), I16Ty);
+    Value *B = Ctx.B.CreateTrunc(Op.src(1), I16Ty);
+    Value *C = Ctx.B.CreateTrunc(Op.src(2), I16Ty);
+    Value *Res =
+        Ctx.B.CreateAdd(Ctx.B.CreateMul(A, B, "vmad16_mul"), C, "vmad16");
     Ctx.writeReg32(Op.dst(), Ctx.B.CreateZExt(Res, Ctx.I32Ty));
     Hr.Handled = true;
     return Hr;
@@ -586,6 +661,30 @@ HandlerResult handleValuSmallOps(RaiseContext &Ctx, const DecodedInst &Di,
     Ctx.writeReg32(Op.dst(),
                    Ctx.B.CreateBitCast(
                        Ctx.B.CreateCall(Exp2Fn, {S}, "s_exp"), Ctx.I32Ty));
+    Hr.Handled = true;
+    return Hr;
+  }
+  case CanonicalOp::V_SIN_F32: {
+    if (!requireDefaultOutputModsIfPresent(Di, Hr))
+      return Hr;
+    Value *S = Ctx.B.CreateBitCast(Op.srcF(0), Ctx.F32Ty);
+    Function *SinFn = Intrinsic::getOrInsertDeclaration(
+        &Ctx.M, Intrinsic::amdgcn_sin, {Ctx.F32Ty});
+    Ctx.writeReg32(Op.dst(),
+                   Ctx.B.CreateBitCast(
+                       Ctx.B.CreateCall(SinFn, {S}, "sin"), Ctx.I32Ty));
+    Hr.Handled = true;
+    return Hr;
+  }
+  case CanonicalOp::V_COS_F32: {
+    if (!requireDefaultOutputModsIfPresent(Di, Hr))
+      return Hr;
+    Value *S = Ctx.B.CreateBitCast(Op.srcF(0), Ctx.F32Ty);
+    Function *CosFn = Intrinsic::getOrInsertDeclaration(
+        &Ctx.M, Intrinsic::amdgcn_cos, {Ctx.F32Ty});
+    Ctx.writeReg32(Op.dst(),
+                   Ctx.B.CreateBitCast(
+                       Ctx.B.CreateCall(CosFn, {S}, "cos"), Ctx.I32Ty));
     Hr.Handled = true;
     return Hr;
   }
@@ -946,6 +1045,83 @@ HandlerResult handleValuSmallOps(RaiseContext &Ctx, const DecodedInst &Di,
     Ctx.writeReg64(
         Op.dst(),
         Ctx.B.CreateBitCast(Ctx.B.CreateCall(Fn, {S}, "fract"), Ctx.I64Ty));
+    Hr.Handled = true;
+    return Hr;
+  }
+
+  // ---- f64 special functions / rounding ----
+  // gfx1151 (RDNA3.5) has the native f64 VALU forms of all of these (it
+  // already lifts v_floor/ceil/trunc_f64 above), so each maps 1:1 to the
+  // hardware intrinsic and re-lowers to the identical gfx11 instruction.
+  case CanonicalOp::V_RSQ_F64: {
+    // V_RSQ_F64: D0.f64 = 1.0 / sqrt(S0.f64) (manual 15.5.91 / 77887).
+    if (!requireDefaultOutputModsIfPresent(Di, Hr))
+      return Hr;
+    Value *S = Ctx.B.CreateBitCast(Op.src64(0), Ctx.F64Ty);
+    S = Op.applyMods(0, S);
+    Function *RsqFn = Intrinsic::getOrInsertDeclaration(
+        &Ctx.M, Intrinsic::amdgcn_rsq, {Ctx.F64Ty});
+    Ctx.writeReg64(Op.dst(),
+                   Ctx.B.CreateBitCast(
+                       Ctx.B.CreateCall(RsqFn, {S}, "rsq64"), Ctx.I64Ty));
+    Hr.Handled = true;
+    return Hr;
+  }
+  case CanonicalOp::V_RNDNE_F64: {
+    // V_RNDNE_F64: round to nearest even (manual 15.5.87 / 77574); same
+    // intrinsic the f32 sibling above uses.
+    if (!requireDefaultOutputModsIfPresent(Di, Hr))
+      return Hr;
+    Value *S = Ctx.B.CreateBitCast(Op.src64(0), Ctx.F64Ty);
+    S = Op.applyMods(0, S);
+    Function *RoundEvenFn = Intrinsic::getOrInsertDeclaration(
+        &Ctx.M, Intrinsic::roundeven, {Ctx.F64Ty});
+    Ctx.writeReg64(Op.dst(),
+                   Ctx.B.CreateBitCast(
+                       Ctx.B.CreateCall(RoundEvenFn, {S}, "rndne64"),
+                       Ctx.I64Ty));
+    Hr.Handled = true;
+    return Hr;
+  }
+  case CanonicalOp::V_FRACT_F64: {
+    // V_FRACT_F64: D0.f64 = S0.f64 + -floor(S0.f64), result clamped to
+    // 0x3fefffffffffffff (manual 75548). The amdgcn.fract intrinsic
+    // reproduces the documented DX-style clamp exactly (the gfx11 target has
+    // native v_fract_f64), so use it rather than an open-coded S-floor(S).
+    if (!requireDefaultOutputModsIfPresent(Di, Hr))
+      return Hr;
+    Value *S = Ctx.B.CreateBitCast(Op.src64(0), Ctx.F64Ty);
+    S = Op.applyMods(0, S);
+    Function *FractFn = Intrinsic::getOrInsertDeclaration(
+        &Ctx.M, Intrinsic::amdgcn_fract, {Ctx.F64Ty});
+    Ctx.writeReg64(Op.dst(),
+                   Ctx.B.CreateBitCast(
+                       Ctx.B.CreateCall(FractFn, {S}, "fract64"), Ctx.I64Ty));
+    Hr.Handled = true;
+    return Hr;
+  }
+  case CanonicalOp::V_FREXP_EXP_I32_F32: {
+    // V_FREXP_EXP_I32_F32: exponent of frexp() as i32 (manual / 75681).
+    if (!requireDefaultOutputModsIfPresent(Di, Hr))
+      return Hr;
+    Value *S = Ctx.B.CreateBitCast(Op.srcF(0), Ctx.F32Ty);
+    Function *Fn = Intrinsic::getOrInsertDeclaration(
+        &Ctx.M, Intrinsic::amdgcn_frexp_exp, {Ctx.I32Ty, Ctx.F32Ty});
+    Ctx.writeReg32(Op.dst(), Ctx.B.CreateCall(Fn, {S}, "frexp_exp32"));
+    Hr.Handled = true;
+    return Hr;
+  }
+  case CanonicalOp::V_FREXP_MANT_F64: {
+    // V_FREXP_MANT_F64: significand of frexp() (manual 15.5.59 / 75784).
+    if (!requireDefaultOutputModsIfPresent(Di, Hr))
+      return Hr;
+    Value *S = Ctx.B.CreateBitCast(Op.src64(0), Ctx.F64Ty);
+    S = Op.applyMods(0, S);
+    Function *Fn = Intrinsic::getOrInsertDeclaration(
+        &Ctx.M, Intrinsic::amdgcn_frexp_mant, {Ctx.F64Ty});
+    Ctx.writeReg64(Op.dst(),
+                   Ctx.B.CreateBitCast(
+                       Ctx.B.CreateCall(Fn, {S}, "frexp_mant64"), Ctx.I64Ty));
     Hr.Handled = true;
     return Hr;
   }

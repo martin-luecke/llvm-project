@@ -359,6 +359,11 @@ enum class CanonicalOp : uint16_t {
   // Targets with native tanh support lower this through `llvm.amdgcn.tanh.*`;
   // other targets use OCML when a matching OCML entry point exists.
   V_TANH_F32,
+  // VOP1 f32 trig. gfx1250 and gfx11 share identical hardware semantics
+  // (input in revolutions: result = sin/cos(2*pi*src)), so these map 1:1 to
+  // the amdgcn.sin/amdgcn.cos intrinsics, which re-lower to v_sin/cos_f32 on
+  // the gfx11 target. Used by e.g. RoPE rotary-embedding kernels.
+  V_SIN_F32, V_COS_F32,
   // bf16 single-source transcendentals; lifted through f32 intrinsics
   // (v_tanh_bf16 through __ocml_tanh_f32).
   V_COS_BF16, V_EXP_BF16, V_LOG_BF16, V_RCP_BF16,
@@ -371,7 +376,8 @@ enum class CanonicalOp : uint16_t {
   V_LDEXP_F32,
   V_FLOOR_F32, V_CEIL_F32, V_TRUNC_F32, V_RNDNE_F32, V_FRACT_F32,
   V_FLOOR_F64, V_CEIL_F64, V_TRUNC_F64, V_RNDNE_F64, V_FRACT_F64,
-  V_FREXP_MANT_F32, V_FREXP_MANT_F64,
+  // frexp significand/exponent (maps to amdgcn.frexp.mant/.exp; C frexp()).
+  V_FREXP_MANT_F32, V_FREXP_EXP_I32_F32, V_FREXP_MANT_F64,
   V_READFIRSTLANE_B32,
   // VOP1 packed FP8/BF8 -> 2x F32 expansion (VOP1Instructions.td:652-
   // 653, profile VOPProfileCVT_PK_F32_F8). Reads 16 bits of the i32
@@ -457,7 +463,7 @@ enum class CanonicalOp : uint16_t {
   V_CNDMASK_B32,
   V_MUL_LO_U32, V_MUL_HI_U32, V_MUL_HI_I32,
   V_MUL_I32_I24, V_MUL_U32_U24, V_MUL_HI_U32_U24, V_MUL_HI_I32_I24,
-  V_MAD_I32_I24, V_MAD_U32_U24, V_MAD_U32,
+  V_MAD_I32_I24, V_MAD_U32_U24, V_MAD_U32, V_MAD_U16,
   V_ADD3_U32, V_LSHL_ADD_U32, V_ADD_LSHL_U32, V_LSHL_OR_B32, V_AND_OR_B32, V_OR3_B32, V_XAD_U32,
   // VOP3 funnel-shift right: dst = ((src0:src1) >> src2[4:0])[31:0].
   // .td uses the SDAG `fshr` node directly (VOP3Instructions.td:222),
@@ -592,7 +598,13 @@ enum class CanonicalOp : uint16_t {
   // half.
   V_MAXIMUM3_F16, V_MINIMUM3_F16,
   V_MAXIMUMMINIMUM_F16, V_MINIMUMMAXIMUM_F16,
-  V_LDEXP_F16, V_FLOOR_F16, V_TANH_F16, V_CVT_F16_U16, V_CVT_U16_F16,
+  V_LDEXP_F16, V_FLOOR_F16, V_TANH_F16, V_CVT_F16_U16, V_CVT_F16_I16,
+  // f16 unary special functions / rounding (gfx1151 has the native set).
+  V_RCP_F16, V_RSQ_F16, V_SQRT_F16, V_EXP_F16, V_LOG_F16, V_SIN_F16, V_COS_F16,
+  V_RNDNE_F16, V_TRUNC_F16, V_CEIL_F16, V_FRACT_F16,
+  // population count with accumulate: D = popcount(S0) + S1.
+  V_BCNT_U32_B32,
+  V_CVT_U16_F16, V_CVT_I16_F16,
   V_ASHRREV_I16, V_LSHRREV_B16, V_LSHLREV_B16,
   V_MAX_U16, V_MIN_U16, V_MAX_I16, V_MIN_I16,
   // 16-bit integer arith (gfx8+, VOP2Instructions.td). Plain i16
