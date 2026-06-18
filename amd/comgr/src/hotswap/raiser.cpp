@@ -323,10 +323,11 @@ static RaiseFailure preloadedHiddenArgFailure(StringRef KernelName,
   F.Mnemonic = "<preloaded-hidden-kernarg>";
   F.Format = "KernargPreload";
   F.Offset = static_cast<uint64_t>(ByteOffset);
-  F.Detail = (Twine("kernel '") + KernelName +
-              "': preloaded hidden kernarg at byte offset " +
-              Twine(ByteOffset) + ": " + Detail)
-                 .str();
+  raw_string_ostream OS(F.Detail);
+  OS << "kernel '" << KernelName
+     << "': preloaded hidden kernarg at byte offset " << ByteOffset << ": "
+     << Detail;
+  OS.flush();
   return F;
 }
 
@@ -337,13 +338,13 @@ static RaiseFailure preloadedImplicitArgFailure(StringRef KernelName,
   F.Mnemonic = "<preloaded-hidden-kernarg>";
   F.Format = "implicitarg.ptr";
   F.Offset = static_cast<uint64_t>(ByteOffset);
-  F.Detail =
-      (Twine("kernel '") + KernelName + "': preloaded kernarg byte offset " +
-       Twine(ByteOffset) +
-       " is in the source implicit-arg range but does not map to source "
-       "hidden-arg metadata; refusing target hidden-block fallback in strict "
-       "mode")
-          .str();
+  raw_string_ostream OS(F.Detail);
+  OS << "kernel '" << KernelName << "': preloaded kernarg byte offset "
+     << ByteOffset
+     << " is in the source implicit-arg range but does not map to source "
+        "hidden-arg metadata; refusing target hidden-block fallback in strict "
+        "mode";
+  OS.flush();
   return F;
 }
 
