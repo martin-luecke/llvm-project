@@ -164,16 +164,7 @@ SourceHiddenArgValue emitHiddenArgValue(SourceHiddenArgContext &Ctx,
     Result.Value = emitHiddenRemainder(Ctx, 2);
   else if (Kind == SourceHiddenArgKind::HiddenGridDims)
     Result.Value = emitGridDims(Ctx);
-  else if (Kind == SourceHiddenArgKind::HiddenGlobalOffsetX ||
-           Kind == SourceHiddenArgKind::HiddenGlobalOffsetY ||
-           Kind == SourceHiddenArgKind::HiddenGlobalOffsetZ) {
-    if (!Ctx.AssumeHipGlobalOffsetZero)
-      return unsupportedHiddenKind("hidden_global_offset_{x,y,z}");
-    // The HotSwap runtime path intercepts HIP-launched kernels. HIP's launch
-    // APIs do not expose a non-zero HSA grid-global offset, so the source ABI's
-    // hidden_global_offset fields are the all-zero 64-bit value.
-    Result.Value = Ctx.B.getInt64(0);
-  } else if (Kind == SourceHiddenArgKind::HiddenReservedZero)
+  else if (Kind == SourceHiddenArgKind::HiddenReservedZero)
     Result.Value = Ctx.B.getInt32(0);
   else if (Kind == SourceHiddenArgKind::HiddenPrivateBase ||
            Kind == SourceHiddenArgKind::HiddenSharedBase)
