@@ -124,6 +124,17 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
                                        Ctx.AssumeHipGlobalOffsetZero};
       SourceHiddenArgValue HiddenBase =
           emitSourceHiddenDword(HiddenCtx, ByteOffset);
+      if (isStrictMode() && !HiddenBase.Matched) {
+        Hr.Failure = RaiseFailure::strictUnsafeLowering(
+            Di, "implicitarg.ptr",
+            "cross-arch implicitarg.ptr lowering is unresolved: source "
+            "implicit-arg offsets are being applied to the target runtime "
+            "hidden-arg block; source byte offset " +
+                Twine(ByteOffset) + ", implicit-args base " +
+                Twine(Ctx.Kernargs.ImplicitArgsBase) + ", load bytes " +
+                Twine(LoadBytes));
+        return Hr;
+      }
       if (!HiddenBase.Matched) {
         if (isStrictMode()) {
           Hr.Failure = RaiseFailure::strictUnsafeLowering(
@@ -213,6 +224,70 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
                                                        Ctx.B.getInt64(D * 4));
         Ctx.Regs.storeSGPR32(Ctx.B, Dest.BaseIdx + D,
                              Ctx.B.CreateLoad(Ctx.I32Ty, Ep, "smem_load"));
+      }
+    }
+    Hr.Handled = true;
+    return Hr;
+  }
+
+  if (Sop == CanonicalOp::S_BUFFER_LOAD_B32 ||
+      Sop == CanonicalOp::S_BUFFER_LOAD_B64 ||
+      Sop == CanonicalOp::S_BUFFER_LOAD_B96 ||
+      Sop == CanonicalOp::S_BUFFER_LOAD_B128 ||
+      Sop == CanonicalOp::S_BUFFER_LOAD_B256 ||
+      Sop == CanonicalOp::S_BUFFER_LOAD_B512) {
+    int LoadDwords = 1;
+    switch (Sop) {
+    case CanonicalOp::S_BUFFER_LOAD_B32:
+      LoadDwords = 1;
+      break;
+    case CanonicalOp::S_BUFFER_LOAD_B64:
+      LoadDwords = 2;
+      break;
+    case CanonicalOp::S_BUFFER_LOAD_B96:
+      LoadDwords = 3;
+      break;
+    case CanonicalOp::S_BUFFER_LOAD_B128:
+      LoadDwords = 4;
+      break;
+    case CanonicalOp::S_BUFFER_LOAD_B256:
+      LoadDwords = 8;
+      break;
+    case CanonicalOp::S_BUFFER_LOAD_B512:
+      LoadDwords = 16;
+      break;
+    default:
+      break;
+    }
+
+    ParsedReg Dest = Op.dst();
+    ParsedReg Rsrc = Op.srcReg(0);
+    Value *RsrcVec = UndefValue::get(FixedVectorType::get(Ctx.I32Ty, 4));
+    for (unsigned I = 0; I < 4; ++I) {
+      RsrcVec = Ctx.B.CreateInsertElement(
+          RsrcVec, Ctx.Regs.loadSGPR32(Ctx.B, Rsrc.BaseIdx + I), I,
+          "sbuffer_rsrc_pack");
+    }
+
+    unsigned OffIdx = Op.srcIdx(1);
+    Value *Offset = Di.isImm(OffIdx) ? Ctx.B.getInt32(Op.srcImm(1))
+                                     : Op.src(1);
+    Type *LoadTy = LoadDwords == 1
+                       ? Ctx.I32Ty
+                       : static_cast<Type *>(
+                             FixedVectorType::get(Ctx.I32Ty, LoadDwords));
+    Function *Fn = Intrinsic::getOrInsertDeclaration(
+        &Ctx.M, Intrinsic::amdgcn_s_buffer_load, {LoadTy});
+    Value *Loaded =
+        Ctx.B.CreateCall(Fn, {RsrcVec, Offset, Ctx.B.getInt32(0)}, "sbuf_load");
+    if (LoadDwords == 1) {
+      Ctx.Regs.storeSGPR32(Ctx.B, Dest.BaseIdx, Loaded);
+    } else {
+      for (int D = 0; D < LoadDwords; ++D) {
+        Ctx.Regs.storeSGPR32(
+            Ctx.B, Dest.BaseIdx + D,
+            Ctx.B.CreateExtractElement(Loaded, static_cast<uint64_t>(D),
+                                       "sbuf_load_dw"));
       }
     }
     Hr.Handled = true;

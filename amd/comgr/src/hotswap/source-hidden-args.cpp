@@ -69,6 +69,13 @@ Value *dispatchPtr(SourceHiddenArgContext &Ctx) {
   return Ctx.B.CreateCall(DispatchPtrFn, {}, "dispatch_ptr");
 }
 
+Value *queuePtrInt(SourceHiddenArgContext &Ctx) {
+  Function *QueuePtrFn =
+      Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::amdgcn_queue_ptr);
+  Value *Ptr = Ctx.B.CreateCall(QueuePtrFn, {}, "queue_ptr");
+  return Ctx.B.CreatePtrToInt(Ptr, Ctx.I64Ty, "source_hidden_queue_ptr");
+}
+
 // Load a zero-extended 16-bit field from the AQL dispatch packet.
 Value *loadDispatchU16(SourceHiddenArgContext &Ctx, unsigned ByteOffset,
                        const Twine &Name) {
@@ -166,7 +173,14 @@ SourceHiddenArgValue emitHiddenArgValue(SourceHiddenArgContext &Ctx,
     // APIs do not expose a non-zero HSA grid-global offset, so the source ABI's
     // hidden_global_offset fields are the all-zero 64-bit value.
     Result.Value = Ctx.B.getInt64(0);
-  } else
+  } else if (Kind == SourceHiddenArgKind::HiddenReservedZero)
+    Result.Value = Ctx.B.getInt32(0);
+  else if (Kind == SourceHiddenArgKind::HiddenPrivateBase ||
+           Kind == SourceHiddenArgKind::HiddenSharedBase)
+    Result.Value = Ctx.B.getInt32(0);
+  else if (Kind == SourceHiddenArgKind::HiddenQueuePtr)
+    Result.Value = queuePtrInt(Ctx);
+  else
     return unsupportedHiddenKind("<unknown>");
   return Result;
 }

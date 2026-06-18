@@ -86,6 +86,34 @@
 // RUN:   | %FileCheck --check-prefix=TGTSYM %s
 // TGTSYM: vecadd
 
+// COM: Partial-translation allowlist: exact kernel-name match keeps the
+// COM: successful vecadd path working, and the output still contains only the
+// COM: requested kernel symbol.
+// RUN: env HSA_HOTSWAP_TRANSLATE_KERNELS=vecadd hotswap-transpile %S/vecadd_gfx950.co \
+// RUN:                   amdgcn-amd-amdhsa--gfx950 \
+// RUN:                   amdgcn-amd-amdhsa--gfx942 \
+// RUN:                   --output=%t.allow.gfx942.co \
+// RUN:   | %FileCheck --check-prefix=ALLOW %s
+// ALLOW: RESULT: SUCCESS bytes={{[1-9][0-9]*}}
+// RUN: %llvm-objdump --syms %t.allow.gfx942.co \
+// RUN:   | %FileCheck --check-prefix=ALLOW-SYM %s
+// ALLOW-SYM: vecadd
+
+// COM: A no-match allowlist still returns a complete target code object, but
+// COM: every non-allowlisted kernel is a loud trap stub. This keeps load-time
+// symbol lookup intact and moves the failure to the impossible/unexpected
+// launch path.
+// RUN: env HSA_HOTSWAP_TRANSLATE_KERNELS=definitely_not_vecadd hotswap-transpile %S/vecadd_gfx950.co \
+// RUN:                   amdgcn-amd-amdhsa--gfx950 \
+// RUN:                   amdgcn-amd-amdhsa--gfx942 \
+// RUN:                   --output=%t.stub.gfx942.co \
+// RUN:   | %FileCheck --check-prefix=ALLOW-NOMATCH %s
+// ALLOW-NOMATCH: RESULT: SUCCESS bytes={{[1-9][0-9]*}}
+// RUN: %llvm-objdump -d %t.stub.gfx942.co \
+// RUN:   | %FileCheck --check-prefix=ALLOW-STUB %s
+// ALLOW-STUB: <vecadd>:
+// ALLOW-STUB: s_trap 2
+
 // COM: Focused warm-cache smoke: first run misses and writes, second run hits
 // COM: the same caller-provided cache directory.
 // RUN: rm -rf %t.cache

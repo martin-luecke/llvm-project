@@ -241,6 +241,14 @@ HandlerResult handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
   if (Di.TsFlags & SIInstrFlags::FlatScratch) {
     auto ScratchAccessBytes = [&]() -> unsigned {
       switch (Sop) {
+      case CanonicalOp::SCRATCH_LOAD_UBYTE:
+      case CanonicalOp::SCRATCH_LOAD_SBYTE:
+      case CanonicalOp::SCRATCH_STORE_BYTE:
+        return 1;
+      case CanonicalOp::SCRATCH_LOAD_USHORT:
+      case CanonicalOp::SCRATCH_LOAD_SSHORT:
+      case CanonicalOp::SCRATCH_STORE_SHORT:
+        return 2;
       case CanonicalOp::SCRATCH_LOAD_DWORD:
       case CanonicalOp::SCRATCH_STORE_DWORD:
         return 4;
@@ -276,7 +284,11 @@ HandlerResult handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
       return Hr;
     }
 
-    if (Sop == CanonicalOp::SCRATCH_LOAD_DWORD ||
+    if (Sop == CanonicalOp::SCRATCH_LOAD_UBYTE ||
+        Sop == CanonicalOp::SCRATCH_LOAD_SBYTE ||
+        Sop == CanonicalOp::SCRATCH_LOAD_USHORT ||
+        Sop == CanonicalOp::SCRATCH_LOAD_SSHORT ||
+        Sop == CanonicalOp::SCRATCH_LOAD_DWORD ||
         Sop == CanonicalOp::SCRATCH_LOAD_DWORDX2 ||
         Sop == CanonicalOp::SCRATCH_LOAD_DWORDX3 ||
         Sop == CanonicalOp::SCRATCH_LOAD_DWORDX4) {
@@ -294,6 +306,14 @@ HandlerResult handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
       ParsedReg Dest = Op.dst();
       Type *LoadTy = nullptr;
       switch (Sop) {
+      case CanonicalOp::SCRATCH_LOAD_UBYTE:
+      case CanonicalOp::SCRATCH_LOAD_SBYTE:
+        LoadTy = Ctx.I8Ty;
+        break;
+      case CanonicalOp::SCRATCH_LOAD_USHORT:
+      case CanonicalOp::SCRATCH_LOAD_SSHORT:
+        LoadTy = Type::getInt16Ty(Ctx.C);
+        break;
       case CanonicalOp::SCRATCH_LOAD_DWORD:
         LoadTy = Ctx.I32Ty;
         break;
@@ -313,7 +333,17 @@ HandlerResult handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
       Ctx.emitUnderExec([&] {
         Value *Loaded = Ctx.B.CreateAlignedLoad(
             LoadTy, Addr, ScratchAlign(AccessBytes), "scratch_load");
-        if (AccessBytes == 4) {
+        if (Sop == CanonicalOp::SCRATCH_LOAD_UBYTE ||
+            Sop == CanonicalOp::SCRATCH_LOAD_USHORT) {
+          Ctx.Regs.writeReg32(Ctx.B, Dest,
+                              Ctx.B.CreateZExt(Loaded, Ctx.I32Ty,
+                                               "scratch_zext"));
+        } else if (Sop == CanonicalOp::SCRATCH_LOAD_SBYTE ||
+                   Sop == CanonicalOp::SCRATCH_LOAD_SSHORT) {
+          Ctx.Regs.writeReg32(Ctx.B, Dest,
+                              Ctx.B.CreateSExt(Loaded, Ctx.I32Ty,
+                                               "scratch_sext"));
+        } else if (AccessBytes == 4) {
           Ctx.Regs.writeReg32(Ctx.B, Dest, Loaded);
         } else {
           unsigned Dwords = AccessBytes / 4;
@@ -331,7 +361,9 @@ HandlerResult handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
       return Hr;
     }
 
-    if (Sop == CanonicalOp::SCRATCH_STORE_DWORD ||
+    if (Sop == CanonicalOp::SCRATCH_STORE_BYTE ||
+        Sop == CanonicalOp::SCRATCH_STORE_SHORT ||
+        Sop == CanonicalOp::SCRATCH_STORE_DWORD ||
         Sop == CanonicalOp::SCRATCH_STORE_DWORDX2 ||
         Sop == CanonicalOp::SCRATCH_STORE_DWORDX3 ||
         Sop == CanonicalOp::SCRATCH_STORE_DWORDX4) {
@@ -355,7 +387,13 @@ HandlerResult handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
       }
 
       Ctx.emitUnderExec([&] {
-        if (AccessBytes == 4) {
+        if (Sop == CanonicalOp::SCRATCH_STORE_BYTE ||
+            Sop == CanonicalOp::SCRATCH_STORE_SHORT) {
+          Type *StoreTy = Type::getIntNTy(Ctx.C, AccessBytes * 8);
+          Ctx.B.CreateAlignedStore(
+              Ctx.B.CreateTrunc(Ctx.Regs.readReg32(Ctx.B, StData), StoreTy),
+              Addr, ScratchAlign(AccessBytes));
+        } else if (AccessBytes == 4) {
           Ctx.B.CreateAlignedStore(Ctx.Regs.readReg32(Ctx.B, StData), Addr,
                                    Align(4));
         } else {
@@ -1183,7 +1221,9 @@ HandlerResult handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
 
   if (Sop == CanonicalOp::FLAT_STORE_DWORD || Sop == CanonicalOp::FLAT_STORE_DWORDX2 ||
       Sop == CanonicalOp::FLAT_STORE_DWORDX3 || Sop == CanonicalOp::FLAT_STORE_DWORDX4 ||
-      Sop == CanonicalOp::FLAT_STORE_BYTE || Sop == CanonicalOp::FLAT_STORE_SHORT ||
+      Sop == CanonicalOp::FLAT_STORE_BYTE ||
+      Sop == CanonicalOp::FLAT_STORE_BYTE_D16_HI ||
+      Sop == CanonicalOp::FLAT_STORE_SHORT ||
       Sop == CanonicalOp::FLAT_STORE_SHORT_D16_HI) {
     int StoreDwords = 1;
     int StoreBits = 32;
@@ -1202,7 +1242,11 @@ HandlerResult handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
       StoreBits = 16; StoreDwords = 0;
       StoreHiHalf = (Sop == CanonicalOp::FLAT_STORE_SHORT_D16_HI);
     }
-    else if (Sop == CanonicalOp::FLAT_STORE_BYTE) { StoreBits = 8; StoreDwords = 0; }
+    else if (Sop == CanonicalOp::FLAT_STORE_BYTE ||
+             Sop == CanonicalOp::FLAT_STORE_BYTE_D16_HI) {
+      StoreBits = 8; StoreDwords = 0;
+      StoreHiHalf = (Sop == CanonicalOp::FLAT_STORE_BYTE_D16_HI);
+    }
 
     // Two operand-shape variants with distinct AS semantics; mirror
     // the FLAT_LOAD_DWORD handler's case split.  For stores:
@@ -1245,10 +1289,12 @@ HandlerResult handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
       // rationale; this branch mirrors the GLOBAL_STORE path above
       // so both FLAT and GLOBAL `_D16_HI` variants graduate through
       // the same emission shape.
-      Value *Val = StoreHiHalf
-                      ? emitD16HiHalfTruncI16(Ctx, Src32)
-                      : Ctx.B.CreateTrunc(
-                            Src32, Type::getIntNTy(Ctx.C, StoreBits));
+      Value *Val =
+          StoreHiHalf
+              ? (StoreBits == 8 ? emitD16HiHalfTruncI8(Ctx, Src32)
+                                : emitD16HiHalfTruncI16(Ctx, Src32))
+              : Ctx.B.CreateTrunc(Src32,
+                                  Type::getIntNTy(Ctx.C, StoreBits));
       Ctx.emitUnderExec([&] { Ctx.B.CreateStore(Val, Addr); });
     } else if (StoreDwords == 1) {
       Value *Val = Ctx.Regs.readReg32(Ctx.B, StData);

@@ -33,6 +33,7 @@ struct PipelineOptions {
   // offset, so hidden_global_offset_{x,y,z} can be synthesized as zero.
   // Standalone callers keep this false and reject those source hidden args.
   bool AssumeHipGlobalOffsetZero = false;
+  std::string KernelAllowlist;
 };
 
 struct PipelineResult {

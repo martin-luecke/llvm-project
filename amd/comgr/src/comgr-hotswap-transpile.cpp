@@ -466,6 +466,8 @@ amd_comgr_status_t AMD_COMGR_API amd_comgr_hotswap_transpile_with_options(
       options && options->cache_directory ? options->cache_directory : "";
   CacheRequest.CacheSkipKernels =
       options && options->cache_skip_kernels ? options->cache_skip_kernels : "";
+  CacheRequest.KernelAllowlist =
+      options && options->kernel_allowlist ? options->kernel_allowlist : "";
   CacheRequest.StrictMode =
       hasFlag(options, AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_STRICT);
   CacheRequest.AssumeHipGlobalOffsetZero = hasFlag(
@@ -554,6 +556,7 @@ amd_comgr_status_t AMD_COMGR_API amd_comgr_hotswap_transpile_with_options(
     PipelineOptions.CollectTimings = CollectTimings;
     PipelineOptions.AssumeHipGlobalOffsetZero =
         CacheRequest.AssumeHipGlobalOffsetZero;
+    PipelineOptions.KernelAllowlist = CacheRequest.KernelAllowlist;
     Pipeline = COMGR::hotswap::runPipelineAllKernels(InputBuf,
                                                  SourceIdent.Processor.str(),
                                                  TargetIdent.Processor.str(),
