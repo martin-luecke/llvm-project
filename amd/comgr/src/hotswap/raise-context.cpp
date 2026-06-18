@@ -654,7 +654,7 @@ Value *RaiseContext::readOpExecWidth(const DecodedInst &Di, unsigned OpIdx) {
     if (Have >= Want)
       return B.CreateZExtOrTrunc(Narrow, Regs.ExecTy);
     Value *Zext = B.CreateZExt(Narrow, Regs.ExecTy, "wn_src_to_exec_zext");
-    Value *Hi = B.CreateShl(Zext, Have);
+    Value *Hi = B.CreateShl(Zext, Have, "", /*HasNUW=*/true);
     return B.CreateDisjointOr(Zext, Hi, "wn_src_to_exec_mask");
   };
 

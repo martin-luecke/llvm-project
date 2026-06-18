@@ -69,7 +69,7 @@
 ; replicate-by-left-shift-then-OR pattern that keeps lane `L` and
 ; lane `L + W_src` reading the same bit, matching MODREP's
 ; per-source-wave-width-replicated contract.
-; CHECK: %mask_widen_shl{{[0-9]*}} = shl i64 %{{[^,]+}}, 32
+; CHECK: %mask_widen_shl{{[0-9]*}} = shl nuw i64 %{{[^,]+}}, 32
 ; CHECK: %mask_widen_replicate{{[0-9]*}} = or disjoint i64 %{{[^,]+}}, %mask_widen_shl{{[0-9]*}}
 ; CHECK: %mask_lane_idx{{[0-9]*}} = zext i32 %{{[^ ]+}} to i64
 ; CHECK: %mask_at_lane{{[0-9]*}} = lshr i64 %mask_widen_replicate{{[0-9]*}}, %mask_lane_idx{{[0-9]*}}

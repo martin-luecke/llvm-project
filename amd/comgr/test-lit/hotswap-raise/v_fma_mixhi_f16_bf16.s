@@ -19,7 +19,7 @@
 ; CHECK: bitcast half %fma_mixhi_f16_round to i16
 ; CHECK: %{{.*}} = zext i16 %{{.*}} to i32
 ; CHECK: %fma_mixhi_f16_old_lo = and i32 %{{.*}}, 65535
-; CHECK: %fma_mixhi_f16_hi_bits = shl i32 %{{.*}}, 16
+; CHECK: %fma_mixhi_f16_hi_bits = shl nuw i32 %{{.*}}, 16
 ; CHECK: %fma_mixhi_f16_pack = or disjoint i32 %fma_mixhi_f16_old_lo, %fma_mixhi_f16_hi_bits
 
 ; BF16 high-half form uses the same selection/writeback shape with bfloat.
@@ -32,7 +32,7 @@
 ; High-half writeback preserves the old destination low half explicitly.
 ; CHECK: %{{.*}} = zext i16 %{{.*}} to i32
 ; CHECK: %fma_mixhi_bf16_old_lo = and i32 %{{.*}}, 65535
-; CHECK: %fma_mixhi_bf16_hi_bits = shl i32 %{{.*}}, 16
+; CHECK: %fma_mixhi_bf16_hi_bits = shl nuw i32 %{{.*}}, 16
 ; CHECK: %fma_mixhi_bf16_pack = or disjoint i32 %fma_mixhi_bf16_old_lo, %fma_mixhi_bf16_hi_bits
 ; CHECK-NOT: unsupported instruction
 

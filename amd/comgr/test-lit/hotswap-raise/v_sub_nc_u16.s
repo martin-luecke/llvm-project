@@ -23,7 +23,7 @@
 ; CHECK: lshr i32 %{{[^,]+}}, 16
 ; CHECK: %vsub_nc_u16{{[0-9]*}} = sub i16 %{{[^,]+}}, %{{[^ ]+}}
 ; CHECK-DAG: zext i16 %vsub_nc_u16{{[0-9]*}} to i32
-; CHECK-DAG: shl i32 %{{[^,]+}}, 16
+; CHECK-DAG: shl nuw i32 %{{[^,]+}}, 16
 ; CHECK-DAG: and i32 %{{[^,]+}}, 65535
 ; CHECK: %vsub_u16_merge_hi{{[0-9]*}} = or {{(disjoint )?}}i32 %{{[^,]+}}, %{{[^ ]+}}
 

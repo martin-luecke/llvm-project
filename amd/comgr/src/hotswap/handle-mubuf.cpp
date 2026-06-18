@@ -133,7 +133,8 @@ HandlerResult handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
             Value *PriorLo =
                 Ctx.B.CreateAnd(Prior, ConstantInt::get(Ctx.I32Ty, 0x0000FFFF));
             Value *Shifted =
-                Ctx.B.CreateShl(Ext32, ConstantInt::get(Ctx.I32Ty, 16));
+                Ctx.B.CreateShl(Ext32, ConstantInt::get(Ctx.I32Ty, 16), "",
+                                /*HasNUW=*/true);
             Merged = Ctx.B.CreateDisjointOr(PriorLo, Shifted, "d16_hi_merge");
           }
           Ctx.writeReg32(Vdata, Merged);

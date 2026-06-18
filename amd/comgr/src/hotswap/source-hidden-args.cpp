@@ -209,7 +209,7 @@ SourceHiddenArgValue emitSourceHiddenInteger(SourceHiddenArgContext &Ctx,
         Ctx.B.CreateZExt(Byte.Value, Ctx.I32Ty, "source_hidden_byte_zext");
     if (I != 0)
       Part = Ctx.B.CreateShl(Part, Ctx.B.getInt32(I * 8),
-                             "source_hidden_byte_place");
+                             "source_hidden_byte_place", /*HasNUW=*/true);
     Acc = Ctx.B.CreateDisjointOr(Acc, Part, "source_hidden_dword");
   }
   if (IsSigned && ByteWidth < 4) {

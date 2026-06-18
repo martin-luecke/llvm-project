@@ -50,7 +50,7 @@
 ; DSTHI: bitcast half %fma_f16 to i16
 ; DSTHI: zext i16 {{.*}} to i32
 ; DSTHI: and i32 {{.*}}, 65535
-; DSTHI: shl i32 {{.*}}, 16
+; DSTHI: shl nuw i32 {{.*}}, 16
 ; DSTHI: %f16_merge_hi = or disjoint i32
 ; DSTHI-NOT: unsupported instruction
 

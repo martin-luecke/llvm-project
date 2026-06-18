@@ -1328,7 +1328,8 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
           OldDest, ConstantInt::get(Ctx.I32Ty, 0x0000FFFFu),
           (Twine(FMAName) + "_old_lo").str());
       Value *HiBits = Ctx.B.CreateShl(NarrowBits, 16,
-                                      (Twine(FMAName) + "_hi_bits").str());
+                                      (Twine(FMAName) + "_hi_bits").str(),
+                                      /*HasNUW=*/true);
       Ctx.writeReg32(Dest,
                      Ctx.B.CreateDisjointOr(OldLo, HiBits,
                                     (Twine(FMAName) + "_pack").str()));

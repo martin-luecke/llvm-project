@@ -274,7 +274,7 @@ HandlerResult handleDS(RaiseContext &Ctx, const DecodedInst &Di,
           Value *ValI8 = Ctx.B.CreateLoad(I8Ty, Ptr, "tr8_b");
           Value *ValI32 = Ctx.B.CreateZExt(ValI8, Ctx.I32Ty);
           Value *Shifted = Ctx.B.CreateShl(ValI32,
-                              Ctx.B.getInt32(8 * I));
+                              Ctx.B.getInt32(8 * I), "", /*HasNUW=*/true);
           Acc = Ctx.B.CreateDisjointOr(Acc, Shifted, "tr8_pack");
         }
         OutDw[J] = Acc;
@@ -386,7 +386,8 @@ HandlerResult handleDS(RaiseContext &Ctx, const DecodedInst &Di,
         Value *Lo32 = Ctx.B.CreateZExt(ValLo, Ctx.I32Ty);
         Value *Hi32 = Ctx.B.CreateZExt(ValHi, Ctx.I32Ty);
         OutDw[J] = Ctx.B.CreateDisjointOr(
-            Ctx.B.CreateShl(Hi32, Ctx.B.getInt32(16)), Lo32, "tr_out");
+            Ctx.B.CreateShl(Hi32, Ctx.B.getInt32(16), "", /*HasNUW=*/true), Lo32,
+            "tr_out");
       }
 
       for (unsigned J = 0; J < 4; J++)

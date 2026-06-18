@@ -829,7 +829,8 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
   if (Sop == CanonicalOp::S_PACK_LL_B32_B16) {
     Value *Lo = Ctx.B.CreateAnd(Op.src(0), ConstantInt::get(Ctx.I32Ty, 0xFFFF));
     Value *Hi = Ctx.B.CreateShl(
-        Ctx.B.CreateAnd(Op.src(1), ConstantInt::get(Ctx.I32Ty, 0xFFFF)), 16);
+        Ctx.B.CreateAnd(Op.src(1), ConstantInt::get(Ctx.I32Ty, 0xFFFF)), 16, "",
+        /*HasNUW=*/true);
     Ctx.Regs.writeReg32(Ctx.B, Op.dst(), Ctx.B.CreateDisjointOr(Lo, Hi, "pack_ll"));
     Hr.Handled = true;
     return Hr;

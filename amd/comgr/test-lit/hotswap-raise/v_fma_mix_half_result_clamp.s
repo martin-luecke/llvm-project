@@ -25,7 +25,7 @@
 ; CHECK: %fma_mixhi_bf16_clamp = call bfloat @llvm.minnum.bf16(bfloat %fma_mixhi_bf16_clamp_lo,
 ; CHECK: bitcast bfloat %fma_mixhi_bf16_clamp to i16
 ; CHECK: %fma_mixhi_bf16_old_lo = and i32 %{{.*}}, 65535
-; CHECK: %fma_mixhi_bf16_hi_bits = shl i32 %{{.*}}, 16
+; CHECK: %fma_mixhi_bf16_hi_bits = shl nuw i32 %{{.*}}, 16
 ; CHECK: %fma_mixhi_bf16_pack = or disjoint i32 %fma_mixhi_bf16_old_lo, %fma_mixhi_bf16_hi_bits
 ; CHECK-NOT: unsupported instruction
 

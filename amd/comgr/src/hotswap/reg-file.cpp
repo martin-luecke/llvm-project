@@ -223,7 +223,7 @@ Value *AllocaRegFile::loadSGPR64(IRBuilder<> &B, int Idx) {
   Type *I64Ty = B.getInt64Ty();
   Value *Lo = B.CreateZExt(B.CreateLoad(I32Ty, Sgpr[Idx]), I64Ty);
   Value *Hi = B.CreateZExt(B.CreateLoad(I32Ty, Sgpr[Idx + 1]), I64Ty);
-  return B.CreateDisjointOr(Lo, B.CreateShl(Hi, 32));
+  return B.CreateDisjointOr(Lo, B.CreateShl(Hi, 32, "", /*HasNUW=*/true));
 }
 
 void AllocaRegFile::storeVGPR32(IRBuilder<> &B, int Idx, Value *V) {
@@ -265,7 +265,7 @@ Value *AllocaRegFile::loadVGPR64(IRBuilder<> &B, int Idx) {
   Type *I64Ty = B.getInt64Ty();
   Value *Lo = B.CreateZExt(B.CreateLoad(I32Ty, Vgpr[Idx]), I64Ty);
   Value *Hi = B.CreateZExt(B.CreateLoad(I32Ty, Vgpr[Idx + 1]), I64Ty);
-  return B.CreateDisjointOr(Lo, B.CreateShl(Hi, 32));
+  return B.CreateDisjointOr(Lo, B.CreateShl(Hi, 32, "", /*HasNUW=*/true));
 }
 
 void AllocaRegFile::storeAGPR32(IRBuilder<> &B, int Idx, Value *V) {
@@ -404,7 +404,8 @@ Value *AllocaRegFile::readReg64(IRBuilder<> &B, ParsedReg Pr) {
     Type *I64Ty = B.getInt64Ty();
     Value *Lo = B.CreateZExt(B.CreateLoad(I32Ty, FlatScr[0]), I64Ty);
     Value *Hi = B.CreateZExt(B.CreateLoad(I32Ty, FlatScr[1]), I64Ty);
-    return B.CreateDisjointOr(Lo, B.CreateShl(Hi, 32), "fscr64");
+    return B.CreateDisjointOr(Lo, B.CreateShl(Hi, 32, "", /*HasNUW=*/true),
+                              "fscr64");
   }
   // TTMP[baseIdx:baseIdx+1] read as i64 -- combine the two adjacent
   // i32 lanes the same way SGPR pairs are combined. The 32-bit
@@ -420,7 +421,8 @@ Value *AllocaRegFile::readReg64(IRBuilder<> &B, ParsedReg Pr) {
     Value *Lo = B.CreateZExt(B.CreateLoad(I32Ty, Ttmp[Pr.BaseIdx]), I64Ty);
     Value *Hi = B.CreateZExt(B.CreateLoad(I32Ty, Ttmp[Pr.BaseIdx + 1]),
                               I64Ty);
-    return B.CreateDisjointOr(Lo, B.CreateShl(Hi, 32), "ttmp64");
+    return B.CreateDisjointOr(Lo, B.CreateShl(Hi, 32, "", /*HasNUW=*/true),
+                              "ttmp64");
   }
   failUnhandledKind("readReg64", Pr);
 }
@@ -497,7 +499,7 @@ void AllocaRegFile::writeReg32(IRBuilder<> &B, ParsedReg Pr, Value *V) {
       // Replicate: EXEC = (v << 32) | v. Equivalent to the
       // "broadcast wave32 whole-wave mask across both halves of the
       // widened EXEC" semantics.
-      Value *Hi = B.CreateShl(V64, 32);
+      Value *Hi = B.CreateShl(V64, 32, "", /*HasNUW=*/true);
       Value *Merged = B.CreateDisjointOr(V64, Hi, "exec_lo_broadcast");
       storeExec(B, Merged);
       return;
@@ -507,7 +509,7 @@ void AllocaRegFile::writeReg32(IRBuilder<> &B, ParsedReg Pr, Value *V) {
     if (Pr.BaseIdx == 1) {
       Value *Mask = ConstantInt::get(ExecTy, 0xFFFFFFFFULL);
       Merged = B.CreateDisjointOr(B.CreateAnd(Cur, Mask),
-                                   B.CreateShl(V64, 32), "exec_hi_write");
+                                   B.CreateShl(V64, 32, "", /*HasNUW=*/true), "exec_hi_write");
     } else {
       Value *Mask = ConstantInt::get(ExecTy, 0xFFFFFFFF00000000ULL);
       Merged = B.CreateDisjointOr(B.CreateAnd(Cur, Mask), V64, "exec_lo_write");
@@ -654,7 +656,7 @@ Value *AllocaRegFile::readRegVec(IRBuilder<> &B, ParsedReg Pr, Type *VecTy) {
   Value *Packed = ConstantInt::get(IntTy, 0);
   for (unsigned I = 0; I < TotalDwords; I++) {
     Value *Ext = B.CreateZExt(Dwords[I], IntTy);
-    if (I > 0) Ext = B.CreateShl(Ext, I * 32);
+    if (I > 0) Ext = B.CreateShl(Ext, I * 32, "", /*HasNUW=*/true);
     Packed = B.CreateDisjointOr(Packed, Ext);
   }
   return B.CreateBitCast(Packed, VecTy);

@@ -29,7 +29,7 @@
 ; LOLO: and i32 {{.*}}, -65536
 ; LOLO: %v_mov_b16_merge{{.*}} = or disjoint i32
 ; LOLO-NOT: lshr i32 {{.*}}, 16
-; LOLO-NOT: shl i32 {{.*}}, 16
+; LOLO-NOT: shl nuw i32 {{.*}}, 16
 
 ; HILO-LABEL: define amdgpu_kernel void @v_mov_b16_hi_lo_kernel(
 ; HILO: lshr i32 {{.*}}, 16
@@ -37,13 +37,13 @@
 ; HILO: zext i16 {{.*}} to i32
 ; HILO: and i32 {{.*}}, -65536
 ; HILO: %v_mov_b16_merge{{.*}} = or disjoint i32
-; HILO-NOT: shl i32 {{.*}}, 16
+; HILO-NOT: shl nuw i32 {{.*}}, 16
 
 ; LOHI-LABEL: define amdgpu_kernel void @v_mov_b16_lo_hi_kernel(
 ; LOHI: trunc i32 {{.*}} to i16
 ; LOHI: zext i16 {{.*}} to i32
 ; LOHI: and i32 {{.*}}, 65535
-; LOHI: shl i32 {{.*}}, 16
+; LOHI: shl nuw i32 {{.*}}, 16
 ; LOHI: %v_mov_b16_merge{{.*}} = or disjoint i32
 ; LOHI-NOT: lshr i32 {{.*}}, 16
 
@@ -52,7 +52,7 @@
 ; HIHI: trunc i32 {{.*}} to i16
 ; HIHI: zext i16 {{.*}} to i32
 ; HIHI: and i32 {{.*}}, 65535
-; HIHI: shl i32 {{.*}}, 16
+; HIHI: shl nuw i32 {{.*}}, 16
 ; HIHI: %v_mov_b16_merge{{.*}} = or disjoint i32
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"

@@ -128,7 +128,7 @@ void writeSelectedU16Half(RaiseContext &Ctx, ParsedReg Dst, Value *Result,
   }
 
   Value *Low = Ctx.B.CreateAnd(Old, ConstantInt::get(Ctx.I32Ty, 0x0000FFFFu));
-  Value *Shifted = Ctx.B.CreateShl(ResultZ, 16);
+  Value *Shifted = Ctx.B.CreateShl(ResultZ, 16, "", /*HasNUW=*/true);
   Ctx.writeReg32(Dst, Ctx.B.CreateDisjointOr(Low, Shifted, MergeName));
 }
 
@@ -2271,7 +2271,8 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Value *B0 = Ctx.B.CreateZExt(Ctx.B.CreateBitCast(H0, I16Ty), Ctx.I32Ty);
     Value *B1 = Ctx.B.CreateZExt(Ctx.B.CreateBitCast(H1, I16Ty), Ctx.I32Ty);
     Ctx.writeReg32(Op.dst(),
-        Ctx.B.CreateDisjointOr(B0, Ctx.B.CreateShl(B1, 16), "pk_f16"));
+        Ctx.B.CreateDisjointOr(B0, Ctx.B.CreateShl(B1, 16, "", /*HasNUW=*/true),
+                               "pk_f16"));
     Hr.Handled = true;
     return Hr;
   }
@@ -2379,7 +2380,7 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Value *Bf1 = Ctx.B.CreateFPTrunc(S1, BfTy, "tobf16_1");
     Value *Bits0 = Ctx.B.CreateZExt(Ctx.B.CreateBitCast(Bf0, Type::getInt16Ty(Ctx.C)), Ctx.I32Ty);
     Value *Bits1 = Ctx.B.CreateZExt(Ctx.B.CreateBitCast(Bf1, Type::getInt16Ty(Ctx.C)), Ctx.I32Ty);
-    Ctx.writeReg32(Op.dst(), Ctx.B.CreateDisjointOr(Bits0, Ctx.B.CreateShl(Bits1, 16), "pk_bf16"));
+    Ctx.writeReg32(Op.dst(), Ctx.B.CreateDisjointOr(Bits0, Ctx.B.CreateShl(Bits1, 16, "", /*HasNUW=*/true), "pk_bf16"));
     Hr.Handled = true;
     return Hr;
   }

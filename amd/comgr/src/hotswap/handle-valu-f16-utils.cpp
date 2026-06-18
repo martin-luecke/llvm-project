@@ -147,7 +147,7 @@ void writeOpSelF16(RaiseContext &Ctx, OpResolver &Op, Value *Result,
   }
 
   Value *Low = Ctx.B.CreateAnd(Old, ConstantInt::get(Ctx.I32Ty, 0x0000FFFFu));
-  Value *Shifted = Ctx.B.CreateShl(Bits, 16);
+  Value *Shifted = Ctx.B.CreateShl(Bits, 16, "", /*HasNUW=*/true);
   Ctx.writeReg32(Op.dst(), Ctx.B.CreateDisjointOr(Low, Shifted, MergeHiName));
 }
 
