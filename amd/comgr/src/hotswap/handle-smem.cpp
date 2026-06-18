@@ -24,7 +24,7 @@ namespace COMGR::hotswap {
 namespace {
 
 Value *addStaticSmemByteOffset64(RaiseContext &Ctx, const DecodedInst &Di,
-                                 Value *Offset, const char *Name) {
+                                 Value *Offset, StringRef Name) {
   if (!Di.HasStaticOffset || Di.StaticOffset == 0)
     return Offset;
   return Ctx.B.CreateAdd(Offset, Ctx.B.getInt64(Di.StaticOffset), Name);
