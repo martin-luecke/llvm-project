@@ -13,6 +13,8 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
 
+#include <optional>
+
 namespace COMGR::hotswap {
 
 // Source-kernel kernarg-segment metadata shared by the raiser and any
@@ -68,7 +70,6 @@ struct SourceHiddenArgByte {
   int ArgOffset = 0;
   int ByteOffset = 0;
 
-  bool matched() const { return Kind != SourceHiddenArgKind::None; }
   unsigned byteIndexInArg() const {
     return static_cast<unsigned>(ByteOffset - ArgOffset);
   }
@@ -78,7 +79,7 @@ struct SourceHiddenArgByte {
 // view.  Known source hidden args are later synthesized from dispatch state;
 // unsupported hidden args must refuse instead of falling back to target
 // implicitarg layout.
-SourceHiddenArgByte classifySourceHiddenArgByte(
+std::optional<SourceHiddenArgByte> classifySourceHiddenArgByte(
     llvm::ArrayRef<KernelArgMeta> Args, int ByteOffset);
 
 } // namespace COMGR::hotswap

@@ -12,6 +12,8 @@
 #include "llvm/IR/IntrinsicsAMDGPU.h"
 #include "llvm/Support/ErrorHandling.h"
 
+#include <optional>
+
 using namespace llvm;
 
 namespace COMGR::hotswap {
@@ -159,14 +161,15 @@ SourceHiddenArgValue emitHiddenArgValue(SourceHiddenArgContext &Ctx,
 
 SourceHiddenArgValue emitSourceHiddenByte(SourceHiddenArgContext &Ctx,
                                           int ByteOffset) {
-  SourceHiddenArgByte Byte = classifySourceHiddenArgByte(Ctx.Args, ByteOffset);
-  if (!Byte.matched())
+  std::optional<SourceHiddenArgByte> Byte =
+      classifySourceHiddenArgByte(Ctx.Args, ByteOffset);
+  if (!Byte)
     return {};
 
-  SourceHiddenArgValue Result = emitHiddenArgValue(Ctx, Byte.Kind);
-  if (!Result.Value && !Byte.ValueKind.empty())
+  SourceHiddenArgValue Result = emitHiddenArgValue(Ctx, Byte->Kind);
+  if (!Result.Value && !Byte->ValueKind.empty())
     Result.FailureDetail =
-        (Twine("unsupported source hidden argument kind '") + Byte.ValueKind +
+        (Twine("unsupported source hidden argument kind '") + Byte->ValueKind +
          "'; add explicit source-ABI synthesis instead of falling back to "
          "target implicitarg layout")
             .str();
@@ -174,7 +177,7 @@ SourceHiddenArgValue emitSourceHiddenByte(SourceHiddenArgContext &Ctx,
     return Result;
 
   Value *Wide = Ctx.B.CreateZExtOrTrunc(Result.Value, Ctx.I64Ty, "hidden_wide");
-  unsigned ByteInArg = Byte.byteIndexInArg();
+  unsigned ByteInArg = Byte->byteIndexInArg();
   if (ByteInArg != 0)
     Wide = Ctx.B.CreateLShr(Wide, Ctx.B.getInt64(ByteInArg * 8),
                             "hidden_byte_shift");

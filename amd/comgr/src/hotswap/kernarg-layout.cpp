@@ -16,10 +16,10 @@ using namespace llvm;
 
 namespace COMGR::hotswap {
 
-SourceHiddenArgByte classifySourceHiddenArgByte(ArrayRef<KernelArgMeta> Args,
-                                                int ByteOffset) {
+std::optional<SourceHiddenArgByte>
+classifySourceHiddenArgByte(ArrayRef<KernelArgMeta> Args, int ByteOffset) {
   if (ByteOffset < 0)
-    return {};
+    return std::nullopt;
   uint32_t Offset = static_cast<uint32_t>(ByteOffset);
 
   for (const KernelArgMeta &Arg : Args) {
@@ -28,7 +28,7 @@ SourceHiddenArgByte classifySourceHiddenArgByte(ArrayRef<KernelArgMeta> Args,
 
     StringRef Kind(Arg.ValueKind);
     if (!Kind.starts_with("hidden_"))
-      return {};
+      return std::nullopt;
 
     SourceHiddenArgByte Result;
     Result.ValueKind = Kind;
@@ -64,7 +64,7 @@ SourceHiddenArgByte classifySourceHiddenArgByte(ArrayRef<KernelArgMeta> Args,
       Result.Kind = SourceHiddenArgKind::UnsupportedHidden;
     return Result;
   }
-  return {};
+  return std::nullopt;
 }
 
 } // namespace COMGR::hotswap
