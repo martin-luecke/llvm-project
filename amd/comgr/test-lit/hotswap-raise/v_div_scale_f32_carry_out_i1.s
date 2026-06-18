@@ -37,8 +37,6 @@
 ; `s_mov_b32 vcc_lo, s3` -- the exact SGPR-bounce shape the audit
 ; targets.
 
-; CHECK-LABEL: define amdgpu_kernel void @v_div_scale_f32_carry_out_i1_kernel(
-
 ; The scale-numerator divscale produces { float, i1 } whose i1 is
 ; the per-lane carry-out destined for v_div_fmas_f32.  Anchor the
 ; (1.0 / true)-flag scale call and capture its extractvalue.  Under
@@ -46,17 +44,14 @@
 ; SDST SGPR's alloca per lane; under the fix it is balloted to a
 ; source-width wave mask AND cached as i1 via recordSgprWaveMaskI1
 ; for the same-BB consumer below.
-; CHECK: call { float, i1 } @llvm.amdgcn.div.scale.f32(float %{{[^,]+}}, float %{{[^,]+}}, i1 true)
-; CHECK: %[[CARRY:[^ ]+]] = extractvalue { float, i1 } %{{[^,]+}}, 1
 
-; The lifted v_div_fmas_f32 must consume %[[CARRY]] directly -- no
+; The lifted v_div_fmas_f32 must consume the captured carry directly -- no
 ; extractLaneBitFromWaveMask / ballot / wn_mask_lane_i1 round-trip
 ; on the path from divscale to divfmas.  Pre-fix the cache wasn't
 ; populated, the `s_mov_b32 vcc_lo, s3` restore hit the lossy
 ; SGPR-alloca extract path, and the i1 reaching divfmas was
-; structurally different from %[[CARRY]] (correct only on target
+; structurally different from the carry (correct only on target
 ; lanes 0 and W_src by replication-aliasing).
-; CHECK: call float @llvm.amdgcn.div.fmas.f32(float %{{[^,]+}}, float %{{[^,]+}}, float %{{[^,]+}}, i1 %[[CARRY]])
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
@@ -64,6 +59,7 @@
 	.globl	v_div_scale_f32_carry_out_i1_kernel
 	.p2align	8
 	.type	v_div_scale_f32_carry_out_i1_kernel,@function
+; CHECK-LABEL: define amdgpu_kernel void @v_div_scale_f32_carry_out_i1_kernel(
 v_div_scale_f32_carry_out_i1_kernel:
 	s_load_b128 s[4:7], s[0:1], 0x0
 	s_wait_kmcnt 0x0
@@ -75,6 +71,8 @@ v_div_scale_f32_carry_out_i1_kernel:
 	; Scale-numerator: carry-out to plain SGPR s3 (this carry is
 	; the one consumed by v_div_fmas_f32 below via the SGPR-bounce
 	; through `s_mov_b32 vcc_lo, s3`).
+	; CHECK: call { float, i1 } @llvm.amdgcn.div.scale.f32(float %{{[^,]+}}, float %{{[^,]+}}, i1 true)
+	; CHECK: %[[CARRY:[^ ]+]] = extractvalue { float, i1 } %{{[^,]+}}, 1
 	v_div_scale_f32 v4, s3, v1, v2, v1
 	v_rcp_f32_e32 v5, v3
 	v_nop
@@ -87,6 +85,7 @@ v_div_scale_f32_carry_out_i1_kernel:
 	; Restore scale-numerator carry from SGPR s3 to vcc_lo so
 	; v_div_fmas_f32 picks it up as its implicit VCC input.
 	s_mov_b32 vcc_lo, s3
+	; CHECK: call float @llvm.amdgcn.div.fmas.f32(float %{{[^,]+}}, float %{{[^,]+}}, float %{{[^,]+}}, i1 %[[CARRY]])
 	v_div_fmas_f32 v3, v3, v5, v7
 	v_div_fixup_f32 v1, v3, v2, v1
 	global_store_b32 v0, v1, s[4:5]
