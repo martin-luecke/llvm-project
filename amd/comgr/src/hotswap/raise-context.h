@@ -116,6 +116,12 @@ struct RaiseContext {
   uint8_t VgprMsBs = 0;
   bool AssumeHipGlobalOffsetZero = false;
 
+  // LDS→global redirect (HSA_HOTSWAP_LDS_TO_GLOBAL / _FORCE).
+  // When true, storage DS ops are emitted as global loads/stores against
+  // WgLdsBase, and every barrier is bracketed with workgroup-scope fences.
+  bool LdsGlobalRedirect = false;
+  llvm::Value *WgLdsBase = nullptr; // ptr addrspace(1), uniform per WG
+
   // Per-instruction VGPR index adjustment, indexed by MCInst operand index.
   // Computed from vgprMSBs before each instruction dispatch. computeVGPRAdjust
   // fails loudly if LLVM TableGen grows a VGPR-MSB-controlled operand beyond

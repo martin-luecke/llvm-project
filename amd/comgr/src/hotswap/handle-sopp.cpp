@@ -147,7 +147,23 @@ HandlerResult handleSOPP(RaiseContext &Ctx, const DecodedInst &Di,
   if (Sop == CanonicalOp::S_BARRIER || Sop == CanonicalOp::S_BARRIER_WAIT) {
     Function *BarrierFn =
         Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::amdgcn_s_barrier);
-    Ctx.B.CreateCall(BarrierFn, {});
+    if (Ctx.LdsGlobalRedirect) {
+      // Barrier coherence upgrade for LDS→global redirect (see
+      // docs/lds-global-redirect.md §4).  On gfx1151 the L0 cache is
+      // per-SIMD (16KB); waves in the same workgroup run on different
+      // SIMDs within the same CU, so s_barrier alone does NOT flush L0.
+      // Bracket every barrier with workgroup-scope release/acquire fences:
+      //   fence release  → s_wait_storecnt 0   (drain pending stores)
+      //   s_barrier      → CU-level rendezvous
+      //   fence acquire  → buffer_gl0_inv       (invalidate L0 on each SIMD)
+      SyncScope::ID WgScope =
+          Ctx.C.getOrInsertSyncScopeID("workgroup-one-as");
+      Ctx.B.CreateFence(AtomicOrdering::Release, WgScope);
+      Ctx.B.CreateCall(BarrierFn, {});
+      Ctx.B.CreateFence(AtomicOrdering::Acquire, WgScope);
+    } else {
+      Ctx.B.CreateCall(BarrierFn, {});
+    }
     Hr.Handled = true;
     return Hr;
   }

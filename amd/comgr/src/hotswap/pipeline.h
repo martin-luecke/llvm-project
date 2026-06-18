@@ -34,6 +34,12 @@ struct PipelineOptions {
   // Standalone callers keep this false and reject those source hidden args.
   bool AssumeHipGlobalOffsetZero = false;
   std::string KernelAllowlist;
+  // LDS→global redirect (HSA_HOTSWAP_LDS_TO_GLOBAL / _FORCE).
+  // Defaults to false; the pipeline entry points apply process-environment
+  // overrides before the first raiseAndCompileKernel call so programmatic
+  // callers can also set these directly without touching the environment.
+  bool EnableLdsGlobalRedirect = false;
+  bool ForceLdsGlobalRedirect = false;
 };
 
 struct PipelineResult {

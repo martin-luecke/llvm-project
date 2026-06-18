@@ -100,6 +100,11 @@ HandlerResult handleDS(RaiseContext &Ctx, const DecodedInst &Di,
   // to the correct instruction for the target ISA (native on gfx950,
   // software-emulated on targets that lack it).
   if (Sop == CanonicalOp::DS_READ_B64_TR_B16) {
+    if (Ctx.LdsGlobalRedirect) {
+      Hr.Failure = RaiseFailure::ldsGlobalRedirectUnsupported(
+          Di, "TR_B16 transpose load (LDS crossbar intrinsic, no global equiv)");
+      return Hr;
+    }
     Value *Addr = Ctx.B.CreateZExt(Op.src(0), Ctx.I64Ty, "ds_addr");
     for (unsigned K = 1; K < Op.nSrcs(); K++) {
       if (Di.isImm(Op.srcIdx(K))) {
@@ -288,11 +293,21 @@ HandlerResult handleDS(RaiseContext &Ctx, const DecodedInst &Di,
 
   if (Sop == CanonicalOp::DS_READ_B64_TR_B8 ||
       Sop == CanonicalOp::DS_LOAD_TR8_B64) {
+    if (Ctx.LdsGlobalRedirect) {
+      Hr.Failure = RaiseFailure::ldsGlobalRedirectUnsupported(
+          Di, "TR8_B64 transpose load (LDS crossbar intrinsic, no global equiv)");
+      return Hr;
+    }
     EmitDsLoadTr8B64();
     return Hr;
   }
 
   if (Sop == CanonicalOp::DS_LOAD_TR16_B128) {
+    if (Ctx.LdsGlobalRedirect) {
+      Hr.Failure = RaiseFailure::ldsGlobalRedirectUnsupported(
+          Di, "TR16_B128 transpose load (LDS crossbar intrinsic, no global equiv)");
+      return Hr;
+    }
     Value *Addr = Ctx.B.CreateZExt(Op.src(0), Ctx.I64Ty, "ds_addr");
     for (unsigned K = 1; K < Op.nSrcs(); K++) {
       if (Di.isImm(Op.srcIdx(K))) {
@@ -479,6 +494,12 @@ HandlerResult handleDS(RaiseContext &Ctx, const DecodedInst &Di,
   {
     auto [ds2IsRead, ds2WidthBits, ds2UnitBytes] = Ds2Classify(Sop);
     if (ds2UnitBytes > 0) {
+      if (Ctx.LdsGlobalRedirect) {
+        Hr.Failure = RaiseFailure::ldsGlobalRedirectUnsupported(
+            Di, "DS2 two-offset (two independent accesses; redirect needs two "
+                "GEPs per operand which is not yet implemented)");
+        return Hr;
+      }
       unsigned Opc = Di.Inst.getOpcode();
       int Off0Idx = AMDGPU::getNamedOperandIdx(Opc, AMDGPU::OpName::offset0);
       int Off1Idx = AMDGPU::getNamedOperandIdx(Opc, AMDGPU::OpName::offset1);
@@ -614,7 +635,13 @@ HandlerResult handleDS(RaiseContext &Ctx, const DecodedInst &Di,
       }
     }
 
-    Value *Ptr = Ctx.B.CreateIntToPtr(Addr, PointerType::get(Ctx.C, 3));
+    // Redirect: route the byte offset into the per-WG global scratch region
+    // instead of LDS addrspace(3).  WgLdsBase is a ptr addrspace(1) computed
+    // at kernel entry from the new hidden kernarg + the linear workgroup ID.
+    Value *Ptr = Ctx.LdsGlobalRedirect
+                     ? Ctx.B.CreateInBoundsGEP(Ctx.I8Ty, Ctx.WgLdsBase, Addr,
+                                                "lds_global_ptr")
+                     : Ctx.B.CreateIntToPtr(Addr, PointerType::get(Ctx.C, 3));
 
     if (IsDsRead) {
       ParsedReg Dest = Op.dst();
@@ -687,6 +714,12 @@ HandlerResult handleDS(RaiseContext &Ctx, const DecodedInst &Di,
   // breadcrumb a maintainer can grep for.
   if (Sop == CanonicalOp::DS_WRITE_B16_D16_HI ||
       Sop == CanonicalOp::DS_WRITE_B8_D16_HI) {
+    if (Ctx.LdsGlobalRedirect) {
+      Hr.Failure = RaiseFailure::ldsGlobalRedirectUnsupported(
+          Di, "D16_HI partial-store (upper-half store; redirect not yet "
+              "implemented for sub-dword writes)");
+      return Hr;
+    }
     Value *Addr = Ctx.B.CreateZExt(Op.src(0), Ctx.I64Ty, "ds_addr");
     for (unsigned K = 1; K < Op.nSrcs(); K++) {
       if (Di.isImm(Op.srcIdx(K))) {

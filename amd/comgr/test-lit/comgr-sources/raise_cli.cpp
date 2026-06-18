@@ -91,6 +91,19 @@
 // transient test hook during the graduation sweep and has been
 // removed so the opt-out path isn't silently bypassed.
 //
+// --enable-lds-redirect. Activates the LDS→global redirect pass, which
+// replaces addrspace(3) storage with a runtime-allocated addrspace(1)
+// global buffer and appends a `ptr addrspace(1) wg_lds_base` argument to
+// the lifted kernel.  Equivalent to setting HSA_HOTSWAP_LDS_TO_GLOBAL=1
+// in the environment, but as a command-line flag so that lit fixtures pin
+// the redirect path without relying on process-global env state.
+//
+// --force-lds-redirect. Bypasses the LDS size-cap check that normally
+// gates the redirect to kernels whose group_segment_fixed_size exceeds the
+// target ISA's LDS capacity.  Use together with --enable-lds-redirect in
+// lit fixtures that exercise small-LDS kernels on a target whose cap is
+// larger.  Equivalent to setting HSA_HOTSWAP_LDS_TO_GLOBAL_FORCE=1.
+//
 // (The earlier `--enable-permlane16-xor3-partner` /
 // `--enable-permlane16-swap-selfpreserve` flags were removed along
 // with their rewrite passes once the asymmetric
@@ -302,6 +315,15 @@ cl::opt<bool> AssumeHipGlobalOffsetZeroOpt(
     cl::desc("Assume HIP launch semantics for hidden_global_offset_{x,y,z}; "
              "generic HSA/OpenCL callers should leave this disabled."));
 
+cl::opt<bool> EnableLdsRedirectOpt(
+    "enable-lds-redirect",
+    cl::desc("Activate the LDS->global redirect pass (see top-of-file comment "
+             "and HSA_HOTSWAP_LDS_TO_GLOBAL)."));
+cl::opt<bool> ForceLdsRedirectOpt(
+    "force-lds-redirect",
+    cl::desc("Bypass the LDS size-cap gate; implies --enable-lds-redirect "
+             "(see HSA_HOTSWAP_LDS_TO_GLOBAL_FORCE)."));
+
 // Resolve an --enable-/--disable- toggle pair, later occurrence wins.
 bool resolveToggle(bool Default, const cl::opt<bool> &Enable,
                    const cl::opt<bool> &Disable) {
@@ -334,6 +356,10 @@ int main(int argc, char **argv) {
       true, EnableWritelaneRewriteOpt, DisableWritelaneRewriteOpt);
   bool EnableWaveNative =
       resolveToggle(true, EnableWaveNativeOpt, DisableWaveNativeOpt);
+  // LDS redirect defaults off; --force-lds-redirect implies --enable-lds-redirect.
+  bool EnableLdsRedirect =
+      EnableLdsRedirectOpt.getValue() || ForceLdsRedirectOpt.getValue();
+  bool ForceLdsRedirect = ForceLdsRedirectOpt.getValue();
 
   // Read the file up-front so we can fall back to the ELF e_flags
   // ISA when the filename heuristic fails (kerneldex corpora often
@@ -430,7 +456,9 @@ int main(int argc, char **argv) {
                                         kernelOffset, kernelSize, targetIsa,
                                         EnableWritelaneRewrite,
                                         EnableWaveNative,
-                                        AssumeHipGlobalOffsetZeroOpt);
+                                        AssumeHipGlobalOffsetZeroOpt,
+                                        EnableLdsRedirect,
+                                        ForceLdsRedirect);
     if (!raised.Success) {
       // Contract: raiseToIR only populates RaiseResult::IrText on the
       // success path (the last write before setting `success = true`),
@@ -484,6 +512,8 @@ int main(int argc, char **argv) {
     pipelineOptions.EnableWritelaneRewrite = EnableWritelaneRewrite;
     pipelineOptions.EnableWaveNative = EnableWaveNative;
     pipelineOptions.AssumeHipGlobalOffsetZero = AssumeHipGlobalOffsetZeroOpt;
+    pipelineOptions.EnableLdsGlobalRedirect = EnableLdsRedirect;
+    pipelineOptions.ForceLdsGlobalRedirect = ForceLdsRedirect;
     auto pipe = COMGR::hotswap::runPipeline(coData, isa, effectiveTargetIsa,
                                             target, pipelineOptions);
     if (!pipe.Success) {
@@ -586,7 +616,9 @@ int main(int argc, char **argv) {
                                           kernelOffset, kernelSize, targetIsa,
                                           EnableWritelaneRewrite,
                                           EnableWaveNative,
-                                          AssumeHipGlobalOffsetZeroOpt);
+                                          AssumeHipGlobalOffsetZeroOpt,
+                                          EnableLdsRedirect,
+                                          ForceLdsRedirect);
       shm->done = true;
       shm->success = raised.Success;
       shm->lifted = raised.LiftedCount;

@@ -59,6 +59,14 @@ SourceHiddenArgValue emitSourceHiddenInteger(SourceHiddenArgContext &Ctx,
                                              unsigned ByteWidth,
                                              bool IsSigned);
 
+// Emit `ceil(grid_size[Dim] / wg_size[Dim])` using the AQL dispatch packet.
+// Returns an i32 value.  Dim must be 0 (X), 1 (Y), or 2 (Z).
+//
+// Uses (G + W - 1) / W to correctly round up partial last blocks.  This
+// matches the number of workgroups the hardware actually dispatches in each
+// dimension, including kernels whose grid is not a multiple of the block size.
+llvm::Value *emitHiddenBlockCount(SourceHiddenArgContext &Ctx, unsigned Dim);
+
 } // namespace COMGR::hotswap
 
 #endif

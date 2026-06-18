@@ -52,6 +52,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
@@ -76,6 +77,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstdlib>
 #include <functional>
 #include <limits>
 #include <optional>
@@ -781,7 +783,9 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
                                  bool EnableWaveNative,
                                  bool ForceThreadLoopProjection,
                                  bool SuppressC5ForThreadLoopRoute,
-                                 bool AssumeHipGlobalOffsetZero) {
+                                 bool AssumeHipGlobalOffsetZero,
+                                 bool EnableLdsGlobalRedirect,
+                                 bool ForceLdsGlobalRedirect) {
   RaiseResult Result;
 
   // Reject obviously-bad ISA inputs before reaching the MC stack -- an
@@ -1174,7 +1178,8 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
                                /*enableWaveNative=*/false,
                                /*forceThreadLoopProjection=*/true,
                                /*suppressC5ForThreadLoopRoute=*/true,
-                               AssumeHipGlobalOffsetZero);
+                               AssumeHipGlobalOffsetZero,
+                               EnableLdsGlobalRedirect, ForceLdsGlobalRedirect);
         }
         errs() << "transpiler: thread-loop fallback not eligible for kernel '"
                << KernelName << "': " << ThreadLoopUnsupportedDetail
@@ -1283,6 +1288,17 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   // Either way the IR body reads args via `amdgcn_kernarg_segment_ptr`;
   // the typed params are unused-in-body and exist solely for `.args`
   // metadata.
+  // LDS→global redirect gate.  EnableLdsGlobalRedirect opts in globally;
+  // ForceLdsGlobalRedirect applies even when source LDS ≤ target cap.
+  // Both flags come from PipelineOptions, which the pipeline entry points
+  // populate from HSA_HOTSWAP_LDS_TO_GLOBAL / _FORCE (or from programmatic
+  // callers that set the options directly).  Default is OFF.
+  const bool LdsRedirectActive =
+      EnableLdsGlobalRedirect &&
+      (ForceLdsGlobalRedirect ||
+       Meta.GroupSegmentFixedSize > TargetIsa.LdsByteCapacity);
+  unsigned WgLdsBaseArgIdx = ~0u; // set below if LdsRedirectActive
+
   SmallVector<Type *, 8> ParamTypes;
   KernargLayout Kernargs;
   Type *KernargByrefTy = nullptr;
@@ -1295,6 +1311,11 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   Kernargs.ImplicitArgsBase = Meta.implicitArgsBase();
   Kernargs.Args = Meta.Args;
   Kernargs.KernargSegmentSize = Meta.KernargSegmentSize;
+
+  if (LdsRedirectActive) {
+    WgLdsBaseArgIdx = static_cast<unsigned>(ParamTypes.size());
+    ParamTypes.push_back(PointerType::get(C, /*addrspace=*/1));
+  }
 
   auto *FuncTy = FunctionType::get(VoidTy, ParamTypes, false);
   Function *F =
@@ -1396,13 +1417,23 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   // per-function `amdgpu-lds-size` attribute in the source-declared
   // range.  The attribute takes "min,max" -- we pass the same value
   // for both since the source's static size is known exactly.
-  if (Meta.GroupSegmentFixedSize > 0) {
+  // When LDS→global redirect is active we're not using LDS at all, so zero the
+  // hardware group_segment_fixed_size rather than propagating the source value.
+  // The backend derives the KD field from `amdgpu-lds-size`, so we just omit
+  // the attribute; the backend then defaults to 0 in the emitted KD.
+  if (Meta.GroupSegmentFixedSize > 0 && !LdsRedirectActive) {
     std::string SizeStr = std::to_string(Meta.GroupSegmentFixedSize);
     F->addFnAttr("amdgpu-lds-size", SizeStr + "," + SizeStr);
   }
 
-  if (KernargByrefTy)
+  if (KernargByrefTy) {
     F->getArg(0)->setName("kargs");
+  } else {
+    for (unsigned ArgI = 0, ArgN = F->arg_size(); ArgI < ArgN; ++ArgI)
+      F->getArg(ArgI)->setName("arg" + std::to_string(ArgI));
+  }
+  if (LdsRedirectActive)
+    F->getArg(WgLdsBaseArgIdx)->setName("wg_lds_base");
 
   errs() << "transpiler: Kernel '" << KernelName
          << "' kernarg_segment_size=" << Meta.KernargSegmentSize << "\n";
@@ -1647,6 +1678,33 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
       SeedTtmp8(B);
   }
 
+  // LDS→global redirect: compute per-workgroup base pointer once at kernel entry.
+  // linear_wg_id = ((wg_id_z * blocks_y) + wg_id_y) * blocks_x + wg_id_x
+  // wg_base = wg_lds_base_arg + linear_wg_id * G  (byte-addressed, addrspace(1))
+  Value *WgLdsBase = nullptr;
+  if (LdsRedirectActive) {
+    Value *BlocksX = emitHiddenBlockCount(HiddenCtx, 0);
+    Value *BlocksY = emitHiddenBlockCount(HiddenCtx, 1);
+    Value *WgIdX = B.CreateZExt(B.CreateCall(FnWorkgroupIdX, {}, "lds_wg_id_x"),
+                                 I64Ty, "lds_wg_id_x_64");
+    Value *WgIdY = B.CreateZExt(B.CreateCall(FnWorkgroupIdY, {}, "lds_wg_id_y"),
+                                 I64Ty, "lds_wg_id_y_64");
+    Value *WgIdZ = B.CreateZExt(B.CreateCall(FnWorkgroupIdZ, {}, "lds_wg_id_z"),
+                                 I64Ty, "lds_wg_id_z_64");
+    Value *BX = B.CreateZExt(BlocksX, I64Ty, "lds_blocks_x");
+    Value *BY = B.CreateZExt(BlocksY, I64Ty, "lds_blocks_y");
+    Value *LinWgId =
+        B.CreateAdd(B.CreateMul(B.CreateAdd(B.CreateMul(WgIdZ, BY, "lds_wgz_by"),
+                                            WgIdY, "lds_wgzy_row"),
+                                BX, "lds_wgzy_row_bx"),
+                    WgIdX, "lds_linear_wg_id");
+    Value *ByteOff = B.CreateMul(
+        LinWgId, ConstantInt::get(I64Ty, Meta.GroupSegmentFixedSize),
+        "lds_wg_byte_off");
+    WgLdsBase = B.CreateInBoundsGEP(I8Ty, F->getArg(WgLdsBaseArgIdx),
+                                     ByteOff, "wg_lds_ptr");
+  }
+
   auto SeedThreadLoopIterationState = [&](IRBuilder<> &SeedB) {
     for (auto *Slot : Regs.Sgpr)
       SeedB.CreateStore(ConstantInt::get(I32Ty, 0), Slot);
@@ -1733,6 +1791,23 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
     report_fatal_error("transpiler: missing entry basic block for kernarg "
                        "provenance");
   Ctx.enterKernargPtrProvenanceForBlock(EntryBbIt->second);
+
+  if (LdsRedirectActive) {
+    Ctx.LdsGlobalRedirect = true;
+    Ctx.WgLdsBase = WgLdsBase;
+    // Attach IR-level metadata recording G so that --emit-ir dumps are
+    // self-documenting.  Note: this metadata is NOT preserved in the output
+    // HSACO ELF; the launch-side interceptor must recover G by comparing
+    // the original binary's MSGPACK group_segment_fixed_size against the
+    // translated binary's (which is 0 when the redirect is active) and
+    // kernarg_segment_size (which grows by 8 for the new wg_lds_base pointer).
+    F->setMetadata(
+        "hotswap.lds_redirect_size",
+        MDTuple::get(C, {ConstantAsMetadata::get(ConstantInt::get(
+                            Type::getInt32Ty(C), Meta.GroupSegmentFixedSize))}));
+    errs() << "transpiler: LDS->global redirect active for '" << KernelName
+           << "' G=" << Meta.GroupSegmentFixedSize << " bytes\n";
+  }
 
   // Dominance-safe SGPR wave-mask shadow storage.
   // One EXEC-width mask + one scalar-valid bit per SGPR base index.
@@ -2157,7 +2232,8 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
                              /*enableWaveNative=*/false,
                              /*forceThreadLoopProjection=*/true,
                              /*suppressC5ForThreadLoopRoute=*/true,
-                             AssumeHipGlobalOffsetZero);
+                             AssumeHipGlobalOffsetZero,
+                             EnableLdsGlobalRedirect, ForceLdsGlobalRedirect);
       }
       if (!ForceThreadLoopProjection &&
           TlDecision.Decision == ThreadLoopDecision::EligibleButGateOff) {
@@ -2343,7 +2419,8 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
                              /*enableWaveNative=*/false,
                              /*forceThreadLoopProjection=*/true,
                              /*suppressC5ForThreadLoopRoute=*/true,
-                             AssumeHipGlobalOffsetZero);
+                             AssumeHipGlobalOffsetZero,
+                             EnableLdsGlobalRedirect, ForceLdsGlobalRedirect);
       }
       RaiseFailure F = RaiseFailure::crossWavePredicateChain(
           KernelName, PredReport.RefusalDetail);
@@ -2402,11 +2479,15 @@ RaiseResult raiseToIR(llvm::ArrayRef<uint8_t> TextBytes,
                       const KernelMeta &Meta,
                       llvm::StringRef CompilationTargetIsa,
                       bool EnableWritelaneRewrite,
-                      bool EnableWaveNative) {
+                      bool EnableWaveNative,
+                      bool EnableLdsGlobalRedirect,
+                      bool ForceLdsGlobalRedirect) {
   return raiseToIR(TextBytes, SourceIsa, KernelName, Meta,
                    /*KernelOffset=*/0,
                    /*KernelSize=*/0, CompilationTargetIsa,
-                   EnableWritelaneRewrite, EnableWaveNative);
+                   EnableWritelaneRewrite, EnableWaveNative,
+                   /*AssumeHipGlobalOffsetZero=*/false,
+                   EnableLdsGlobalRedirect, ForceLdsGlobalRedirect);
 }
 
 RaiseResult raiseToIR(llvm::ArrayRef<uint8_t> TextBytes,
@@ -2418,13 +2499,16 @@ RaiseResult raiseToIR(llvm::ArrayRef<uint8_t> TextBytes,
                       llvm::StringRef CompilationTargetIsa,
                       bool EnableWritelaneRewrite,
                       bool EnableWaveNative,
-                      bool AssumeHipGlobalOffsetZero) {
+                      bool AssumeHipGlobalOffsetZero,
+                      bool EnableLdsGlobalRedirect,
+                      bool ForceLdsGlobalRedirect) {
   return raiseToIRImpl(TextBytes, SourceIsa, KernelName, Meta, KernelOffset,
                        KernelSize, CompilationTargetIsa, EnableWritelaneRewrite,
                        EnableWaveNative,
                        /*forceThreadLoopProjection=*/false,
                        /*suppressC5ForThreadLoopRoute=*/false,
-                       AssumeHipGlobalOffsetZero);
+                       AssumeHipGlobalOffsetZero,
+                       EnableLdsGlobalRedirect, ForceLdsGlobalRedirect);
 }
 
 } // namespace COMGR::hotswap
