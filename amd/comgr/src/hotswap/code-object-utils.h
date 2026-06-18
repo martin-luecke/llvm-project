@@ -24,6 +24,11 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
+
+namespace llvm {
+class LLVMContext;
+class Type;
+} // namespace llvm
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/MemoryBufferRef.h"
 
@@ -174,6 +179,34 @@ llvm::Expected<KernelMeta> extractKernelMeta(llvm::MemoryBufferRef ElfData,
 llvm::Expected<KernelSymbolExtent>
 findKernelSymbolExtent(llvm::MemoryBufferRef ElfData,
                        llvm::StringRef KernelName);
+
+/// Build the lifted kernel's formal-parameter types so they reproduce the
+/// source kernel's *explicit* (`.args`, non-`hidden_`) argument layout.
+///
+/// The hotswap raiser reads every kernarg via the
+/// `amdgcn.kernarg.segment.ptr` intrinsic, so a typed signature is not
+/// needed for correctness of the lifted *code*. It IS needed for the
+/// emitted `.args` METADATA: a launcher that marshals arguments per-argument
+/// via `hipModuleLaunchKernel`'s `kernelParams` (e.g. Triton) relies on the
+/// AMDGPU backend's structured `.args` to scatter each argument to the right
+/// kernarg offset. A single opaque `byref([N x i8])` placeholder makes the
+/// backend emit one `by_value` blob, which silently mis-marshals such
+/// launches (every argument but the first lands at the wrong offset).
+///
+/// Mapping: pointer kinds (`global_buffer`, `dynamic_shared_pointer`, ...)
+/// become `ptr addrspace(AS)` carrying the source address space; scalar
+/// `by_value` args become an integer of matching size. Emitting the same
+/// types in `.args` order to the same AMDGPU backend reproduces the source
+/// kernarg offsets bit-for-bit (identical ABI). `hidden_*` args are skipped
+/// -- the raiser synthesises those from the dispatch packet rather than
+/// reading them from the kernarg segment.
+///
+/// Returns true and fills `ParamTypes` when at least one explicit argument
+/// was emitted; returns false (leaving `ParamTypes` untouched) when the
+/// kernel has no explicit arguments, so callers can fall back to the opaque
+/// size-only placeholder.
+bool buildKernargParamTypes(llvm::LLVMContext &Ctx, const KernelMeta &Meta,
+                            llvm::SmallVectorImpl<llvm::Type *> &ParamTypes);
 
 } // namespace COMGR::hotswap
 
