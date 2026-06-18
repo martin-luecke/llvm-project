@@ -89,6 +89,23 @@ struct ISAProfile {
   // encoding; gfx942 and earlier reserve ID=3.
   bool SupportsDeallocVgprs = false;
 
+  // Word3 (the "flags" dword) of a raw, byte-addressed buffer resource
+  // descriptor (V#) for THIS ISA, used when the raiser reconstructs a MUBUF
+  // SRSRC for `amdgcn.raw[.ptr].buffer.{load,store}` (see mubuf-addr.cpp).
+  //
+  // It carries FORMAT_32 (0x27000) plus the generation-specific OOB_SELECT.
+  // RDNA (gfx10+) REQUIRES OOB_SELECT=3 ("raw", num_records counted in bytes)
+  // in word3 bits [29:28]; without it the hardware bounds-checks against
+  // num_records * stride (stride 0 -> 0), treats EVERY lane as out of bounds,
+  // and silently drops the access -- which made transpiled Triton buffer
+  // stores/loads no-op (all-zeros output) on gfx1151. CDNA (gfx9: gfx942 /
+  // gfx950) uses the bare format word with no OOB_SELECT.
+  //
+  // The value matches what a native from-source compile emits for the same
+  // raw-buffer access on each generation (gfx11: 0x31027000; gfx942:
+  // 0x00027000).
+  uint32_t RawBufferWord3 = 0x00027000u;
+
   // Addressable (physical) LDS capacity of this target, in bytes
   // (IsaInfo::getAddressableLocalMemorySize). The async-to-LDS lowering uses it
   // as the out-of-range bound separating a real LDS destination from the gfx12
@@ -119,6 +136,10 @@ struct ISAProfile {
     P.HasGfx125UserSgprCountField = llvm::AMDGPU::isGFX1250Plus(STI);
     P.Has1024AddressableVGPRs =
         STI.hasFeature(llvm::AMDGPU::Feature1024AddressableVGPRs);
+    // RDNA (gfx10+) raw-buffer descriptors need OOB_SELECT=3 in word3; CDNA
+    // (gfx9) does not. See the RawBufferWord3 field comment.
+    P.RawBufferWord3 =
+        llvm::AMDGPU::isGFX10Plus(STI) ? 0x31027000u : 0x00027000u;
     P.LdsByteCapacity =
         llvm::AMDGPU::IsaInfo::getAddressableLocalMemorySize(&STI);
     P.SupportsDeallocVgprs = llvm::AMDGPU::isGFX11Plus(STI);
