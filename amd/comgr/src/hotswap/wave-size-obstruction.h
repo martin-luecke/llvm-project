@@ -217,6 +217,10 @@ enum class RewriteId : uint8_t {
                             // WaveIdLiftScalarized site as "implemented rewrite
                             // available" instead of "refuse outright" so the
                             // classifier lets the kernel through to Phase 6.5.
+  SourceLocalMbcnt,          // v_mbcnt_{lo,hi} are lifted as source-wave-local
+                            // counts on wave32 -> wider targets, so downstream
+                            // lane-id-derived EXEC predicates see lane_id % W_s
+                            // instead of the target's absolute lane id.
 };
 
 // Human-readable short label for an `ObstructionKind` -- used in the

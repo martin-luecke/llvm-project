@@ -189,6 +189,7 @@ int main(int argc, char *argv[]) {
   Options.cache_directory = getenv("HSA_HOTSWAP_CACHE_DIR");
   Options.cache_skip_kernels = getenv("HSA_HOTSWAP_CACHE_SKIP_KERNELS");
   Options.hotswap_rules_path = getenv("HSA_HOTSWAP_RULES");
+  Options.kernel_allowlist = getenv("HSA_HOTSWAP_TRANSLATE_KERNELS");
   if (getenv("HSA_HOTSWAP_CACHE_DISABLE"))
     Options.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_CACHE_DISABLE;
   if (getenv("HSA_HOTSWAP_CACHE_READONLY"))

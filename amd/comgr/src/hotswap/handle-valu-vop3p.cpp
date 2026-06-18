@@ -554,11 +554,14 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
   // ---- VOP3P packed-pair `<2 x i16>` int ops ----
   // Binary forms use VOP_V2I16_V2I16_V2I16; ternary forms add a third packed
   // source. Each 32-bit source is bitcast to `<2 x i16>` for the lane-wise op
-  // and back to i32 for the VGPR write-back.
+  // and back to i32 for the VGPR write-back. The reversed-operand shift
+  // siblings (V_PK_LSHLREV_B16 / V_PK_ASHRREV_I16 / V_PK_LSHRREV_B16) share
+  // this shape and dispatch their IR opcode in the inner switch below.
   case CanonicalOp::V_PK_MAD_U16:
   case CanonicalOp::V_PK_ADD_U16:
   case CanonicalOp::V_PK_LSHLREV_B16:
   case CanonicalOp::V_PK_ASHRREV_I16:
+  case CanonicalOp::V_PK_LSHRREV_B16:
   case CanonicalOp::V_PK_MUL_LO_U16:
   case CanonicalOp::V_PK_MAX_I16:
   case CanonicalOp::V_PK_MAX3_I16: {
@@ -669,6 +672,17 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
           ConstantInt::get(I16Ty, 15));
       Value *Amt = Ctx.B.CreateAnd(S0, Mask, "pk_ashrrev_amt");
       Res = Ctx.B.CreateAShr(S1, Amt, "pk_ashrrev");
+      break;
+    }
+    case CanonicalOp::V_PK_LSHRREV_B16: {
+      // clshr_rev_16 SDAG sibling: dst = src1 >> (src0 & 15), logical
+      // zero-fill per packed 16-bit lane. Same reversed-operand and shift-count
+      // mask semantics as V_PK_LSHLREV_B16.
+      Value *Mask = ConstantVector::getSplat(
+          ElementCount::getFixed(2),
+          ConstantInt::get(I16Ty, 15));
+      Value *Amt = Ctx.B.CreateAnd(S0, Mask, "pk_lshrrev_amt");
+      Res = Ctx.B.CreateLShr(S1, Amt, "pk_lshrrev");
       break;
     }
     default: llvm_unreachable("filtered by outer switch");

@@ -67,6 +67,8 @@ enum class CanonicalOp : uint16_t {
 
   // -- SMEM --
   S_LOAD_B32, S_LOAD_B64, S_LOAD_B96, S_LOAD_B128, S_LOAD_B256, S_LOAD_B512,
+  S_BUFFER_LOAD_B32, S_BUFFER_LOAD_B64, S_BUFFER_LOAD_B96,
+  S_BUFFER_LOAD_B128, S_BUFFER_LOAD_B256, S_BUFFER_LOAD_B512,
   // gfx12+ scalar narrow loads: fetch 1 or 2 bytes from a uniform address and
   // zero/sign-extend into a 32-bit SGPR. Older ISAs have no equivalent; on a
   // cross-target lift to gfx942 the backend will lower the narrow `load iN`
@@ -666,6 +668,7 @@ enum class CanonicalOp : uint16_t {
   V_TRIG_PREOP_F64,
 
   V_MAX_U32, V_MIN_U32, V_MAX_I32, V_MIN_I32,
+  V_MAXMIN_U32, V_MINMAX_U32, V_MAXMIN_I32, V_MINMAX_I32,
   V_PERMLANE16_B32, V_PERMLANEX16_B32, V_PERMLANE64_B32,
   V_PERMLANE16_SWAP_B32, V_PERMLANE32_SWAP_B32,
 
@@ -741,6 +744,9 @@ enum class CanonicalOp : uint16_t {
   //                   bits of the count select the shift amount per
   //                   AMDGPU's hardware-clamp-to-element-width with
   //                   arithmetic (sign-extending) right-shift semantics).
+  // V_PK_LSHRREV_B16: dst = src1 >> (src0 & 15)        (logical zero-fill
+  //                   sibling; same reversed-operand and shift-count mask
+  //                   contract as V_PK_LSHLREV_B16).
   // V_PK_MUL_LO_U16:  dst = (src0 * src1) & 0xFFFF     (lane-wise low
   //                   16 bits of the integer product; "lo" means the
   //                   low half of the 32-bit multiply, so signed vs
@@ -756,7 +762,7 @@ enum class CanonicalOp : uint16_t {
   // each output lane (defaults: op_sel=[0,0,0], op_sel_hi=[1,1,1] --
   // natural lo->lo, hi->hi packing).
   V_PK_MAD_U16, V_PK_ADD_U16, V_PK_LSHLREV_B16, V_PK_ASHRREV_I16,
-  V_PK_MUL_LO_U16, V_PK_MAX_I16, V_PK_MAX3_I16,
+  V_PK_LSHRREV_B16, V_PK_MUL_LO_U16, V_PK_MAX_I16, V_PK_MAX3_I16,
 
   V_BITOP3_B32, V_BITOP3_B16,
 
@@ -802,7 +808,8 @@ enum class CanonicalOp : uint16_t {
   // -- FLAT / GLOBAL / SCRATCH memory --
   FLAT_LOAD_UBYTE, FLAT_LOAD_SBYTE, FLAT_LOAD_USHORT, FLAT_LOAD_SSHORT,
   FLAT_LOAD_DWORD, FLAT_LOAD_DWORDX2, FLAT_LOAD_DWORDX3, FLAT_LOAD_DWORDX4,
-  FLAT_STORE_BYTE, FLAT_STORE_SHORT, FLAT_STORE_SHORT_D16_HI,
+  FLAT_STORE_BYTE, FLAT_STORE_BYTE_D16_HI,
+  FLAT_STORE_SHORT, FLAT_STORE_SHORT_D16_HI,
   FLAT_STORE_DWORD, FLAT_STORE_DWORDX2, FLAT_STORE_DWORDX3, FLAT_STORE_DWORDX4,
   GLOBAL_LOAD_UBYTE, GLOBAL_LOAD_SBYTE, GLOBAL_LOAD_USHORT, GLOBAL_LOAD_SSHORT,
   GLOBAL_LOAD_SHORT_D16_HI,
@@ -810,7 +817,9 @@ enum class CanonicalOp : uint16_t {
   GLOBAL_STORE_BYTE, GLOBAL_STORE_BYTE_D16_HI,
   GLOBAL_STORE_SHORT, GLOBAL_STORE_SHORT_D16_HI,
   GLOBAL_STORE_DWORD, GLOBAL_STORE_DWORDX2, GLOBAL_STORE_DWORDX3, GLOBAL_STORE_DWORDX4,
+  SCRATCH_LOAD_UBYTE, SCRATCH_LOAD_SBYTE, SCRATCH_LOAD_USHORT, SCRATCH_LOAD_SSHORT,
   SCRATCH_LOAD_DWORD, SCRATCH_LOAD_DWORDX2, SCRATCH_LOAD_DWORDX3, SCRATCH_LOAD_DWORDX4,
+  SCRATCH_STORE_BYTE, SCRATCH_STORE_SHORT,
   SCRATCH_STORE_DWORD, SCRATCH_STORE_DWORDX2, SCRATCH_STORE_DWORDX3, SCRATCH_STORE_DWORDX4,
 
   // -- FLAT atomics --

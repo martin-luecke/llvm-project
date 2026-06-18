@@ -64,6 +64,14 @@ ArrayRef<CanonicalOpAttrSpec> getHandlerSOP2Attrs() {
       {CanonicalOp::S_BFE_I64, {/*routesExecThroughStoreExec=*/true}},
       {CanonicalOp::S_CSELECT_B32, {/*routesExecThroughStoreExec=*/true}},
       {CanonicalOp::S_CSELECT_B64, {/*routesExecThroughStoreExec=*/true}},
+      {CanonicalOp::S_MIN_I32, {/*routesExecThroughStoreExec=*/true}},
+      {CanonicalOp::S_MIN_U32, {/*routesExecThroughStoreExec=*/true}},
+      {CanonicalOp::S_MAX_I32, {/*routesExecThroughStoreExec=*/true}},
+      {CanonicalOp::S_MAX_U32, {/*routesExecThroughStoreExec=*/true}},
+      {CanonicalOp::S_LSHL1_ADD_U32, {/*routesExecThroughStoreExec=*/true}},
+      {CanonicalOp::S_LSHL2_ADD_U32, {/*routesExecThroughStoreExec=*/true}},
+      {CanonicalOp::S_LSHL3_ADD_U32, {/*routesExecThroughStoreExec=*/true}},
+      {CanonicalOp::S_LSHL4_ADD_U32, {/*routesExecThroughStoreExec=*/true}},
   };
   return kAttrs;
 }
