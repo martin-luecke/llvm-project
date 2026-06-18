@@ -27,6 +27,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/MC/MCRegister.h"
 
+#include <cassert>
 #include <map>
 
 namespace COMGR::hotswap {
@@ -243,7 +244,8 @@ struct RaiseContext {
   // True when `Base` names the descriptor-provided kernarg pointer SGPR pair.
   // Kernels that do not enable that user SGPR never match.
   bool isEntryKernargSegmentPtrSgpr(ParsedReg Base) const {
-    if (Layout == nullptr || Base.RegKind != ParsedReg::SGPR)
+    assert(Layout && "RaiseContext requires descriptor-derived SGPR layout");
+    if (Base.RegKind != ParsedReg::SGPR)
       return false;
     int KernargPtrSgpr = Layout->KernargSegmentPtrSgpr;
     return KernargPtrSgpr >= 0 && Base.BaseIdx == KernargPtrSgpr;
