@@ -1195,27 +1195,15 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   // either a `ptr addrspace(4)` GEP shape or an addrspace(1) global
   // GEP shape against the segment_ptr intrinsic -- none of them rely
   // on the kernarg buffer being a typed Function argument list.
-  // Build the kernel signature from the source's explicit `.args` so the
-  // AMDGPU backend emits STRUCTURED `.args` metadata (see
-  // buildKernargParamTypes). This is required for launchers that marshal
-  // arguments per-argument via hipModuleLaunchKernel's `kernelParams` (e.g.
-  // Triton): HIP scatters each param to the kernarg offset the backend
-  // advertises, so a single opaque `byref([N x i8])` blob -- which emits one
-  // `by_value` arg -- mis-places every argument but the first and the kernel
-  // reads garbage/zeroes. The handlers still read kernarg via the
-  // `amdgcn.kernarg.segment.ptr` intrinsic, so the typed params are otherwise
-  // unused; emitting the same types in `.args` order to the same backend
-  // reproduces the source kernarg offsets exactly (identical ABI).
-  SmallVector<Type *, 8> ParamTypes;
+  SmallVector<Type *, 1> ParamTypes;
   KernargLayout Kernargs;
-  Type *KernargByrefTy = nullptr; // set only for the opaque size-only fallback
-  bool TypedKernargs = buildKernargParamTypes(C, Meta, ParamTypes);
-  if (!TypedKernargs && Meta.KernargSegmentSize > 0) {
-    // Arg-less / all-hidden kernels have no explicit args to type. Fall back to
-    // the opaque placeholder so the KD still reports the source kernarg size.
+  int ParamIdx = 0;
+  Type *KernargByrefTy = nullptr;
+  if (Meta.KernargSegmentSize > 0) {
     KernargByrefTy =
         ArrayType::get(I8Ty, static_cast<uint64_t>(Meta.KernargSegmentSize));
     ParamTypes.push_back(PointerType::get(C, /*addrspace=*/4));
+    ParamIdx = 1;
   }
   Kernargs.ImplicitArgsBase = Meta.implicitArgsBase();
   Kernargs.Args = Meta.Args;
@@ -1311,12 +1299,8 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
     F->addFnAttr("amdgpu-lds-size", SizeStr + "," + SizeStr);
   }
 
-  if (KernargByrefTy != nullptr) {
+  if (ParamIdx > 0)
     F->getArg(0)->setName("kargs");
-  } else {
-    for (unsigned ArgI = 0, ArgN = F->arg_size(); ArgI < ArgN; ++ArgI)
-      F->getArg(ArgI)->setName("arg" + std::to_string(ArgI));
-  }
 
   errs() << "transpiler: Kernel '" << KernelName
          << "' kernarg_segment_size=" << Meta.KernargSegmentSize << "\n";
