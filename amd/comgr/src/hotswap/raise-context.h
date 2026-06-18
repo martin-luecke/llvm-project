@@ -258,8 +258,7 @@ struct RaiseContext {
   // Update the intra-BB cursor after an SGPR write. Only writes to either
   // kernarg-pointer lane change this provenance fact.
   void noteSgprWriteForKernargProvenance(int Idx) {
-    if (Layout == nullptr)
-      return;
+    assert(Layout && "RaiseContext requires descriptor-derived SGPR layout");
     int KernargPtrSgpr = Layout->KernargSegmentPtrSgpr;
     if (KernargPtrSgpr < 0 ||
         (Idx != KernargPtrSgpr && Idx != KernargPtrSgpr + 1))
