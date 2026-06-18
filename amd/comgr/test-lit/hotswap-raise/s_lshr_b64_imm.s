@@ -11,7 +11,7 @@
 ; CHECK-LABEL: define amdgpu_kernel void @s_lshr_b64_imm_kernel(
 ; The i64 source operand is carried directly (no by_value split), the
 ; corpus shape for shifting a kernarg-derived i64 by an immediate.
-; CHECK-SAME: ptr addrspace(4) byref([272 x i8]) align 16 %kargs
+; CHECK-SAME: ptr addrspace(1) {{%[0-9]+}}, i64 {{%[0-9]+}})
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6

@@ -23,7 +23,7 @@
 ; The kernel signature is a single byte-array placeholder of the
 ; source's kernarg_segment_size (16-byte by_value + 8-byte ptr = 24).
 ; CHECK-LABEL: define amdgpu_kernel void @smem_kernarg_const_delta_kernel(
-; CHECK-SAME: ptr addrspace(4) byref([24 x i8]) align 16 %kargs
+; CHECK-SAME: i32 {{%[0-9]+}}, i32 {{%[0-9]+}}, i32 {{%[0-9]+}}, i32 {{%[0-9]+}}, ptr addrspace(1) {{%[0-9]+}})
 
 ; Kernarg fetches go through `llvm.amdgcn.kernarg.segment.ptr` + a
 ; real load on `ptr addrspace(1)`. The AMDGPU backend re-derives the

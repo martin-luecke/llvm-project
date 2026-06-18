@@ -36,7 +36,7 @@
 ;      i64-wide source.
 
 ; CHECK-LABEL: define amdgpu_kernel void @s_cmp_eq_u64_kernel(
-; CHECK-SAME: ptr addrspace(4) byref([280 x i8]) align 16 %kargs
+; CHECK-SAME: ptr addrspace(1) {{%[0-9]+}}, i64 {{%[0-9]+}}, i64 {{%[0-9]+}})
 
 ; The s_cmp_eq_u64 lift. The handler-emitted value-name `scmp64`
 ; appears verbatim, and the operand types are i64.
