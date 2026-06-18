@@ -42,6 +42,7 @@
 #include "tdm-runtime.h"
 
 #include "llvm/ADT/Twine.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
@@ -70,6 +71,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <limits>
 #include <utility>
 
 #define DEBUG_TYPE "wave-projection"
@@ -180,8 +182,18 @@ static bool threadLoopUnsupportedWorkgroupMemoryOrBarrier(
       Kind = "LDS access";
       break;
     default:
+      // Reject real LDS memory operations, but do not reject pure DS
+      // cross-lane primitives. Under ThreadLoopProjection only the
+      // source-wave lanes execute each iteration, so audited handlers for
+      // ds_bpermute/ds_swizzle remain source-wave scoped. Actual LDS
+      // reads/writes/transposes and barriers still need aliasing/barrier
+      // proofs before ThreadLoop can safely run them.
       if (isSemOpInRange(Di.CanonOp, CanonicalOp::DS_LOAD_TR16_B128,
-                         CanonicalOp::DS_SWIZZLE_B32))
+                         CanonicalOp::DS_LOAD_TR8_B64) ||
+          isSemOpInRange(Di.CanonOp, CanonicalOp::DS_READ_B32,
+                         CanonicalOp::DS_READ_I8) ||
+          isSemOpInRange(Di.CanonOp, CanonicalOp::DS_WRITE_B32,
+                         CanonicalOp::DS_WRITE_B8_D16_HI))
         Kind = "LDS access";
       break;
     }
@@ -199,6 +211,63 @@ static bool threadLoopUnsupportedWorkgroupMemoryOrBarrier(
     }
   }
   return false;
+}
+
+static unsigned scratchAccessBytes(CanonicalOp Op) {
+  switch (Op) {
+  case CanonicalOp::SCRATCH_LOAD_UBYTE:
+  case CanonicalOp::SCRATCH_LOAD_SBYTE:
+  case CanonicalOp::SCRATCH_STORE_BYTE:
+    return 1;
+  case CanonicalOp::SCRATCH_LOAD_USHORT:
+  case CanonicalOp::SCRATCH_LOAD_SSHORT:
+  case CanonicalOp::SCRATCH_STORE_SHORT:
+    return 2;
+  case CanonicalOp::SCRATCH_LOAD_DWORD:
+  case CanonicalOp::SCRATCH_STORE_DWORD:
+    return 4;
+  case CanonicalOp::SCRATCH_LOAD_DWORDX2:
+  case CanonicalOp::SCRATCH_STORE_DWORDX2:
+    return 8;
+  case CanonicalOp::SCRATCH_LOAD_DWORDX3:
+  case CanonicalOp::SCRATCH_STORE_DWORDX3:
+    return 12;
+  case CanonicalOp::SCRATCH_LOAD_DWORDX4:
+  case CanonicalOp::SCRATCH_STORE_DWORDX4:
+    return 16;
+  default:
+    return 0;
+  }
+}
+
+static uint32_t inferScratchPrivateSegmentSize(ArrayRef<DecodedInst> Insts) {
+  uint64_t MaxEnd = 0;
+  for (const DecodedInst &Di : Insts) {
+    if (!(Di.TsFlags & SIInstrFlags::FlatScratch))
+      continue;
+    unsigned Bytes = scratchAccessBytes(Di.CanonOp);
+    if (!Bytes)
+      continue;
+
+    uint64_t Imm = 0;
+    StringRef Text(Di.FullText);
+    size_t OffPos = Text.find("offset:");
+    if (OffPos != StringRef::npos) {
+      StringRef Tok = Text.substr(OffPos + StringRef("offset:").size()).trim();
+      Tok = Tok.split(' ').first;
+      uint64_t Parsed = 0;
+      if (!Tok.getAsInteger(0, Parsed))
+        Imm = Parsed;
+    }
+    MaxEnd = std::max<uint64_t>(MaxEnd, Imm + Bytes);
+  }
+  if (!MaxEnd)
+    return 0;
+  constexpr uint64_t AlignBytes = 16;
+  uint64_t Rounded = (MaxEnd + AlignBytes - 1) & ~(AlignBytes - 1);
+  if (Rounded > std::numeric_limits<uint32_t>::max())
+    return 0;
+  return static_cast<uint32_t>(Rounded);
 }
 
 } // namespace
@@ -575,30 +644,75 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
         Isa.WaveSize, TargetIsa.WaveSize);
     LLVM_DEBUG(dbgs() << Trace);
     if (Report.hasUnrewritable() || Report.hasPendingRewrite()) {
-      RaiseFailure F = selectFailureFromReport(Report);
-      // The factory names the class in `format`; surface the full trace in
-      // `detail` so diagnostics can carry the per-site context forward without
-      // re-invoking the classifier.
-      if (!F.Detail.empty())
-        F.Detail += "\n";
-      F.Detail += Trace;
-      // `format_hex(value, width)` prepends "0x" itself; do NOT add a
-      // literal "0x" here or the output will read "0x0x...". Use
-      // `format_hex_no_prefix` if a manual prefix is desired (the
-      // trace-renderer below uses that variant).
-      errs() << "transpiler: pre-translation abort: " << F.Format
-             << " on '" << F.Mnemonic << "' at offset "
-             << format_hex(F.Offset, 1) << " \u2014 "
-             << (Report.firstUnrewritable()
-                     ? "no rewrite in wave-size-translation.md "
-                       "\u00a77's unrewritable table"
-                     : "rewrite pending (wave-size-translation.md "
-                       "\u00a77's pending-rewrite table)")
-             << "\n"
-             << Trace;
-      Result.Failure = std::move(F);
-      return Result;
-
+      bool OnlyBlockingLanePredicatedExec = false;
+      for (const auto &Site : Report.Sites) {
+        const bool Blocking =
+            Site.Rewrite == RewriteId::None ||
+            (Site.Rewrite != RewriteId::None && !Site.RewriteImplemented);
+        if (!Blocking)
+          continue;
+        OnlyBlockingLanePredicatedExec = true;
+        if (Site.Kind != ObstructionKind::CmpxFromLaneId &&
+            Site.Kind != ObstructionKind::SaveExecFromLaneId) {
+          OnlyBlockingLanePredicatedExec = false;
+          break;
+        }
+      }
+      bool DischargedByThreadLoop =
+          ForceThreadLoopProjection && OnlyBlockingLanePredicatedExec;
+      if (ForceThreadLoopProjection && OnlyBlockingLanePredicatedExec) {
+        LLVM_DEBUG({
+          dbgs() << "transpiler: ThreadLoopProjection discharges "
+                 << "lane-predicated EXEC obstruction(s) for kernel '"
+                 << KernelName << "'\n";
+        });
+      } else if (!ForceThreadLoopProjection && OnlyBlockingLanePredicatedExec &&
+                 TargetIsa.WaveSize > Isa.WaveSize &&
+                 (TargetIsa.WaveSize % Isa.WaveSize) == 0) {
+        std::string ThreadLoopUnsupportedDetail;
+        if (!threadLoopUnsupportedWorkgroupMemoryOrBarrier(
+                Insts, ThreadLoopUnsupportedDetail)) {
+          errs() << "transpiler: pre-translation fallback: retrying kernel '"
+                 << KernelName
+                 << "' under ThreadLoopProjection after lane-predicated EXEC "
+                    "cross-widen obstruction\n";
+          errs() << Trace;
+          return raiseToIRImpl(TextBytes, SourceIsa, KernelName, Meta,
+                               KernelOffset, KernelSize, CompilationTargetIsa,
+                               /*enableWritelaneRewrite=*/false,
+                               /*enableWaveNative=*/false,
+                               /*forceThreadLoopProjection=*/true,
+                               /*suppressC5ForThreadLoopRoute=*/true);
+        }
+        errs() << "transpiler: thread-loop fallback not eligible for kernel '"
+               << KernelName << "': " << ThreadLoopUnsupportedDetail
+               << ". Keeping principled loud refusal.\n";
+      }
+      if (!DischargedByThreadLoop) {
+        RaiseFailure F = selectFailureFromReport(Report);
+        // The factory names the class in `format`; surface the full trace in
+        // `detail` so diagnostics can carry the per-site context forward without
+        // re-invoking the classifier.
+        if (!F.Detail.empty())
+          F.Detail += "\n";
+        F.Detail += Trace;
+        // `format_hex(value, width)` prepends "0x" itself; do NOT add a
+        // literal "0x" here or the output will read "0x0x...". Use
+        // `format_hex_no_prefix` if a manual prefix is desired (the
+        // trace-renderer below uses that variant).
+        errs() << "transpiler: pre-translation abort: " << F.Format
+               << " on '" << F.Mnemonic << "' at offset "
+               << format_hex(F.Offset, 1) << " \u2014 "
+               << (Report.firstUnrewritable()
+                       ? "no rewrite in wave-size-translation.md "
+                         "\u00a77's unrewritable table"
+                       : "rewrite pending (wave-size-translation.md "
+                         "\u00a77's pending-rewrite table)")
+               << "\n"
+               << Trace;
+        Result.Failure = std::move(F);
+        return Result;
+      }
     }
   }
 
@@ -827,8 +941,16 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
       Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_workgroup_id_x);
   Function *FnWorkgroupIdY =
       Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_workgroup_id_y);
+  Function *FnWorkgroupIdZ =
+      Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_workgroup_id_z);
   Function *FnKargPtr =
       Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_kernarg_segment_ptr);
+  Function *FnDispatchPtr =
+      Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_dispatch_ptr);
+  Function *FnQueuePtr =
+      Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_queue_ptr);
+  Function *FnDispatchId =
+      Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_dispatch_id);
   // Build the source-ISA user-SGPR ABI from the kernel descriptor.
   // Phase 4 seeding and handler-side ABI-sensitive decoding (e.g.
   // handle_smem's kernarg-pointer detection) both key off this layout.
@@ -870,9 +992,8 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
     if (!FirstBodyBb)
       FirstBodyBb = Bb;
   }
-  BasicBlock *EntryBb = UseThreadLoop
-                            ? BasicBlock::Create(C, "entry", F, FirstBodyBb)
-                            : OffsetToBb[KernelOffset];
+  BasicBlock *KernelEntryBb = OffsetToBb[KernelOffset];
+  BasicBlock *EntryBb = BasicBlock::Create(C, "entry", F, FirstBodyBb);
 
   // ==== Phase 4: Init entry registers ====
   IRBuilder<> B(EntryBb);
@@ -893,18 +1014,37 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   // addrspace(4) cast). storeSGPR64 ptrtoint-splits the pointer into two
   // i32 halves; loadSGPR64 reconstructs and the SMEM handler casts back
   // to ptr addrspace(4).
-  if (UserSgprLayout.KernargSegmentPtrSgpr >= 0) {
-    Regs.storeSGPR64(B, UserSgprLayout.KernargSegmentPtrSgpr,
-                     B.CreateCall(FnKargPtr, {}, "kernarg_ptr"));
-  }
-  if (UserSgprLayout.WorkgroupIdXSgpr >= 0) {
-    Regs.storeSGPR32(B, UserSgprLayout.WorkgroupIdXSgpr,
-                     B.CreateCall(FnWorkgroupIdX, {}, "wg_id_x"));
-  }
-  if (UserSgprLayout.WorkgroupIdYSgpr >= 0) {
-    Regs.storeSGPR32(B, UserSgprLayout.WorkgroupIdYSgpr,
-                     B.CreateCall(FnWorkgroupIdY, {}, "wg_id_y"));
-  }
+  auto SeedUserSgprs = [&](IRBuilder<> &SeedB) {
+    if (UserSgprLayout.DispatchPtrSgpr >= 0) {
+      Regs.storeSGPR64(SeedB, UserSgprLayout.DispatchPtrSgpr,
+                       SeedB.CreateCall(FnDispatchPtr, {}, "dispatch_ptr"));
+    }
+    if (UserSgprLayout.QueuePtrSgpr >= 0) {
+      Regs.storeSGPR64(SeedB, UserSgprLayout.QueuePtrSgpr,
+                       SeedB.CreateCall(FnQueuePtr, {}, "queue_ptr"));
+    }
+    if (UserSgprLayout.KernargSegmentPtrSgpr >= 0) {
+      Regs.storeSGPR64(SeedB, UserSgprLayout.KernargSegmentPtrSgpr,
+                       SeedB.CreateCall(FnKargPtr, {}, "kernarg_ptr"));
+    }
+    if (UserSgprLayout.DispatchIdSgpr >= 0) {
+      Regs.storeSGPR64(SeedB, UserSgprLayout.DispatchIdSgpr,
+                       SeedB.CreateCall(FnDispatchId, {}, "dispatch_id"));
+    }
+    if (UserSgprLayout.WorkgroupIdXSgpr >= 0) {
+      Regs.storeSGPR32(SeedB, UserSgprLayout.WorkgroupIdXSgpr,
+                       SeedB.CreateCall(FnWorkgroupIdX, {}, "wg_id_x"));
+    }
+    if (UserSgprLayout.WorkgroupIdYSgpr >= 0) {
+      Regs.storeSGPR32(SeedB, UserSgprLayout.WorkgroupIdYSgpr,
+                       SeedB.CreateCall(FnWorkgroupIdY, {}, "wg_id_y"));
+    }
+    if (UserSgprLayout.WorkgroupIdZSgpr >= 0) {
+      Regs.storeSGPR32(SeedB, UserSgprLayout.WorkgroupIdZSgpr,
+                       SeedB.CreateCall(FnWorkgroupIdZ, {}, "wg_id_z"));
+    }
+  };
+  SeedUserSgprs(B);
   SourceHiddenArgContext HiddenCtx{C, M, B, I8Ty, I32Ty, I64Ty, Meta.Args};
   auto EmitPreloadedHiddenKernargDword = [&](int ByteOffset) -> Value * {
     SourceHiddenArgValue Hidden = emitSourceHiddenDword(HiddenCtx, ByteOffset);
@@ -992,8 +1132,6 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
     // tolerate the Z bits bleeding into their read (they already do
     // per the consumer pattern definition).
     Value *WgIdY = B.CreateCall(FnWorkgroupIdY, {}, "ttmp7_wg_id_y");
-    Function *FnWorkgroupIdZ =
-        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_workgroup_id_z);
     Value *WgIdZ = B.CreateCall(FnWorkgroupIdZ, {}, "ttmp7_wg_id_z");
     Value *WgIdYLo = B.CreateAnd(WgIdY, B.getInt32(0xFFFF), "wg_id_y_lo16");
     Value *WgIdZHi = B.CreateShl(WgIdZ, B.getInt32(16), "wg_id_z_hi16");
@@ -1034,18 +1172,7 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
     // dwords via the same intrinsic + GEP + i32 load. Hidden block
     // counts continue to flow through `emitPreloadedHiddenKernargDword`
     // (dispatch-packet synthesis, not in kernarg memory).
-    if (UserSgprLayout.KernargSegmentPtrSgpr >= 0) {
-      Regs.storeSGPR64(SeedB, UserSgprLayout.KernargSegmentPtrSgpr,
-                       SeedB.CreateCall(FnKargPtr, {}, "kernarg_ptr"));
-    }
-    if (UserSgprLayout.WorkgroupIdXSgpr >= 0) {
-      Regs.storeSGPR32(SeedB, UserSgprLayout.WorkgroupIdXSgpr,
-                       SeedB.CreateCall(FnWorkgroupIdX, {}, "wg_id_x"));
-    }
-    if (UserSgprLayout.WorkgroupIdYSgpr >= 0) {
-      Regs.storeSGPR32(SeedB, UserSgprLayout.WorkgroupIdYSgpr,
-                       SeedB.CreateCall(FnWorkgroupIdY, {}, "wg_id_y"));
-    }
+    SeedUserSgprs(SeedB);
     for (size_t SgprIdx = 0; SgprIdx < UserSgprLayout.Entries.size();
          ++SgprIdx) {
       const auto &Entry = UserSgprLayout.Entries[SgprIdx];
@@ -1067,8 +1194,6 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
       SeedB.CreateStore(SeedB.CreateCall(FnWorkgroupIdX, {}, "ttmp9_wg_id"),
                         Regs.Ttmp[9]);
       Value *WgIdY = SeedB.CreateCall(FnWorkgroupIdY, {}, "ttmp7_wg_id_y");
-      Function *FnWorkgroupIdZ = Intrinsic::getOrInsertDeclaration(
-          &M, Intrinsic::amdgcn_workgroup_id_z);
       Value *WgIdZ = SeedB.CreateCall(FnWorkgroupIdZ, {}, "ttmp7_wg_id_z");
       Value *WgIdYLo =
           SeedB.CreateAnd(WgIdY, SeedB.getInt32(0xFFFF), "wg_id_y_lo16");
@@ -1098,6 +1223,16 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
                    PtrGlobalTy, OffsetToBb, KernelOffset, KernelEndOffset};
   Ctx.SetpcAnalysis = &SetpcAnalysis;
   Ctx.SourcePrivateSegmentFixedSize = Meta.PrivateSegmentFixedSize;
+  if (Ctx.SourcePrivateSegmentFixedSize == 0) {
+    uint32_t InferredScratchSize = inferScratchPrivateSegmentSize(Insts);
+    if (InferredScratchSize != 0) {
+      Ctx.SourcePrivateSegmentFixedSize = InferredScratchSize;
+      errs() << "transpiler: inferred source private_segment_fixed_size="
+             << InferredScratchSize
+             << " from decoded scratch_* instruction offsets for '"
+             << KernelName << "' because source KD reports zero\n";
+    }
+  }
   Ctx.SourceComputePgmRsrc2 = Meta.ComputePgmRsrc2;
   Ctx.SourceKernelCodeProperties = Meta.KernelCodeProperties;
 
@@ -1141,6 +1276,9 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   // wave-mask-translation.md section 3.1 for the full contract.
   Regs.OnSgprWritten = [&Ctx](int Idx) { Ctx.invalidateSgprWaveMaskI1(Idx); };
 
+  if (!UseThreadLoop)
+    B.CreateBr(KernelEntryBb);
+
   if (UseThreadLoop) {
     auto *IterA = B.CreateAlloca(I32Ty, nullptr, "tl_iter_alloca");
     B.CreateStore(B.getInt32(0), IterA);
@@ -1167,7 +1305,7 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
     for (auto *ValidA : Ctx.SgprWaveMaskValidShadow)
       B.CreateStore(B.getFalse(), ValidA);
 
-    B.CreateCondBr(EnterBody, OffsetToBb[KernelOffset], LatchBb);
+    B.CreateCondBr(EnterBody, KernelEntryBb, LatchBb);
 
     B.SetInsertPoint(LatchBb);
     Value *OldIter = B.CreateLoad(I32Ty, IterA, "tl_iter_old");

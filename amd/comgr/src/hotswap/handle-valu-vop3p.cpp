@@ -552,12 +552,12 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
   }
 
   // ---- VOP3P packed-pair `<2 x i16>` int ops ----
-  // V_PK_ADD_U16 / V_PK_LSHLREV_B16 / V_PK_MUL_LO_U16. Operand profile is
+  // V_PK_ADD_U16 / V_PK_LSHLREV_B16 / V_PK_LSHRREV_B16 / V_PK_MUL_LO_U16. Operand profile is
   // VOP_V2I16_V2I16_V2I16: 32-bit dst / 32-bit src0 / 32-bit src1, each
   // bitcast to `<2 x i16>` for the lane-wise op and back to i32 for the
   // VGPR write-back. Shared handler shape; per-CanonicalOp dispatch picks the
   // IR opcode (`add` vs the reversed `clshl_rev_16` shape vs lane-wise
-  // modular `mul` -- see notes on each case below). Inline literals encode
+  // logical right shift, modular `mul` -- see notes on each case below). Inline literals encode
   // a packed `<2 x i16>` directly (lo i16 = bits[15:0], hi i16 = bits[31:16]);
   // there is NO broadcast analogue to the V_PK_F32 32-bit-element family
   // because the literal width matches the operand width here. Sibling
@@ -567,6 +567,7 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
   // what the corpus exercises" discipline.
   case CanonicalOp::V_PK_ADD_U16:
   case CanonicalOp::V_PK_LSHLREV_B16:
+  case CanonicalOp::V_PK_LSHRREV_B16:
   case CanonicalOp::V_PK_MUL_LO_U16: {
     auto *I16Ty = Type::getInt16Ty(Ctx.C);
 
@@ -606,6 +607,17 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
           ConstantInt::get(I16Ty, 15));
       Value *Amt = Ctx.B.CreateAnd(S0, Mask, "pk_lshlrev_amt");
       Res = Ctx.B.CreateShl(S1, Amt, "pk_lshlrev");
+      break;
+    }
+    case CanonicalOp::V_PK_LSHRREV_B16: {
+      // clshr_rev_16 SDAG sibling: dst = src1 >> (src0 & 15), logical
+      // zero-fill per packed 16-bit lane. Same reversed-operand and shift-count
+      // mask semantics as V_PK_LSHLREV_B16.
+      Value *Mask = ConstantVector::getSplat(
+          ElementCount::getFixed(2),
+          ConstantInt::get(I16Ty, 15));
+      Value *Amt = Ctx.B.CreateAnd(S0, Mask, "pk_lshrrev_amt");
+      Res = Ctx.B.CreateLShr(S1, Amt, "pk_lshrrev");
       break;
     }
     default: llvm_unreachable("filtered by outer switch");

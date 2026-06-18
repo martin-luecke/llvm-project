@@ -2914,6 +2914,17 @@ typedef struct amd_comgr_hotswap_transpile_options_s {
   const char *cache_directory;
   const char *cache_skip_kernels;
   const char *hotswap_rules_path;
+  /**
+   * Optional exact kernel allowlist for partial HotSwap translation. When
+   * non-NULL/non-empty, COMGR only translates kernels whose metadata name is
+   * present in this list. The string is a comma/newline separated list, or
+   * begins with '@' to name a UTF-8 text file containing that list. This is an
+   * explicit opt-in scalability mode for generic code objects with many
+   * unlaunched kernels. If a loaded code object contains none of the allowlisted
+   * kernels, transpilation fails loudly rather than returning a silently
+   * incomplete object.
+   */
+  const char *kernel_allowlist;
   uint64_t flags;
 } amd_comgr_hotswap_transpile_options_t;
 

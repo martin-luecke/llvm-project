@@ -4,7 +4,9 @@
 #include "raiser.h"
 
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
@@ -14,11 +16,16 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/MC/TargetRegistry.h"
+#include "llvm/Target/TargetMachine.h"
+#include "llvm/Target/TargetOptions.h"
+#include "llvm/TargetParser/Triple.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <set>
 #include <string>
 
 #define DEBUG_TYPE "transpiler"
@@ -294,6 +301,18 @@ static bool raiseAndCompileKernel(const TextSection &text,
                            options.EnableWritelaneRewrite,
                            options.EnableWaveNative);
   if (!raised.Success) {
+    static const char *s_dumpFailInput =
+        std::getenv("HSA_HOTSWAP_DUMP_FAIL_INPUT");
+    static const char *s_dumpFailKernel =
+        std::getenv("HSA_HOTSWAP_DUMP_FAIL_KERNEL");
+    if (s_dumpFailInput && s_dumpFailInput[0] == '1' &&
+        !raised.DisasmText.empty() &&
+        (!s_dumpFailKernel || !s_dumpFailKernel[0] ||
+         kernelName.contains(s_dumpFailKernel))) {
+      std::string fileStem =
+          makeSafeBasename(kernelName, /*reservedSuffixBytes=*/10);
+      writeFile(tmpDir.filePath(fileStem + ".fail.dis"), raised.DisasmText);
+    }
     llvm::errs() << "transpiler: Raising '" << kernelName << "' to LLVM IR failed";
     result.FailKernel = kernelName;
     RaiseFailure Failure =
@@ -574,6 +593,39 @@ static bool linkObjects(llvm::ArrayRef<std::string> objPaths,
   return true;
 }
 
+bool parseKernelAllowlist(llvm::StringRef Spec, std::set<std::string> &Out,
+                          std::string &Error) {
+  if (Spec.empty())
+    return true;
+
+  std::string Material = Spec.str();
+  if (Spec.starts_with("@")) {
+    llvm::StringRef Path = Spec.drop_front();
+    auto BufOrErr = llvm::MemoryBuffer::getFile(Path, /*IsText=*/true);
+    if (!BufOrErr) {
+      Error = "failed to read kernel allowlist '" + Path.str() + "': " +
+              BufOrErr.getError().message();
+      return false;
+    }
+    Material = (*BufOrErr)->getBuffer().str();
+  }
+
+  llvm::SmallVector<llvm::StringRef, 64> Lines;
+  llvm::StringRef(Material).split(Lines, '\n', /*MaxSplit=*/-1,
+                                  /*KeepEmpty=*/false);
+  for (llvm::StringRef Line : Lines) {
+    llvm::SmallVector<llvm::StringRef, 16> Items;
+    Line.split(Items, ',', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
+    for (llvm::StringRef Item : Items) {
+      Item = Item.trim();
+      if (Item.empty() || Item.starts_with("#"))
+        continue;
+      Out.insert(Item.str());
+    }
+  }
+  return true;
+}
+
 void collectTargetPrivateSegmentMetadata(PipelineResult &result,
                                          llvm::ArrayRef<std::string> kernelNames) {
   using namespace llvm::amdhsa;
@@ -714,6 +766,7 @@ PipelineResult runPipelineAllKernels(llvm::MemoryBufferRef codeObjectData,
   static const char *s_stubOnFail = std::getenv("HSA_HOTSWAP_STUB_ON_FAILURE");
   const bool StubOnFailure = s_stubOnFail && s_stubOnFail[0] == '1';
 
+
   std::set<std::string> Allowlist;
   const bool UseKernelAllowlist = !options.KernelAllowlist.empty();
   if (UseKernelAllowlist) {
@@ -763,6 +816,7 @@ PipelineResult runPipelineAllKernels(llvm::MemoryBufferRef codeObjectData,
                              codeObjectData.getBufferSize()));
 
   std::vector<std::string> objPaths;
+  std::vector<std::pair<std::string, KernelMeta>> TrapStubs;
   for (size_t i = 0; i < kernelNames.size(); ++i) {
     const auto &kName = kernelNames[i];
     std::string objPath = tmpDir.filePath("k" + std::to_string(i) + ".o");
@@ -809,6 +863,18 @@ PipelineResult runPipelineAllKernels(llvm::MemoryBufferRef codeObjectData,
       return finish();
     }
     LLVM_DEBUG(llvm::dbgs() << "OK\n");
+  }
+
+  if (!TrapStubs.empty()) {
+    std::string objPath = tmpDir.filePath("trap_stubs.o");
+    if (!compileTrapStubKernels(TrapStubs, targetISA, tmpDir, objPath, result,
+                                options)) {
+      result.Success = false;
+      return finish();
+    }
+    objPaths.push_back(std::move(objPath));
+    llvm::errs() << "transpiler: partial HotSwap emitted "
+                 << TrapStubs.size() << " trap-stub kernel(s)\n";
   }
 
   std::string hsacoPath = tmpDir.filePath("merged.Hsaco");

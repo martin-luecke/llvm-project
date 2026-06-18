@@ -868,6 +868,32 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Hr.Handled = true;
     return Hr;
   }
+  if (Sop == CanonicalOp::V_MAXMIN_U32 || Sop == CanonicalOp::V_MINMAX_U32 ||
+      Sop == CanonicalOp::V_MAXMIN_I32 || Sop == CanonicalOp::V_MINMAX_I32) {
+    Value *S0 = Op.src(0), *S1 = Op.src(1), *S2 = Op.src(2);
+    const bool IsSigned = Sop == CanonicalOp::V_MAXMIN_I32 ||
+                          Sop == CanonicalOp::V_MINMAX_I32;
+    const bool IsMaxMin = Sop == CanonicalOp::V_MAXMIN_U32 ||
+                          Sop == CanonicalOp::V_MAXMIN_I32;
+    auto CmpLT = [&](Value *A, Value *B) {
+      return IsSigned ? Ctx.B.CreateICmpSLT(A, B) : Ctx.B.CreateICmpULT(A, B);
+    };
+    auto CmpGT = [&](Value *A, Value *B) {
+      return IsSigned ? Ctx.B.CreateICmpSGT(A, B) : Ctx.B.CreateICmpUGT(A, B);
+    };
+    Value *Inner = nullptr;
+    Value *Result = nullptr;
+    if (IsMaxMin) {
+      Inner = Ctx.B.CreateSelect(CmpGT(S0, S1), S0, S1, "vmaxmin_max");
+      Result = Ctx.B.CreateSelect(CmpLT(Inner, S2), Inner, S2, "vmaxmin");
+    } else {
+      Inner = Ctx.B.CreateSelect(CmpLT(S0, S1), S0, S1, "vminmax_min");
+      Result = Ctx.B.CreateSelect(CmpGT(Inner, S2), Inner, S2, "vminmax");
+    }
+    Ctx.writeReg32(Op.dst(), Result);
+    Hr.Handled = true;
+    return Hr;
+  }
   if (Sop == CanonicalOp::V_MUL_HI_U32) {
     Value *A = Ctx.B.CreateZExt(Op.src(0), Ctx.I64Ty), *B = Ctx.B.CreateZExt(Op.src(1), Ctx.I64Ty);
     Ctx.writeReg32(Op.dst(), Ctx.B.CreateTrunc(Ctx.B.CreateLShr(Ctx.B.CreateMul(A, B), 32), Ctx.I32Ty, "vmulhi"));
@@ -1253,6 +1279,13 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Function *SatFn = Intrinsic::getOrInsertDeclaration(
         &Ctx.M, Intrinsic::fptoui_sat, {Ctx.I32Ty, F64Ty});
     Ctx.writeReg32(Op.dst(), Ctx.B.CreateCall(SatFn, {V}, "cvt_u32_f64"));
+    Hr.Handled = true;
+    return Hr;
+  }
+  if (Sop == CanonicalOp::V_CVT_I32_F64) {
+    auto *F64Ty = Type::getDoubleTy(Ctx.C);
+    Value *V = Ctx.B.CreateBitCast(Op.src64(0), F64Ty);
+    Ctx.writeReg32(Op.dst(), Ctx.B.CreateFPToSI(V, Ctx.I32Ty, "cvt_i32_f64"));
     Hr.Handled = true;
     return Hr;
   }

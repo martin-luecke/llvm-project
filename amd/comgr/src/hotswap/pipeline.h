@@ -29,6 +29,7 @@ struct PipelineOptions {
   bool EnableWritelaneRewrite = true;
   bool EnableWaveNative = true;
   bool CollectTimings = false;
+  std::string KernelAllowlist;
 };
 
 struct PipelineResult {
