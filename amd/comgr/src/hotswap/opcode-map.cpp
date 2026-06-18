@@ -427,6 +427,8 @@ static const Entry kCanonTable[] = {
     // Targets with native tanh support use `llvm.amdgcn.tanh.*`; targets
     // without native support lower through matching OCML entry points.
     E(V_TANH_F32_e64, V_TANH_F32),
+    E(V_SIN_F32_e64, V_SIN_F32),
+    E(V_COS_F32_e64, V_COS_F32),
     E(V_S_EXP_F32_e64, V_S_EXP_F32),
     E(V_S_LOG_F32_e64, V_S_LOG_F32),
     E(V_S_RCP_F32_e64, V_S_RCP_F32),
@@ -438,9 +440,26 @@ static const Entry kCanonTable[] = {
     E(V_TRUNC_F32_e64, V_TRUNC_F32),
     E(V_RNDNE_F32_e64, V_RNDNE_F32),
     E(V_FRACT_F32_e64, V_FRACT_F32),
+    E(V_RSQ_F64_e64, V_RSQ_F64),
+    E(V_RNDNE_F64_e64, V_RNDNE_F64),
+    E(V_FRACT_F64_e64, V_FRACT_F64),
     E(V_FREXP_MANT_F32_e64, V_FREXP_MANT_F32),
+    E(V_FREXP_EXP_I32_F32_e64, V_FREXP_EXP_I32_F32),
+    E(V_FREXP_MANT_F64_e64, V_FREXP_MANT_F64),
     E(V_READFIRSTLANE_B32, V_READFIRSTLANE_B32),
     E(V_FLOOR_F16_e64, V_FLOOR_F16),
+    E(V_RCP_F16_e64, V_RCP_F16),
+    E(V_RSQ_F16_e64, V_RSQ_F16),
+    E(V_SQRT_F16_e64, V_SQRT_F16),
+    E(V_EXP_F16_e64, V_EXP_F16),
+    E(V_LOG_F16_e64, V_LOG_F16),
+    E(V_SIN_F16_e64, V_SIN_F16),
+    E(V_COS_F16_e64, V_COS_F16),
+    E(V_RNDNE_F16_e64, V_RNDNE_F16),
+    E(V_TRUNC_F16_e64, V_TRUNC_F16),
+    E(V_CEIL_F16_e64, V_CEIL_F16),
+    E(V_FRACT_F16_e64, V_FRACT_F16),
+    E(V_BCNT_U32_B32_e64, V_BCNT_U32_B32),
     E(V_CVT_F16_U16_e64, V_CVT_F16_U16),
     E(V_CVT_U16_F16_e64, V_CVT_U16_F16),
 
@@ -512,6 +531,10 @@ static const Entry kCanonTable[] = {
     E(V_MAD_I32_I24_e64_gfx12, V_MAD_I32_I24),
     E(V_MAD_U32_U24_e64, V_MAD_U32_U24),
     E(V_MAD_U32_e64, V_MAD_U32),
+    // gfx1250 decodes v_mad_u16 as the gfx9+ op_sel form; the _t16_/_fake16_
+    // and _gfx11/_gfx12 reals all canonicalize onto V_MAD_U16_gfx9_e64
+    // (mirrors V_FMA_F16_gfx9_e64 above).
+    E(V_MAD_U16_gfx9_e64, V_MAD_U16),
     E(V_ADD3_U32_e64, V_ADD3_U32),
     E(V_LSHL_ADD_U32_e64, V_LSHL_ADD_U32),
     E(V_ADD_LSHL_U32_e64, V_ADD_LSHL_U32),
