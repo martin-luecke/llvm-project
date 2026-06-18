@@ -154,10 +154,6 @@ SourceHiddenArgValue emitHiddenArgValue(SourceHiddenArgContext &Ctx,
     Result.Value = emitHiddenRemainder(Ctx, 2);
   else if (Kind == SourceHiddenArgKind::HiddenGridDims)
     Result.Value = emitGridDims(Ctx);
-  else if (Kind == SourceHiddenArgKind::HiddenGlobalOffsetX ||
-           Kind == SourceHiddenArgKind::HiddenGlobalOffsetY ||
-           Kind == SourceHiddenArgKind::HiddenGlobalOffsetZ)
-    Result.Value = Ctx.B.getInt32(0);
   else if (Kind == SourceHiddenArgKind::HiddenReservedZero)
     Result.Value = Ctx.B.getInt32(0);
   else if (Kind == SourceHiddenArgKind::HiddenPrivateBase ||
