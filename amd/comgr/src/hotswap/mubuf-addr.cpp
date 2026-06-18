@@ -286,7 +286,11 @@ Value *buildMubufSRD(RaiseContext &Ctx, const SRSRCDwords &Dw) {
   Value *MappedDw2 = Ctx.B.CreateSelect(ShouldMapMax, TargetMax, Dw.Dw2,
                                         "srd_num_records");
   Value *SrdW2 = ScalarizeDescriptorWord(MappedDw2, "srd_w2");
-  Value *Word3 = ConstantInt::get(Ctx.I32Ty, kGfx942RawBufferFormat32Float);
+  // Word3 must carry the TARGET ISA's raw-buffer format + OOB_SELECT. On RDNA
+  // (gfx10+) targets this includes OOB_SELECT=3; emitting the bare gfx942
+  // FORMAT_32 word here makes gfx11 treat every lane as OOB and drop the
+  // access (silent all-zeros). See ISAProfile::RawBufferWord3.
+  Value *Word3 = ConstantInt::get(Ctx.I32Ty, Ctx.TargetIsa.RawBufferWord3);
   Value *Srd = UndefValue::get(FixedVectorType::get(Ctx.I32Ty, 4));
   Srd = Ctx.B.CreateInsertElement(Srd, SrdW0, static_cast<uint64_t>(0));
   Srd = Ctx.B.CreateInsertElement(Srd, SrdW1, static_cast<uint64_t>(1));
@@ -349,11 +353,14 @@ MubufAddr decodeMubufAddr(RaiseContext &Ctx, const DecodedInst &Di,
   Function *MakeRsrc = Intrinsic::getOrInsertDeclaration(
       &Ctx.M, Intrinsic::amdgcn_make_buffer_rsrc,
       {PointerType::get(Ctx.C, 8), PointerType::get(Ctx.C, 1)});
+  // make.buffer.rsrc's flags operand becomes word3 verbatim, so it likewise
+  // needs the TARGET ISA's raw-buffer format + OOB_SELECT (gfx10+ requires
+  // OOB_SELECT=3 or the access is dropped as out-of-bounds).
   Out.RawPtrRsrc = Ctx.B.CreateCall(
       MakeRsrc,
       {BasePtr, ConstantInt::get(Type::getInt16Ty(Ctx.C), 0),
        Ctx.B.CreateZExt(NumRecords, Ctx.I64Ty),
-       ConstantInt::get(Ctx.I32Ty, 0x27000)},
+       ConstantInt::get(Ctx.I32Ty, Ctx.TargetIsa.RawBufferWord3)},
       "mubuf_raw_ptr_rsrc");
   Out.AuxFlags = ConstantInt::get(Ctx.I32Ty, 0);
   return Out;
