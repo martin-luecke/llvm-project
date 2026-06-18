@@ -1186,8 +1186,15 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   // Both flags come from PipelineOptions, which the pipeline entry points
   // populate from HSA_HOTSWAP_LDS_TO_GLOBAL / _FORCE (or from programmatic
   // callers that set the options directly).  Default is OFF.
+  //
+  // GroupSegmentFixedSize == 0 is an unconditional skip: the Force flag only
+  // bypasses the target-cap check, not the "has LDS at all" prerequisite.
+  // Kernels with G=0 have no LDS storage to redirect; attempting to process
+  // their DS instructions (which may be GDS or other non-storage DS ops) hits
+  // unsupported opcodes in the raiser for no benefit.
   const bool LdsRedirectActive =
       EnableLdsGlobalRedirect &&
+      Meta.GroupSegmentFixedSize > 0 &&
       (ForceLdsGlobalRedirect ||
        Meta.GroupSegmentFixedSize > TargetIsa.LdsByteCapacity);
   unsigned WgLdsBaseArgIdx = ~0u; // set below if LdsRedirectActive
@@ -1302,12 +1309,8 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
     F->addFnAttr("amdgpu-lds-size", SizeStr + "," + SizeStr);
   }
 
-  if (KernargByrefTy) {
+  if (KernargByrefTy)
     F->getArg(0)->setName("kargs");
-  } else {
-    for (unsigned ArgI = 0, ArgN = F->arg_size(); ArgI < ArgN; ++ArgI)
-      F->getArg(ArgI)->setName("arg" + std::to_string(ArgI));
-  }
   if (LdsRedirectActive)
     F->getArg(WgLdsBaseArgIdx)->setName("wg_lds_base");
 
@@ -1556,6 +1559,8 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   // wg_base = wg_lds_base_arg + linear_wg_id * G  (byte-addressed, addrspace(1))
   Value *WgLdsBase = nullptr;
   if (LdsRedirectActive) {
+    SourceHiddenArgContext HiddenCtx{C, M, B, I8Ty, I32Ty, I64Ty, Meta.Args,
+                                     AssumeHipGlobalOffsetZero};
     Value *BlocksX = emitHiddenBlockCount(HiddenCtx, 0);
     Value *BlocksY = emitHiddenBlockCount(HiddenCtx, 1);
     Value *WgIdX = B.CreateZExt(B.CreateCall(FnWorkgroupIdX, {}, "lds_wg_id_x"),
