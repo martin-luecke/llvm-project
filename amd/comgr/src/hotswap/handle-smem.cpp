@@ -87,13 +87,14 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
     // disagree, strict mode refuses rather than guessing whether the runtime
     // path still points at source hidden args or at an ordinary explicit
     // pointer.
-    bool IsEntryImplicitArgLoad =
+    bool IsSourceImplicitArgOffset =
         BaseIsKernargPair && ImmOffset && Ctx.Kernargs.ImplicitArgsBase > 0 &&
-        ByteOffset >= Ctx.Kernargs.ImplicitArgsBase &&
+        ByteOffset >= Ctx.Kernargs.ImplicitArgsBase;
+    bool IsEntryImplicitArgLoad =
+        IsSourceImplicitArgOffset &&
         BaseProvenance == RaiseContext::KernargPtrProvenance::LiveEntry;
-    if (BaseIsKernargPair && ImmOffset && Ctx.Kernargs.ImplicitArgsBase > 0 &&
-        ByteOffset >= Ctx.Kernargs.ImplicitArgsBase &&
-        !IsEntryImplicitArgLoad && isStrictMode()) {
+    if (IsSourceImplicitArgOffset && !IsEntryImplicitArgLoad &&
+        isStrictMode()) {
       Hr.Failure = RaiseFailure::strictUnsafeLowering(
           Di, "implicitarg.ptr",
           "cross-arch implicitarg.ptr lowering is unresolved: source "
