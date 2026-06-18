@@ -21,6 +21,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
+#include "llvm/Support/LogicalResult.h"
 #include "Utils/AMDGPUBaseInfo.h"
 
 using namespace llvm;
@@ -31,16 +32,17 @@ namespace {
 
 // Lift a bf16 unary transcendental through an f32 callee, wrapping with
 // bf16<->f32 fpext/fptrunc and merging into the dst half. Half-select honors
-// both op_sel modifiers and _HI16 subreg naming. Returns false (with
+// both op_sel modifiers and _HI16 subreg naming. Returns failure (with
 // Hr.Failure set) when a present src0 modifier operand is malformed.
-bool emitBF16UnaryViaF32Callee(RaiseContext &Ctx, OpResolver &Op,
-                               HandlerResult &Hr, FunctionCallee F32Callee,
-                               StringRef Name) {
+LogicalResult emitBF16UnaryViaF32Callee(RaiseContext &Ctx, OpResolver &Op,
+                                        HandlerResult &Hr,
+                                        FunctionCallee F32Callee,
+                                        StringRef Name) {
   const DecodedInst &Di = Op.Di;
   const MCRegisterInfo &MRI = *Ctx.Mc.RegInfo;
   unsigned Mods = 0;
   if (!readOptionalVOP3F16SrcMods(Di, Hr, 0, Name, Mods))
-    return false;
+    return failure();
   Type *BfTy = Type::getBFloatTy(Ctx.C);
   Type *I16Ty = Type::getInt16Ty(Ctx.C);
 
@@ -62,7 +64,7 @@ bool emitBF16UnaryViaF32Callee(RaiseContext &Ctx, OpResolver &Op,
   Value *ResBf = Ctx.B.CreateFPTrunc(Res32, BfTy, (Name + "_tr").str());
 
   writeOpSelF16(Ctx, Op, ResBf, DstHi, "bf16_merge_lo", "bf16_merge_hi");
-  return true;
+  return success();
 }
 
 FunctionCallee getF32Intrinsic(RaiseContext &Ctx, Intrinsic::ID IID) {
@@ -704,9 +706,9 @@ HandlerResult handleValuSmallOps(RaiseContext &Ctx, const DecodedInst &Di,
   case CanonicalOp::V_RCP_BF16: {
     if (!requireDefaultOutputModsIfPresent(Di, Hr))
       return Hr;
-    if (!emitBF16UnaryViaF32Callee(
+    if (failed(emitBF16UnaryViaF32Callee(
             Ctx, Op, Hr, getF32Intrinsic(Ctx, Intrinsic::amdgcn_rcp),
-            "rcp_bf16"))
+            "rcp_bf16")))
       return Hr;
     Hr.Handled = true;
     return Hr;
@@ -714,9 +716,9 @@ HandlerResult handleValuSmallOps(RaiseContext &Ctx, const DecodedInst &Di,
   case CanonicalOp::V_RSQ_BF16: {
     if (!requireDefaultOutputModsIfPresent(Di, Hr))
       return Hr;
-    if (!emitBF16UnaryViaF32Callee(
+    if (failed(emitBF16UnaryViaF32Callee(
             Ctx, Op, Hr, getF32Intrinsic(Ctx, Intrinsic::amdgcn_rsq),
-            "rsq_bf16"))
+            "rsq_bf16")))
       return Hr;
     Hr.Handled = true;
     return Hr;
@@ -724,9 +726,9 @@ HandlerResult handleValuSmallOps(RaiseContext &Ctx, const DecodedInst &Di,
   case CanonicalOp::V_SQRT_BF16: {
     if (!requireDefaultOutputModsIfPresent(Di, Hr))
       return Hr;
-    if (!emitBF16UnaryViaF32Callee(
+    if (failed(emitBF16UnaryViaF32Callee(
             Ctx, Op, Hr, getF32Intrinsic(Ctx, Intrinsic::amdgcn_sqrt),
-            "sqrt_bf16"))
+            "sqrt_bf16")))
       return Hr;
     Hr.Handled = true;
     return Hr;
@@ -734,9 +736,9 @@ HandlerResult handleValuSmallOps(RaiseContext &Ctx, const DecodedInst &Di,
   case CanonicalOp::V_LOG_BF16: {
     if (!requireDefaultOutputModsIfPresent(Di, Hr))
       return Hr;
-    if (!emitBF16UnaryViaF32Callee(
+    if (failed(emitBF16UnaryViaF32Callee(
             Ctx, Op, Hr, getF32Intrinsic(Ctx, Intrinsic::amdgcn_log),
-            "log_bf16"))
+            "log_bf16")))
       return Hr;
     Hr.Handled = true;
     return Hr;
@@ -744,9 +746,9 @@ HandlerResult handleValuSmallOps(RaiseContext &Ctx, const DecodedInst &Di,
   case CanonicalOp::V_EXP_BF16: {
     if (!requireDefaultOutputModsIfPresent(Di, Hr))
       return Hr;
-    if (!emitBF16UnaryViaF32Callee(
+    if (failed(emitBF16UnaryViaF32Callee(
             Ctx, Op, Hr, getF32Intrinsic(Ctx, Intrinsic::amdgcn_exp2),
-            "exp_bf16"))
+            "exp_bf16")))
       return Hr;
     Hr.Handled = true;
     return Hr;
@@ -754,9 +756,9 @@ HandlerResult handleValuSmallOps(RaiseContext &Ctx, const DecodedInst &Di,
   case CanonicalOp::V_COS_BF16: {
     if (!requireDefaultOutputModsIfPresent(Di, Hr))
       return Hr;
-    if (!emitBF16UnaryViaF32Callee(
+    if (failed(emitBF16UnaryViaF32Callee(
             Ctx, Op, Hr, getF32Intrinsic(Ctx, Intrinsic::amdgcn_cos),
-            "cos_bf16"))
+            "cos_bf16")))
       return Hr;
     Hr.Handled = true;
     return Hr;
@@ -764,9 +766,9 @@ HandlerResult handleValuSmallOps(RaiseContext &Ctx, const DecodedInst &Di,
   case CanonicalOp::V_SIN_BF16: {
     if (!requireDefaultOutputModsIfPresent(Di, Hr))
       return Hr;
-    if (!emitBF16UnaryViaF32Callee(
+    if (failed(emitBF16UnaryViaF32Callee(
             Ctx, Op, Hr, getF32Intrinsic(Ctx, Intrinsic::amdgcn_sin),
-            "sin_bf16"))
+            "sin_bf16")))
       return Hr;
     Hr.Handled = true;
     return Hr;
@@ -774,8 +776,8 @@ HandlerResult handleValuSmallOps(RaiseContext &Ctx, const DecodedInst &Di,
   case CanonicalOp::V_TANH_BF16: {
     if (!requireDefaultOutputModsIfPresent(Di, Hr))
       return Hr;
-    if (!emitBF16UnaryViaF32Callee(Ctx, Op, Hr, declareOCMLTanhF32(Ctx.M),
-                                   "tanh_bf16"))
+    if (failed(emitBF16UnaryViaF32Callee(Ctx, Op, Hr, declareOCMLTanhF32(Ctx.M),
+                                   "tanh_bf16")))
       return Hr;
     Hr.Handled = true;
     return Hr;
