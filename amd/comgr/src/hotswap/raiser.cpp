@@ -755,10 +755,12 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
     F->addFnAttr("amdgpu-no-completion-action");
     F->addFnAttr("amdgpu-no-default-queue");
     F->addFnAttr("amdgpu-no-dispatch-id");
-    // Do not suppress dispatch-ptr: source hidden-arg synthesis materialises
-    // values such as hidden_group_size_* and hidden_block_count_* from the
-    // target dispatch packet, because the lifted HSACO intentionally does not
-    // ask HIP to append source-ABI hidden args after the opaque kargs blob.
+    // dispatch-ptr is suppressed conditionally after the raise loop:
+    // source hidden-arg synthesis may materialise values such as
+    // hidden_group_size_* and hidden_block_count_* from the AQL dispatch
+    // packet via amdgcn_dispatch_ptr, so we must not suppress it eagerly
+    // here.  Instead we check use_empty() once the body is complete
+    // (see below, just before Phase 6).
     F->addFnAttr("amdgpu-no-heap-ptr");
     F->addFnAttr("amdgpu-no-hostcall-ptr");
     F->addFnAttr("amdgpu-no-implicitarg-ptr");
@@ -1387,6 +1389,20 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   // If any instructions failed to raise, skip Phases 6-7.
   if (!Result.AllFailures.empty()) {
     return Result;
+  }
+
+  // Suppress dispatch-ptr in the lifted KD when the body never actually calls
+  // llvm.amdgcn.dispatch.ptr -- neither the source dispatch_ptr SGPR seed nor
+  // hidden-arg synthesis materialised a use.  Without this suppression the
+  // backend conservatively inserts dispatch_ptr for every kernel, adding two
+  // user-SGPRs ahead of kernarg_segment_ptr and shifting the kernarg base
+  // register (s[0:1] -> s[2:3]), which diverges from the source ABI the
+  // launch path expects.
+  {
+    Function *FnDisp = M.getFunction(
+        llvm::Intrinsic::getName(llvm::Intrinsic::amdgcn_dispatch_ptr));
+    if (!FnDisp || FnDisp->use_empty())
+      F->addFnAttr("amdgpu-no-dispatch-ptr");
   }
 
   // ==== Phase 6: Promote allocas to SSA ====
