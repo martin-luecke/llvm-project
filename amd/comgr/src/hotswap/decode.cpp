@@ -43,6 +43,8 @@ namespace COMGR::hotswap {
 
 namespace {
 
+constexpr unsigned KSoppBranchStrideBytes = 4;
+
 // Build the logical-source view of an MCInst. Walks `desc.operands()` and
 // classifies each operand using TableGen-generated metadata only:
 //
@@ -701,16 +703,17 @@ std::optional<uint64_t> computeSoppBranchTarget(uint64_t Off, int64_t RawImm) {
   // `Off + 4`, keeping underflow/overflow explicit so callers can refuse or
   // conservatively drop the edge instead of wrapping the source address.
   int64_t BrOff = SignExtend64<16>(static_cast<uint64_t>(RawImm));
-  if (Off > UINT64_MAX - 4)
+  if (Off > UINT64_MAX - KSoppBranchStrideBytes)
     return std::nullopt;
-  uint64_t Base = Off + 4;
+  uint64_t Base = Off + KSoppBranchStrideBytes;
   if (BrOff < 0) {
-    uint64_t Back = static_cast<uint64_t>(-BrOff) * 4;
+    uint64_t Back =
+        static_cast<uint64_t>(-BrOff) * KSoppBranchStrideBytes;
     if (Back > Base)
       return std::nullopt;
     return Base - Back;
   }
-  uint64_t Forward = static_cast<uint64_t>(BrOff) * 4;
+  uint64_t Forward = static_cast<uint64_t>(BrOff) * KSoppBranchStrideBytes;
   if (Forward > UINT64_MAX - Base)
     return std::nullopt;
   return Base + Forward;
