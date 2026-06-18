@@ -72,8 +72,9 @@ computeDecodedBlockSuccessors(const DecodedInst &LastInst,
 
 // Compute the absolute byte offset of a SOPP branch target. SOPP branch
 // immediates are signed 16-bit dword offsets from the next instruction
-// (`PC + 4`). Returns std::nullopt on source offset arithmetic overflow.
-std::optional<uint64_t> computeSoppBranchTarget(uint64_t Off, int64_t RawImm);
+// (`PC + 4`). Invalid source-offset arithmetic is reported loudly rather than
+// dropping the edge from CFG recovery.
+uint64_t computeSoppBranchTarget(uint64_t Off, int64_t RawImm);
 
 // True when LastInst terminates the recovered source block. This is separate
 // from successor count: s_swap_pc_i64 ends its block while still having a

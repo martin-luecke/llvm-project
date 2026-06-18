@@ -661,19 +661,19 @@ void collectBranchTargets(const DecodedInst &Di, uint64_t Off,
       report_fatal_error("transpiler: s_add_pc_i64 with non-immediate source "
                          "(only the immediate-literal form is supported)");
     if (InstSize > UINT64_MAX - Off)
-      return;
+      report_fatal_error("transpiler: s_add_pc_i64 source offset overflow");
     uint64_t Base = Off + InstSize;
     int64_t Imm = Inst.getOperand(0).getImm();
     uint64_t Target = 0;
     if (Imm < 0) {
       uint64_t Back = llvm::AbsoluteValue(Imm);
       if (Back > Base)
-        return;
+        report_fatal_error("transpiler: s_add_pc_i64 branch target underflow");
       Target = Base - Back;
     } else {
       uint64_t Forward = static_cast<uint64_t>(Imm);
       if (Forward > UINT64_MAX - Base)
-        return;
+        report_fatal_error("transpiler: s_add_pc_i64 branch target overflow");
       Target = Base + Forward;
     }
     if (Target >= KernelStartOffset && Target < DecodeLimit)
@@ -683,10 +683,9 @@ void collectBranchTargets(const DecodedInst &Di, uint64_t Off,
   for (unsigned I = 0; I < Inst.getNumOperands(); ++I) {
     if (!Inst.getOperand(I).isImm())
       continue;
-    std::optional<uint64_t> Target =
-        computeSoppBranchTarget(Off, Inst.getOperand(I).getImm());
-    if (Target && *Target >= KernelStartOffset && *Target < DecodeLimit)
-      BlockStarts.insert(*Target);
+    uint64_t Target = computeSoppBranchTarget(Off, Inst.getOperand(I).getImm());
+    if (Target >= KernelStartOffset && Target < DecodeLimit)
+      BlockStarts.insert(Target);
   }
   if (Di.IsConditionalBranch && InstSize <= UINT64_MAX - Off) {
     uint64_t Fallthrough = Off + InstSize;
@@ -697,25 +696,24 @@ void collectBranchTargets(const DecodedInst &Di, uint64_t Off,
 
 } // namespace
 
-std::optional<uint64_t> computeSoppBranchTarget(uint64_t Off, int64_t RawImm) {
+uint64_t computeSoppBranchTarget(uint64_t Off, int64_t RawImm) {
   // SOPP encodes branch displacements as signed 16-bit instruction offsets
   // relative to the next instruction.  Convert once to a byte offset from
-  // `Off + 4`, keeping underflow/overflow explicit so callers can refuse or
-  // conservatively drop the edge instead of wrapping the source address.
+  // `Off + 4`, keeping underflow/overflow explicit instead of wrapping the
+  // source address and corrupting CFG recovery.
   int64_t BrOff = SignExtend64<16>(static_cast<uint64_t>(RawImm));
   if (Off > UINT64_MAX - KSoppBranchStrideBytes)
-    return std::nullopt;
+    report_fatal_error("transpiler: SOPP branch base offset overflow");
   uint64_t Base = Off + KSoppBranchStrideBytes;
   if (BrOff < 0) {
-    uint64_t Back =
-        static_cast<uint64_t>(-BrOff) * KSoppBranchStrideBytes;
+    uint64_t Back = static_cast<uint64_t>(-BrOff) * KSoppBranchStrideBytes;
     if (Back > Base)
-      return std::nullopt;
+      report_fatal_error("transpiler: SOPP branch target underflow");
     return Base - Back;
   }
   uint64_t Forward = static_cast<uint64_t>(BrOff) * KSoppBranchStrideBytes;
   if (Forward > UINT64_MAX - Base)
-    return std::nullopt;
+    report_fatal_error("transpiler: SOPP branch target overflow");
   return Base + Forward;
 }
 
@@ -730,27 +728,22 @@ std::optional<uint64_t> computeSoppBranchTarget(uint64_t Off, int64_t RawImm) {
 // edges must consult the SetPcAnalysis table after this helper returns the
 // local decoded model.
 //
-// Invalid or overflowing branch immediates produce no target edge.  The caller
-// will then treat the missing edge conservatively (typically as unknown or
-// unresolvable) rather than fabricating a fallthrough.
 SmallVector<uint64_t, 2>
 computeDecodedBlockSuccessors(const DecodedInst &LastInst,
                               uint64_t NextBlockOffset, bool NextBlockExists) {
   SmallVector<uint64_t, 2> Result;
-  auto BranchTargetFromImm = [&](unsigned OpIdx) -> std::optional<uint64_t> {
+  auto BranchTargetFromImm = [&](unsigned OpIdx) -> uint64_t {
     if (OpIdx >= LastInst.Inst.getNumOperands())
-      return std::nullopt;
+      report_fatal_error("transpiler: branch target operand missing");
     const MCOperand &Op = LastInst.Inst.getOperand(OpIdx);
     if (!Op.isImm())
-      return std::nullopt;
+      report_fatal_error("transpiler: branch target operand is not immediate");
     return computeSoppBranchTarget(LastInst.Offset, Op.getImm());
   };
 
   switch (LastInst.CanonOp) {
   case CanonicalOp::S_BRANCH: {
-    std::optional<uint64_t> T = BranchTargetFromImm(0);
-    if (T)
-      Result.push_back(*T);
+    Result.push_back(BranchTargetFromImm(0));
     break;
   }
   case CanonicalOp::S_CBRANCH_SCC0:
@@ -759,9 +752,7 @@ computeDecodedBlockSuccessors(const DecodedInst &LastInst,
   case CanonicalOp::S_CBRANCH_VCCNZ:
   case CanonicalOp::S_CBRANCH_EXECZ:
   case CanonicalOp::S_CBRANCH_EXECNZ: {
-    std::optional<uint64_t> T = BranchTargetFromImm(0);
-    if (T)
-      Result.push_back(*T);
+    Result.push_back(BranchTargetFromImm(0));
     if (NextBlockExists)
       Result.push_back(NextBlockOffset);
     break;
