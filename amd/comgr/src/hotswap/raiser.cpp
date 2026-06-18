@@ -924,7 +924,7 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   // fixpoint; crossing the selected symbol extent is a boundary violation, and
   // an in-extent target that cannot decode is a hard CFG recovery failure.
   while (true) {
-    SetpcAnalysis = analyseSetPC(Insts, BlockStarts, Mc);
+    SetpcAnalysis = analyseSetPC(Insts, BlockStarts, Mc, TextBytes.size());
     llvm::DenseSet<uint64_t> InstOffsets = collectInstructionOffsets(Insts);
     bool AddedHelperRegion = false;
     for (uint64_t Addr : SetpcAnalysis.ExtraBlockStarts) {

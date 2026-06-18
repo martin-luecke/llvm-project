@@ -227,7 +227,7 @@ ParsedReg RaiseContext::parseReg(MCRegister Reg, int MciOpIdx) const {
   case AMDGPU::SRC_FLAT_SCRATCH_BASE_LO:
   case AMDGPU::SRC_FLAT_SCRATCH_BASE_HI:
     Pr.RegKind = ParsedReg::FLAT_SCR;
-    Pr.Width = Width;
+    Pr.WidthInDwords = Width;
     return Pr;
   // Aperture / runtime-defined source registers: SRC_SHARED_BASE /
   // _LIMIT, SRC_PRIVATE_BASE / _LIMIT, SRC_FLAT_SCRATCH_BASE_LO /
