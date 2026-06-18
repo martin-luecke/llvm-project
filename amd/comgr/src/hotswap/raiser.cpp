@@ -258,13 +258,16 @@ static KernargPrepassDef classifyKernargPrepassDef(const MCRegisterInfo &MRI,
 static unsigned kernargPrepassRegWidth32(const MCRegisterInfo &MRI,
                                          MCRegister Reg) {
   const unsigned MaxSubIdx = MRI.getNumSubRegIndices();
-  unsigned W = 0;
-  for (unsigned SubIdx = AMDGPU::sub0; SubIdx < MaxSubIdx; ++SubIdx) {
+  if (!MRI.getSubReg(Reg, AMDGPU::sub0))
+    return 1;
+
+  unsigned W = 1;
+  for (unsigned SubIdx = AMDGPU::sub0 + 1; SubIdx < MaxSubIdx; ++SubIdx) {
     if (!MRI.getSubReg(Reg, SubIdx))
-      return W ? W : 1;
+      return W;
     ++W;
   }
-  return W ? W : 1;
+  return W;
 }
 
 static KernargPtrEffect
