@@ -14,6 +14,9 @@
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/BinaryFormat/MsgPackDocument.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Type.h"
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/AMDHSAKernelDescriptor.h"
@@ -431,6 +434,61 @@ findKernelSymbolExtent(llvm::MemoryBufferRef ElfData,
   }
   Extent.Size = NextAddr - *AddrOrErr;
   return Extent;
+}
+
+bool buildKernargParamTypes(llvm::LLVMContext &Ctx, const KernelMeta &Meta,
+                            llvm::SmallVectorImpl<llvm::Type *> &ParamTypes) {
+  bool Any = false;
+  for (const KernelArgMeta &Arg : Meta.Args) {
+    llvm::StringRef Kind(Arg.ValueKind);
+    // `hidden_*` args are synthesised by the raiser from the dispatch packet,
+    // not read from the kernarg segment, and are never passed by the host as
+    // kernelParams -- so they must not appear in the lifted signature.
+    if (Kind.starts_with("hidden_"))
+      continue;
+
+    // Pointer-kinded args carry an address space; everything else is a
+    // by-value scalar. A non-zero AddressSpace is itself conclusive evidence
+    // of a pointer (by_value scalars always report address space 0).
+    const bool IsPointer = Kind == "global_buffer" ||
+                           Kind == "dynamic_shared_pointer" || Kind == "image" ||
+                           Kind == "pipe" || Kind == "queue" ||
+                           Arg.AddressSpace != 0;
+
+    llvm::Type *ArgTy = nullptr;
+    if (IsPointer) {
+      unsigned AS = Arg.AddressSpace;
+      if (AS == 0)
+        AS = (Kind == "dynamic_shared_pointer") ? 3u : 1u;
+      ArgTy = llvm::PointerType::get(Ctx, AS);
+    } else {
+      switch (Arg.Size) {
+      case 1:
+        ArgTy = llvm::Type::getInt8Ty(Ctx);
+        break;
+      case 2:
+        ArgTy = llvm::Type::getInt16Ty(Ctx);
+        break;
+      case 4:
+        ArgTy = llvm::Type::getInt32Ty(Ctx);
+        break;
+      case 8:
+        ArgTy = llvm::Type::getInt64Ty(Ctx);
+        break;
+      default:
+        // Odd-sized by-value aggregate: a byte array reproduces the size; the
+        // raiser never reads it (kernarg loads go through the segment ptr), so
+        // its natural alignment of 1 only matters if a *following* arg's
+        // source offset assumed higher alignment -- which toolchain-emitted
+        // kernels never do for an aggregate of this size.
+        ArgTy = llvm::ArrayType::get(llvm::Type::getInt8Ty(Ctx), Arg.Size);
+        break;
+      }
+    }
+    ParamTypes.push_back(ArgTy);
+    Any = true;
+  }
+  return Any;
 }
 
 } // namespace COMGR::hotswap
