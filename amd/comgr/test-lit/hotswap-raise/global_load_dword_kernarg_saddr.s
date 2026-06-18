@@ -12,7 +12,8 @@
 ; against an addrspace(1) pointer reconstructed from the kernarg segment
 ; pointer — not as a literal load from address 0x2.
 
-; CHECK-LABEL: define amdgpu_kernel void @global_load_dword_kernarg_saddr_kernel(ptr addrspace(4) byref([24 x i8]) align 16 %kargs)
+; CHECK-LABEL: define amdgpu_kernel void @global_load_dword_kernarg_saddr_kernel(
+; CHECK-SAME: [12 x i8] {{%[0-9]+}}, ptr addrspace(1) {{%[0-9]+}})
 ; The kernarg SGPR pair is materialized from amdgcn.kernarg.segment.ptr,
 ; ptrtoint-split into two i32 halves, then reconstructed at every use.
 ; CHECK: %kernarg_ptr = call ptr addrspace(4) @llvm.amdgcn.kernarg.segment.ptr()
