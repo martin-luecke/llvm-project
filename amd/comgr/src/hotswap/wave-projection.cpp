@@ -43,18 +43,36 @@ namespace COMGR::hotswap {
 // ----------------------------------------------------------------------------
 
 Value *WaveProjection::emitLaneIdx(IRBuilder<> &B) const {
-  Module *M = B.GetInsertBlock()->getModule();
-  Type *I32Ty = B.getInt32Ty();
+  // Lane id (mbcnt vs all-ones, base 0) is EXEC-independent and
+  // function-invariant: emit once at a dominating point and cache.
+  if (CachedLaneIdx)
+    return CachedLaneIdx;
+
+  // Inline if already in the entry block (def precedes the immediate use, still
+  // dominates the function); otherwise hoist to the entry terminator.
+  BasicBlock *Cur = B.GetInsertBlock();
+  BasicBlock &Entry = Cur->getParent()->getEntryBlock();
+  IRBuilder<> EB(Cur, B.GetInsertPoint());
+  if (Cur != &Entry) {
+    if (Entry.hasTerminator())
+      EB.SetInsertPoint(Entry.getTerminator());
+    else
+      EB.SetInsertPoint(&Entry);
+  }
+
+  Module *M = Entry.getModule();
+  Type *I32Ty = EB.getInt32Ty();
   Function *MbcntLo = Intrinsic::getOrInsertDeclaration(
       M, Intrinsic::amdgcn_mbcnt_lo);
   Value *AllOnes = ConstantInt::getSigned(I32Ty, -1);
   Value *Zero32 = ConstantInt::get(I32Ty, 0);
-  Value *LaneId = B.CreateCall(MbcntLo, {AllOnes, Zero32}, "lane_lo");
+  Value *LaneId = EB.CreateCall(MbcntLo, {AllOnes, Zero32}, "lane_lo");
   if (WaveMaskTy != I32Ty) {
     Function *MbcntHi = Intrinsic::getOrInsertDeclaration(
         M, Intrinsic::amdgcn_mbcnt_hi);
-    LaneId = B.CreateCall(MbcntHi, {AllOnes, LaneId}, "lane_id");
+    LaneId = EB.CreateCall(MbcntHi, {AllOnes, LaneId}, "lane_id");
   }
+  CachedLaneIdx = LaneId;
   return LaneId;
 }
 

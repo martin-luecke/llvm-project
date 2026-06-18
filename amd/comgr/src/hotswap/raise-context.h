@@ -141,23 +141,8 @@ struct RaiseContext {
                               uint16_t Ctrl, uint8_t RowMask,
                               uint8_t BankMask, bool BoundCtrl);
 
-  // Materialise the target-hardware lane id (i32) at the current
-  // builder insertion point, with per-BB memoisation. Mirrors the
-  // `cachedLaneActive` pattern: handlers that need the lane id can
-  // call `ctx.emitLaneIdx()` repeatedly within an instruction's
-  // dispatch and reuse the same SSA value, avoiding redundant
-  // `mbcnt_lo` / `mbcnt_hi` chains in the raw IR.
-  //
-  // The cache is invalidated on every source-instruction boundary
-  // by the same `resetLaneActiveCache` call that resets
-  // `cachedLaneActive`, since the dominance lifecycle is identical
-  // (the cached i32 dominates the BB it was emitted in but not
-  // arbitrary later BBs).
-  //
-  // Delegates to `projection.emitLaneIdx(B)` for the actual mbcnt
-  // sequence -- `WaveProjection` remains the single source of truth
-  // for *how* lane id is computed; `RaiseContext` only handles
-  // caching.
+  // Target-hardware lane id (i32). Delegates to `WaveProjection::emitLaneIdx`,
+  // which emits the mbcnt pair once and caches it per function.
   llvm::Value *emitLaneIdx();
 
   // ==== SIMT Predicated Execution (SPE) helpers
@@ -197,8 +182,6 @@ struct RaiseContext {
   void resetLaneActiveCache() {
     CachedLaneActive = nullptr;
     CachedLaneActiveBb = nullptr;
-    CachedLaneIdx = nullptr;
-    CachedLaneIdxBb = nullptr;
   }
 
   // Wrap `regs.storeExec` with cache invalidation. Handlers should prefer
@@ -253,13 +236,6 @@ struct RaiseContext {
   // `resetLaneActiveCache` / `emitLaneActiveBit`.
   llvm::Value *CachedLaneActive = nullptr;
   llvm::BasicBlock *CachedLaneActiveBb = nullptr;
-
-  // Memoised lane id for this instruction's emission, mirroring the
-  // cachedLaneActive pair above. Used by `emitLaneIdx`. Same public-
-  // field rationale (aggregate brace-init); mutate only via
-  // `resetLaneActiveCache` / `emitLaneIdx`.
-  llvm::Value *CachedLaneIdx = nullptr;
-  llvm::BasicBlock *CachedLaneIdxBb = nullptr;
 
   // Per-BB cache of the per-lane i1 compare result produced by the
   // most recent V_CMP_*_e64 writer targeting a given SGPR in this
