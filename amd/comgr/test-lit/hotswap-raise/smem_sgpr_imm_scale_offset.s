@@ -7,12 +7,6 @@
 ; static byte offset. This fixture covers that SGPR_IMM load shape:
 ;   s_load_b32 ..., sBASE, sOFF offset:0x808 scale_offset
 ;
-; CHECK-LABEL: define amdgpu_kernel void @smem_sgpr_imm_scale_offset_kernel(
-; CHECK: %smem_roff{{[0-9]*}} = zext i32
-; CHECK: %smem_roff_scaled{{[0-9]*}} = mul i64 %smem_roff{{[0-9]*}}, 4
-; CHECK: %smem_roff_plus_imm{{[0-9]*}} = add i64 %smem_roff_scaled{{[0-9]*}}, 2056
-; CHECK: getelementptr inbounds i8, ptr addrspace(1) %{{[^,]+}}, i64 %smem_roff_plus_imm
-
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
 	.text
@@ -20,10 +14,15 @@
 	.p2align	8
 	.type	smem_sgpr_imm_scale_offset_kernel,@function
 smem_sgpr_imm_scale_offset_kernel:
+; CHECK-LABEL: define amdgpu_kernel void @smem_sgpr_imm_scale_offset_kernel(
 	s_load_b64 s[4:5], s[0:1], 0x0
 	s_load_b32 s2, s[0:1], 0x8
 	s_wait_loadcnt 0x0
 	s_load_b32 s3, s[4:5], s2 offset:0x808 scale_offset
+; CHECK: %smem_roff{{[0-9]*}} = zext i32
+; CHECK: %smem_roff_scaled{{[0-9]*}} = mul i64 %smem_roff{{[0-9]*}}, 4
+; CHECK: %smem_roff_plus_imm{{[0-9]*}} = add i64 %smem_roff_scaled{{[0-9]*}}, 2056
+; CHECK: getelementptr inbounds i8, ptr addrspace(1) %{{[^,]+}}, i64 %smem_roff_plus_imm
 	s_wait_loadcnt 0x0
 	v_mov_b32_e32 v1, s3
 	global_store_b32 v0, v1, s[4:5] scale_offset
