@@ -252,6 +252,25 @@ bool isStrictMode() {
   return s_strict;
 }
 
+// Apply process-environment overrides to a PipelineOptions value.  Called at
+// the entry points of runPipeline / runPipelineAllKernels which take options by
+// value so the local copy can be mutated freely.  Reads each env var at most
+// once via a static-local to avoid repeated getenv() calls on the hot path.
+static void applyEnvOverrides(PipelineOptions &Opts) {
+  static const bool s_ldsRedir = []() {
+    const char *v = std::getenv("HSA_HOTSWAP_LDS_TO_GLOBAL");
+    return v && v[0] == '1';
+  }();
+  static const bool s_ldsForce = []() {
+    const char *v = std::getenv("HSA_HOTSWAP_LDS_TO_GLOBAL_FORCE");
+    return v && v[0] == '1';
+  }();
+  if (s_ldsRedir)
+    Opts.EnableLdsGlobalRedirect = true;
+  if (s_ldsForce)
+    Opts.ForceLdsGlobalRedirect = true;
+}
+
 // Raise one kernel to IR, compile to a relocatable .o via llc + llvm-mc.
 // On success, writes the .o to objPath and returns true.
 static bool raiseAndCompileKernel(const TextSection &text,
@@ -300,7 +319,9 @@ static bool raiseAndCompileKernel(const TextSection &text,
                            kernelSize, targetISA,
                            options.EnableWritelaneRewrite,
                            options.EnableWaveNative,
-                           options.AssumeHipGlobalOffsetZero);
+                           options.AssumeHipGlobalOffsetZero,
+                           options.EnableLdsGlobalRedirect,
+                           options.ForceLdsGlobalRedirect);
   if (!raised.Success) {
     static const char *s_dumpFailInput =
         std::getenv("HSA_HOTSWAP_DUMP_FAIL_INPUT");
@@ -658,6 +679,7 @@ PipelineResult runPipeline(llvm::MemoryBufferRef codeObjectData,
                            llvm::StringRef targetISA,
                            llvm::StringRef kernelName,
                            PipelineOptions options) {
+  applyEnvOverrides(options);
   auto totalStart = timingStart(options.CollectTimings);
   PipelineResult result;
   auto finish = [&]() {
@@ -735,6 +757,7 @@ PipelineResult runPipelineAllKernels(llvm::MemoryBufferRef codeObjectData,
                                      llvm::StringRef sourceISA,
                                      llvm::StringRef targetISA,
                                      PipelineOptions options) {
+  applyEnvOverrides(options);
   auto totalStart = timingStart(options.CollectTimings);
   PipelineResult result;
   auto finish = [&]() {

@@ -105,14 +105,6 @@ Value *emitDispatchGridSize(SourceHiddenArgContext &Ctx, unsigned Dim) {
                          Twine("source_hidden_grid_size_") + Twine(Dim));
 }
 
-// Emit source hidden_block_count_{x,y,z}.
-Value *emitHiddenBlockCount(SourceHiddenArgContext &Ctx, unsigned Dim) {
-  return Ctx.B.CreateUDiv(emitDispatchGridSize(Ctx, Dim),
-                          emitDispatchWorkgroupSize(Ctx, Dim),
-                          Twine("source_hidden_block_count_") + Twine(Dim));
-}
-
-// Emit source hidden_remainder_{x,y,z}.
 Value *emitHiddenRemainder(SourceHiddenArgContext &Ctx, unsigned Dim) {
   return Ctx.B.CreateURem(emitDispatchGridSize(Ctx, Dim),
                           emitDispatchWorkgroupSize(Ctx, Dim),
@@ -211,6 +203,29 @@ SourceHiddenArgValue emitSourceHiddenByte(SourceHiddenArgContext &Ctx,
 }
 
 } // namespace
+
+Value *emitHiddenBlockCount(SourceHiddenArgContext &Ctx, unsigned Dim) {
+  // Compute ceil(grid_size[Dim] / wg_size[Dim]) via (G + W - 1) / W.
+  //
+  // The AQL dispatch packet carries grid_size as a total work-item count;
+  // the hardware dispatches ceil(grid_size / wg_size) workgroups per
+  // dimension, rounding up to cover any partial last block.  Using floor
+  // (plain UDiv) underestimates by 1 when grid_size % wg_size != 0, which
+  // causes the linear-workgroup-id formula in the LDS->global redirect to
+  // assign the same scratch slot to two different workgroups.  Triton
+  // kernels are always aligned (grid = num_blocks * wg_size), so floor ==
+  // ceil for them; but the contract documented in source-hidden-args.h is
+  // ceil, and we need correctness for non-aligned dispatches.
+  Value *G = emitDispatchGridSize(Ctx, Dim);
+  Value *W = emitDispatchWorkgroupSize(Ctx, Dim); // i32 (zero-ext from i16)
+  Value *Num = Ctx.B.CreateAdd(
+      G,
+      Ctx.B.CreateSub(W, Ctx.B.getInt32(1),
+                      Twine("block_count_wm1_") + Twine(Dim)),
+      Twine("block_count_num_") + Twine(Dim));
+  return Ctx.B.CreateUDiv(Num, W,
+                          Twine("source_hidden_block_count_") + Twine(Dim));
+}
 
 SourceHiddenArgValue emitSourceHiddenInteger(SourceHiddenArgContext &Ctx,
                                              int ByteOffset,

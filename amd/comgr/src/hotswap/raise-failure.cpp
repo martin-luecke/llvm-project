@@ -58,6 +58,8 @@ const char *reasonString(RaiseFailureReason R) {
     return "user-sgpr-layout-mismatch";
   case RaiseFailureReason::UnsupportedSourceClusterDims:
     return "unsupported-source-cluster-dims";
+  case RaiseFailureReason::LdsGlobalRedirectUnsupportedVariant:
+    return "lds-global-redirect-unsupported-variant";
   }
   llvm_unreachable("unhandled RaiseFailureReason");
 }
@@ -280,6 +282,17 @@ RaiseFailure RaiseFailure::unsupportedSourceClusterDims(
   F.Format = reasonString(RaiseFailureReason::UnsupportedSourceClusterDims);
   F.Offset = 0;
   F.Detail = ("kernel '" + KernelName + "': " + Detail).str();
+  return F;
+}
+
+RaiseFailure RaiseFailure::ldsGlobalRedirectUnsupported(const DecodedInst &Di,
+                                                         const llvm::Twine &Detail) {
+  RaiseFailure F;
+  F.Reason = RaiseFailureReason::LdsGlobalRedirectUnsupportedVariant;
+  F.Mnemonic = Di.Mnemonic;
+  F.Format = "DS-LDS-redirect";
+  F.Offset = Di.Offset;
+  F.Detail = Detail.str();
   return F;
 }
 

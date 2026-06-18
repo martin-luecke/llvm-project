@@ -119,6 +119,12 @@ enum class RaiseFailureReason : uint16_t {
   // cluster dimensions. TTMP6 then carries real per-cluster workgroup state
   // that the current HotSwap ABI model does not reconstruct.
   UnsupportedSourceClusterDims,
+  // LDS→global redirect (HSA_HOTSWAP_LDS_TO_GLOBAL): a DS instruction
+  // variant is not yet handled by the redirect path.  `detail` names the
+  // specific variant (DS2, D16_HI, atomic, TR8/TR16, async-to-LDS) so
+  // callers can stage coverage.  Always a per-instruction failure so a kernel
+  // with only the supported single-offset read/write variants succeeds.
+  LdsGlobalRedirectUnsupportedVariant,
 };
 
 // Human-readable name for a `RaiseFailureReason`. Stable enough for
@@ -274,6 +280,13 @@ struct RaiseFailure {
   // Phase 4 init: source cluster dimensions are explicit and non-disabled.
   static RaiseFailure unsupportedSourceClusterDims(
       llvm::StringRef KernelName, const llvm::Twine &Detail);
+
+  // LDS→global redirect: a DS instruction variant is not supported by the
+  // redirect path.  `di` locates the specific instruction; `detail` names the
+  // variant family (e.g. "DS2 two-offset", "D16_HI partial-store", "atomic",
+  // "TR8/TR16 transpose load") so callers can understand the gap.
+  static RaiseFailure ldsGlobalRedirectUnsupported(const DecodedInst &Di,
+                                                    const llvm::Twine &Detail);
 };
 
 // Write the canonical human-readable rendering of a structured raise failure.
