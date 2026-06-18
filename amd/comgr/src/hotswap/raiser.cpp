@@ -202,20 +202,16 @@ struct KernargPrepassDef {
 };
 
 struct KernargProvenanceBlock {
-  // Source byte offset for this recovered block leader.
+  // Source byte offset of this recovered block leader.
   uint64_t Start = 0;
-  // Inclusive instruction-index range covered by this block. The range starts
-  // at the instruction whose offset is `Start` and ends at the first decoded
-  // block terminator or at the instruction before the next recovered block.
+  // Indices into Insts. LastIdx is inclusive.
   unsigned FirstIdx = 0;
   unsigned LastIdx = 0;
-  // False for block-start offsets that do not correspond to a decoded
-  // instruction, such as an out-of-range branch target.
+  // False when Start is a recovered leader but no instruction decodes there.
   bool HasInsts = false;
-  // Program-order transfer summary for the kernarg SGPR pair within this
-  // block. Applied to the block's entry provenance during fixed-point
-  // propagation.
+  // Sequential effect of this block's instructions on the kernarg SGPR pair.
   KernargPtrEffect Effect = KernargPtrEffect::Preserves;
+  // Indices into the Blocks vector.
   SmallVector<unsigned, 2> Successors;
 };
 
