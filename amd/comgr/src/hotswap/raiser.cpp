@@ -72,6 +72,7 @@
 #include "llvm/Support/Debug.h"
 
 #include <algorithm>
+#include <cassert>
 #include <functional>
 #include <limits>
 #include <optional>
@@ -387,8 +388,10 @@ computeKernargPtrProvenance(RaiseContext &Ctx, ArrayRef<DecodedInst> Insts,
                             const DenseMap<uint64_t, BasicBlock *>
                                 &OffsetToBb) {
   using Provenance = RaiseContext::KernargPtrProvenance;
-  if (Ctx.Layout == nullptr || Ctx.Layout->KernargSegmentPtrSgpr < 0)
+  assert(Ctx.Layout && "RaiseContext requires descriptor-derived SGPR layout");
+  if (Insts.empty() || Ctx.Layout->KernargSegmentPtrSgpr < 0)
     return;
+  Ctx.HasKernargPtrProvenanceByBB = true;
   unsigned KernargPtrSgpr =
       static_cast<unsigned>(Ctx.Layout->KernargSegmentPtrSgpr);
   const MCRegisterInfo &MRI = *Ctx.Mc.RegInfo;
@@ -458,8 +461,9 @@ computeKernargPtrProvenance(RaiseContext &Ctx, ArrayRef<DecodedInst> Insts,
   };
 
   auto EntryIt = BlockIndexByOffset.find(KernelOffset);
-  if (EntryIt != BlockIndexByOffset.end())
-    MergeInto(EntryIt->second, Provenance::LiveEntry);
+  assert(EntryIt != BlockIndexByOffset.end() &&
+         "decoded block starts must include kernel entry");
+  MergeInto(EntryIt->second, Provenance::LiveEntry);
 
   // This finite-height lattice only moves a block from unseen to its first
   // incoming fact, then at most once more to Unknown when incoming paths

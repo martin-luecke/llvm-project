@@ -274,10 +274,15 @@ struct RaiseContext {
 
   // Load the prepass entry fact when lowering reaches a recovered source BB.
   void enterKernargPtrProvenanceForBlock(llvm::BasicBlock *BB) {
+    assert(BB && "cannot enter kernarg provenance for null basic block");
+    if (!HasKernargPtrProvenanceByBB) {
+      CurrentKernargPtrProvenance = KernargPtrProvenance::Unknown;
+      return;
+    }
     auto It = KernargSegmentPtrProvenanceByBB.find(BB);
-    CurrentKernargPtrProvenance = It == KernargSegmentPtrProvenanceByBB.end()
-                                      ? KernargPtrProvenance::Unknown
-                                      : It->second;
+    assert(It != KernargSegmentPtrProvenanceByBB.end() &&
+           "missing kernarg provenance for source basic block");
+    CurrentKernargPtrProvenance = It->second;
   }
 
   // emitUnderExec(body) wraps `body()` in an `if (lane_active)` diamond:
@@ -398,6 +403,8 @@ struct RaiseContext {
   // Conservative kernarg-pointer provenance for the strict hidden-arg SMEM
   // gate. Filled before instruction lowering by a fixed-point over the decoded
   // CFG. Mixed incoming states become Unknown and keep strict mode loud.
+  // False means tracking is inactive and BB entry uses Unknown without lookup.
+  bool HasKernargPtrProvenanceByBB = false;
   llvm::DenseMap<llvm::BasicBlock *, KernargPtrProvenance>
       KernargSegmentPtrProvenanceByBB =
           llvm::DenseMap<llvm::BasicBlock *, KernargPtrProvenance>();
