@@ -9,10 +9,6 @@
 ; HIP's always-zero global work offset, so each dword is synthesized and strict
 ; mode must not fall back to the target hidden-arg block.
 
-; CHECK-LABEL: define amdgpu_kernel void @hidden_global_offset_b128_kernel(
-; CHECK-NOT: call ptr addrspace(4) @llvm.amdgcn.implicitarg.ptr()
-; CHECK: phi i32 [ 0, %{{[a-zA-Z_0-9]+}} ], [ %tid, %{{[a-zA-Z_0-9]+}} ]
-
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
 	.text
@@ -21,9 +17,12 @@
 	.p2align	8
 	.type	hidden_global_offset_b128_kernel,@function
 hidden_global_offset_b128_kernel:
+; CHECK-LABEL: define amdgpu_kernel void @hidden_global_offset_b128_kernel(
 	s_clause 0x1
 	s_load_b64 s[8:9], s[0:1], 0x0
 	s_load_b128 s[4:7], s[0:1], 0x8
+; CHECK-NOT: call ptr addrspace(4) @llvm.amdgcn.implicitarg.ptr()
+; CHECK: phi i32 [ 0, %{{[a-zA-Z_0-9]+}} ], [ %tid, %{{[a-zA-Z_0-9]+}} ]
 	s_wait_kmcnt 0x0
 	v_dual_mov_b32 v0, s4 :: v_dual_mov_b32 v1, 0
 	global_store_b32 v1, v0, s[8:9]
