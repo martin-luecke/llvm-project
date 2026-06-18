@@ -450,6 +450,17 @@ static void emitTrapStubFunction(llvm::Module &M, llvm::StringRef kernelName,
 
   llvm::BasicBlock *Entry = llvm::BasicBlock::Create(C, "entry", F);
   llvm::IRBuilder<> B(Entry);
+  // No-op stub mode (HSA_HOTSWAP_STUB_NOOP=1): the stub returns immediately
+  // instead of trapping. A no-op kernel cannot hang or fault, so a run that
+  // stubs EVERYTHING as no-op still launches (and the runtime logs) every
+  // kernel the app dispatches -- the safe way to capture the launched-kernel
+  // set for an allowlist without transpiling or executing any real kernel.
+  // (Output is garbage; this is only for allowlist capture.)
+  static const char *s_stubNoop = std::getenv("HSA_HOTSWAP_STUB_NOOP");
+  if (s_stubNoop && s_stubNoop[0] == '1') {
+    B.CreateRetVoid();
+    return;
+  }
   llvm::Function *Trap =
       llvm::Intrinsic::getOrInsertDeclaration(&M, llvm::Intrinsic::trap);
   B.CreateCall(Trap);
@@ -694,6 +705,34 @@ PipelineResult runPipelineAllKernels(llvm::MemoryBufferRef codeObjectData,
     return finish();
   }
 
+  // Best-effort bring-up mode: when set, a kernel that cannot be raised yet is
+  // emitted as a trap stub instead of failing the entire code object. A stubbed
+  // kernel never silently produces wrong results -- if it is never launched the
+  // code object still loads; if it IS launched the trap fires loudly, pinpointing
+  // exactly which instruction coverage is still missing. This is the natural
+  // mode for discovering the real coverage frontier of a full application.
+  static const char *s_stubOnFail = std::getenv("HSA_HOTSWAP_STUB_ON_FAILURE");
+  const bool StubOnFailure = s_stubOnFail && s_stubOnFail[0] == '1';
+
+  std::set<std::string> Allowlist;
+  const bool UseKernelAllowlist = !options.KernelAllowlist.empty();
+  if (UseKernelAllowlist) {
+    std::string AllowlistError;
+    if (!parseKernelAllowlist(options.KernelAllowlist, Allowlist,
+                              AllowlistError)) {
+      llvm::errs() << "transpiler: " << AllowlistError << "\n";
+      result.FailKernel = "__kernel_allowlist__";
+      result.FailMnemonic = "__kernel_allowlist__";
+      result.FailReason = "KernelAllowlistInvalid";
+      result.FailFormat = "KernelAllowlistInvalid";
+      result.FailDetail = AllowlistError;
+      return finish();
+    }
+    LLVM_DEBUG(llvm::dbgs() << "transpiler: Kernel allowlist mode enabled for "
+                            << Allowlist.size() << " requested kernel(s)\n");
+  }
+
+
   LLVM_DEBUG(llvm::dbgs() << "transpiler: Raising " << kernelNames.size()
                           << " kernel(s) [" << sourceISA << " -> " << targetISA
                           << "]\n");
@@ -731,15 +770,45 @@ PipelineResult runPipelineAllKernels(llvm::MemoryBufferRef codeObjectData,
     LLVM_DEBUG(llvm::dbgs() << "transpiler:   [" << (i + 1) << "/"
                             << kernelNames.size() << "] " << kName << " ... ");
 
-    if (!raiseAndCompileKernel(text, codeObjectData, kName,
-                               sourceISA, targetISA, tmpDir, objPath, result,
-                               options)) {
+    bool Ok = false;
+    if (!UseKernelAllowlist || Allowlist.count(kName)) {
+      Ok = raiseAndCompileKernel(text, codeObjectData, kName,
+                                 sourceISA, targetISA, tmpDir, objPath, result,
+                                 options);
+      if (Ok)
+        objPaths.push_back(std::move(objPath));
+      else if (StubOnFailure) {
+        // Could not raise this kernel -- trap-stub it instead of failing the
+        // whole code object (best-effort bring-up). Preserve the kernel ABI
+        // so launches that DO reach it trap cleanly rather than corrupting.
+        llvm::errs() << "transpiler: STUB-ON-FAILURE: trap-stubbing unraisable "
+                     << "kernel '" << kName << "' (failed on "
+                     << result.FailMnemonic << ")\n";
+        auto metaOrErr = extractKernelMeta(codeObjectData, kName);
+        KernelMeta meta = metaOrErr ? std::move(*metaOrErr) : KernelMeta{};
+        TrapStubs.push_back({kName, std::move(meta)});
+        // Clear the per-kernel failure attribution: the overall code object is
+        // still a success, and stale Fail* fields would mislead the proof log.
+        result.FailKernel.clear();
+        result.FailMnemonic.clear();
+        result.FailReason.clear();
+        result.FailFormat.clear();
+        result.FailDetail.clear();
+        result.FailOffset = 0;
+        Ok = true;
+      }
+    } else {
+      auto metaOrErr = extractKernelMeta(codeObjectData, kName);
+      KernelMeta meta = metaOrErr ? std::move(*metaOrErr) : KernelMeta{};
+      TrapStubs.push_back({kName, std::move(meta)});
+      Ok = true;
+    }
+    if (!Ok) {
       LLVM_DEBUG(llvm::dbgs() << "FAILED\n");
       result.Success = false;
       return finish();
     }
     LLVM_DEBUG(llvm::dbgs() << "OK\n");
-    objPaths.push_back(std::move(objPath));
   }
 
   std::string hsacoPath = tmpDir.filePath("merged.Hsaco");
