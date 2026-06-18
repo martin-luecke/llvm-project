@@ -54,11 +54,17 @@ static const char *write_status_name(
   return "failed";
 }
 
-static void get_result_string(amd_comgr_hotswap_transpile_result_t Result,
-                              amd_comgr_hotswap_transpile_result_string_t Field,
-                              char *Buffer, size_t BufferSize) {
-  size_t Size = BufferSize;
+static char *get_result_string(amd_comgr_hotswap_transpile_result_t Result,
+                               amd_comgr_hotswap_transpile_result_string_t Field) {
+  size_t Size = 0;
+  amd_comgr_(hotswap_transpile_result_get_string(Result, Field, &Size, NULL));
+  if (Size == 0)
+    fail("hotswap result string field %d returned zero size", (int)Field);
+  char *Buffer = (char *)malloc(Size);
+  if (Buffer == NULL)
+    fail("malloc(%zu) for result string field %d failed", Size, (int)Field);
   amd_comgr_(hotswap_transpile_result_get_string(Result, Field, &Size, Buffer));
+  return Buffer;
 }
 
 static void print_result_if_present(amd_comgr_hotswap_transpile_result_t Result) {
@@ -73,9 +79,9 @@ static void print_result_if_present(amd_comgr_hotswap_transpile_result_t Result)
       AMD_COMGR_HOTSWAP_CACHE_LOOKUP_DISABLED;
   amd_comgr_hotswap_cache_write_status_t Write =
       AMD_COMGR_HOTSWAP_CACHE_WRITE_NOT_ATTEMPTED;
-  char SourceGfx[64] = "";
-  char TargetGfx[64] = "";
-  char CacheKey[128] = "";
+  char *SourceGfx = NULL;
+  char *TargetGfx = NULL;
+  char *CacheKey = NULL;
 
   amd_comgr_(hotswap_transpile_result_get_info(
       Result, AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_SUCCESS, &Success));
@@ -89,12 +95,12 @@ static void print_result_if_present(amd_comgr_hotswap_transpile_result_t Result)
       Result, AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_LIFTED_COUNT, &Lifted));
   amd_comgr_(hotswap_transpile_result_get_info(
       Result, AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_TOTAL_COUNT, &Total));
-  get_result_string(Result, AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_SOURCE_GFX,
-                    SourceGfx, sizeof(SourceGfx));
-  get_result_string(Result, AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_TARGET_GFX,
-                    TargetGfx, sizeof(TargetGfx));
-  get_result_string(Result, AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_CACHE_KEY,
-                    CacheKey, sizeof(CacheKey));
+  SourceGfx =
+      get_result_string(Result, AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_SOURCE_GFX);
+  TargetGfx =
+      get_result_string(Result, AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_TARGET_GFX);
+  CacheKey =
+      get_result_string(Result, AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_CACHE_KEY);
 
   printf("RESULT_INFO: success=%d cache_hit=%d cache_lookup=%s "
          "cache_write=%s source_gfx=%s target_gfx=%s lifted=%lld total=%lld "
@@ -102,6 +108,9 @@ static void print_result_if_present(amd_comgr_hotswap_transpile_result_t Result)
          Success ? 1 : 0, CacheHit ? 1 : 0, lookup_status_name(Lookup),
          write_status_name(Write), SourceGfx, TargetGfx, (long long)Lifted,
          (long long)Total, CacheKey);
+  free(SourceGfx);
+  free(TargetGfx);
+  free(CacheKey);
 }
 
 int main(int argc, char *argv[]) {
