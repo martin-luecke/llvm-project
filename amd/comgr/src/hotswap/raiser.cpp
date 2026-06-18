@@ -261,7 +261,7 @@ static unsigned kernargPrepassRegWidth32(const MCRegisterInfo &MRI,
   unsigned W = 0;
   for (unsigned SubIdx = AMDGPU::sub0; SubIdx < MaxSubIdx; ++SubIdx) {
     if (!MRI.getSubReg(Reg, SubIdx))
-      break;
+      return W ? W : 1;
     ++W;
   }
   return W ? W : 1;
