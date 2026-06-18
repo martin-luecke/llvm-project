@@ -179,8 +179,7 @@ static bool isSemOpInRange(CanonicalOp Op, CanonicalOp First, CanonicalOp Last) 
 //   * LiveEntry  - every incoming path still has the entry kernarg pointer.
 //   * Clobbered  - every incoming path has overwritten either half.
 //   * Unknown    - paths disagree, are unreachable, or cannot be classified.
-// Hidden-arg synthesis requires LiveEntry; Unknown intentionally fails closed
-// in strict mode.
+// Only LiveEntry permits hidden-arg synthesis.
 //
 // Register identity comes from MC register classes and TableGen-declared defs.
 // Do not infer writes from mnemonic text or TSFlags here: a missed def silently
