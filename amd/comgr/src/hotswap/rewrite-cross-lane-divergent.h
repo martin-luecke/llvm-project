@@ -85,8 +85,9 @@ namespace COMGR::hotswap {
 //   * `update.dpp(old, src, dpp_ctrl, row_mask, bank_mask,
 //                 bound_ctrl)` ->
 //       per-lane `ds_bpermute(srcLaneAbs << 2, src)` + `select`
-//       chain.  Per-target-lane L, with row = (L >> 4) & 3, bank =
-//       (L >> 2) & 3, withinRow = L & 0xF:
+//       chain.  Per-target-lane L, with sourceLane = L & (W_s - 1),
+//       row = (sourceLane >> 4) & 3, bank = (sourceLane >> 2) & 3,
+//       withinRow = L & 0xF:
 //         srcWithinRow, inRange = decode(dpp_ctrl, withinRow)
 //         srcLaneAbs            = (L & ~0xF) | srcWithinRow
 //         bperm                 = ds_bpermute(srcLaneAbs << 2, src)

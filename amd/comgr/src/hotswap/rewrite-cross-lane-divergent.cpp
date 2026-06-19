@@ -1087,13 +1087,13 @@ void rewriteUpdateDppI32Call(CallInst *CI, Value *LaneId,
                               "pre-flight missed unsupported dpp_ctrl ") +
                         describeDppCtrl(Ctrl));
 
-  // Lane-topology values for the source-fetch path.  Both are
-  // derived from the target-wave physical `LaneId` because DPP
-  // source fetch is per-physical-row by ISA definition (the source
-  // selector indexes a lane within the target wave's row).  `LaneId`
-  // itself is memoised at the function level by the caller
-  // (`buildTargetLaneId`), so the only duplication across DPP sites
-  // is the and/lshr chain, which instcombine folds post-pass.
+  // Lane-topology values for the source-fetch path.  Both stay on the
+  // target-wave physical `LaneId`: the bpermute selector must index a
+  // lane within the target wave's physical 16-lane row, so the source
+  // fetch is not source-wave-clipped (unlike the mask gating below).
+  // `LaneId` is memoised at the function level by the caller
+  // (`buildTargetLaneId`), so the only duplication across DPP sites is
+  // the and/lshr chain, which instcombine folds post-pass.
   Value *WithinRow =
       B.CreateAnd(LaneId, ConstantInt::get(I32Ty, 0xF), "cwd_dpp_within_row");
   Value *RowBase = B.CreateAnd(LaneId, ConstantInt::get(I32Ty, ~0xFu),
@@ -1184,6 +1184,11 @@ CrossLaneDivergentRewriteReport rewriteCrossLaneDivergent(
   // null silently -- no current path uses it, and accepting nullptr
   // is part of the documented contract.
   (void)TM;
+
+  // Every rewriter masks lanes with `SourceWaveSize - 1`, which is only a
+  // valid wave-local mask when the wave size is a nonzero power of two.
+  assert(llvm::isPowerOf2_32(SourceWaveSize) &&
+         "source wave size must be a nonzero power of two");
 
   // Direction gate. Same-wave / narrowing skip the rewrite entirely:
   // the backend's implicit readfirstlane would not collapse any per-
