@@ -1156,8 +1156,10 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
   // semantics change versus the source op. See the V_RCP_F64
   // CanonicalOp comment in canonical-op.h for the rationale.
   if (Sop == CanonicalOp::V_RCP_F64) {
+    if (!requireDefaultOutputModsIfPresent(Di, Hr))
+      return Hr;
     auto *F64Ty = Type::getDoubleTy(Ctx.C);
-    Value *S = Ctx.B.CreateBitCast(Op.src64(0), F64Ty);
+    Value *S = Op.applyMods(0, Ctx.B.CreateBitCast(Op.src64(0), F64Ty));
     Function *Rcp = Intrinsic::getOrInsertDeclaration(
         &Ctx.M, Intrinsic::amdgcn_rcp, {F64Ty});
     Value *R = Ctx.B.CreateCall(Rcp, {S}, "vrcp_f64");
