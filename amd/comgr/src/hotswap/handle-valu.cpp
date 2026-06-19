@@ -2282,12 +2282,12 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Hr.Handled = true;
     return Hr;
   }
-  // v_swap_b32 vdstA, vdstB / uses vdstA, vdstB - exchange two VGPRs.
-  // MC encoding has two defs (vdst, vdst_in) and two uses (src0, src0_in).
-  // The old values of both registers swap: src0 -> vdst and old-vdst ->
-  // vdst_in.
+  // v_swap_b32 vdst, src0 - exchange two VGPRs. The MC encoding has two defs
+  // (vdst and src0_out, the latter tied to src0) and two uses (vdst_in tied to
+  // vdst, and src0). The swap exchanges the old values: vdst gets old src0, and
+  // src0 gets old vdst (written back through the src0_out def).
   if (Sop == CanonicalOp::V_SWAP_B32) {
-    // vdst = old src0; vdst_in(== src0's slot) = old vdst.
+    // vdst <- old src0; src0 (via the src0_out def) <- old vdst.
     ParsedReg DstA = Op.dst(0);
     // DstB writes back to src0's slot (the src0_out def, tied to src0); like
     // permlane16_swap's src0_out it must land in src0's own VGPR_MSB bank.
