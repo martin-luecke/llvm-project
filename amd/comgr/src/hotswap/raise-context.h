@@ -124,14 +124,13 @@ struct RaiseContext {
   llvm::Value *readOp64(const DecodedInst &Di, unsigned OpIdx);
   llvm::Value *readOpExecWidth(const DecodedInst &Di, unsigned OpIdx);
 
-  // Emit `llvm.amdgcn.update.dpp.<i32>(old, src, ctrl, row_mask, bank_mask,
+  // Emit `llvm.amdgcn.update.dpp.{i32,i64}(old, src, ctrl, row_mask, bank_mask,
   // bound_ctrl)` -- the P5 lowering for src0-path DPP modifiers; see the
   // DPP row of hotswap/docs/wave-size-translation.md §5.3 for the rewrite
-  // contract. `src` and `old` must be 32-bit (i32 or f32/bitcastable); a
-  // future 64-bit lift would extend the intrinsic overload set and the
-  // bitcast-bridge below. The return type matches `src->getType()` so
-  // callers can feed the result back into the original instruction's
-  // ALU path without reshuffling.
+  // contract. `src` and `old` may be 32- or 64-bit (i32/f32 or i64/f64 via
+  // the bitcast-bridge below), matching the VOP_DPP and VOP_DPP_64 widths.
+  // The return type matches `src->getType()` so callers can feed the result
+  // back into the original instruction's ALU path without reshuffling.
   //
   // `OpResolver::src(0)` / `srcF(0)` wrap their return through this helper
   // when `DecodedInst::hasDpp` is true, so handlers dispatched by CanonicalOp
