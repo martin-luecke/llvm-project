@@ -2874,10 +2874,10 @@ static std::string getMangledNameImpl(CIRGenModule &cgm, GlobalDecl gd,
   // SYCL does not externalize file-scope statics, so RDC does not change the
   // mangled name.
   if (cgm.getLangOpts().GPURelocatableDeviceCode &&
-      !cgm.getLangOpts().isSYCL()) {
-    cgm.errorNYI(nd->getSourceRange(),
-                 "getMangledName: GPU relocatable device code");
-  }
+      !cgm.getLangOpts().isSYCL() &&
+      cgm.getASTContext().shouldExternalize(nd) &&
+      cgm.getLangOpts().CUDAIsDevice)
+    cgm.printPostfixForExternalizedDecl(out, nd);
 
   return std::string(out.str());
 }
