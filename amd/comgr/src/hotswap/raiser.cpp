@@ -184,6 +184,7 @@ static bool isSemOpInRange(CanonicalOp Op, CanonicalOp First, CanonicalOp Last) 
 // Register identity comes from MC register classes and TableGen-declared defs.
 // Do not infer writes from mnemonic text or TSFlags here: a missed def silently
 // lets a stale source hidden-arg interpretation survive across an overwrite.
+// Effect of one instruction or block on the source kernarg pointer SGPR pair.
 enum class KernargPtrEffect {
   Preserves,
   Clobbers,
@@ -202,6 +203,7 @@ struct KernargPrepassDef {
   unsigned Index = 0;
 };
 
+// Recovered CFG block summary used by the kernarg provenance fixed point.
 struct KernargProvenanceBlock {
   // Source byte offset of this recovered block leader.
   uint64_t Start = 0;

@@ -56,6 +56,7 @@ static const char *write_status_name(
   return "failed";
 }
 
+// Receives a temporary result string owned by with_result_string.
 typedef void (*result_string_callback_t)(const char *Value, size_t Size,
                                          void *UserData);
 
