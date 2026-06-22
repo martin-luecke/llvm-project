@@ -681,6 +681,14 @@ Value *RaiseContext::readOpExecWidth(const DecodedInst &Di, unsigned OpIdx) {
       }
       return Fallback;
     }
+    // Wave32-source VCC_HI / EXEC_HI are plain 32-bit data scalars used as
+    // general-purpose scratch SGPRs.  When one appears as the mask operand
+    // of s_and_saveexec_b32 (or similar), treat it as a 32-bit wave mask
+    // and widen it to the target EXEC width via the same symmetric
+    // replication used for SGPR wave masks.
+    if (Pr.RegKind == ParsedReg::VCC_HI_SCRATCH ||
+        Pr.RegKind == ParsedReg::EXEC_HI_SCRATCH)
+      return WidenToExec(Regs.readReg32(B, Pr));
     errs() << "transpiler: readOpExecWidth unresolvable register '"
            << Mc.RegInfo->getName(Di.getReg(OpIdx)) << "' in " << Di.Mnemonic
            << "\n";
