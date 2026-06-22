@@ -191,6 +191,24 @@ enum class KernargPtrEffect {
   Unknown,
 };
 
+// Four-point lattice used internally by the fixed-point solver:
+//
+//            Unknown
+//           /       \
+//      LiveEntry  Clobbered
+//           \       /
+//           Unvisited
+//
+// `Unvisited` is bottom: it represents blocks not reached by the recovered CFG.
+// When exporting final BB facts, bottom is treated as top so strict mode fails
+// closed for unreachable or unrecovered paths.
+enum class KernargPtrDataflowState {
+  Unvisited,
+  LiveEntry,
+  Clobbered,
+  Unknown,
+};
+
 // Classification of one MC register definition for kernarg-pointer overlap.
 struct KernargPrepassDef {
   enum class Kind {
@@ -292,20 +310,48 @@ instructionKernargPtrEffect(const MCRegisterInfo &MRI, const MCInstrInfo &MII,
   return KernargPtrEffect::Preserves;
 }
 
-// Apply an instruction or block effect to an incoming provenance state.
-static RaiseContext::KernargPtrProvenance applyKernargPtrEffect(
-    RaiseContext::KernargPtrProvenance Provenance,
-    KernargPtrEffect Effect) {
-  using ProvenanceKind = RaiseContext::KernargPtrProvenance;
+// Apply an instruction or block effect to an incoming dataflow state.
+static KernargPtrDataflowState
+applyKernargPtrEffect(KernargPtrDataflowState State, KernargPtrEffect Effect) {
+  if (State == KernargPtrDataflowState::Unvisited)
+    return KernargPtrDataflowState::Unvisited;
+
   switch (Effect) {
   case KernargPtrEffect::Preserves:
-    return Provenance;
+    return State;
   case KernargPtrEffect::Clobbers:
-    return ProvenanceKind::Clobbered;
+    return KernargPtrDataflowState::Clobbered;
   case KernargPtrEffect::Unknown:
-    return ProvenanceKind::Unknown;
+    return KernargPtrDataflowState::Unknown;
   }
   llvm_unreachable("unknown kernarg pointer effect");
+}
+
+static KernargPtrDataflowState
+joinKernargPtrStates(KernargPtrDataflowState Lhs,
+                     KernargPtrDataflowState Rhs) {
+  if (Lhs == KernargPtrDataflowState::Unvisited)
+    return Rhs;
+  if (Rhs == KernargPtrDataflowState::Unvisited)
+    return Lhs;
+  if (Lhs == Rhs)
+    return Lhs;
+  return KernargPtrDataflowState::Unknown;
+}
+
+static RaiseContext::KernargPtrProvenance
+toFinalKernargPtrProvenance(KernargPtrDataflowState State) {
+  using Provenance = RaiseContext::KernargPtrProvenance;
+  switch (State) {
+  case KernargPtrDataflowState::Unvisited:
+  case KernargPtrDataflowState::Unknown:
+    return Provenance::Unknown;
+  case KernargPtrDataflowState::LiveEntry:
+    return Provenance::LiveEntry;
+  case KernargPtrDataflowState::Clobbered:
+    return Provenance::Clobbered;
+  }
+  llvm_unreachable("unknown kernarg pointer dataflow state");
 }
 
 // Compose instruction effects in source program order.
@@ -395,7 +441,6 @@ computeKernargPtrProvenance(RaiseContext &Ctx, ArrayRef<DecodedInst> Insts,
                             uint64_t KernelOffset,
                             const DenseMap<uint64_t, BasicBlock *>
                                 &OffsetToBb) {
-  using Provenance = RaiseContext::KernargPtrProvenance;
   assert(Ctx.Layout && "RaiseContext requires descriptor-derived SGPR layout");
   if (Insts.empty() || Ctx.Layout->KernargSegmentPtrSgpr < 0)
     return;
@@ -460,15 +505,10 @@ computeKernargPtrProvenance(RaiseContext &Ctx, ArrayRef<DecodedInst> Insts,
     }
   }
 
-  SmallVector<Provenance> State(Blocks.size(), Provenance::Unknown);
-  BitVector Seen(Blocks.size());
-  auto MergeInto = [&](unsigned I, Provenance Incoming) {
-    if (!Seen[I]) {
-      Seen.set(I);
-      State[I] = Incoming;
-      return true;
-    }
-    Provenance Merged = State[I] == Incoming ? State[I] : Provenance::Unknown;
+  SmallVector<KernargPtrDataflowState> State(
+      Blocks.size(), KernargPtrDataflowState::Unvisited);
+  auto MergeInto = [&](unsigned I, KernargPtrDataflowState Incoming) {
+    KernargPtrDataflowState Merged = joinKernargPtrStates(State[I], Incoming);
     if (Merged == State[I])
       return false;
     State[I] = Merged;
@@ -478,18 +518,17 @@ computeKernargPtrProvenance(RaiseContext &Ctx, ArrayRef<DecodedInst> Insts,
   auto EntryIt = BlockIndexByOffset.find(KernelOffset);
   assert(EntryIt != BlockIndexByOffset.end() &&
          "decoded block starts must include kernel entry");
-  MergeInto(EntryIt->second, Provenance::LiveEntry);
+  MergeInto(EntryIt->second, KernargPtrDataflowState::LiveEntry);
 
-  // This finite-height lattice only moves a block from unseen to its first
-  // incoming fact, then at most once more to Unknown when incoming paths
-  // disagree. Unknown is absorbing, so backedges converge.
+  // Finite-height diamond lattice: facts only move upward from Unvisited to a
+  // concrete path fact and then, if paths disagree or a write is unknown, to
+  // Unknown. Unknown is absorbing under join, so backedges converge.
   bool Changed = true;
   while (Changed) {
     Changed = false;
     for (unsigned I = 0; I < NumBlocks; ++I) {
-      if (!Seen[I])
-        continue;
-      Provenance Out = applyKernargPtrEffect(State[I], Blocks[I].Effect);
+      KernargPtrDataflowState Out =
+          applyKernargPtrEffect(State[I], Blocks[I].Effect);
       for (unsigned Succ : Blocks[I].Successors)
         Changed |= MergeInto(Succ, Out);
     }
@@ -500,7 +539,7 @@ computeKernargPtrProvenance(RaiseContext &Ctx, ArrayRef<DecodedInst> Insts,
     if (BbIt == OffsetToBb.end())
       continue;
     Ctx.setKernargPtrProvenanceForBlock(
-        BbIt->second, Seen[I] ? State[I] : Provenance::Unknown);
+        BbIt->second, toFinalKernargPtrProvenance(State[I]));
   }
 }
 
