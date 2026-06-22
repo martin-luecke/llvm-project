@@ -181,9 +181,8 @@ static bool isSemOpInRange(CanonicalOp Op, CanonicalOp First, CanonicalOp Last) 
 //   * Unknown    - paths disagree, are unreachable, or cannot be classified.
 // Only LiveEntry permits hidden-arg synthesis.
 //
-// Register identity comes from MC register classes and TableGen-declared defs.
-// Do not infer writes from mnemonic text or TSFlags here: a missed def silently
-// lets a stale source hidden-arg interpretation survive across an overwrite.
+// Register identity comes from MC register classes and TableGen-declared defs;
+// mnemonic text and TSFlags are insufficient for overlap checks.
 // Effect of one instruction or block on the source kernarg pointer SGPR pair.
 enum class KernargPtrEffect {
   Preserves,
@@ -360,9 +359,8 @@ static RaiseFailure preloadedImplicitArgFailure(StringRef KernelName,
 static SmallVector<uint64_t> computeKernargProvenanceSuccessors(
     const DecodedInst &LastInst, std::optional<uint64_t> NextBlockOffset,
     const SetPcAnalysis &SetpcAnalysis) {
-  // Ordinary SOPP successors use the shared decoded CFG model.  SETPC/SWAPPC
-  // successors are recovered by setpc-analysis after decode, so consult its
-  // classification table instead of guessing a fallthrough edge.
+  // Ordinary SOPP successors use the shared decoded CFG model. SETPC/SWAPPC
+  // successors come from setpc-analysis.
   if (LastInst.CanonOp != CanonicalOp::S_SET_PC_I64 &&
       LastInst.CanonOp != CanonicalOp::S_SWAP_PC_I64)
     return computeDecodedBlockSuccessors(LastInst, NextBlockOffset);

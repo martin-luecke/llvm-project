@@ -64,28 +64,18 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
     RaiseContext::KernargPtrProvenance BaseProvenance =
         Ctx.getKernargPtrProvenance();
 
-    // Implicit-args reroute. AMDGPU separates the explicit kernarg
-    // segment from the implicit-arg block: the latter is reachable via
-    // `amdgcn_implicitarg_ptr`, not via offsets past the end of the
-    // kernarg segment. A source kernel that issues
+    // Implicit-args reroute. AMDGPU exposes the implicit-arg block through
+    // `amdgcn_implicitarg_ptr`. A source kernel that issues
     // `s_load_b* sN, kernarg_pair, off` with `off >= implicitArgsBase`
     // is reading hidden args through the source-ABI flat layout; the
     // lifted kernel must materialise those bytes via the implicit-arg
     // pointer with the offset rebased to `off - implicitArgsBase`.
     //
-    // Strict-mode refusal: in `HSA_HOTSWAP_STRICT=1` the cross-arch
-    // implicit-arg layout is not yet proven equivalent for every
-    // `(source ISA, target ISA)` pair we lift between, so the
-    // pipeline refuses to silently substitute a target-ABI implicit
-    // arg for a source-ABI one. In permissive mode we trust the
-    // ROCm convention that the layouts match (both gfx9-12 follow
-    // the same `hidden_*` block).
+    // Strict mode requires source hidden-arg synthesis for offsets in this
+    // range. Permissive mode uses ROCm's matching gfx9-12 hidden-arg layout.
     //
     // Gating: the physical SGPR pair must be the source-ABI kernarg pair, and
     // CFG provenance must prove that the pair still contains the entry kernarg
-    // pointer. If the pair has been overwritten, or incoming CFG edges
-    // disagree, strict mode refuses rather than guessing whether the runtime
-    // path still points at source hidden args or at an ordinary explicit
     // pointer.
     bool IsSourceImplicitArgOffset =
         BaseIsKernargPair && ImmOffset && Ctx.Kernargs.ImplicitArgsBase > 0 &&
@@ -176,16 +166,8 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
       return Hr;
     }
 
-    // Generic GEP+load against `addrspace(1)`. The AMDGPU backend
-    // re-derives uniformity / addrspace-narrowing during lowering: a
-    // load whose pointer is provably from `amdgcn_kernarg_segment_ptr`
-    // is selected as `s_load_*` against the kernarg segment regardless
-    // of the IR-level addrspace cast; for runtime-mutated bases (Triton/
-    // SGLang `s[0:1] = preloaded_ptr + wg_offset`, Tensile HBMArgs
-    // `s_load_b64 s[0:1], s[0:1], 0x10`, etc.) the backend keeps the
-    // VMEM lowering. The lift no longer hand-picks the addrspace --
-    // tracking pointer provenance at lift time was redundant with the
-    // backend's own analysis.
+    // Generic GEP+load against `addrspace(1)`. AMDGPU ISel selects the final
+    // memory path from the pointer value's uniformity and provenance.
     {
       Value *BaseAddr = Ctx.Regs.loadSGPR64(Ctx.B, Base.BaseIdx);
       Value *Ptr = Ctx.B.CreateIntToPtr(BaseAddr, Ctx.PtrGlobalTy);
