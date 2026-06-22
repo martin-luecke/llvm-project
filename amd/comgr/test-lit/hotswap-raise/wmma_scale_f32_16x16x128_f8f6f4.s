@@ -52,6 +52,13 @@ wmma_scale_f32_16x16x128_f8f6f4_kernel:
 	s_delay_alu instid0(VALU_DEP_1)
 ; IR_GFX942-LABEL: define amdgpu_kernel void @wmma_scale_f32_16x16x128_f8f6f4_kernel(
 
+; OCP -> FNUZ re-encode of the fp8 fragments (A=BF8/E5M2, B=FP8/E4M3) before
+; the gfx942 MFMA -- per-byte vectorized, ending in a <4 x i32> -> <4 x i8>
+; trunc. gfx942's fp8/bf8 MFMA reads FNUZ; the source is OCP.
+; IR_GFX942-DAG: trunc <4 x i32> %{{[^ ]+}} to <4 x i8>
+
+; First K-block of pass 0 pins the per-iteration emission order
+; (MFMA partial with zero accumulator, then ldexp scale, then fmuladd):
 ; IR_GFX942: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.bf8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
 ; IR_GFX942: sub i32 %{{[^,]+}}, 254
 ; IR_GFX942: call float @llvm.ldexp.f32.i32(float 1.000000e+00, i32 %{{[^)]+}})

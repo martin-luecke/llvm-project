@@ -1,9 +1,16 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --enable-wave-native --emit-ir=wmma_f32_16x16x64_fp8_fp8_kernel 2>/dev/null | %FileCheck %s
+; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --enable-wave-native --emit-ir=wmma_f32_16x16x64_fp8_fp8_kernel | %FileCheck %s
 
 ; wmma_f32_16x16x64_fp8_fp8 lift to paired mfma.f32.16x16x32.fp8.fp8, gfx942 FNUZ.
 ; CHECK-LABEL: define amdgpu_kernel void @wmma_f32_16x16x64_fp8_fp8_kernel(
 ; CHECK: call i1 @llvm.amdgcn.init.whole.wave()
+
+; OCP->FNUZ re-encode of the fp8 A/B fragments before the gfx942 (FNUZ) MFMA:
+; gfx12 source bytes are OCP E4M3, gfx942's MFMA reads FNUZ. The per-byte
+; vectorized re-encode ends in a <4 x i32> -> <4 x i8> trunc.
+; CHECK: trunc <4 x i32> %{{[^ ]+}} to <4 x i8>
+
+; Per-MFMA bitcast to i64 (CDNA3 fp8/bf8 MFMA element type).
 ; CHECK: %{{.*}} = bitcast <2 x i32> %{{.*}} to i64
 ; CHECK: %mfma1 = call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.fp8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> %{{[^,]+}}, i32 0, i32 0, i32 0)
 ; CHECK: %mfma2 = call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.fp8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> %mfma1, i32 0, i32 0, i32 0)

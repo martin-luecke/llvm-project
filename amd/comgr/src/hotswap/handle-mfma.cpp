@@ -11,6 +11,7 @@
 #include "Utils/AMDGPUBaseInfo.h" // AMDGPU::getNamedOperandIdx, AMDGPU::OpName
 #include "amdgpu-formats.h"       // SIInstrFlags
 #include "canonical-op.h"
+#include "fp8-convert.h"
 #include "hotswap/raise-failure.h"
 #include "opcode-map.h"
 #include "llvm/ADT/DenseMap.h"
@@ -209,6 +210,56 @@ Expected<HandlerResult> handleMFMA(RaiseContext &Ctx, const DecodedInst &Di,
   Value *A = Ctx.Regs.readRegVec(Ctx.B, SrcA, SrcTy);
   Value *B = Ctx.Regs.readRegVec(Ctx.B, SrcB, SrcTy);
   Value *C = Ctx.Regs.readRegVec(Ctx.B, SrcC, AccumTy);
+
+  // Native fp8/bf8 MFMA operands carry the SOURCE ISA's fp8 interpretation
+  // (OCP on gfx950, FNUZ on gfx942). When the target's interpretation differs
+  // (e.g. a gfx950 -> gfx942 raise), re-encode the packed A/B bytes so the
+  // target MFMA reads the same numeric values. F16/BF16/IU8/F32/XF32 and the
+  // scaled F8F6F4 family (gfx950-only, no gfx942 isel) carry no plain fp8 byte
+  // and are skipped.
+  {
+    bool AIsBf8 = false, BIsBf8 = false;
+    auto fp8Sides = [&]() -> bool {
+      switch (Sop) {
+      case CanonicalOp::V_MFMA_F32_16x16x32_FP8_FP8:
+      case CanonicalOp::V_MFMA_F32_32x32x16_FP8_FP8:
+        return true;
+      case CanonicalOp::V_MFMA_F32_16x16x32_FP8_BF8:
+      case CanonicalOp::V_MFMA_F32_32x32x16_FP8_BF8:
+        BIsBf8 = true;
+        return true;
+      case CanonicalOp::V_MFMA_F32_16x16x32_BF8_FP8:
+      case CanonicalOp::V_MFMA_F32_32x32x16_BF8_FP8:
+        AIsBf8 = true;
+        return true;
+      case CanonicalOp::V_MFMA_F32_16x16x32_BF8_BF8:
+      case CanonicalOp::V_MFMA_F32_32x32x16_BF8_BF8:
+        AIsBf8 = BIsBf8 = true;
+        return true;
+      default:
+        return false;
+      }
+    };
+    Fp8Format SrcF = fp8FormatOf(Ctx.Isa), TgtF = fp8FormatOf(Ctx.TargetIsa);
+    if (fp8Sides() && SrcF != Fp8Format::None && TgtF != Fp8Format::None &&
+        SrcF != TgtF) {
+      bool ToFnuz = TgtF == Fp8Format::FNUZ;
+      assert(SrcTy->isIntegerTy(64) && "fp8 MFMA operand expected i64");
+      auto Conv = [&](Value *V, bool IsBf8) -> Value * {
+        Value *Lo = Ctx.B.CreateTrunc(V, Ctx.I32Ty);
+        Value *Hi = Ctx.B.CreateTrunc(
+            Ctx.B.CreateLShr(V, ConstantInt::get(SrcTy, 32)), Ctx.I32Ty);
+        Lo = convertFp8Dword(Ctx.B, Lo, IsBf8, ToFnuz);
+        Hi = convertFp8Dword(Ctx.B, Hi, IsBf8, ToFnuz);
+        return Ctx.B.CreateOr(
+            Ctx.B.CreateZExt(Lo, SrcTy),
+            Ctx.B.CreateShl(Ctx.B.CreateZExt(Hi, SrcTy),
+                            ConstantInt::get(SrcTy, 32)));
+      };
+      A = Conv(A, AIsBf8);
+      B = Conv(B, BIsBf8);
+    }
+  }
 
   // Immediate modifiers keyed off the authoritative named-operand table.
   // `cbsz` is common to both families; `abid` is non-scaled only; scaled

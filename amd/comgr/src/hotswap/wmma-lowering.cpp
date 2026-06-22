@@ -184,6 +184,7 @@
 // ============================================================================
 
 #include "wmma-lowering.h"
+#include "fp8-convert.h"
 #include "raise-context.h"
 
 #include "llvm/IR/Constants.h"
@@ -558,6 +559,27 @@ Expected<Value *> emitWMMAtoMFMA(RaiseContext &Ctx, Value *A, Value *Vb,
   unpackDwords(B, A, 8, Ctx.I32Ty, ADwords);
   unpackDwords(B, Vb, 8, Ctx.I32Ty, BDwords);
   unpackDwords(B, C, 8, Ctx.I32Ty, CDwords);
+
+  // gfx12 WMMA fp8/bf8 operands are OCP; the gfx942 fp8/bf8 MFMA reads FNUZ.
+  // Re-encode the A/B fragments OCP->FNUZ when source and target fp8 formats
+  // differ (the only occurring case here is OCP source -> FNUZ gfx942 target).
+  // F16/BF16/IU8 carry no fp8 format and are skipped.
+  if (fp8FormatOf(Ctx.Isa) == Fp8Format::OCP &&
+      fp8FormatOf(Ctx.TargetIsa) == Fp8Format::FNUZ) {
+    bool AIsBf8 = InputType == WMMAInputType::BF8_FP8 ||
+                  InputType == WMMAInputType::BF8_BF8;
+    bool BIsBf8 = InputType == WMMAInputType::FP8_BF8 ||
+                  InputType == WMMAInputType::BF8_BF8;
+    bool IsFp8 = InputType == WMMAInputType::FP8_FP8 ||
+                 InputType == WMMAInputType::FP8_BF8 ||
+                 InputType == WMMAInputType::BF8_FP8 ||
+                 InputType == WMMAInputType::BF8_BF8;
+    if (IsFp8)
+      for (unsigned I = 0; I < 8; ++I) {
+        ADwords[I] = convertFp8Dword(B, ADwords[I], AIsBf8, /*ToFnuz=*/true);
+        BDwords[I] = convertFp8Dword(B, BDwords[I], BIsBf8, /*ToFnuz=*/true);
+      }
+  }
 
   Value *LaneId = emitLaneId(B, M, Ctx.I32Ty);
 
@@ -1080,8 +1102,11 @@ llvm::Expected<llvm::Value *> emitWMMAScaleF8F6F4toScaledMFMA(
 // gfx1250 v_wmma_scale_f32_16x16x128_f8f6f4 -> gfx942: decompose K=128 into 4
 // K=32 unscaled MFMAs and apply the per-block scale to each partial via
 // fmuladd. FP6/BF6/FP4 widen in-line to FP8/BF8 so the pipeline is
-// format-agnostic. MODREP runs one pass; WaveNative cross-widen runs two
-// (GroupBase 0 and 32) combined by a laneId select.
+// format-agnostic. The widened/passthrough fragments are OCP fp8 (E4M3FN /
+// E5M2); since gfx942's fp8/bf8 MFMA interprets operands as FNUZ they are then
+// re-encoded OCP -> FNUZ (see convertOcpFragmentToFnuz). MODREP runs one pass;
+// WaveNative cross-widen runs two (GroupBase 0 and 32) combined by a laneId
+// select.
 
 namespace {
 
@@ -1379,8 +1404,8 @@ Value *extractScaleByte(IRBuilder<> &B, Value *Scale32, unsigned k) {
 }
 
 // Decode one scale byte to f32. E8M0 via `ldexp(1.0, byte - 127)` with
-// 0xFF -> qNaN. E4M3 via hw `cvt_f32_fp8` (same bit layout as the FP8
-// E4M3 data format, including NaN). E5M3 not yet implemented.
+// 0xFF -> qNaN. E4M3 decoded as UE4M3 (OCP bias 7) by hand -- not the FNUZ
+// `cvt_f32_fp8`. E5M3 not yet implemented.
 Value *decodeScaleByte(IRBuilder<> &B, Module &M, Type *F32Ty, Value *Byte,
                        int Fmt) {
   switch (Fmt) {
@@ -1395,12 +1420,30 @@ Value *decodeScaleByte(IRBuilder<> &B, Module &M, Type *F32Ty, Value *Byte,
                           "e8m0_decoded");
   }
   case ScaleFmtE4M3: {
-    // Scale format 2 is UE4M3 (unsigned). cvt.f32.fp8 decodes signed E4M3,
-    // so mask the sign bit; byte 0x7F still decodes as +NaN, matching UE4M3.
-    Value *Masked = B.CreateAnd(Byte, B.getInt32(0x7F), "ue4m3_byte_unsigned");
-    Function *CvtFn =
-        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_cvt_f32_fp8);
-    return B.CreateCall(CvtFn, {Masked, B.getInt32(0)}, "ue4m3_decoded");
+    // Scale format 2 is UE4M3 (unsigned OCP E4M3FN, bias 7). gfx942 has no OCP
+    // fp8 decoder -- amdgcn_cvt_f32_fp8 reads FNUZ (bias 8) and would halve
+    // every scale (e.g. the 0x38 unit scale -> 0.5) -- so decode by hand:
+    //   normal:    (8 + mant) / 8 * 2^(exp - 7)
+    //   subnormal: mant / 8 * 2^-6        (exp == 0)
+    //   NaN:       exp == 15 && mant == 7
+    Value *Exp = B.CreateAnd(B.CreateLShr(Byte, B.getInt32(3)), B.getInt32(0xF),
+                             "ue4m3_exp");
+    Value *Mant = B.CreateAnd(Byte, B.getInt32(0x7), "ue4m3_mant");
+    Value *IsSub = B.CreateICmpEQ(Exp, B.getInt32(0), "ue4m3_sub");
+    Value *MantNum = B.CreateSelect(
+        IsSub, Mant, B.CreateAdd(Mant, B.getInt32(8)), "ue4m3_signif");
+    Value *Sig = B.CreateFMul(B.CreateUIToFP(MantNum, F32Ty),
+                              ConstantFP::get(F32Ty, 0.125), "ue4m3_sig");
+    Value *Exp2 = B.CreateSelect(IsSub, B.getInt32(-6),
+                                 B.CreateSub(Exp, B.getInt32(7)), "ue4m3_e");
+    Function *LdexpFn = Intrinsic::getOrInsertDeclaration(
+        &M, Intrinsic::ldexp, {F32Ty, B.getInt32Ty()});
+    Value *Val = B.CreateCall(LdexpFn, {Sig, Exp2}, "ue4m3_val");
+    Value *IsNaN =
+        B.CreateAnd(B.CreateICmpEQ(Exp, B.getInt32(0xF)),
+                    B.CreateICmpEQ(Mant, B.getInt32(7)), "ue4m3_is_nan");
+    return B.CreateSelect(IsNaN, ConstantFP::getQNaN(F32Ty), Val,
+                          "ue4m3_decoded");
   }
   case ScaleFmtE5M3:
     return nullptr; // TODO
@@ -1544,6 +1587,13 @@ Expected<Value *> emitWMMAScaleF8F6F4toMFMA(
   WidenFragment(bFmt, bSrcDwords, bDwordsArr);
   assert(aDwordsArr.size() == 16 && bDwordsArr.size() == 16 &&
          "post-widen fragments must be 16 fp8 dwords / lane");
+
+  // The fragments are now OCP fp8 (E4M3FN / E5M2); gfx942's fp8/bf8 MFMA reads
+  // FNUZ. Re-encode per effective format before feeding the MFMA.
+  convertFp8DwordsInPlace(B, aDwordsArr, /*IsBf8=*/aFmtEff == FmtBF8,
+                          /*ToFnuz=*/true);
+  convertFp8DwordsInPlace(B, bDwordsArr, /*IsBf8=*/bFmtEff == FmtBF8,
+                          /*ToFnuz=*/true);
 
   Value *LaneId = emitLaneId(B, M, ctx.I32Ty);
 
