@@ -24,6 +24,8 @@
 #include "amd_comgr.h"
 #include "common.h"
 
+#include <assert.h>
+
 static const char *lookup_status_name(
     amd_comgr_hotswap_cache_lookup_status_t Status) {
   switch (Status) {
@@ -54,10 +56,15 @@ static const char *write_status_name(
   return "failed";
 }
 
-// Return a heap-allocated result string. Caller must free the returned buffer.
-static char *get_result_string(
+typedef void (*result_string_callback_t)(const char *Value, size_t Size,
+                                         void *UserData);
+
+// Fetch Field, call Callback with its temporary string, then free it.
+static void with_result_string(
     amd_comgr_hotswap_transpile_result_t Result,
-    amd_comgr_hotswap_transpile_result_string_t Field) {
+    amd_comgr_hotswap_transpile_result_string_t Field,
+    result_string_callback_t Callback, void *UserData) {
+  assert(Callback && "result string callback must be non-null");
   size_t Size = 0;
   amd_comgr_(hotswap_transpile_result_get_string(Result, Field, &Size, NULL));
   if (Size == 0)
@@ -66,7 +73,17 @@ static char *get_result_string(
   if (Buffer == NULL)
     fail("malloc(%zu) for result string field %d failed", Size, (int)Field);
   amd_comgr_(hotswap_transpile_result_get_string(Result, Field, &Size, Buffer));
-  return Buffer;
+  Callback(Buffer, Size, UserData);
+  free(Buffer);
+}
+
+// Print a temporary result string passed by with_result_string.
+static void print_result_string(const char *Value, size_t Size, void *UserData) {
+  assert(Size > 0 && "result string size includes terminating NUL");
+  FILE *Output = (FILE *)UserData;
+  assert(Output && "result string output stream must be non-null");
+  if (fwrite(Value, 1, Size - 1, Output) != Size - 1)
+    fail("short write while printing result string");
 }
 
 static void print_result_if_present(amd_comgr_hotswap_transpile_result_t Result) {
@@ -81,9 +98,6 @@ static void print_result_if_present(amd_comgr_hotswap_transpile_result_t Result)
       AMD_COMGR_HOTSWAP_CACHE_LOOKUP_DISABLED;
   amd_comgr_hotswap_cache_write_status_t Write =
       AMD_COMGR_HOTSWAP_CACHE_WRITE_NOT_ATTEMPTED;
-  char *SourceGfx = NULL;
-  char *TargetGfx = NULL;
-  char *CacheKey = NULL;
 
   amd_comgr_(hotswap_transpile_result_get_info(
       Result, AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_SUCCESS, &Success));
@@ -97,22 +111,21 @@ static void print_result_if_present(amd_comgr_hotswap_transpile_result_t Result)
       Result, AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_LIFTED_COUNT, &Lifted));
   amd_comgr_(hotswap_transpile_result_get_info(
       Result, AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_TOTAL_COUNT, &Total));
-  SourceGfx =
-      get_result_string(Result, AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_SOURCE_GFX);
-  TargetGfx =
-      get_result_string(Result, AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_TARGET_GFX);
-  CacheKey =
-      get_result_string(Result, AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_CACHE_KEY);
 
-  printf("RESULT_INFO: success=%d cache_hit=%d cache_lookup=%s "
-         "cache_write=%s source_gfx=%s target_gfx=%s lifted=%lld total=%lld "
-         "cache_key=%s\n",
+  printf("RESULT_INFO: success=%d cache_hit=%d cache_lookup=%s cache_write=%s "
+         "source_gfx=",
          Success ? 1 : 0, CacheHit ? 1 : 0, lookup_status_name(Lookup),
-         write_status_name(Write), SourceGfx, TargetGfx, (long long)Lifted,
-         (long long)Total, CacheKey);
-  free(SourceGfx);
-  free(TargetGfx);
-  free(CacheKey);
+         write_status_name(Write));
+  with_result_string(Result, AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_SOURCE_GFX,
+                     print_result_string, stdout);
+  printf(" target_gfx=");
+  with_result_string(Result, AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_TARGET_GFX,
+                     print_result_string, stdout);
+  printf(" lifted=%lld total=%lld cache_key=", (long long)Lifted,
+         (long long)Total);
+  with_result_string(Result, AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_CACHE_KEY,
+                     print_result_string, stdout);
+  printf("\n");
 }
 
 int main(int argc, char *argv[]) {
