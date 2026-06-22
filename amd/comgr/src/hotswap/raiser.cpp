@@ -275,7 +275,8 @@ static KernargPtrEffect
 instructionKernargPtrEffect(const MCRegisterInfo &MRI, const MCInstrInfo &MII,
                             const DecodedInst &Di, unsigned KernargPtrSgpr) {
   const MCInstrDesc &Desc = MII.get(Di.Inst.getOpcode());
-  for (unsigned I = 0; I < Desc.getNumDefs(); ++I) {
+  const unsigned NumDefs = Desc.getNumDefs();
+  for (unsigned I = 0; I < NumDefs; ++I) {
     if (!Di.isReg(I))
       return KernargPtrEffect::Unknown;
     KernargPrepassDef Def = classifyKernargPrepassDef(MRI, Di.getReg(I));
