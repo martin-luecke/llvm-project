@@ -232,11 +232,16 @@ struct RaiseContext {
   // recovered source BB leader.
   //
   //   LiveEntry - all incoming CFG paths still carry the entry kernarg pointer.
-  //   Clobbered - all incoming CFG paths have overwritten either half.
+  //   NonEntry  - all incoming CFG paths overwrote the full pair with a
+  //               memory-loaded value; later loads through the same SGPR
+  //               numbers use ordinary memory lowering.
+  //   Clobbered - all incoming CFG paths have overwritten either half without a
+  //               proof that the resulting full pair is non-entry.
   //   Unknown   - paths disagree, are unreachable, or include an unclassified
   //               write; strict hidden-arg lowering refuses in this state.
   enum class KernargPtrProvenance {
     LiveEntry,
+    NonEntry,
     Clobbered,
     Unknown,
   };
@@ -255,8 +260,8 @@ struct RaiseContext {
     return CurrentKernargPtrProvenance;
   }
 
-  // Update the intra-BB cursor after an SGPR write. Only writes to either
-  // kernarg-pointer lane change this provenance fact.
+  // Update the current intra-BB provenance state after an ordinary SGPR write.
+  // Only writes to either kernarg-pointer lane change this fact.
   void noteSgprWriteForKernargProvenance(int Idx) {
     assert(Layout && "RaiseContext requires descriptor-derived SGPR layout");
     int KernargPtrSgpr = Layout->KernargSegmentPtrSgpr;
@@ -264,6 +269,21 @@ struct RaiseContext {
         (Idx != KernargPtrSgpr && Idx != KernargPtrSgpr + 1))
       return;
     CurrentKernargPtrProvenance = KernargPtrProvenance::Clobbered;
+  }
+
+  // Refine the current intra-BB provenance state after an SMEM load has fully
+  // overwritten the physical kernarg pair. The low-level SGPR stores
+  // conservatively mark the pair Clobbered first; the handler calls this after
+  // the complete load is emitted so subsequent same-BB loads stop treating the
+  // base as the entry kernarg pointer.
+  void noteSgprMemoryLoadForKernargProvenance(int BaseIdx, int WidthDwords) {
+    assert(Layout && "RaiseContext requires descriptor-derived SGPR layout");
+    int KernargPtrSgpr = Layout->KernargSegmentPtrSgpr;
+    if (KernargPtrSgpr < 0 || BaseIdx < 0 || WidthDwords < 2)
+      return;
+    int EndIdx = BaseIdx + WidthDwords - 1;
+    if (BaseIdx <= KernargPtrSgpr && EndIdx >= KernargPtrSgpr + 1)
+      CurrentKernargPtrProvenance = KernargPtrProvenance::NonEntry;
   }
 
   // Record the prepass-computed entry fact for a recovered source BB.

@@ -174,11 +174,18 @@ static bool isSemOpInRange(CanonicalOp Op, CanonicalOp First, CanonicalOp Last) 
 // kernarg pointer.  Once an instruction writes either half of the pair, later
 // loads through the same SGPR numbers may be normal explicit pointers
 // (rebased kernels, Triton pointer arithmetic, etc.), so strict mode must stop
-// treating source implicit-arg offsets as hidden-arg accesses.
+// treating source implicit-arg offsets as hidden-arg accesses unless the pair
+// has been fully overwritten with a value read from memory.
 //
 // The prepass below computes one conservative state per decoded basic block:
 //   * LiveEntry  - every incoming path still has the entry kernarg pointer.
-//   * Clobbered  - every incoming path has overwritten either half.
+//   * NonEntry   - every incoming path fully overwrote the pair with a dword
+//                  SMEM load. This is a provenance fact, not a numeric no-alias
+//                  claim: the pair no longer carries the dispatch-provided
+//                  entry SGPR value, so source hidden-arg recognition should
+//                  not trigger solely from the physical register numbers.
+//   * Clobbered  - every incoming path has overwritten either half, but the
+//                  resulting full pair is not proven non-entry.
 //   * Unknown    - paths disagree, are unreachable, or cannot be classified.
 // Only LiveEntry permits hidden-arg synthesis.
 //
@@ -187,17 +194,18 @@ static bool isSemOpInRange(CanonicalOp Op, CanonicalOp First, CanonicalOp Last) 
 // Effect of one instruction or block on the source kernarg pointer SGPR pair.
 enum class KernargPtrEffect {
   Preserves,
+  NonEntry,
   Clobbers,
   Unknown,
 };
 
-// Four-point lattice used internally by the fixed-point solver:
+// Five-point lattice used internally by the fixed-point solver:
 //
-//            Unknown
-//           /       \
-//      LiveEntry  Clobbered
-//           \       /
-//           Unvisited
+//              Unknown
+//          /      |      \
+//   LiveEntry  NonEntry  Clobbered
+//          \      |      /
+//              Unvisited
 //
 // `Unvisited` is bottom: it represents blocks not reached by the recovered CFG.
 // When exporting final BB facts, bottom is treated as top so strict mode fails
@@ -205,6 +213,7 @@ enum class KernargPtrEffect {
 enum class KernargPtrDataflowState {
   Unvisited,
   LiveEntry,
+  NonEntry,
   Clobbered,
   Unknown,
 };
@@ -304,8 +313,15 @@ instructionKernargPtrEffect(const MCRegisterInfo &MRI, const MCInstrInfo &MII,
       continue;
     unsigned DefEnd =
         Def.Index + kernargPrepassRegWidth32(MRI, Di.getReg(I)) - 1;
-    if (Def.Index <= KernargPtrSgpr + 1 && DefEnd >= KernargPtrSgpr)
+    if (Def.Index <= KernargPtrSgpr + 1 && DefEnd >= KernargPtrSgpr) {
+      // Only dword-width SMEM loads can define a full memory-loaded pointer
+      // pair; narrow SMEM loads extend into one SGPR.
+      if (Def.Index <= KernargPtrSgpr && DefEnd >= KernargPtrSgpr + 1 &&
+          isSemOpInRange(Di.CanonOp, CanonicalOp::S_LOAD_B32,
+                         CanonicalOp::S_LOAD_B512))
+        return KernargPtrEffect::NonEntry;
       return KernargPtrEffect::Clobbers;
+    }
   }
   return KernargPtrEffect::Preserves;
 }
@@ -319,6 +335,8 @@ applyKernargPtrEffect(KernargPtrDataflowState State, KernargPtrEffect Effect) {
   switch (Effect) {
   case KernargPtrEffect::Preserves:
     return State;
+  case KernargPtrEffect::NonEntry:
+    return KernargPtrDataflowState::NonEntry;
   case KernargPtrEffect::Clobbers:
     return KernargPtrDataflowState::Clobbered;
   case KernargPtrEffect::Unknown:
@@ -348,6 +366,8 @@ toFinalKernargPtrProvenance(KernargPtrDataflowState State) {
     return Provenance::Unknown;
   case KernargPtrDataflowState::LiveEntry:
     return Provenance::LiveEntry;
+  case KernargPtrDataflowState::NonEntry:
+    return Provenance::NonEntry;
   case KernargPtrDataflowState::Clobbered:
     return Provenance::Clobbered;
   }
@@ -360,6 +380,8 @@ static KernargPtrEffect composeKernargPtrEffect(KernargPtrEffect BlockEffect,
   switch (InstEffect) {
   case KernargPtrEffect::Preserves:
     return BlockEffect;
+  case KernargPtrEffect::NonEntry:
+    return KernargPtrEffect::NonEntry;
   case KernargPtrEffect::Clobbers:
     return KernargPtrEffect::Clobbers;
   case KernargPtrEffect::Unknown:

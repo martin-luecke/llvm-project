@@ -76,6 +76,8 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
     bool BaseIsKernargPair = Ctx.isEntryKernargSegmentPtrSgpr(Base);
     RaiseContext::KernargPtrProvenance BaseProvenance =
         Ctx.getKernargPtrProvenance();
+    bool BaseIsNonEntry =
+        BaseProvenance == RaiseContext::KernargPtrProvenance::NonEntry;
 
     // Implicit-args reroute. AMDGPU exposes the implicit-arg block through
     // `amdgcn_implicitarg_ptr`. A source kernel that issues
@@ -89,9 +91,11 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
     //
     // Gating: the physical SGPR pair must be the source-ABI kernarg pair, and
     // CFG provenance must prove that the pair still contains the entry kernarg
-    // pointer.
+    // pointer. A proven NonEntry pair is an ordinary memory-loaded pointer and
+    // therefore falls through to the generic load path below.
     bool IsSourceImplicitArgOffset =
-        BaseIsKernargPair && ImmOffset && Ctx.Kernargs.ImplicitArgsBase > 0 &&
+        BaseIsKernargPair && !BaseIsNonEntry && ImmOffset &&
+        Ctx.Kernargs.ImplicitArgsBase > 0 &&
         ByteOffset >= Ctx.Kernargs.ImplicitArgsBase;
     bool IsEntryImplicitArgLoad =
         IsSourceImplicitArgOffset &&
@@ -105,8 +109,8 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
           "hidden-arg block on some CFG paths");
       return Hr;
     }
-    if (BaseIsKernargPair && !ImmOffset && Ctx.Kernargs.ImplicitArgsBase > 0 &&
-        isStrictMode()) {
+    if (BaseIsKernargPair && !BaseIsNonEntry && !ImmOffset &&
+        Ctx.Kernargs.ImplicitArgsBase > 0 && isStrictMode()) {
       Hr.Failure = RaiseFailure::strictUnsafeLowering(
           Di, "implicitarg.ptr",
           "cross-arch implicitarg.ptr lowering is unresolved: dynamic source "
@@ -214,6 +218,7 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
         Ctx.Regs.storeSGPR32(Ctx.B, Dest.BaseIdx + D,
                              Ctx.B.CreateLoad(Ctx.I32Ty, Ep, "smem_load"));
       }
+      Ctx.noteSgprMemoryLoadForKernargProvenance(Dest.BaseIdx, LoadDwords);
     }
     Hr.Handled = true;
     return Hr;
@@ -261,16 +266,20 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
     bool BaseIsKernargPair = Ctx.isEntryKernargSegmentPtrSgpr(Base);
     RaiseContext::KernargPtrProvenance BaseProvenance =
         Ctx.getKernargPtrProvenance();
+    bool BaseIsNonEntry =
+        BaseProvenance == RaiseContext::KernargPtrProvenance::NonEntry;
     Value *BaseAddr = Ctx.Regs.loadSGPR64(Ctx.B, Base.BaseIdx);
     Value *Ptr = Ctx.B.CreateIntToPtr(BaseAddr, Ctx.PtrGlobalTy);
     unsigned OffIdx = Op.srcIdx(1);
     if (Di.isImm(OffIdx)) {
       int64_t Off = Op.srcImm(1);
       bool IsEntryImplicitArgLoad =
-          BaseIsKernargPair && Ctx.Kernargs.ImplicitArgsBase > 0 &&
+          BaseIsKernargPair && !BaseIsNonEntry &&
+          Ctx.Kernargs.ImplicitArgsBase > 0 &&
           Off >= Ctx.Kernargs.ImplicitArgsBase &&
           BaseProvenance == RaiseContext::KernargPtrProvenance::LiveEntry;
-      if (BaseIsKernargPair && Ctx.Kernargs.ImplicitArgsBase > 0 &&
+      if (BaseIsKernargPair && !BaseIsNonEntry &&
+          Ctx.Kernargs.ImplicitArgsBase > 0 &&
           Off >= Ctx.Kernargs.ImplicitArgsBase && !IsEntryImplicitArgLoad &&
           isStrictMode()) {
         Hr.Failure = RaiseFailure::strictUnsafeLowering(
@@ -313,7 +322,8 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
       if (Off != 0)
         Ptr = Ctx.B.CreateInBoundsGEP(Ctx.I8Ty, Ptr, Ctx.B.getInt64(Off));
     } else {
-      if (BaseIsKernargPair && Ctx.Kernargs.ImplicitArgsBase > 0 &&
+      if (BaseIsKernargPair && !BaseIsNonEntry &&
+          Ctx.Kernargs.ImplicitArgsBase > 0 &&
           isStrictMode()) {
         Hr.Failure = RaiseFailure::strictUnsafeLowering(
             Di, "implicitarg.ptr",
