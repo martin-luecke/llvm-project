@@ -46,6 +46,7 @@ struct KernargLayout {
   int KernargSegmentSize = 0;
 };
 
+// Source metadata hidden_* argument kinds with source-ABI synthesis support.
 enum class SourceHiddenArgKind {
   None,
   HiddenBlockCountX,
@@ -64,6 +65,7 @@ enum class SourceHiddenArgKind {
   UnsupportedHidden,
 };
 
+// Metadata match for one byte in a source hidden_* argument.
 struct SourceHiddenArgByte {
   SourceHiddenArgKind Kind = SourceHiddenArgKind::None;
   llvm::StringRef ValueKind;

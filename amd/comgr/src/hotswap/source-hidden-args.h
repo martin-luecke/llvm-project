@@ -28,6 +28,7 @@ class Value;
 
 namespace COMGR::hotswap {
 
+// Inputs needed to synthesize source-ABI hidden argument values in IR.
 struct SourceHiddenArgContext {
   llvm::LLVMContext &C;
   llvm::Module &M;
@@ -39,6 +40,7 @@ struct SourceHiddenArgContext {
   bool AssumeHipGlobalOffsetZero = false;
 };
 
+// Result of attempting to synthesize a source hidden argument.
 struct SourceHiddenArgValue {
   // True when ByteOffset maps to a source metadata hidden_* field.
   bool Matched = false;
@@ -48,8 +50,10 @@ struct SourceHiddenArgValue {
   std::string FailureDetail;
 };
 
+// Synthesize a 32-bit source hidden argument value at ByteOffset.
 SourceHiddenArgValue emitSourceHiddenDword(SourceHiddenArgContext &Ctx,
                                            int ByteOffset);
+// Synthesize a 1-, 2-, or 4-byte source hidden integer at ByteOffset.
 SourceHiddenArgValue emitSourceHiddenInteger(SourceHiddenArgContext &Ctx,
                                              int ByteOffset,
                                              unsigned ByteWidth,

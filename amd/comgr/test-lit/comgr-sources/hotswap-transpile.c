@@ -54,8 +54,10 @@ static const char *write_status_name(
   return "failed";
 }
 
-static char *get_result_string(amd_comgr_hotswap_transpile_result_t Result,
-                               amd_comgr_hotswap_transpile_result_string_t Field) {
+// Return a heap-allocated result string. Caller must free the returned buffer.
+static char *get_result_string(
+    amd_comgr_hotswap_transpile_result_t Result,
+    amd_comgr_hotswap_transpile_result_string_t Field) {
   size_t Size = 0;
   amd_comgr_(hotswap_transpile_result_get_string(Result, Field, &Size, NULL));
   if (Size == 0)

@@ -190,6 +190,7 @@ enum class KernargPtrEffect {
   Unknown,
 };
 
+// Classification of one MC register definition for kernarg-pointer overlap.
 struct KernargPrepassDef {
   enum class Kind {
     NotTracked,
@@ -215,6 +216,7 @@ struct KernargProvenanceBlock {
   SmallVector<unsigned, 2> Successors;
 };
 
+// Classify a register definition as a tracked SGPR lane, irrelevant, or unknown.
 static KernargPrepassDef classifyKernargPrepassDef(const MCRegisterInfo &MRI,
                                                    MCRegister Reg) {
   if (!Reg)
@@ -266,6 +268,7 @@ static unsigned kernargPrepassRegWidth32(const MCRegisterInfo &MRI,
   return W;
 }
 
+// Summarize how one decoded instruction affects the kernarg pointer SGPR pair.
 static KernargPtrEffect
 instructionKernargPtrEffect(const MCRegisterInfo &MRI, const MCInstrInfo &MII,
                             const DecodedInst &Di, unsigned KernargPtrSgpr) {
@@ -286,6 +289,7 @@ instructionKernargPtrEffect(const MCRegisterInfo &MRI, const MCInstrInfo &MII,
   return KernargPtrEffect::Preserves;
 }
 
+// Apply an instruction or block effect to an incoming provenance state.
 static RaiseContext::KernargPtrProvenance applyKernargPtrEffect(
     RaiseContext::KernargPtrProvenance Provenance,
     KernargPtrEffect Effect) {
@@ -301,6 +305,7 @@ static RaiseContext::KernargPtrProvenance applyKernargPtrEffect(
   llvm_unreachable("unknown kernarg pointer effect");
 }
 
+// Compose instruction effects in source program order.
 static KernargPtrEffect composeKernargPtrEffect(KernargPtrEffect BlockEffect,
                                                 KernargPtrEffect InstEffect) {
   switch (InstEffect) {
@@ -314,6 +319,7 @@ static KernargPtrEffect composeKernargPtrEffect(KernargPtrEffect BlockEffect,
   llvm_unreachable("unknown kernarg pointer effect");
 }
 
+// Build the strict-mode failure for an unsupported preloaded hidden kernarg.
 static RaiseFailure preloadedHiddenArgFailure(StringRef KernelName,
                                               int ByteOffset,
                                               const Twine &Detail) {
@@ -330,6 +336,7 @@ static RaiseFailure preloadedHiddenArgFailure(StringRef KernelName,
   return F;
 }
 
+// Build the strict-mode failure for a preloaded implicit-arg byte.
 static RaiseFailure preloadedImplicitArgFailure(StringRef KernelName,
                                                 int ByteOffset) {
   RaiseFailure F;
@@ -347,6 +354,7 @@ static RaiseFailure preloadedImplicitArgFailure(StringRef KernelName,
   return F;
 }
 
+// Compute recovered CFG successors for the kernarg provenance prepass.
 static SmallVector<uint64_t> computeKernargProvenanceSuccessors(
     const DecodedInst &LastInst, std::optional<uint64_t> NextBlockOffset,
     const SetPcAnalysis &SetpcAnalysis) {
@@ -377,6 +385,8 @@ static SmallVector<uint64_t> computeKernargProvenanceSuccessors(
   return Result;
 }
 
+// Fill RaiseContext's per-BB kernarg provenance map by fixed-point over the
+// recovered source CFG.
 static void
 computeKernargPtrProvenance(RaiseContext &Ctx, ArrayRef<DecodedInst> Insts,
                             const std::set<uint64_t> &BlockStarts,
