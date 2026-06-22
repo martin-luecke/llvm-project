@@ -44,6 +44,7 @@
 
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -377,7 +378,7 @@ static SmallVector<uint64_t> computeKernargProvenanceSuccessors(
     break;
   case SetPcSiteInfo::Kind::IndirectB:
   case SetPcSiteInfo::Kind::DispatchSet:
-    Result.append(Info.IndirectTargets.begin(), Info.IndirectTargets.end());
+    llvm::append_range(Result, Info.IndirectTargets);
     break;
   case SetPcSiteInfo::Kind::Unresolvable:
     break;
@@ -404,44 +405,49 @@ computeKernargPtrProvenance(RaiseContext &Ctx, ArrayRef<DecodedInst> Insts,
   const MCInstrInfo &MII = *Ctx.Mc.InstrInfo;
 
   SmallVector<uint64_t> Starts(BlockStarts.begin(), BlockStarts.end());
+  const unsigned NumStarts = Starts.size();
+  const unsigned NumInsts = Insts.size();
   DenseMap<uint64_t, unsigned> BlockIndexByOffset;
   DenseMap<uint64_t, unsigned> InstIndexByOffset;
-  for (unsigned I = 0; I < Insts.size(); ++I)
+  for (unsigned I = 0; I < NumInsts; ++I)
     InstIndexByOffset[Insts[I].Offset] = I;
 
   SmallVector<KernargProvenanceBlock> Blocks;
-  Blocks.reserve(Starts.size());
-  for (unsigned I = 0; I < Starts.size(); ++I) {
+  Blocks.reserve(NumStarts);
+  for (unsigned I = 0; I < NumStarts; ++I) {
     BlockIndexByOffset[Starts[I]] = I;
     KernargProvenanceBlock Block;
     Block.Start = Starts[I];
     auto FirstIt = InstIndexByOffset.find(Starts[I]);
-    if (FirstIt != InstIndexByOffset.end()) {
-      Block.HasInsts = true;
-      Block.FirstIdx = FirstIt->second;
-      uint64_t NextStart = I + 1 < Starts.size()
-                               ? Starts[I + 1]
-                               : std::numeric_limits<uint64_t>::max();
-      Block.LastIdx = Block.FirstIdx;
-      for (unsigned J = Block.FirstIdx;
-           J < Insts.size() && Insts[J].Offset < NextStart; ++J) {
-        Block.LastIdx = J;
-        Block.Effect = composeKernargPtrEffect(
-            Block.Effect,
-            instructionKernargPtrEffect(MRI, MII, Insts[J], KernargPtrSgpr));
-        if (decodedInstEndsBlock(Insts[J]))
-          break;
-      }
+    if (FirstIt == InstIndexByOffset.end()) {
+      Blocks.push_back(Block);
+      continue;
+    }
+
+    Block.HasInsts = true;
+    Block.FirstIdx = FirstIt->second;
+    uint64_t NextStart =
+        I + 1 < NumStarts ? Starts[I + 1] : std::numeric_limits<uint64_t>::max();
+    Block.LastIdx = Block.FirstIdx;
+    for (unsigned J = Block.FirstIdx;
+         J < NumInsts && Insts[J].Offset < NextStart; ++J) {
+      Block.LastIdx = J;
+      Block.Effect = composeKernargPtrEffect(
+          Block.Effect,
+          instructionKernargPtrEffect(MRI, MII, Insts[J], KernargPtrSgpr));
+      if (decodedInstEndsBlock(Insts[J]))
+        break;
     }
     Blocks.push_back(Block);
   }
 
-  for (unsigned I = 0; I < Blocks.size(); ++I) {
+  const unsigned NumBlocks = Blocks.size();
+  for (unsigned I = 0; I < NumBlocks; ++I) {
     KernargProvenanceBlock &Block = Blocks[I];
     if (!Block.HasInsts)
       continue;
     std::optional<uint64_t> NextStart;
-    if (I + 1 < Starts.size())
+    if (I + 1 < NumStarts)
       NextStart = Starts[I + 1];
     assert(Ctx.SetpcAnalysis &&
            "kernarg provenance requires completed SETPC analysis");
@@ -479,7 +485,7 @@ computeKernargPtrProvenance(RaiseContext &Ctx, ArrayRef<DecodedInst> Insts,
   bool Changed = true;
   while (Changed) {
     Changed = false;
-    for (unsigned I = 0; I < Blocks.size(); ++I) {
+    for (unsigned I = 0; I < NumBlocks; ++I) {
       if (!Seen[I])
         continue;
       Provenance Out = applyKernargPtrEffect(State[I], Blocks[I].Effect);
@@ -488,7 +494,7 @@ computeKernargPtrProvenance(RaiseContext &Ctx, ArrayRef<DecodedInst> Insts,
     }
   }
 
-  for (unsigned I = 0; I < Blocks.size(); ++I) {
+  for (unsigned I = 0; I < NumBlocks; ++I) {
     auto BbIt = OffsetToBb.find(Blocks[I].Start);
     if (BbIt == OffsetToBb.end())
       continue;
