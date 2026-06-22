@@ -328,6 +328,8 @@ void decodeStaticSmemOffset(DecodedInst &Di) {
   unsigned Opc = Inst.getOpcode();
   int SOffsetIdx = AMDGPU::getNamedOperandIdx(Opc, AMDGPU::OpName::soffset);
   int OffsetIdx = AMDGPU::getNamedOperandIdx(Opc, AMDGPU::OpName::offset);
+  // Absence of either named operand means this is not the SGPR_IMM shape that
+  // carries both dynamic and static offsets.
   if (SOffsetIdx < 0 || OffsetIdx < 0)
     return;
 
@@ -343,10 +345,10 @@ void decodeStaticSmemOffset(DecodedInst &Di) {
        << "' (opcode=" << Opc
        << ") has both OpName::soffset and OpName::offset but the decoded "
           "operands are not a register soffset plus immediate offset";
-    report_fatal_error(StringRef(Os.str()));
+    StringRef Reason = Os.str();
+    report_fatal_error(Reason);
   }
 
-  Di.HasStaticOffset = true;
   Di.StaticOffset = Inst.getOperand(static_cast<unsigned>(OffsetIdx)).getImm();
 }
 

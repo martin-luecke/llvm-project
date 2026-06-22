@@ -23,11 +23,13 @@ namespace COMGR::hotswap {
 
 namespace {
 
+// Add the decoded static SMEM byte immediate to an already 64-bit dynamic
+// offset, preserving `Offset` when the instruction has no non-zero immediate.
 Value *addStaticSmemByteOffset64(RaiseContext &Ctx, const DecodedInst &Di,
                                  Value *Offset, StringRef Name) {
-  if (!Di.HasStaticOffset || Di.StaticOffset == 0)
+  if (!Di.StaticOffset || *Di.StaticOffset == 0)
     return Offset;
-  return Ctx.B.CreateAdd(Offset, Ctx.B.getInt64(Di.StaticOffset), Name);
+  return Ctx.B.CreateAdd(Offset, Ctx.B.getInt64(*Di.StaticOffset), Name);
 }
 
 } // namespace
