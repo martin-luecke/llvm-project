@@ -166,25 +166,6 @@ static bool isSemOpInRange(CanonicalOp Op, CanonicalOp First, CanonicalOp Last) 
          V <= static_cast<uint16_t>(Last);
 }
 
-static std::optional<unsigned> smemDwordLoadWidth(CanonicalOp Op) {
-  switch (Op) {
-  case CanonicalOp::S_LOAD_B32:
-    return 1;
-  case CanonicalOp::S_LOAD_B64:
-    return 2;
-  case CanonicalOp::S_LOAD_B96:
-    return 3;
-  case CanonicalOp::S_LOAD_B128:
-    return 4;
-  case CanonicalOp::S_LOAD_B256:
-    return 8;
-  case CanonicalOp::S_LOAD_B512:
-    return 16;
-  default:
-    return std::nullopt;
-  }
-}
-
 // Kernarg-pointer provenance for source hidden-arg SMEM loads.
 //
 // Source kernels address hidden arguments with ordinary SMEM loads from the
@@ -317,9 +298,40 @@ static unsigned kernargPrepassRegWidth32(const MCRegisterInfo &MRI,
   return W;
 }
 
+// Return the explicit-def width from the TableGen operand register class. Used
+// for SMEM dword-family loads whose decoded tuple register may not expose the
+// full lane count through MC sub-registers.
+static unsigned kernargPrepassDefRegClassWidth32(const MCInstrInfo &MII,
+                                                 const MCRegisterInfo &MRI,
+                                                 const MCSubtargetInfo &STI,
+                                                 const MCInstrDesc &Desc,
+                                                 unsigned DefIdx) {
+  ArrayRef<MCOperandInfo> Operands = Desc.operands();
+  if (DefIdx >= Operands.size())
+    report_fatal_error(Twine("transpiler: missing operand metadata for opcode ") +
+                       Twine(Desc.Opcode) + " def " + Twine(DefIdx) +
+                       " (num operands=" + Twine(Operands.size()) + ")");
+
+  int16_t RegClassId = MII.getOpRegClassID(
+      Operands[DefIdx], STI.getHwMode(MCSubtargetInfo::HwMode_RegInfo));
+  if (RegClassId < 0)
+    report_fatal_error(Twine("transpiler: opcode ") + Twine(Desc.Opcode) +
+                       " def " + Twine(DefIdx) +
+                       " has no register class");
+
+  unsigned Bits = MRI.getRegClass(RegClassId).getSizeInBits();
+  if (Bits == 0 || Bits % 32 != 0)
+    report_fatal_error(Twine("transpiler: opcode ") + Twine(Desc.Opcode) +
+                       " def " + Twine(DefIdx) + " register class " +
+                       Twine(RegClassId) + " has invalid dword width " +
+                       Twine(Bits));
+  return Bits / 32;
+}
+
 // Summarize how one decoded instruction affects the kernarg pointer SGPR pair.
 static KernargPtrEffect
 instructionKernargPtrEffect(const MCRegisterInfo &MRI, const MCInstrInfo &MII,
+                            const MCSubtargetInfo &STI,
                             const DecodedInst &Di, unsigned KernargPtrSgpr) {
   const MCInstrDesc &Desc = MII.get(Di.Inst.getOpcode());
   const unsigned NumDefs = Desc.getNumDefs();
@@ -331,16 +343,20 @@ instructionKernargPtrEffect(const MCRegisterInfo &MRI, const MCInstrInfo &MII,
       return KernargPtrEffect::Unknown;
     if (Def.DefKind == KernargPrepassDef::Kind::NotTracked)
       continue;
-    std::optional<unsigned> SmemLoadDwords = smemDwordLoadWidth(Di.CanonOp);
+    bool IsDwordSmemLoad =
+        isSemOpInRange(Di.CanonOp, CanonicalOp::S_LOAD_B32,
+                       CanonicalOp::S_LOAD_B512);
     unsigned DefWidth =
-        SmemLoadDwords.value_or(kernargPrepassRegWidth32(MRI, Di.getReg(I)));
+        IsDwordSmemLoad
+            ? kernargPrepassDefRegClassWidth32(MII, MRI, STI, Desc, I)
+            : kernargPrepassRegWidth32(MRI, Di.getReg(I));
     unsigned DefEnd = Def.Index + DefWidth - 1;
     if (Def.Index <= KernargPtrSgpr + 1 && DefEnd >= KernargPtrSgpr) {
       // Only dword-family SMEM loads can define the full pair; derive their
-      // width from the opcode because some scalar tuple registers do not expose
-      // the full lane count through MC sub-registers.
+      // width from the TableGen operand class because some scalar tuple
+      // registers do not expose the full lane count through MC sub-registers.
       if (Def.Index <= KernargPtrSgpr && DefEnd >= KernargPtrSgpr + 1 &&
-          SmemLoadDwords)
+          IsDwordSmemLoad)
         return KernargPtrEffect::NonEntry;
       return KernargPtrEffect::Clobbers;
     }
@@ -493,6 +509,7 @@ computeKernargPtrProvenance(RaiseContext &Ctx, ArrayRef<DecodedInst> Insts,
       static_cast<unsigned>(Ctx.Layout->KernargSegmentPtrSgpr);
   const MCRegisterInfo &MRI = *Ctx.Mc.RegInfo;
   const MCInstrInfo &MII = *Ctx.Mc.InstrInfo;
+  const MCSubtargetInfo &STI = *Ctx.Mc.SubtargetInfo;
 
   SmallVector<uint64_t> Starts(BlockStarts.begin(), BlockStarts.end());
   const unsigned NumStarts = Starts.size();
@@ -524,7 +541,8 @@ computeKernargPtrProvenance(RaiseContext &Ctx, ArrayRef<DecodedInst> Insts,
       Block.LastIdx = J;
       Block.Effect = composeKernargPtrEffect(
           Block.Effect,
-          instructionKernargPtrEffect(MRI, MII, Insts[J], KernargPtrSgpr));
+          instructionKernargPtrEffect(MRI, MII, STI, Insts[J],
+                                      KernargPtrSgpr));
       if (decodedInstEndsBlock(Insts[J]))
         break;
     }
