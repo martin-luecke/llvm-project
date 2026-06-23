@@ -1,6 +1,6 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 \
-; RUN:     --emit-ir=vbuffer_vgpr_msb_roles_kernel 2>/dev/null \
+; RUN:     --emit-ir=vbuffer_vgpr_msb_roles_kernel \
 ; RUN:   | %FileCheck %s
 ;
 ; Regression guard: gfx1250 `s_set_vgpr_msb` maps its MSB fields to operands
@@ -16,14 +16,6 @@
 ; would instead extend the *data* operand and read the address from low-bank
 ; v200 (value 11).
 
-; The store's voffset must come from the high-bank address (value 42) and must
-; never be the low-bank v200 (value 11). A positional (VALU-order) raiser would
-; extend the data operand instead and read the address low-bank.
-; CHECK-LABEL: define amdgpu_kernel void @vbuffer_vgpr_msb_roles_kernel(
-; CHECK-NOT: add i32 0, 11
-; CHECK: [[VOFF:%[0-9]+]] = add i32 0, 42
-; CHECK: call void @llvm.amdgcn.raw.buffer.store.i32(i32 %{{[^,]+}}, <4 x i32> %{{[^,]+}}, i32 [[VOFF]], i32 0, i32 0)
-
     .amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
     .amdhsa_code_object_version 6
     .text
@@ -37,6 +29,13 @@ vbuffer_vgpr_msb_roles_kernel:
     s_set_vgpr_msb 0xc0
     v_mov_b32_e32 v200, 42
     s_set_vgpr_msb 0x3
+; The store's voffset must come from the high-bank address (value 42) and must
+; never be the low-bank v200 (value 11). A positional (VALU-order) raiser would
+; extend the data operand instead and read the address low-bank.
+; CHECK-LABEL: define amdgpu_kernel void @vbuffer_vgpr_msb_roles_kernel(
+; CHECK-NOT: add i32 0, 11
+; CHECK: [[VOFF:%[0-9]+]] = add i32 0, 42
+; CHECK: call void @llvm.amdgcn.raw.buffer.store.i32(i32 %{{[^,]+}}, <4 x i32> %{{[^,]+}}, i32 [[VOFF]], i32 0, i32 0)
     buffer_store_dword v0, v200, s[0:3], null offen
     s_set_vgpr_msb 0
     s_endpgm

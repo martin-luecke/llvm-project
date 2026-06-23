@@ -42,6 +42,37 @@ BasicBlock *RaiseContext::lookupBB(uint64_t Addr) {
   return Bb;
 }
 
+// Returns true for source opcodes whose vector operands are defined to ignore
+// active S_SET_VGPR_MSB state, so a missing operand-role table is intentional.
+// This exception is not directly inferable from TableGen operand metadata; the
+// authoritative AMDGPU lowering table encodes it as an empty mapping.
+static bool ignoresVGPRMsb(unsigned Opc) {
+  switch (Opc) {
+  case AMDGPU::V_WMMA_LD_SCALE_PAIRED_B32:
+  case AMDGPU::V_WMMA_LD_SCALE_PAIRED_B32_gfx1250:
+  case AMDGPU::V_WMMA_LD_SCALE16_PAIRED_B64:
+  case AMDGPU::V_WMMA_LD_SCALE16_PAIRED_B64_gfx1250:
+    return true;
+  default:
+    return false;
+  }
+}
+
+// Returns true iff the decoded MC operands include a real VGPR or AGPR
+// register. Non-register operands and no-register sentinels are ignored.
+static bool hasVectorRegOperand(const DecodedInst &Di,
+                                const MCRegisterInfo &MRI) {
+  for (unsigned I = 0, E = Di.Inst.getNumOperands(); I != E; ++I) {
+    const MCOperand &Op = Di.Inst.getOperand(I);
+    if (!Op.isReg() || !Op.getReg())
+      continue;
+    unsigned Enc = MRI.getEncodingValue(Op.getReg());
+    if (Enc & (AMDGPU::HWEncoding::IS_VGPR | AMDGPU::HWEncoding::IS_AGPR))
+      return true;
+  }
+  return false;
+}
+
 void RaiseContext::computeVGPRAdjust(const DecodedInst &Di) {
   std::fill_n(CurrentVgprAdjust, KMaxOps, 0u);
   if (VgprMsBs == 0)
@@ -58,18 +89,23 @@ void RaiseContext::computeVGPRAdjust(const DecodedInst &Di) {
   // AMDGPU backend (AMDGPULowerVGPREncoding / AMDGPUInstPrinter) uses to lower
   // VGPR encoding -- rather than assuming VALU's src0/src1/src2/vdst order:
   // VBUFFER maps slot 0 to vaddr and slot 3 to vdata, VDS maps slots 0/1/2 to
-  // addr/data0/data1, and so on. Formats with no table (e.g. V_WMMA_LD_SCALE,
-  // which the ISA defines to ignore the MSBs) get no adjustment, matching the
-  // backend.
+  // addr/data0/data1, and so on.
   //
   // Only the single-issue (X) table is consulted: VOPD dual-issue packets do
   // not flow through CurrentVgprAdjust -- handle-vopd.cpp applies their MSBs
   // directly via applyVopdVGPRMsb.
   unsigned Opc = Di.Inst.getOpcode();
+  const MCInstrDesc &Desc = Mc.InstrInfo->get(Opc);
   const AMDGPU::OpName *Ops =
-      AMDGPU::getVGPRLoweringOperandTables(Mc.InstrInfo->get(Opc)).first;
-  if (!Ops)
-    return;
+      AMDGPU::getVGPRLoweringOperandTables(Desc).first;
+  if (!Ops) {
+    if (ignoresVGPRMsb(Opc) || !hasVectorRegOperand(Di, *Mc.RegInfo) ||
+        Desc.isPseudo() || Desc.isMetaInstruction())
+      return;
+    report_fatal_error(Twine("transpiler: S_SET_VGPR_MSB has no "
+                             "operand-role table for vector instruction ") +
+                       Di.Mnemonic);
+  }
 
   for (unsigned Slot = 0; Slot != 4; ++Slot) {
     // NUM_OPERAND_NAMES marks a slot this format does not use (e.g. VBUFFER
@@ -86,8 +122,14 @@ void RaiseContext::computeVGPRAdjust(const DecodedInst &Di) {
     // the offset parseReg() will apply. getNamedOperandIdx returns -1 if the
     // operand is absent; KMaxOps bounds the CurrentVgprAdjust table.
     int OpIdx = AMDGPU::getNamedOperandIdx(Opc, Ops[Slot]);
-    if (OpIdx >= 0 && static_cast<unsigned>(OpIdx) < KMaxOps)
-      CurrentVgprAdjust[OpIdx] = Adjust;
+    if (OpIdx < 0)
+      continue;
+    if (static_cast<unsigned>(OpIdx) >= KMaxOps)
+      report_fatal_error(Twine("transpiler: S_SET_VGPR_MSB operand index ") +
+                         Twine(OpIdx) +
+                         " exceeds CurrentVgprAdjust capacity " +
+                         Twine(KMaxOps) + " for " + Di.Mnemonic);
+    CurrentVgprAdjust[OpIdx] = Adjust;
   }
 }
 
