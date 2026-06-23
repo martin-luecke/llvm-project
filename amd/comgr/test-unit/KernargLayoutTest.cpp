@@ -12,9 +12,10 @@
 
 #include <vector>
 
-using COMGR::hotswap::KernelArgMeta;
-using COMGR::hotswap::SourceHiddenArgKind;
 using COMGR::hotswap::classifySourceHiddenArgByte;
+using COMGR::hotswap::KernelArgMeta;
+using COMGR::hotswap::SourceHiddenArgByte;
+using COMGR::hotswap::SourceHiddenArgKind;
 
 namespace {
 KernelArgMeta makeArg(const char *Name, int Offset, int Size,
@@ -36,15 +37,15 @@ TEST(KernargLayout, ClassifiesHiddenBlockCountsByByteContainment) {
       makeArg("grid_z", 56, 4, "hidden_block_count_z"),
   };
 
-  auto X0 = classifySourceHiddenArgByte(Args, 48);
-  auto X3 = classifySourceHiddenArgByte(Args, 51);
-  auto Y0 = classifySourceHiddenArgByte(Args, 52);
-  auto Z0 = classifySourceHiddenArgByte(Args, 56);
+  std::optional<SourceHiddenArgByte> X0 = classifySourceHiddenArgByte(Args, 48);
+  std::optional<SourceHiddenArgByte> X3 = classifySourceHiddenArgByte(Args, 51);
+  std::optional<SourceHiddenArgByte> Y0 = classifySourceHiddenArgByte(Args, 52);
+  std::optional<SourceHiddenArgByte> Z0 = classifySourceHiddenArgByte(Args, 56);
 
-  EXPECT_TRUE(X0.has_value());
-  EXPECT_TRUE(X3.has_value());
-  EXPECT_TRUE(Y0.has_value());
-  EXPECT_TRUE(Z0.has_value());
+  ASSERT_TRUE(X0.has_value());
+  ASSERT_TRUE(X3.has_value());
+  ASSERT_TRUE(Y0.has_value());
+  ASSERT_TRUE(Z0.has_value());
 
   EXPECT_EQ(X0->Kind, SourceHiddenArgKind::HiddenBlockCountX);
   EXPECT_EQ(X0->byteIndexInArg(), 0u);
@@ -61,12 +62,14 @@ TEST(KernargLayout, ClassifiesGroupSizeRemainderAndGridDims) {
       makeArg("grid_dims", 96, 2, "hidden_grid_dims"),
   };
 
-  auto GSX = classifySourceHiddenArgByte(Args, 44);
-  auto RemX = classifySourceHiddenArgByte(Args, 50);
-  auto GD = classifySourceHiddenArgByte(Args, 96);
-  EXPECT_TRUE(GSX.has_value());
-  EXPECT_TRUE(RemX.has_value());
-  EXPECT_TRUE(GD.has_value());
+  std::optional<SourceHiddenArgByte> GSX =
+      classifySourceHiddenArgByte(Args, 44);
+  std::optional<SourceHiddenArgByte> RemX =
+      classifySourceHiddenArgByte(Args, 50);
+  std::optional<SourceHiddenArgByte> GD = classifySourceHiddenArgByte(Args, 96);
+  ASSERT_TRUE(GSX.has_value());
+  ASSERT_TRUE(RemX.has_value());
+  ASSERT_TRUE(GD.has_value());
 
   EXPECT_EQ(GSX->Kind, SourceHiddenArgKind::HiddenGroupSizeX);
   EXPECT_EQ(RemX->Kind, SourceHiddenArgKind::HiddenRemainderX);
@@ -78,8 +81,9 @@ TEST(KernargLayout, ClassifiesUnsupportedHiddenKinds) {
       makeArg("hostcall", 64, 8, "hidden_hostcall_buffer"),
   };
 
-  auto Unsupported = classifySourceHiddenArgByte(Args, 64);
-  EXPECT_TRUE(Unsupported.has_value());
+  std::optional<SourceHiddenArgByte> Unsupported =
+      classifySourceHiddenArgByte(Args, 64);
+  ASSERT_TRUE(Unsupported.has_value());
 
   EXPECT_EQ(Unsupported->Kind, SourceHiddenArgKind::UnsupportedHidden);
 }
