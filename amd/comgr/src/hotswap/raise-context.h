@@ -141,8 +141,7 @@ struct RaiseContext {
                               uint16_t Ctrl, uint8_t RowMask,
                               uint8_t BankMask, bool BoundCtrl);
 
-  // Target-hardware lane id (i32). Delegates to `WaveProjection::emitLaneIdx`,
-  // which emits the mbcnt pair once and caches it per function.
+  // Target-hardware lane id (i32), emitted once per kernel and reused.
   llvm::Value *emitLaneIdx();
 
   // ==== SIMT Predicated Execution (SPE) helpers
@@ -170,15 +169,10 @@ struct RaiseContext {
   // unoptimised output shape.
   llvm::Value *emitLaneActiveBit();
 
-  // Invalidate the lane_active and lane_idx memoisations. Called by
-  // the main raiser loop between instructions and by `storeExec`.
-  // Handlers that know they have mutated EXEC through a lower-level
-  // path (e.g. the few places that call `regs.storeExec` directly)
-  // must also invoke this. The lane_idx cache shares the same
-  // invalidation contract: per-BB lifetime, reset at every
-  // instruction boundary so a handler that hops basic blocks (e.g.
-  // SPE diamonds) never reads a cached SSA value out of its
-  // dominance scope.
+  // Invalidate the lane_active memoisation. Called by the main raiser
+  // loop between instructions and by `storeExec`. Handlers that know
+  // they have mutated EXEC through a lower-level path (e.g. the few
+  // places that call `regs.storeExec` directly) must also invoke this.
   void resetLaneActiveCache() {
     CachedLaneActive = nullptr;
     CachedLaneActiveBb = nullptr;
