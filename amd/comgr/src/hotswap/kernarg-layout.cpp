@@ -148,7 +148,7 @@ classifySourceHiddenArgByte(ArrayRef<KernelArgMeta> Args, int ByteOffset) {
       Result.Kind = SourceHiddenArgKind::UnsupportedHidden;
     return Result;
   }
-  return classifyStandardHiddenArgByte(Args, ByteOffset);
+  return std::nullopt;
 }
 
 } // namespace COMGR::hotswap
