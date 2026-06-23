@@ -166,6 +166,25 @@ static bool isSemOpInRange(CanonicalOp Op, CanonicalOp First, CanonicalOp Last) 
          V <= static_cast<uint16_t>(Last);
 }
 
+static std::optional<unsigned> smemDwordLoadWidth(CanonicalOp Op) {
+  switch (Op) {
+  case CanonicalOp::S_LOAD_B32:
+    return 1;
+  case CanonicalOp::S_LOAD_B64:
+    return 2;
+  case CanonicalOp::S_LOAD_B96:
+    return 3;
+  case CanonicalOp::S_LOAD_B128:
+    return 4;
+  case CanonicalOp::S_LOAD_B256:
+    return 8;
+  case CanonicalOp::S_LOAD_B512:
+    return 16;
+  default:
+    return std::nullopt;
+  }
+}
+
 // Kernarg-pointer provenance for source hidden-arg SMEM loads.
 //
 // Source kernels address hidden arguments with ordinary SMEM loads from the
@@ -174,16 +193,17 @@ static bool isSemOpInRange(CanonicalOp Op, CanonicalOp First, CanonicalOp Last) 
 // kernarg pointer.  Once an instruction writes either half of the pair, later
 // loads through the same SGPR numbers may be normal explicit pointers
 // (rebased kernels, Triton pointer arithmetic, etc.), so strict mode must stop
-// treating source implicit-arg offsets as hidden-arg accesses unless the pair
-// has been fully overwritten with a value read from memory.
+// treating source implicit-arg offsets as hidden-arg accesses once the full
+// pair is known not to hold the dispatch-provided entry pointer.
 //
 // The prepass below computes one conservative state per decoded basic block:
 //   * LiveEntry  - every incoming path still has the entry kernarg pointer.
-//   * NonEntry   - every incoming path fully overwrote the pair with a dword
-//                  SMEM load. This is a provenance fact, not a numeric no-alias
-//                  claim: the pair no longer carries the dispatch-provided
-//                  entry SGPR value, so source hidden-arg recognition should
-//                  not trigger solely from the physical register numbers.
+//   * NonEntry   - every incoming path fully overwrote the pair with a
+//                  dword-family SMEM instruction. This is a provenance fact,
+//                  not a numeric no-alias claim: the pair no longer carries the
+//                  dispatch-provided entry SGPR value, so source hidden-arg
+//                  recognition should not trigger solely from the physical
+//                  register numbers.
 //   * Clobbered  - every incoming path has overwritten either half, but the
 //                  resulting full pair is not proven non-entry.
 //   * Unknown    - paths disagree, are unreachable, or cannot be classified.
@@ -311,14 +331,16 @@ instructionKernargPtrEffect(const MCRegisterInfo &MRI, const MCInstrInfo &MII,
       return KernargPtrEffect::Unknown;
     if (Def.DefKind == KernargPrepassDef::Kind::NotTracked)
       continue;
-    unsigned DefEnd =
-        Def.Index + kernargPrepassRegWidth32(MRI, Di.getReg(I)) - 1;
+    std::optional<unsigned> SmemLoadDwords = smemDwordLoadWidth(Di.CanonOp);
+    unsigned DefWidth =
+        SmemLoadDwords.value_or(kernargPrepassRegWidth32(MRI, Di.getReg(I)));
+    unsigned DefEnd = Def.Index + DefWidth - 1;
     if (Def.Index <= KernargPtrSgpr + 1 && DefEnd >= KernargPtrSgpr) {
-      // Only dword-width SMEM loads can define a full memory-loaded pointer
-      // pair; narrow SMEM loads extend into one SGPR.
+      // Only dword-family SMEM loads can define the full pair; derive their
+      // width from the opcode because some scalar tuple registers do not expose
+      // the full lane count through MC sub-registers.
       if (Def.Index <= KernargPtrSgpr && DefEnd >= KernargPtrSgpr + 1 &&
-          isSemOpInRange(Di.CanonOp, CanonicalOp::S_LOAD_B32,
-                         CanonicalOp::S_LOAD_B512))
+          SmemLoadDwords)
         return KernargPtrEffect::NonEntry;
       return KernargPtrEffect::Clobbers;
     }

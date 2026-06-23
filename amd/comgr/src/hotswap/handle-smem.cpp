@@ -91,8 +91,8 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
     //
     // Gating: the physical SGPR pair must be the source-ABI kernarg pair, and
     // CFG provenance must prove that the pair still contains the entry kernarg
-    // pointer. A proven NonEntry pair is an ordinary memory-loaded pointer and
-    // therefore falls through to the generic load path below.
+    // pointer. A proven NonEntry pair no longer carries the dispatch-provided
+    // entry pointer and therefore falls through to the generic load path below.
     bool IsSourceImplicitArgOffset =
         BaseIsKernargPair && !BaseIsNonEntry && ImmOffset &&
         Ctx.Kernargs.ImplicitArgsBase > 0 &&
@@ -155,6 +155,7 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
           Ctx.Regs.storeSGPR32(Ctx.B, Dest.BaseIdx + D,
                                Ctx.B.CreateLoad(Ctx.I32Ty, Ep, "impl_load"));
         }
+        Ctx.noteSgprMemoryLoadForKernargProvenance(Dest.BaseIdx, LoadDwords);
         Hr.Handled = true;
         return Hr;
       }
@@ -179,6 +180,7 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
         }
         Ctx.Regs.storeSGPR32(Ctx.B, Dest.BaseIdx + D, Dw.Value);
       }
+      Ctx.noteSgprMemoryLoadForKernargProvenance(Dest.BaseIdx, LoadDwords);
       Hr.Handled = true;
       return Hr;
     }

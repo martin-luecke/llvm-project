@@ -232,9 +232,10 @@ struct RaiseContext {
   // recovered source BB leader.
   //
   //   LiveEntry - all incoming CFG paths still carry the entry kernarg pointer.
-  //   NonEntry  - all incoming CFG paths overwrote the full pair with a
-  //               memory-loaded value; later loads through the same SGPR
-  //               numbers use ordinary memory lowering.
+  //   NonEntry  - all incoming CFG paths overwrote the full pair with a value
+  //               that is not the dispatch-provided entry kernarg pointer;
+  //               later loads through the same SGPR numbers use ordinary
+  //               memory lowering.
   //   Clobbered - all incoming CFG paths have overwritten either half without a
   //               proof that the resulting full pair is non-entry.
   //   Unknown   - paths disagree, are unreachable, or include an unclassified
@@ -271,11 +272,8 @@ struct RaiseContext {
     CurrentKernargPtrProvenance = KernargPtrProvenance::Clobbered;
   }
 
-  // Refine the current intra-BB provenance state after an SMEM load has fully
-  // overwritten the physical kernarg pair. The low-level SGPR stores
-  // conservatively mark the pair Clobbered first; the handler calls this after
-  // the complete load is emitted so subsequent same-BB loads stop treating the
-  // base as the entry kernarg pointer.
+  // After a dword-family SMEM instruction overwrites the full kernarg pair,
+  // refine the intra-BB state from the low-level stores' Clobbered to NonEntry.
   void noteSgprMemoryLoadForKernargProvenance(int BaseIdx, int WidthDwords) {
     assert(Layout && "RaiseContext requires descriptor-derived SGPR layout");
     int KernargPtrSgpr = Layout->KernargSegmentPtrSgpr;
