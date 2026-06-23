@@ -250,19 +250,26 @@ target_include_directories(hotswap-transpiler PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>
 )
 
-# `llc`, `llvm-mc`, `llvm-objdump` etc. live in the build tree's bin/.
-# ROCR's trap-handler subproject may require a ROCm Clang package even when
-# Hotswap itself is validated against a local LLVM build, so keep the tool path
-# overrideable rather than deriving it unconditionally from the LLVM package
-# used for in-process linkage.
-set(HOTSWAP_TRANSPILER_LLVM_TOOLS_DIR "${LLVM_TOOLS_BINARY_DIR}" CACHE PATH
-  "Directory containing llc, llvm-mc, llvm-objdump, and related LLVM tools used by Hotswap")
-target_compile_definitions(hotswap-transpiler PRIVATE
-  LLVM_TOOLS_DIR="${HOTSWAP_TRANSPILER_LLVM_TOOLS_DIR}"
-)
+# The pipeline links relocatable objects into the HSACO using the in-process
+# LLD ELF driver (lld::lldMain), so it needs the lld headers and libraries.
+# The parent comgr build adds these only to amd_comgr (PRIVATE), so the
+# hotswap object library must pull them in itself.
+if(NOT TARGET lldELF OR NOT TARGET lldCommon)
+  find_package(LLD CONFIG)
+endif()
+if(LLD_INCLUDE_DIRS)
+  target_include_directories(hotswap-transpiler PRIVATE ${LLD_INCLUDE_DIRS})
+elseif(LLVM_EXTERNAL_LLD_SOURCE_DIR)
+  target_include_directories(hotswap-transpiler PRIVATE
+    ${LLVM_EXTERNAL_LLD_SOURCE_DIR}/include
+    ${LLVM_BINARY_DIR}/tools/lld/include)
+endif()
 
 target_link_libraries(hotswap-transpiler
   PUBLIC
+    # LLD ELF driver (in-process linking).
+    lldELF
+    lldCommon
     # LLVM AMDGPU components, sorted alphabetically.
     LLVMAMDGPUAsmParser
     LLVMAMDGPUCodeGen

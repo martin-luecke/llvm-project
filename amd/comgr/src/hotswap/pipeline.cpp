@@ -3,30 +3,55 @@
 #include "raise-failure.h"
 #include "raiser.h"
 
+#include "lld/Common/CommonLinkerContext.h"
+#include "lld/Common/Driver.h"
+
+#include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/StringExtras.h"
+#include "llvm/Analysis/CGSCCPassManager.h"
+#include "llvm/Analysis/LoopAnalysisManager.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Verifier.h"
+#include "llvm/MC/MCAsmBackend.h"
+#include "llvm/MC/MCAsmInfo.h"
+#include "llvm/MC/MCCodeEmitter.h"
+#include "llvm/MC/MCContext.h"
+#include "llvm/MC/MCInstrInfo.h"
+#include "llvm/MC/MCObjectFileInfo.h"
+#include "llvm/MC/MCObjectWriter.h"
+#include "llvm/MC/MCParser/MCAsmParser.h"
+#include "llvm/MC/MCParser/MCTargetAsmParser.h"
+#include "llvm/MC/MCRegisterInfo.h"
+#include "llvm/MC/MCStreamer.h"
+#include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/MC/MCTargetOptions.h"
+#include "llvm/MC/TargetRegistry.h"
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/AMDHSAKernelDescriptor.h"
+#include "llvm/Support/CodeGen.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
-#include "llvm/Support/Path.h"
-#include "llvm/Support/Program.h"
-#include "llvm/Support/AMDHSAKernelDescriptor.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/Path.h"
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/xxhash.h"
+#include "llvm/Target/TargetMachine.h"
+#include "llvm/TargetParser/Triple.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <optional>
 #include <string>
 
-#define DEBUG_TYPE "transpiler"
+LLD_HAS_DRIVER(elf)
 
-#ifndef LLVM_TOOLS_DIR
-#define LLVM_TOOLS_DIR "/usr/bin"
-#endif
+#define DEBUG_TYPE "transpiler"
 
 namespace COMGR::hotswap {
 
@@ -108,47 +133,150 @@ std::string makeSafeBasename(llvm::StringRef kernelName,
   return prefix + "_" + hex;
 }
 
-int toolTimeoutSeconds() {
-  static const int timeout = [] {
-    constexpr int kDefaultTimeoutSeconds = 300;
-    const char *env = std::getenv("HSA_HOTSWAP_TOOL_TIMEOUT_S");
-    if (!env || !env[0])
-      return kDefaultTimeoutSeconds;
-    char *end = nullptr;
-    long parsed = std::strtol(env, &end, 10);
-    if (*end != '\0' || parsed <= 0) {
-      llvm::errs() << "transpiler: invalid HSA_HOTSWAP_TOOL_TIMEOUT_S='"
-                   << env << "'; using default " << kDefaultTimeoutSeconds
-                   << " seconds\n";
-      return kDefaultTimeoutSeconds;
-    }
-    return static_cast<int>(parsed);
-  }();
-  return timeout;
+constexpr llvm::StringRef kHotswapTriple = "amdgcn-amd-amdhsa";
+
+llvm::OptimizationLevel toOptimizationLevel(unsigned Level) {
+  switch (Level) {
+  case 0:
+    return llvm::OptimizationLevel::O0;
+  case 1:
+    return llvm::OptimizationLevel::O1;
+  case 2:
+    return llvm::OptimizationLevel::O2;
+  default:
+    return llvm::OptimizationLevel::O3;
+  }
 }
 
-int runTool(llvm::StringRef program, llvm::ArrayRef<llvm::StringRef> args) {
-  LLVM_DEBUG({
-    llvm::dbgs() << "transpiler: Running:";
-    for (auto &a : args) llvm::dbgs() << " " << a;
-    llvm::dbgs() << "\n";
-  });
+llvm::CodeGenOptLevel toCodeGenOptLevel(unsigned Level) {
+  switch (Level) {
+  case 0:
+    return llvm::CodeGenOptLevel::None;
+  case 1:
+    return llvm::CodeGenOptLevel::Less;
+  case 2:
+    return llvm::CodeGenOptLevel::Default;
+  default:
+    return llvm::CodeGenOptLevel::Aggressive;
+  }
+}
 
-  auto exeOrErr = llvm::sys::findProgramByName(program);
-  if (!exeOrErr) {
-    llvm::errs() << "transpiler: tool not found: " << program << "\n";
-    return -1;
+std::unique_ptr<llvm::TargetMachine>
+createHotswapTargetMachine(llvm::StringRef targetISA, unsigned OptLevel) {
+  std::string err;
+  llvm::Triple triple(kHotswapTriple);
+  const llvm::Target *target =
+      llvm::TargetRegistry::lookupTarget(triple, err);
+  if (!target) {
+    llvm::errs() << "transpiler: lookupTarget failed: " << err << "\n";
+    return nullptr;
+  }
+  llvm::TargetOptions opts;
+  return std::unique_ptr<llvm::TargetMachine>(target->createTargetMachine(
+      triple, targetISA, /*Features=*/"", opts, llvm::Reloc::PIC_,
+      /*CodeModel=*/std::nullopt, toCodeGenOptLevel(OptLevel)));
+}
+
+// In-process `opt`: run the default per-module pipeline at OptLevel.
+llvm::Error runOptPipeline(llvm::Module &M, llvm::TargetMachine &TM,
+                           unsigned OptLevel) {
+  llvm::LoopAnalysisManager LAM;
+  llvm::FunctionAnalysisManager FAM;
+  llvm::CGSCCAnalysisManager CGAM;
+  llvm::ModuleAnalysisManager MAM;
+  llvm::PassBuilder PB(&TM);
+  PB.registerModuleAnalyses(MAM);
+  PB.registerCGSCCAnalyses(CGAM);
+  PB.registerFunctionAnalyses(FAM);
+  PB.registerLoopAnalyses(LAM);
+  PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+
+  llvm::OptimizationLevel OL = toOptimizationLevel(OptLevel);
+  llvm::ModulePassManager MPM = OL == llvm::OptimizationLevel::O0
+                                    ? PB.buildO0DefaultPipeline(OL)
+                                    : PB.buildPerModuleDefaultPipeline(OL);
+  MPM.run(M, MAM);
+  return llvm::Error::success();
+}
+
+// In-process `llc`: lower the module to target assembly text.
+llvm::Error emitAssembly(llvm::Module &M, llvm::TargetMachine &TM,
+                         std::string &asmOut) {
+  llvm::SmallString<4096> buffer;
+  llvm::raw_svector_ostream OS(buffer);
+  llvm::legacy::PassManager PM;
+  if (TM.addPassesToEmitFile(PM, OS, /*DwoOut=*/nullptr,
+                             llvm::CodeGenFileType::AssemblyFile))
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "target cannot emit assembly");
+  PM.run(M);
+  asmOut.assign(buffer.begin(), buffer.end());
+  return llvm::Error::success();
+}
+
+// In-process `llvm-mc`: assemble target assembly text into a relocatable
+// object, written to objOut.
+bool assembleToObject(llvm::StringRef asmText, llvm::StringRef targetISA,
+                      llvm::SmallVectorImpl<char> &objOut) {
+  std::string err;
+  llvm::Triple triple(kHotswapTriple);
+  const llvm::Target *target =
+      llvm::TargetRegistry::lookupTarget(triple, err);
+  if (!target) {
+    llvm::errs() << "transpiler: lookupTarget failed: " << err << "\n";
+    return false;
   }
 
-  std::string errMsg;
-  int rc = llvm::sys::ExecuteAndWait(*exeOrErr, args, /*Env=*/std::nullopt,
-                                     /*Redirects=*/{},
-                                     /*SecondsToWait=*/toolTimeoutSeconds(),
-                                     /*MemoryLimit=*/0, &errMsg);
-  if (rc != 0)
-    llvm::errs() << "transpiler: " << program << " failed (exit " << rc << ")"
-                 << (errMsg.empty() ? "" : ": " + errMsg) << "\n";
-  return rc;
+  llvm::SourceMgr srcMgr;
+  srcMgr.AddNewSourceBuffer(
+      llvm::MemoryBuffer::getMemBufferCopy(asmText, "<hotswap-asm>"),
+      llvm::SMLoc());
+
+  std::unique_ptr<llvm::MCRegisterInfo> MRI(target->createMCRegInfo(triple));
+  llvm::MCTargetOptions MCOptions;
+  std::unique_ptr<llvm::MCAsmInfo> MAI(
+      target->createMCAsmInfo(*MRI, triple, MCOptions));
+  std::unique_ptr<llvm::MCSubtargetInfo> STI(
+      target->createMCSubtargetInfo(triple, targetISA, /*Features=*/""));
+  std::unique_ptr<llvm::MCInstrInfo> MCII(target->createMCInstrInfo());
+  if (!MRI || !MAI || !STI || !MCII) {
+    llvm::errs() << "transpiler: failed to create MC info for assembly\n";
+    return false;
+  }
+
+  llvm::MCContext Ctx(triple, *MAI, *MRI, *STI, &srcMgr);
+  std::unique_ptr<llvm::MCObjectFileInfo> MOFI(
+      new llvm::MCObjectFileInfo());
+  MOFI->initMCObjectFileInfo(Ctx, /*PIC=*/true);
+  Ctx.setObjectFileInfo(MOFI.get());
+
+  llvm::raw_svector_ostream Out(objOut);
+  llvm::MCCodeEmitter *CE = target->createMCCodeEmitter(*MCII, Ctx);
+  llvm::MCAsmBackend *MAB = target->createMCAsmBackend(*STI, *MRI, MCOptions);
+  if (!CE || !MAB) {
+    llvm::errs() << "transpiler: failed to create MC code emitter/backend\n";
+    return false;
+  }
+  std::unique_ptr<llvm::MCStreamer> Str(target->createMCObjectStreamer(
+      triple, Ctx, std::unique_ptr<llvm::MCAsmBackend>(MAB),
+      MAB->createObjectWriter(Out), std::unique_ptr<llvm::MCCodeEmitter>(CE),
+      *STI));
+  Str->initSections(*STI);
+
+  std::unique_ptr<llvm::MCAsmParser> Parser(
+      llvm::createMCAsmParser(srcMgr, Ctx, *Str, *MAI));
+  std::unique_ptr<llvm::MCTargetAsmParser> TAP(
+      target->createMCAsmParser(*STI, *Parser, *MCII));
+  if (!TAP) {
+    llvm::errs() << "transpiler: failed to create target asm parser\n";
+    return false;
+  }
+  Parser->setTargetParser(*TAP);
+  if (Parser->Run(/*NoInitialTextSection=*/false)) {
+    llvm::errs() << "transpiler: assembly parsing failed\n";
+    return false;
+  }
+  return true;
 }
 
 struct DumpDir {
@@ -347,41 +475,64 @@ static bool raiseAndCompileKernel(const TextSection &text,
   result.Timings.writeIrSeconds +=
       timingElapsed(options.CollectTimings, writeIrStart);
 
-  std::string llcBin = std::string(LLVM_TOOLS_DIR) + "/llc";
-  std::string mcpuLlc = ("-mcpu=" + targetISA).str();
+  if (!raised.Module) {
+    llvm::errs() << "transpiler: raiser produced no module for '" << kernelName
+                 << "'\n";
+    return false;
+  }
+  llvm::Module &M = *raised.Module;
+
+  std::unique_ptr<llvm::TargetMachine> TM =
+      createHotswapTargetMachine(targetISA, options.OptLevel);
+  if (!TM) {
+    llvm::errs() << "transpiler: failed to create TargetMachine for '"
+                 << kernelName << "'\n";
+    return false;
+  }
+  M.setDataLayout(TM->createDataLayout());
+
+  auto optStart = timingStart(options.CollectTimings);
+  if (llvm::Error err = runOptPipeline(M, *TM, options.OptLevel)) {
+    result.Timings.optSeconds += timingElapsed(options.CollectTimings, optStart);
+    llvm::errs() << "transpiler: opt failed for '" << kernelName
+                 << "': " << llvm::toString(std::move(err)) << "\n";
+    return false;
+  }
+  result.Timings.optSeconds += timingElapsed(options.CollectTimings, optStart);
+
+  std::string asmText;
   auto llcStart = timingStart(options.CollectTimings);
-  if (runTool(llcBin, {llcBin, "-march=amdgcn", mcpuLlc, "-filetype=asm", "-o",
-                       asmPath, irPath}) != 0) {
+  if (llvm::Error err = emitAssembly(M, *TM, asmText)) {
     result.Timings.llcSeconds += timingElapsed(options.CollectTimings, llcStart);
-    llvm::errs() << "transpiler: llc failed for '" << kernelName << "'\n";
+    llvm::errs() << "transpiler: llc failed for '" << kernelName
+                 << "': " << llvm::toString(std::move(err)) << "\n";
     return false;
   }
   result.Timings.llcSeconds += timingElapsed(options.CollectTimings, llcStart);
 
   {
     auto readAsmStart = timingStart(options.CollectTimings);
-    if (auto asmBufOrErr =
-            llvm::MemoryBuffer::getFile(asmPath, /*IsText=*/true)) {
-      if (!result.AsmText.empty())
-        result.AsmText += "\n";
-      result.AsmText.append((*asmBufOrErr)->getBufferStart(),
-                            (*asmBufOrErr)->getBufferEnd());
-    } else {
-      llvm::errs() << "transpiler: Cannot read asm file: " << asmPath << ": "
-                   << asmBufOrErr.getError().message() << "\n";
-    }
+    if (!result.AsmText.empty())
+      result.AsmText += "\n";
+    result.AsmText += asmText;
+    writeFile(asmPath, asmText);
     result.Timings.readAsmSeconds +=
         timingElapsed(options.CollectTimings, readAsmStart);
   }
 
-  std::string mcBin = std::string(LLVM_TOOLS_DIR) + "/llvm-mc";
-  std::string mcpuMc = ("-mcpu=" + targetISA).str();
+  llvm::SmallVector<char, 4096> objBytes;
   auto llvmMcStart = timingStart(options.CollectTimings);
-  if (runTool(mcBin, {mcBin, "-triple=amdgcn-amd-amdhsa", mcpuMc,
-                      "-filetype=obj", "-o", objPath, asmPath}) != 0) {
+  if (!assembleToObject(asmText, targetISA, objBytes)) {
     result.Timings.llvmMcSeconds +=
         timingElapsed(options.CollectTimings, llvmMcStart);
     llvm::errs() << "transpiler: llvm-mc failed for '" << kernelName << "'\n";
+    return false;
+  }
+  if (!writeFile(objPath, llvm::ArrayRef<uint8_t>(
+                              reinterpret_cast<const uint8_t *>(objBytes.data()),
+                              objBytes.size()))) {
+    result.Timings.llvmMcSeconds +=
+        timingElapsed(options.CollectTimings, llvmMcStart);
     return false;
   }
   result.Timings.llvmMcSeconds +=
@@ -390,18 +541,24 @@ static bool raiseAndCompileKernel(const TextSection &text,
   return true;
 }
 
-// Link one or more relocatable .o files into a shared HSACO.
+// Link one or more relocatable .o files into a shared HSACO using the
+// in-process LLD ELF driver.
 static bool linkObjects(llvm::ArrayRef<std::string> objPaths,
                         llvm::StringRef hsacoPath) {
-  std::string lldBin = std::string(LLVM_TOOLS_DIR) + "/ld.lld";
-  llvm::SmallVector<llvm::StringRef, 16> args;
-  args.push_back(lldBin);
+  std::string hsacoPathStr = hsacoPath.str();
+  llvm::SmallVector<const char *, 16> args;
+  args.push_back("ld.lld");
   args.push_back("-shared");
+  args.push_back("--threads=1");
   args.push_back("-o");
-  args.push_back(hsacoPath);
+  args.push_back(hsacoPathStr.c_str());
   for (auto &o : objPaths)
-    args.push_back(o);
-  if (runTool(lldBin, args) != 0) {
+    args.push_back(o.c_str());
+
+  lld::Result ret =
+      lld::lldMain(args, llvm::outs(), llvm::errs(), {{lld::Gnu, &lld::elf::link}});
+  lld::CommonLinkerContext::destroy();
+  if (ret.retCode != 0 || !ret.canRunAgain) {
     llvm::errs() << "transpiler: ld.lld failed\n";
     return false;
   }
