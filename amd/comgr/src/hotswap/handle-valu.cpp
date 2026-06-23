@@ -25,6 +25,7 @@
 #include "llvm/IR/IntrinsicsAMDGPU.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
+#include <cassert>
 #include <map>
 #include <optional>
 #include <tuple>
@@ -70,65 +71,27 @@ std::optional<bool> readVOP3Clamp(const DecodedInst &Di, HandlerResult &Hr,
 struct True16OpSel {
   bool Src0Hi = false;
   bool Src1Hi = false;
+  bool Src2Hi = false;
   bool DstHi = false;
 };
 
 std::optional<True16OpSel> readTrue16OpSel(const DecodedInst &Di,
-                                           OpResolver &Op, HandlerResult &Hr,
+                                           OpResolver &Op, unsigned NumSrcs,
+                                           HandlerResult &Hr,
                                            StringRef OpName) {
-  if (Op.nSrcs() < 2) {
+  assert(NumSrcs == 2 || NumSrcs == 3);
+  if (Op.nSrcs() < NumSrcs) {
+    const char *ExpectedSrcs = NumSrcs == 2 ? "src0/src1" : "src0/src1/src2";
     Hr.Failure = RaiseFailure::unsupportedInstructionForm(
-        Di, "VOP3",
-        Twine(OpName) + " has too few source operands; expected src0/src1");
+        Di, "VOP3", Twine(OpName) +
+                         " has too few source operands; expected " +
+                         ExpectedSrcs);
     return std::nullopt;
   }
 
   unsigned Src0Mods = Op.srcMod(0);
   unsigned Src1Mods = Op.srcMod(1);
-  constexpr unsigned AllowedSrc0Mods =
-      SISrcMods::OP_SEL_0 | SISrcMods::DST_OP_SEL;
-  constexpr unsigned AllowedSrc1Mods = SISrcMods::OP_SEL_0;
-  if ((Src0Mods & ~AllowedSrc0Mods) != 0 ||
-      (Src1Mods & ~AllowedSrc1Mods) != 0) {
-    Hr.Failure = RaiseFailure::unsupportedInstructionForm(
-        Di, "VOP3",
-        Twine(OpName) +
-            " has unsupported source modifiers; only op_sel bits are modeled");
-    return std::nullopt;
-  }
-
-  True16OpSel Sel;
-  Sel.Src0Hi = (Src0Mods & SISrcMods::OP_SEL_0) != 0;
-  Sel.Src1Hi = (Src1Mods & SISrcMods::OP_SEL_0) != 0;
-  Sel.DstHi = (Src0Mods & SISrcMods::DST_OP_SEL) != 0;
-  return Sel;
-}
-
-// Source and destination half selectors for true16 ternary VOP3 forms.
-struct True16TernaryOpSel {
-  bool Src0Hi : 1;
-  bool Src1Hi : 1;
-  bool Src2Hi : 1;
-  bool DstHi : 1;
-
-  True16TernaryOpSel()
-      : Src0Hi(false), Src1Hi(false), Src2Hi(false), DstHi(false) {}
-};
-
-std::optional<True16TernaryOpSel>
-readTrue16TernaryOpSel(const DecodedInst &Di, OpResolver &Op,
-                       HandlerResult &Hr, StringRef OpName) {
-  if (Op.nSrcs() < 3) {
-    Hr.Failure = RaiseFailure::unsupportedInstructionForm(
-        Di, "VOP3",
-        Twine(OpName) +
-            " has too few source operands; expected src0/src1/src2");
-    return std::nullopt;
-  }
-
-  unsigned Src0Mods = Op.srcMod(0);
-  unsigned Src1Mods = Op.srcMod(1);
-  unsigned Src2Mods = Op.srcMod(2);
+  unsigned Src2Mods = NumSrcs == 3 ? Op.srcMod(2) : 0;
   constexpr unsigned AllowedSrc0Mods =
       SISrcMods::OP_SEL_0 | SISrcMods::DST_OP_SEL;
   constexpr unsigned AllowedSrcMods = SISrcMods::OP_SEL_0;
@@ -142,7 +105,7 @@ readTrue16TernaryOpSel(const DecodedInst &Di, OpResolver &Op,
     return std::nullopt;
   }
 
-  True16TernaryOpSel Sel;
+  True16OpSel Sel;
   Sel.Src0Hi = (Src0Mods & SISrcMods::OP_SEL_0) != 0;
   Sel.Src1Hi = (Src1Mods & SISrcMods::OP_SEL_0) != 0;
   Sel.Src2Hi = (Src2Mods & SISrcMods::OP_SEL_0) != 0;
@@ -2054,7 +2017,7 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     if (!Clamp)
       return Hr;
 
-    std::optional<True16OpSel> Sel = readTrue16OpSel(Di, Op, Hr, OpName);
+    std::optional<True16OpSel> Sel = readTrue16OpSel(Di, Op, 2, Hr, OpName);
     if (!Sel)
       return Hr;
 
@@ -2082,8 +2045,7 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     std::optional<bool> Clamp = readVOP3Clamp(Di, Hr, OpName);
     if (!Clamp)
       return Hr;
-    std::optional<True16TernaryOpSel> Sel =
-        readTrue16TernaryOpSel(Di, Op, Hr, OpName);
+    std::optional<True16OpSel> Sel = readTrue16OpSel(Di, Op, 3, Hr, OpName);
     if (!Sel)
       return Hr;
 
@@ -2205,13 +2167,11 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
   }
   // VOP3 true16 signed 3-way max: smax(smax(src0, src1), src2). op_sel selects
   // the i16 half of each source and the dst half that receives the result; the
-  // other dst half is preserved per the RDNA3+ true16 ISA. The clamp bit is a
-  // structural no-op here -- the signed max of in-range i16 inputs is already in
-  // range -- so it is intentionally not read, matching the V_MAX3_U32 sibling
-  // above and the packed V_PK_MAX_I16/V_PK_MAX3_I16 forms.
+  // other dst half is preserved per the RDNA3+ true16 ISA. The MI400 manual
+  // marks this scalar true16 form OPF_NOCLAMP, unlike the packed DPX max3 form.
   if (Sop == CanonicalOp::V_MAX3_I16) {
-    std::optional<True16TernaryOpSel> Sel =
-        readTrue16TernaryOpSel(Di, Op, Hr, "v_max3_i16");
+    std::optional<True16OpSel> Sel =
+        readTrue16OpSel(Di, Op, 3, Hr, "v_max3_i16");
     if (!Sel)
       return Hr;
     Type *I16Ty = Type::getInt16Ty(Ctx.C);
