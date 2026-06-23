@@ -1,5 +1,6 @@
 #include "pipeline.h"
 #include "code-object-utils.h"
+#include "mc-state.h"
 #include "raise-failure.h"
 #include "raiser.h"
 
@@ -13,7 +14,6 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
-#include "llvm/IR/Verifier.h"
 #include "llvm/MC/MCAsmBackend.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCCodeEmitter.h"
@@ -133,8 +133,6 @@ std::string makeSafeBasename(llvm::StringRef kernelName,
   return prefix + "_" + hex;
 }
 
-constexpr llvm::StringRef kHotswapTriple = "amdgcn-amd-amdhsa";
-
 llvm::OptimizationLevel toOptimizationLevel(unsigned Level) {
   switch (Level) {
   case 0:
@@ -164,7 +162,7 @@ llvm::CodeGenOptLevel toCodeGenOptLevel(unsigned Level) {
 std::unique_ptr<llvm::TargetMachine>
 createHotswapTargetMachine(llvm::StringRef targetISA, unsigned OptLevel) {
   std::string err;
-  llvm::Triple triple(kHotswapTriple);
+  llvm::Triple triple(kAMDGPUTriple);
   const llvm::Target *target =
       llvm::TargetRegistry::lookupTarget(triple, err);
   if (!target) {
@@ -219,7 +217,7 @@ llvm::Error emitAssembly(llvm::Module &M, llvm::TargetMachine &TM,
 bool assembleToObject(llvm::StringRef asmText, llvm::StringRef targetISA,
                       llvm::SmallVectorImpl<char> &objOut) {
   std::string err;
-  llvm::Triple triple(kHotswapTriple);
+  llvm::Triple triple(kAMDGPUTriple);
   const llvm::Target *target =
       llvm::TargetRegistry::lookupTarget(triple, err);
   if (!target) {
@@ -462,16 +460,17 @@ static bool raiseAndCompileKernel(const TextSection &text,
   // budget; the symbol name inside the IR stays untouched, so debug
   // tooling can still resolve the long name from the LLVM module.
   std::string fileStem = makeSafeBasename(kernelName, /*reservedSuffixBytes=*/5);
-  std::string irPath  = tmpDir.filePath(fileStem + ".ll");
-  std::string asmPath = tmpDir.filePath(fileStem + ".s");
 
+  // Codegen consumes the in-memory module directly; the .ll/.s/.dis files are
+  // debug dumps only, so skip them unless a persistent dump dir was set (a
+  // non-persistent temp dir is deleted on exit, taking the dumps with it).
   auto writeIrStart = timingStart(options.CollectTimings);
-  if (!writeFile(irPath, raised.IrText))
-    return false;
-
-  static const char *s_dumpInput = std::getenv("HSA_HOTSWAP_DUMP_INPUT");
-  if (s_dumpInput && s_dumpInput[0] == '1' && !raised.DisasmText.empty())
-    writeFile(tmpDir.filePath(fileStem + ".dis"), raised.DisasmText);
+  if (tmpDir.persistent) {
+    writeFile(tmpDir.filePath(fileStem + ".ll"), raised.IrText);
+    static const char *s_dumpInput = std::getenv("HSA_HOTSWAP_DUMP_INPUT");
+    if (s_dumpInput && s_dumpInput[0] == '1' && !raised.DisasmText.empty())
+      writeFile(tmpDir.filePath(fileStem + ".dis"), raised.DisasmText);
+  }
   result.Timings.writeIrSeconds +=
       timingElapsed(options.CollectTimings, writeIrStart);
 
@@ -515,7 +514,8 @@ static bool raiseAndCompileKernel(const TextSection &text,
     if (!result.AsmText.empty())
       result.AsmText += "\n";
     result.AsmText += asmText;
-    writeFile(asmPath, asmText);
+    if (tmpDir.persistent)
+      writeFile(tmpDir.filePath(fileStem + ".s"), asmText);
     result.Timings.readAsmSeconds +=
         timingElapsed(options.CollectTimings, readAsmStart);
   }
