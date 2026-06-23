@@ -479,10 +479,6 @@ enum class CanonicalOp : uint16_t {
   // dst op_sel is set so the preserved half survives the
   // read-modify-write.
   V_ADD_NC_U16, V_SUB_NC_U16, V_ADD_NC_I16, V_SUB_NC_I16,
-  // VOP3 true16 unsigned multiply-add:
-  //   dst.u16 = src0.u16 * src1.u16 + src2.u16
-  // with op_sel half selection on all sources and dst. The unclamped form wraps
-  // to the low 16 bits; clamp=1 saturates to 0xffff before the half write.
   V_MAD_U16,
   // gfx1250 VOP3 add-then-min/max: (s/u)(min/max)((s/u)addsat(src0, src1), src2).
   V_ADD_MIN_U32,
@@ -504,8 +500,7 @@ enum class CanonicalOp : uint16_t {
   // VOP3 ternary clamp `.NUM` dual:
   //   V_MAXMIN_NUM_F32: minnum(maxnum(s0, s1), s2).
   V_MAXMIN_NUM_F32,
-  // VOP3 integer 3-way max/min/median. The .td uses
-  // AMDGPU{u,s}{max,min,med}3 SDAG nodes which the backend pattern-matches.
+  // VOP3 integer 3-way max/min/median.
   V_MAX3_U32, V_MIN3_U32, V_MAX3_I32, V_MIN3_I32, V_MAX3_I16,
   // VOP3 signed-integer median-of-three. Hardware semantic
   // (VOP3Instructions.td:1796 via AMDGPUsmed3 SDAG node):

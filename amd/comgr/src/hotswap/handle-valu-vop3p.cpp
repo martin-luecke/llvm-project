@@ -583,11 +583,6 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
     Value *Res = nullptr;
     switch (Sop) {
     case CanonicalOp::V_PK_MAD_U16: {
-      // Lane-wise i16 multiply-add: dst = src0 * src1 + src2. Unclamped wraps
-      // modulo 2^16 per lane (plain mul/add, no nuw/nsw); clamp=1 saturates
-      // each lane to 0xffff, mirroring the scalar V_MAD_U16 contract in
-      // handle-valu.cpp. The clamp bit is encodable on this VOP3P profile, so
-      // it must be modeled rather than dropped.
       Value *S2 = readPacked2Src(Ctx, Op, 2, I16Ty, Mods[2], Opts);
       int ClampIdx = AMDGPU::getNamedOperandIdx(Di.Inst.getOpcode(),
                                                 AMDGPU::OpName::clamp);
@@ -602,27 +597,12 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
             Di, "VOP3P", "v_pk_mad_u16 clamp operand is not 0 or 1");
         return Hr;
       }
-      if (ClampImm != 0) {
-        // u16*u16 + u16 = 0xFFFF0000 fits in u32 per lane, so the widen is
-        // exact and a per-lane umin to 0xffff is the full unsigned saturation.
-        auto *V2I32 = FixedVectorType::get(Ctx.I32Ty, 2);
-        Value *WA = Ctx.B.CreateZExt(S0, V2I32, "pk_mad_u16_a_wide");
-        Value *WB = Ctx.B.CreateZExt(S1, V2I32, "pk_mad_u16_b_wide");
-        Value *WC = Ctx.B.CreateZExt(S2, V2I32, "pk_mad_u16_c_wide");
-        Value *Wide = Ctx.B.CreateAdd(
-            Ctx.B.CreateMul(WA, WB, "pk_mad_u16_mul_wide"), WC,
-            "pk_mad_u16_wide");
-        Function *UminFn = Intrinsic::getOrInsertDeclaration(
-            &Ctx.M, Intrinsic::umin, {V2I32});
-        Value *Max = ConstantVector::getSplat(
-            ElementCount::getFixed(2),
-            ConstantInt::get(Ctx.I32Ty, 0xFFFFu));
-        Value *Sat = Ctx.B.CreateCall(UminFn, {Wide, Max}, "pk_mad_u16_clamp");
-        Res = Ctx.B.CreateTrunc(Sat, V2I16, "pk_mad_u16");
-      } else {
-        Res = Ctx.B.CreateAdd(Ctx.B.CreateMul(S0, S1, "pk_mad_u16_mul"), S2,
-                              "pk_mad_u16");
-      }
+      auto *V2I32 = FixedVectorType::get(Ctx.I32Ty, 2);
+      Constant *Max =
+          ConstantVector::getSplat(ElementCount::getFixed(2),
+                                   ConstantInt::get(Ctx.I32Ty, 0xFFFFu));
+      Res = emitU16Mad(Ctx, S0, S1, S2, ClampImm != 0, V2I32,
+                       Max, "pk_mad_u16");
       break;
     }
     case CanonicalOp::V_PK_ADD_U16:
@@ -635,23 +615,33 @@ HandlerResult handleValuVoP3P(RaiseContext &Ctx, const DecodedInst &Di,
       Res = Ctx.B.CreateMul(S0, S1, "pk_mul_lo_u16");
       break;
     case CanonicalOp::V_PK_MAX_I16: {
-      // Lane-wise signed i16 max via the canonical llvm.smax, matching the
-      // V_PK_MAX_F32/maxnum and V_MAX3_U32/umax sibling lowerings. The clamp
-      // bit (also on V_PK_MAX3_I16) is a true no-op here -- the signed max of
-      // in-range i16 lanes is already in range -- so it is intentionally not
-      // read, matching the scalar V_MAX3_I16.
       Function *SmaxFn =
           Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::smax, {V2I16});
       Res = Ctx.B.CreateCall(SmaxFn, {S0, S1}, "pk_max_i16");
       break;
     }
     case CanonicalOp::V_PK_MAX3_I16: {
-      // Lane-wise signed i16 3-way max: smax(smax(src0, src1), src2).
       Value *S2 = readPacked2Src(Ctx, Op, 2, I16Ty, Mods[2], Opts);
+      int ClampIdx = AMDGPU::getNamedOperandIdx(Di.Inst.getOpcode(),
+                                                AMDGPU::OpName::clamp);
+      if (ClampIdx < 0 || !Di.isImm(static_cast<unsigned>(ClampIdx))) {
+        Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+            Di, "VOP3P", "v_pk_max3_i16 missing immediate clamp operand");
+        return Hr;
+      }
+      int64_t ClampImm = Di.getImm(static_cast<unsigned>(ClampIdx));
+      if (ClampImm != 0 && ClampImm != 1) {
+        Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+            Di, "VOP3P", "v_pk_max3_i16 clamp operand is not 0 or 1");
+        return Hr;
+      }
       Function *SmaxFn =
           Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::smax, {V2I16});
       Value *M01 = Ctx.B.CreateCall(SmaxFn, {S0, S1}, "pk_max3_i16_m01");
       Res = Ctx.B.CreateCall(SmaxFn, {M01, S2}, "pk_max3_i16");
+      if (ClampImm != 0)
+        Res = Ctx.B.CreateCall(SmaxFn, {Res, Constant::getNullValue(V2I16)},
+                               "pk_max3_i16_clamp");
       break;
     }
     case CanonicalOp::V_PK_LSHLREV_B16: {

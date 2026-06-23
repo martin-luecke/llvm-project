@@ -556,12 +556,6 @@ static const Entry kCanonTable[] = {
     E(V_SUB_NC_U16_e64, V_SUB_NC_U16),
     E(V_ADD_I16_e64, V_ADD_NC_I16),
     E(V_SUB_I16_e64, V_SUB_NC_I16),
-    // Two real forms feed the same true16 handler, mirroring V_FMA_F16 below:
-    //   V_MAD_U16_e64       -- gfx8 ("vi") form (no op_sel)
-    //   V_MAD_U16_gfx9_e64  -- gfx9+ op_sel form; t16/fake16 16-bit encoding
-    //                          variants collapse onto it via sameSemanticShape.
-    // gfx1250 `v_mad_u16` decodes to the gfx9 form, so that entry is the one the
-    // lit fixture exercises.
     E(V_MAD_U16_e64, V_MAD_U16),
     E(V_MAD_U16_gfx9_e64, V_MAD_U16),
     // gfx1250 add-then-min/max VOP3. The real subtarget opcodes canonicalize
@@ -595,15 +589,11 @@ static const Entry kCanonTable[] = {
     // V_MINMAX_F32_e64 so a single mapping suffices.
     E(V_MINMAX_F32_e64, V_MINMAX_NUM_F32),
     E(V_MAXMIN_F32_e64, V_MAXMIN_NUM_F32),
-    // gfx11/gfx12 VOP3 integer 3-way min/max. DPP/DPP8 modifier
-    // variants canonicalize through the same opcode-map stripping path used by
-    // the other VOP3+DPP entries, so a base e64 row is the semantic key.
     E(V_MAX3_U32_e64, V_MAX3_U32),
     E(V_MIN3_U32_e64, V_MIN3_U32),
     E(V_MAX3_I32_e64, V_MAX3_I32),
     E(V_MIN3_I32_e64, V_MIN3_I32),
     E(V_MED3_I32_e64, V_MED3_I32),
-    // VOP3 true16 signed 3-way max. Same e64-base stripping as the i32 row.
     E(V_MAX3_I16_e64, V_MAX3_I16),
     E(V_BITOP3_B32_e64, V_BITOP3_B32),
     E(V_BITOP3_B16_e64, V_BITOP3_B16),
@@ -757,9 +747,7 @@ static const Entry kCanonTable[] = {
     // LLVM has no `V_PK_MAX_F32`/`V_PK_MIN_F32` pseudo (only F16 variants);
     // leave the matching CanonicalOps unmapped until one appears.
     E(V_PK_MOV_B32, V_PK_MOV_B32),
-    // Packed `<2 x i16>` int family. LLVM emits the bare TableGen pseudo
-    // (`V_PK_MAD_U16` / `V_PK_ADD_U16` / `V_PK_LSHLREV_B16` /
-    // `V_PK_MUL_LO_U16` / `V_PK_MAX_I16` / `V_PK_MAX3_I16`); the
+    // Packed `<2 x i16>` int family.
     E(V_PK_MAD_U16, V_PK_MAD_U16),
     E(V_PK_ADD_U16, V_PK_ADD_U16),
     E(V_PK_LSHLREV_B16, V_PK_LSHLREV_B16),

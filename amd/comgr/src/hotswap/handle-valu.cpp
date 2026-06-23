@@ -53,10 +53,9 @@ std::optional<bool> readVOP3Clamp(const DecodedInst &Di, HandlerResult &Hr,
   if (!Clamp) {
     Hr.Failure = RaiseFailure::unsupportedInstructionForm(
         Di, "VOP3",
-        (Twine(OpName) +
-         " missing immediate clamp operand; operand table layout does not "
-         "match the expected VOP3 profile")
-            .str());
+        Twine(OpName) +
+            " missing immediate clamp operand; operand table layout does not "
+            "match the expected VOP3 profile");
     return std::nullopt;
   }
   return *Clamp != 0;
@@ -80,9 +79,7 @@ std::optional<True16OpSel> readTrue16OpSel(const DecodedInst &Di,
   if (Op.nSrcs() < 2) {
     Hr.Failure = RaiseFailure::unsupportedInstructionForm(
         Di, "VOP3",
-        (Twine(OpName) +
-         " has too few source operands; expected src0/src1")
-            .str());
+        Twine(OpName) + " has too few source operands; expected src0/src1");
     return std::nullopt;
   }
 
@@ -95,9 +92,8 @@ std::optional<True16OpSel> readTrue16OpSel(const DecodedInst &Di,
       (Src1Mods & ~AllowedSrc1Mods) != 0) {
     Hr.Failure = RaiseFailure::unsupportedInstructionForm(
         Di, "VOP3",
-        (Twine(OpName) +
-         " has unsupported source modifiers; only op_sel bits are modeled")
-            .str());
+        Twine(OpName) +
+            " has unsupported source modifiers; only op_sel bits are modeled");
     return std::nullopt;
   }
 
@@ -108,25 +104,25 @@ std::optional<True16OpSel> readTrue16OpSel(const DecodedInst &Di,
   return Sel;
 }
 
+// Source and destination half selectors for true16 ternary VOP3 forms.
 struct True16TernaryOpSel {
-  bool Src0Hi = false;
-  bool Src1Hi = false;
-  bool Src2Hi = false;
-  bool DstHi = false;
+  bool Src0Hi : 1;
+  bool Src1Hi : 1;
+  bool Src2Hi : 1;
+  bool DstHi : 1;
+
+  True16TernaryOpSel()
+      : Src0Hi(false), Src1Hi(false), Src2Hi(false), DstHi(false) {}
 };
 
-// Ternary analogue of readTrue16OpSel: src0..src2 each carry an op_sel bit
-// selecting their i16 half, and src0 additionally carries the dst op_sel bit.
-// Any modifier other than op_sel is refused rather than silently dropped.
 std::optional<True16TernaryOpSel>
 readTrue16TernaryOpSel(const DecodedInst &Di, OpResolver &Op,
                        HandlerResult &Hr, StringRef OpName) {
   if (Op.nSrcs() < 3) {
     Hr.Failure = RaiseFailure::unsupportedInstructionForm(
         Di, "VOP3",
-        (Twine(OpName) +
-         " has too few source operands; expected src0/src1/src2")
-            .str());
+        Twine(OpName) +
+            " has too few source operands; expected src0/src1/src2");
     return std::nullopt;
   }
 
@@ -141,9 +137,8 @@ readTrue16TernaryOpSel(const DecodedInst &Di, OpResolver &Op,
       (Src2Mods & ~AllowedSrcMods) != 0) {
     Hr.Failure = RaiseFailure::unsupportedInstructionForm(
         Di, "VOP3",
-        (Twine(OpName) +
-         " has unsupported source modifiers; only op_sel bits are modeled")
-            .str());
+        Twine(OpName) +
+            " has unsupported source modifiers; only op_sel bits are modeled");
     return std::nullopt;
   }
 
@@ -2082,9 +2077,6 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Hr.Handled = true;
     return Hr;
   }
-  // VOP3 true16 unsigned multiply-add with op_sel half selection on all
-  // sources and dst. Unclamped hardware wraps to 16 bits; clamp=1 saturates to
-  // 0xffff before writing the selected half.
   if (Sop == CanonicalOp::V_MAD_U16) {
     StringRef OpName = "v_mad_u16";
     std::optional<bool> Clamp = readVOP3Clamp(Di, Hr, OpName);
@@ -2095,34 +2087,12 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     if (!Sel)
       return Hr;
 
-    Type *I16Ty = Type::getInt16Ty(Ctx.C);
     Value *A = extractU16Half(Ctx, Op.src(0), Sel->Src0Hi);
     Value *B = extractU16Half(Ctx, Op.src(1), Sel->Src1Hi);
     Value *C = extractU16Half(Ctx, Op.src(2), Sel->Src2Hi);
-    Value *Result = nullptr;
-    if (*Clamp) {
-      // i32 holds the exact product+sum: 0xFFFF*0xFFFF + 0xFFFF = 0xFFFF0000,
-      // which fits in u32, so the clamp below sees the true value (no pre-clamp
-      // wraparound, and no need for the i64 widening v_mad_i32_i24 requires).
-      // All inputs are unsigned so only the upper bound can be exceeded; a
-      // single llvm.umin to 0xffff is the full unsigned saturation.
-      Value *WideA = Ctx.B.CreateZExt(A, Ctx.I32Ty, "mad_u16_a_wide");
-      Value *WideB = Ctx.B.CreateZExt(B, Ctx.I32Ty, "mad_u16_b_wide");
-      Value *WideC = Ctx.B.CreateZExt(C, Ctx.I32Ty, "mad_u16_c_wide");
-      Value *Wide = Ctx.B.CreateAdd(
-          Ctx.B.CreateMul(WideA, WideB, "mad_u16_mul_wide"), WideC,
-          "mad_u16_wide");
-      Function *UminFn =
-          Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::umin,
-                                            {Ctx.I32Ty});
-      Value *Sat = Ctx.B.CreateCall(
-          UminFn, {Wide, ConstantInt::get(Ctx.I32Ty, 0xFFFFu)},
-          "mad_u16_clamp");
-      Result = Ctx.B.CreateTrunc(Sat, I16Ty, "mad_u16_clamp_i16");
-    } else {
-      Result = Ctx.B.CreateAdd(Ctx.B.CreateMul(A, B, "mad_u16_mul"), C,
-                               "mad_u16");
-    }
+    Value *Result =
+        emitU16Mad(Ctx, A, B, C, *Clamp, Ctx.I32Ty,
+                   ConstantInt::get(Ctx.I32Ty, 0xFFFFu), "mad_u16");
     writeSelectedU16Half(Ctx, Op.dst(), Result, Sel->DstHi,
                          Sel->DstHi ? "mad_u16_merge_hi"
                                     : "mad_u16_merge_lo");
