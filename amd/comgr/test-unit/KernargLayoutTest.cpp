@@ -41,12 +41,17 @@ TEST(KernargLayout, ClassifiesHiddenBlockCountsByByteContainment) {
   auto Y0 = classifySourceHiddenArgByte(Args, 52);
   auto Z0 = classifySourceHiddenArgByte(Args, 56);
 
-  EXPECT_EQ(X0.Kind, SourceHiddenArgKind::HiddenBlockCountX);
-  EXPECT_EQ(X0.byteIndexInArg(), 0u);
-  EXPECT_EQ(X3.Kind, SourceHiddenArgKind::HiddenBlockCountX);
-  EXPECT_EQ(X3.byteIndexInArg(), 3u);
-  EXPECT_EQ(Y0.Kind, SourceHiddenArgKind::HiddenBlockCountY);
-  EXPECT_EQ(Z0.Kind, SourceHiddenArgKind::HiddenBlockCountZ);
+  EXPECT_TRUE(X0.has_value());
+  EXPECT_TRUE(X3.has_value());
+  EXPECT_TRUE(Y0.has_value());
+  EXPECT_TRUE(Z0.has_value());
+
+  EXPECT_EQ(X0->Kind, SourceHiddenArgKind::HiddenBlockCountX);
+  EXPECT_EQ(X0->byteIndexInArg(), 0u);
+  EXPECT_EQ(X3->Kind, SourceHiddenArgKind::HiddenBlockCountX);
+  EXPECT_EQ(X3->byteIndexInArg(), 3u);
+  EXPECT_EQ(Y0->Kind, SourceHiddenArgKind::HiddenBlockCountY);
+  EXPECT_EQ(Z0->Kind, SourceHiddenArgKind::HiddenBlockCountZ);
 }
 
 TEST(KernargLayout, ClassifiesGroupSizeRemainderAndGridDims) {
@@ -56,12 +61,16 @@ TEST(KernargLayout, ClassifiesGroupSizeRemainderAndGridDims) {
       makeArg("grid_dims", 96, 2, "hidden_grid_dims"),
   };
 
-  EXPECT_EQ(classifySourceHiddenArgByte(Args, 44).Kind,
-            SourceHiddenArgKind::HiddenGroupSizeX);
-  EXPECT_EQ(classifySourceHiddenArgByte(Args, 50).Kind,
-            SourceHiddenArgKind::HiddenRemainderX);
-  EXPECT_EQ(classifySourceHiddenArgByte(Args, 96).Kind,
-            SourceHiddenArgKind::HiddenGridDims);
+  auto GSX = classifySourceHiddenArgByte(Args, 44);
+  auto RemX = classifySourceHiddenArgByte(Args, 50);
+  auto GD = classifySourceHiddenArgByte(Args, 96);
+  EXPECT_TRUE(GSX.has_value());
+  EXPECT_TRUE(RemX.has_value());
+  EXPECT_TRUE(GD.has_value());
+
+  EXPECT_EQ(GSX->Kind, SourceHiddenArgKind::HiddenGroupSizeX);
+  EXPECT_EQ(RemX->Kind, SourceHiddenArgKind::HiddenRemainderX);
+  EXPECT_EQ(GD->Kind, SourceHiddenArgKind::HiddenGridDims);
 }
 
 TEST(KernargLayout, ClassifiesUnsupportedHiddenKinds) {
@@ -69,8 +78,10 @@ TEST(KernargLayout, ClassifiesUnsupportedHiddenKinds) {
       makeArg("hostcall", 64, 8, "hidden_hostcall_buffer"),
   };
 
-  EXPECT_EQ(classifySourceHiddenArgByte(Args, 64).Kind,
-            SourceHiddenArgKind::UnsupportedHidden);
+  auto Unsupported = classifySourceHiddenArgByte(Args, 64);
+  EXPECT_TRUE(Unsupported.has_value());
+
+  EXPECT_EQ(Unsupported->Kind, SourceHiddenArgKind::UnsupportedHidden);
 }
 
 TEST(KernargLayout, NonHiddenAndMissingOffsetsAreNotHidden) {
@@ -78,6 +89,6 @@ TEST(KernargLayout, NonHiddenAndMissingOffsetsAreNotHidden) {
       makeArg("n", 24, 4, "by_value"),
   };
 
-  EXPECT_FALSE(classifySourceHiddenArgByte(Args, 24).matched());
-  EXPECT_FALSE(classifySourceHiddenArgByte(Args, 28).matched());
+  EXPECT_FALSE(classifySourceHiddenArgByte(Args, 24).has_value());
+  EXPECT_FALSE(classifySourceHiddenArgByte(Args, 28).has_value());
 }
