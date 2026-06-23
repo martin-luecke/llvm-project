@@ -1173,7 +1173,8 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
                                /*enableWritelaneRewrite=*/false,
                                /*enableWaveNative=*/false,
                                /*forceThreadLoopProjection=*/true,
-                               /*suppressC5ForThreadLoopRoute=*/true);
+                               /*suppressC5ForThreadLoopRoute=*/true,
+                               AssumeHipGlobalOffsetZero);
         }
         errs() << "transpiler: thread-loop fallback not eligible for kernel '"
                << KernelName << "': " << ThreadLoopUnsupportedDetail
