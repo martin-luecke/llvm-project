@@ -3,13 +3,9 @@
 ; RUN:     --emit-ir=workitem_id_y_kernel \
 ; RUN:   | %FileCheck %s
 ;
-; The kernel-entry v0 holds the packed workitem id (x[0:9] | y[10:19] |
-; z[20:29]). The source reads threadIdx.y by shifting v0 right and masking
-; (here `v0 >> 8` then `& 0xffc`, i.e. threadIdx.y * 4 for a u32 store). If the
-; raiser seeded v0 with only workitem.id.x (range [0, blockDim.x)), the backend
-; folds `v0 >> 8` to 0 and every threadIdx.y read collapses to 0. The source
-; descriptor enables X+Y (.amdhsa_system_vgpr_workitem_id 1), so the seed must
-; reconstruct the packed x | (y << 10) and feed it into the shift/mask chain.
+; Exercises the kernel-entry v0 seed (WaveProjection::emitPackedWorkitemId,
+; driven from raiser.cpp): the packed workitem id must reconstruct the Y field
+; so a source threadIdx.y read survives instead of folding to 0.
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6

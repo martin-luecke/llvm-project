@@ -91,33 +91,38 @@ Value *ModuloReplicationProjection::emitWorkitemIdX(IRBuilder<> &B) const {
   return Raw;
 }
 
+// Bit offsets of the Y/Z fields in the packed kernel-entry v0 workitem id
+// (x[0:9] | y[10:19] | z[20:29])
+static constexpr unsigned WorkitemIdYBitOffset = 10;
+static constexpr unsigned WorkitemIdZBitOffset = 20;
+
 Value *WaveProjection::packWorkitemId(IRBuilder<> &B, Value *X,
                                       unsigned NumDims) const {
   if (NumDims < 2)
     return X;
   Module *M = B.GetInsertBlock()->getModule();
-  Value *Packed = X;
   Function *FnY =
       Intrinsic::getOrInsertDeclaration(M, Intrinsic::amdgcn_workitem_id_y);
   Value *Y = B.CreateCall(FnY, {}, "tid_y");
-  Packed = B.CreateOr(Packed,
-                      B.CreateShl(Y, ConstantInt::get(I32Ty, 10), "tid_y_shl"),
-                      "tid_xy");
-  if (NumDims >= 3) {
-    Function *FnZ =
-        Intrinsic::getOrInsertDeclaration(M, Intrinsic::amdgcn_workitem_id_z);
-    Value *Z = B.CreateCall(FnZ, {}, "tid_z");
-    Packed = B.CreateOr(
-        Packed, B.CreateShl(Z, ConstantInt::get(I32Ty, 20), "tid_z_shl"),
-        "tid_xyz");
-  }
-  return Packed;
+  Value *Packed =
+      B.CreateOr(X,
+                 B.CreateShl(Y, ConstantInt::get(I32Ty, WorkitemIdYBitOffset),
+                             "tid_y_shl"),
+                 "tid_xy");
+  if (NumDims < 3)
+    return Packed;
+  Function *FnZ =
+      Intrinsic::getOrInsertDeclaration(M, Intrinsic::amdgcn_workitem_id_z);
+  Value *Z = B.CreateCall(FnZ, {}, "tid_z");
+  return B.CreateOr(Packed,
+                    B.CreateShl(Z,
+                                ConstantInt::get(I32Ty, WorkitemIdZBitOffset),
+                                "tid_z_shl"),
+                    "tid_xyz");
 }
 
 Value *WaveProjection::emitPackedWorkitemId(IRBuilder<> &B,
                                             unsigned NumDims) const {
-  // 1-D kernels (the common case) reduce to exactly the X path, so their
-  // raised IR is unchanged. Higher dims fold in the native Y/Z fields.
   return packWorkitemId(B, emitWorkitemIdX(B), NumDims);
 }
 
