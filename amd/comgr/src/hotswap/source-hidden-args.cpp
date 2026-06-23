@@ -171,7 +171,14 @@ SourceHiddenArgValue emitHiddenArgValue(SourceHiddenArgContext &Ctx,
     Result.Value = Ctx.B.getInt32(0);
   else if (Kind == SourceHiddenArgKind::HiddenQueuePtr)
     Result.Value = queuePtrInt(Ctx);
-  else
+  else if (Kind == SourceHiddenArgKind::HiddenGlobalOffsetX ||
+           Kind == SourceHiddenArgKind::HiddenGlobalOffsetY ||
+           Kind == SourceHiddenArgKind::HiddenGlobalOffsetZ) {
+    if (!Ctx.AssumeHipGlobalOffsetZero)
+      return unsupportedHiddenKind("hidden_global_offset_{x,y,z}");
+    // HIP launches have zero HSA grid-global offset; synthesize as 64-bit zero.
+    Result.Value = Ctx.B.getInt64(0);
+  } else
     return unsupportedHiddenKind("<unknown>");
   return Result;
 }
