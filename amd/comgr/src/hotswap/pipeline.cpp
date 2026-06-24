@@ -176,8 +176,8 @@ createHotswapTargetMachine(llvm::StringRef targetISA, unsigned OptLevel) {
 }
 
 // In-process `opt`: run the default per-module pipeline at OptLevel.
-llvm::Error runOptPipeline(llvm::Module &M, llvm::TargetMachine &TM,
-                           unsigned OptLevel) {
+void runOptPipeline(llvm::Module &M, llvm::TargetMachine &TM,
+                    unsigned OptLevel) {
   llvm::LoopAnalysisManager LAM;
   llvm::FunctionAnalysisManager FAM;
   llvm::CGSCCAnalysisManager CGAM;
@@ -194,7 +194,6 @@ llvm::Error runOptPipeline(llvm::Module &M, llvm::TargetMachine &TM,
                                     ? PB.buildO0DefaultPipeline(OL)
                                     : PB.buildPerModuleDefaultPipeline(OL);
   MPM.run(M, MAM);
-  return llvm::Error::success();
 }
 
 // In-process `llc`: lower the module to target assembly text.
@@ -214,30 +213,29 @@ llvm::Error emitAssembly(llvm::Module &M, llvm::TargetMachine &TM,
 
 // In-process `llvm-mc`: assemble target assembly text into a relocatable
 // object, written to objOut.
-bool assembleToObject(llvm::StringRef asmText, llvm::StringRef targetISA,
+bool assembleToObject(llvm::StringRef asmText, llvm::TargetMachine &TM,
                       llvm::SmallVectorImpl<char> &objOut) {
-  std::string err;
-  llvm::Triple triple(kAMDGPUTriple);
-  const llvm::Target *target =
-      llvm::TargetRegistry::lookupTarget(triple, err);
-  if (!target) {
-    llvm::errs() << "transpiler: lookupTarget failed: " << err << "\n";
-    return false;
-  }
+  const llvm::Target &target = TM.getTarget();
+  const llvm::Triple &triple = TM.getTargetTriple();
 
   llvm::SourceMgr srcMgr;
   srcMgr.AddNewSourceBuffer(
       llvm::MemoryBuffer::getMemBufferCopy(asmText, "<hotswap-asm>"),
       llvm::SMLoc());
 
-  std::unique_ptr<llvm::MCRegisterInfo> MRI(target->createMCRegInfo(triple));
+  std::unique_ptr<llvm::MCRegisterInfo> MRI(target.createMCRegInfo(triple));
   llvm::MCTargetOptions MCOptions;
   std::unique_ptr<llvm::MCAsmInfo> MAI(
-      target->createMCAsmInfo(*MRI, triple, MCOptions));
-  std::unique_ptr<llvm::MCSubtargetInfo> STI(
-      target->createMCSubtargetInfo(triple, targetISA, /*Features=*/""));
-  std::unique_ptr<llvm::MCInstrInfo> MCII(target->createMCInstrInfo());
-  if (!MRI || !MAI || !STI || !MCII) {
+      target.createMCAsmInfo(*MRI, triple, MCOptions));
+  auto STIOrErr = buildSubtargetInfo(target, TM.getTargetCPU());
+  if (!STIOrErr) {
+    llvm::errs() << "transpiler: " << llvm::toString(STIOrErr.takeError())
+                 << "\n";
+    return false;
+  }
+  std::unique_ptr<llvm::MCSubtargetInfo> STI = std::move(*STIOrErr);
+  std::unique_ptr<llvm::MCInstrInfo> MCII(target.createMCInstrInfo());
+  if (!MRI || !MAI || !MCII) {
     llvm::errs() << "transpiler: failed to create MC info for assembly\n";
     return false;
   }
@@ -249,13 +247,13 @@ bool assembleToObject(llvm::StringRef asmText, llvm::StringRef targetISA,
   Ctx.setObjectFileInfo(MOFI.get());
 
   llvm::raw_svector_ostream Out(objOut);
-  llvm::MCCodeEmitter *CE = target->createMCCodeEmitter(*MCII, Ctx);
-  llvm::MCAsmBackend *MAB = target->createMCAsmBackend(*STI, *MRI, MCOptions);
+  llvm::MCCodeEmitter *CE = target.createMCCodeEmitter(*MCII, Ctx);
+  llvm::MCAsmBackend *MAB = target.createMCAsmBackend(*STI, *MRI, MCOptions);
   if (!CE || !MAB) {
     llvm::errs() << "transpiler: failed to create MC code emitter/backend\n";
     return false;
   }
-  std::unique_ptr<llvm::MCStreamer> Str(target->createMCObjectStreamer(
+  std::unique_ptr<llvm::MCStreamer> Str(target.createMCObjectStreamer(
       triple, Ctx, std::unique_ptr<llvm::MCAsmBackend>(MAB),
       MAB->createObjectWriter(Out), std::unique_ptr<llvm::MCCodeEmitter>(CE),
       *STI));
@@ -264,7 +262,7 @@ bool assembleToObject(llvm::StringRef asmText, llvm::StringRef targetISA,
   std::unique_ptr<llvm::MCAsmParser> Parser(
       llvm::createMCAsmParser(srcMgr, Ctx, *Str, *MAI));
   std::unique_ptr<llvm::MCTargetAsmParser> TAP(
-      target->createMCAsmParser(*STI, *Parser, *MCII));
+      target.createMCAsmParser(*STI, *Parser, *MCII));
   if (!TAP) {
     llvm::errs() << "transpiler: failed to create target asm parser\n";
     return false;
@@ -491,12 +489,7 @@ static bool raiseAndCompileKernel(const TextSection &text,
   M.setDataLayout(TM->createDataLayout());
 
   auto optStart = timingStart(options.CollectTimings);
-  if (llvm::Error err = runOptPipeline(M, *TM, options.OptLevel)) {
-    result.Timings.optSeconds += timingElapsed(options.CollectTimings, optStart);
-    llvm::errs() << "transpiler: opt failed for '" << kernelName
-                 << "': " << llvm::toString(std::move(err)) << "\n";
-    return false;
-  }
+  runOptPipeline(M, *TM, options.OptLevel);
   result.Timings.optSeconds += timingElapsed(options.CollectTimings, optStart);
 
   std::string asmText;
@@ -522,7 +515,7 @@ static bool raiseAndCompileKernel(const TextSection &text,
 
   llvm::SmallVector<char, 4096> objBytes;
   auto llvmMcStart = timingStart(options.CollectTimings);
-  if (!assembleToObject(asmText, targetISA, objBytes)) {
+  if (!assembleToObject(asmText, *TM, objBytes)) {
     result.Timings.llvmMcSeconds +=
         timingElapsed(options.CollectTimings, llvmMcStart);
     llvm::errs() << "transpiler: llvm-mc failed for '" << kernelName << "'\n";
