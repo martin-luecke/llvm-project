@@ -46,6 +46,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <mutex>
 #include <optional>
 #include <string>
 
@@ -548,6 +549,10 @@ static bool linkObjects(llvm::ArrayRef<std::string> objPaths,
   for (auto &o : objPaths)
     args.push_back(o.c_str());
 
+  // lld::lldMain drives a process-global CommonLinkerContext and is neither
+  // re-entrant nor thread-safe; serialize all in-process links.
+  static std::mutex lldMutex;
+  std::lock_guard<std::mutex> lldLock(lldMutex);
   lld::Result ret =
       lld::lldMain(args, llvm::outs(), llvm::errs(), {{lld::Gnu, &lld::elf::link}});
   lld::CommonLinkerContext::destroy();
