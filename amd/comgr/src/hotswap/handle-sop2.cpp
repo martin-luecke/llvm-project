@@ -201,12 +201,10 @@ static void recordDerivedWaveMaskI1(RaiseContext &Ctx, ParsedReg DstReg,
   }
 }
 
-// SOP2 bitwise ops normally set SCC from the scalar destination. For mask ops
-// whose scalar result bits match the propagated i1 shadow (and/or/xor/andn2),
-// use the full derived mask instead so SCC observes every modeled lane, not
-// just the source-width scalar fallback. This follows the projection's ballot
-// model, so it is scoped to lanes active under the modeled EXEC rather than
-// trying to recover out-of-EXEC bits the per-lane i1 shadow cannot represent.
+// Vector compares produce one bit per lane. When scalar code combines those
+// values as masks, SCC should answer "is any modeled lane bit set?", not "is
+// the current lane's bit set?". Rebuild the full mask with a ballot before
+// testing it for zero.
 static void storeSccFromWaveMaskI1(RaiseContext &Ctx, llvm::Value *I1,
                                    const Twine &Name) {
   Value *Mask = Ctx.Projection.ballotI1ToWidth(Ctx.B, I1, Ctx.Regs.ExecTy,
@@ -222,12 +220,12 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
   CanonicalOp Sop = Di.CanonOp;
 
   // 32-bit binary ops -- auto SCC via sccResult unless the operands are known
-  // wave masks, in which case SCC is derived from the full propagated shadow.
+  // lane masks, in which case SCC is derived from the full propagated mask.
   //
-  // Shadow propagation: when both sources carry per-lane wave-mask i1s, compute
-  // the result in i1-space and re-record the shadow after the scalar write has
-  // invalidated the cache via `onSgprWritten`. This keeps later mask consumers
-  // and SCC from falling back to source-width scalar bits.
+  // When both sources carry per-lane mask bits, compute the result in i1-space
+  // and re-record it after the scalar write has invalidated the cache via
+  // `onSgprWritten`. This keeps later mask consumers and SCC from falling back
+  // to source-width scalar bits.
   if (Sop == CanonicalOp::S_AND_B32) {
     Value *S0I1 = tryGetSrcWaveMaskI1(Ctx, Op, 0);
     Value *S1I1 = tryGetSrcWaveMaskI1(Ctx, Op, 1);
@@ -960,10 +958,10 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
     Hr.Handled = true;
     return Hr;
   }
-  // ORN2 complements src1 without masking the complemented bits back down with
-  // src0, so scalar SCC may observe complement bits outside the modeled mask.
-  // The propagated i1 shadow is still sound for later per-lane mask consumers;
-  // only whole-register SCC must stay on the scalar result.
+  // Do not use the per-lane mask to set SCC for ORN2. A scalar complement can
+  // set bits that are not modeled lane bits, e.g. with 4 lane bits:
+  // A=0000, B=1111, A|~B=...11110000. Hardware SCC sees the full scalar
+  // result, so it is true even though the modeled lane mask is empty.
   if (Sop == CanonicalOp::S_ORN2_B64) {
     Value *S0I1 = tryGetSrcWaveMaskI1(Ctx, Op, 0);
     Value *S1I1 = tryGetSrcWaveMaskI1(Ctx, Op, 1);
@@ -995,7 +993,7 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
   // See the ORN2_B64 note above: preserve scalar SCC, but keep the propagated
-  // i1 shadow for downstream per-lane mask consumers.
+  // per-lane mask for downstream mask consumers.
   if (Sop == CanonicalOp::S_ORN2_B32) {
     Value *S0I1 = tryGetSrcWaveMaskI1(Ctx, Op, 0);
     Value *S1I1 = tryGetSrcWaveMaskI1(Ctx, Op, 1);
@@ -1010,11 +1008,10 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
   // s_{nand,nor,xnor}_b{32,64} -- negated bitops, `dst = ~(src0 OP src1)`.
-  // SCC follows writeReg32/64's standard rule (set when result != 0). Do not
-  // derive SCC from the propagated i1 shadow here: the scalar complement also
-  // flips bits outside the modeled lane mask, which is architecturally visible
-  // to SCC. The shadow remains sound because later consumers extract only the
-  // current lane's bit under the projection's mask model.
+  // SCC follows writeReg32/64's standard rule (set when result != 0). As with
+  // ORN2, the scalar complement can set bits outside the modeled lane mask, and
+  // hardware SCC observes those bits. The per-lane mask remains useful for
+  // downstream mask consumers.
   // Each opcode uses the same SOP2 operand triplet (sdst, src0, src1)
   // and identical sign-/zero-extension semantics as their non-negated
   // siblings (S_AND_B32 etc.), so we can reuse op.src/op.src64 directly.
