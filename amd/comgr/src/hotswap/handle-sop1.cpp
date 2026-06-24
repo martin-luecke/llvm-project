@@ -244,20 +244,6 @@ HandlerResult handleSOP1(RaiseContext &Ctx, const DecodedInst &Di,
       }
     }
 
-    // `s_mov_b32 vcc_lo, sN` short-circuit: commit the per-lane i1
-    // directly into the VCC alloca instead of going through the lossy
-    // `writeReg32(VCC, V)` -> `extractLaneBitFromWaveMask` round-trip.
-    // Critical for the V_DIV_SCALE_F32 -> SGPR -> s_mov vcc, sN ->
-    // V_DIV_FMAS_F32 carry chain under wave32 -> wave64 cross-widening,
-    // where the round-trip otherwise replicates source wave 0's
-    // carries into lanes 32..63 and breaks source wave 1's div_fmas
-    // scale by 2^(+/-64).
-    if (Dst.RegKind == ParsedReg::VCC && SrcWaveMaskI1) {
-      Ctx.Regs.storeVCC(Ctx.B, SrcWaveMaskI1);
-      Hr.Handled = true;
-      return Hr;
-    }
-
     Ctx.Regs.writeReg32(Ctx.B, Dst, Src);
     if (Dst.RegKind == ParsedReg::SGPR && SrcReg.RegKind == ParsedReg::EXEC) {
       Value *ExecI1 = Ctx.Projection.extractLaneBitFromWaveMask(
