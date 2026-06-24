@@ -43,7 +43,7 @@ double timingElapsed(bool CollectTimings, TimingClock::time_point start) {
   return CollectTimings ? secondsBetween(start, TimingClock::now()) : 0.0;
 }
 
-constexpr int kCacheSchemaVersion = 3;
+constexpr int kCacheSchemaVersion = 4;
 
 struct FileIdentity {
   std::string path;
@@ -255,6 +255,7 @@ KeyData buildKeyData(const TranslationCacheRequest &request,
   appendKeyField(material, "elf_machine", data.elfMachineHex);
   appendKeyField(material, "elf_flags", data.elfFlagsHex);
   appendKeyField(material, "orig_mach", request.OrigMach);
+  appendKeyField(material, "opt_level", static_cast<int>(request.OptLevel));
   appendKeyField(material, "rules_path", request.HotswapRulesPath);
   appendKeyField(material, "rules_sha256", data.rulesSha256);
   appendKeyField(material, "strict", request.StrictMode);
@@ -464,6 +465,7 @@ llvm::json::Object metadataObject(const TranslationCacheRequest &request,
       {"elf_machine", keyData.elfMachineHex},
       {"elf_flags", keyData.elfFlagsHex},
       {"orig_mach", request.OrigMach},
+      {"opt_level", static_cast<int64_t>(request.OptLevel)},
       {"hotswap_rules_path", request.HotswapRulesPath},
       {"hotswap_rules_sha256", keyData.rulesSha256},
       {"strict_mode", request.StrictMode},
@@ -506,6 +508,8 @@ bool validateMetadata(const TranslationCacheRequest &request,
       !requireEqualString(obj, "elf_machine", keyData.elfMachineHex, Reason) ||
       !requireEqualString(obj, "elf_flags", keyData.elfFlagsHex, Reason) ||
       !requireEqualInt(obj, "orig_mach", request.OrigMach, Reason) ||
+      !requireEqualInt(obj, "opt_level", static_cast<int64_t>(request.OptLevel),
+                       Reason) ||
       !requireEqualString(obj, "hotswap_rules_path", request.HotswapRulesPath,
                           Reason) ||
       !requireEqualString(obj, "hotswap_rules_sha256", keyData.rulesSha256,

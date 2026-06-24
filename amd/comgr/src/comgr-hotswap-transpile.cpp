@@ -557,6 +557,7 @@ amd_comgr_status_t AMD_COMGR_API amd_comgr_hotswap_transpile_with_options(
     PipelineOptions.CollectTimings = CollectTimings;
     PipelineOptions.AssumeHipGlobalOffsetZero =
         CacheRequest.AssumeHipGlobalOffsetZero;
+    PipelineOptions.OptLevel = CacheRequest.OptLevel;
     Pipeline = COMGR::hotswap::runPipelineAllKernels(InputBuf,
                                                  SourceIdent.Processor.str(),
                                                  TargetIdent.Processor.str(),

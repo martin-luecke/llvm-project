@@ -255,7 +255,7 @@ target_include_directories(hotswap-transpiler PUBLIC
 # The parent comgr build adds these only to amd_comgr (PRIVATE), so the
 # hotswap object library must pull them in itself.
 if(NOT TARGET lldELF OR NOT TARGET lldCommon)
-  find_package(LLD CONFIG)
+  find_package(LLD REQUIRED CONFIG)
 endif()
 if(LLD_INCLUDE_DIRS)
   target_include_directories(hotswap-transpiler PRIVATE ${LLD_INCLUDE_DIRS})
@@ -263,6 +263,11 @@ elseif(LLVM_EXTERNAL_LLD_SOURCE_DIR)
   target_include_directories(hotswap-transpiler PRIVATE
     ${LLVM_EXTERNAL_LLD_SOURCE_DIR}/include
     ${LLVM_BINARY_DIR}/tools/lld/include)
+else()
+  message(FATAL_ERROR
+    "hotswap-transpiler needs the LLD headers, but LLD_INCLUDE_DIRS is unset and "
+    "LLVM_EXTERNAL_LLD_SOURCE_DIR is not defined. In an in-tree build, set "
+    "LLVM_EXTERNAL_LLD_SOURCE_DIR to the lld source directory.")
 endif()
 
 target_link_libraries(hotswap-transpiler
