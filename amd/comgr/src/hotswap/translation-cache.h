@@ -14,7 +14,6 @@ struct TranslationCacheKeyBuildTimings {
   double elfHeaderSeconds = 0.0;
   double rulesHashSeconds = 0.0;
   double loadedImageIdentitySeconds = 0.0;
-  double llvmToolIdentitySeconds = 0.0;
   double kernelNamesSeconds = 0.0;
   double materialBuildSeconds = 0.0;
   double keyHashSeconds = 0.0;

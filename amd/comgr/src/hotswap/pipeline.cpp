@@ -227,7 +227,12 @@ bool assembleToObject(llvm::StringRef asmText, llvm::TargetMachine &TM,
   std::unique_ptr<llvm::MCRegisterInfo> MRI(target.createMCRegInfo(triple));
   llvm::MCTargetOptions MCOptions;
   std::unique_ptr<llvm::MCAsmInfo> MAI(
-      target.createMCAsmInfo(*MRI, triple, MCOptions));
+      MRI ? target.createMCAsmInfo(*MRI, triple, MCOptions) : nullptr);
+  std::unique_ptr<llvm::MCInstrInfo> MCII(target.createMCInstrInfo());
+  if (!MRI || !MAI || !MCII) {
+    llvm::errs() << "transpiler: failed to create MC info for assembly\n";
+    return false;
+  }
   auto STIOrErr = buildSubtargetInfo(target, TM.getTargetCPU());
   if (!STIOrErr) {
     llvm::errs() << "transpiler: " << llvm::toString(STIOrErr.takeError())
@@ -235,11 +240,6 @@ bool assembleToObject(llvm::StringRef asmText, llvm::TargetMachine &TM,
     return false;
   }
   std::unique_ptr<llvm::MCSubtargetInfo> STI = std::move(*STIOrErr);
-  std::unique_ptr<llvm::MCInstrInfo> MCII(target.createMCInstrInfo());
-  if (!MRI || !MAI || !MCII) {
-    llvm::errs() << "transpiler: failed to create MC info for assembly\n";
-    return false;
-  }
 
   llvm::MCContext Ctx(triple, *MAI, *MRI, *STI, &srcMgr);
   std::unique_ptr<llvm::MCObjectFileInfo> MOFI(

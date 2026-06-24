@@ -76,7 +76,6 @@ struct HotswapComgrTimings {
   double cacheLookupKeyElfHeaderSeconds = 0.0;
   double cacheLookupKeyRulesHashSeconds = 0.0;
   double cacheLookupKeyLoadedImageIdentitySeconds = 0.0;
-  double cacheLookupKeyLlvmToolIdentitySeconds = 0.0;
   double cacheLookupKeyKernelNamesSeconds = 0.0;
   double cacheLookupKeyMaterialBuildSeconds = 0.0;
   double cacheLookupKeyHashSeconds = 0.0;
@@ -105,7 +104,6 @@ struct HotswapComgrTimings {
   double cacheWriteKeyElfHeaderSeconds = 0.0;
   double cacheWriteKeyRulesHashSeconds = 0.0;
   double cacheWriteKeyLoadedImageIdentitySeconds = 0.0;
-  double cacheWriteKeyLlvmToolIdentitySeconds = 0.0;
   double cacheWriteKeyKernelNamesSeconds = 0.0;
   double cacheWriteKeyMaterialBuildSeconds = 0.0;
   double cacheWriteKeyHashSeconds = 0.0;
@@ -132,8 +130,6 @@ std::string timingJson(const HotswapComgrTimings &Timings) {
        Timings.cacheLookupKeyRulesHashSeconds},
       {"cache_lookup_key_loaded_image_identity_seconds",
        Timings.cacheLookupKeyLoadedImageIdentitySeconds},
-      {"cache_lookup_key_llvm_tool_identity_seconds",
-       Timings.cacheLookupKeyLlvmToolIdentitySeconds},
       {"cache_lookup_key_kernel_names_seconds",
        Timings.cacheLookupKeyKernelNamesSeconds},
       {"cache_lookup_key_material_build_seconds",
@@ -172,8 +168,6 @@ std::string timingJson(const HotswapComgrTimings &Timings) {
        Timings.cacheWriteKeyRulesHashSeconds},
       {"cache_write_key_loaded_image_identity_seconds",
        Timings.cacheWriteKeyLoadedImageIdentitySeconds},
-      {"cache_write_key_llvm_tool_identity_seconds",
-       Timings.cacheWriteKeyLlvmToolIdentitySeconds},
       {"cache_write_key_kernel_names_seconds",
        Timings.cacheWriteKeyKernelNamesSeconds},
       {"cache_write_key_material_build_seconds",
@@ -204,8 +198,6 @@ void addLookupTimings(HotswapComgrTimings &Timings,
   Timings.cacheLookupKeyRulesHashSeconds += lookup.keyBuild.rulesHashSeconds;
   Timings.cacheLookupKeyLoadedImageIdentitySeconds +=
       lookup.keyBuild.loadedImageIdentitySeconds;
-  Timings.cacheLookupKeyLlvmToolIdentitySeconds +=
-      lookup.keyBuild.llvmToolIdentitySeconds;
   Timings.cacheLookupKeyKernelNamesSeconds +=
       lookup.keyBuild.kernelNamesSeconds;
   Timings.cacheLookupKeyMaterialBuildSeconds +=
@@ -245,8 +237,6 @@ void addWriteTimings(HotswapComgrTimings &Timings,
   Timings.cacheWriteKeyRulesHashSeconds += write.keyBuild.rulesHashSeconds;
   Timings.cacheWriteKeyLoadedImageIdentitySeconds +=
       write.keyBuild.loadedImageIdentitySeconds;
-  Timings.cacheWriteKeyLlvmToolIdentitySeconds +=
-      write.keyBuild.llvmToolIdentitySeconds;
   Timings.cacheWriteKeyKernelNamesSeconds += write.keyBuild.kernelNamesSeconds;
   Timings.cacheWriteKeyMaterialBuildSeconds +=
       write.keyBuild.materialBuildSeconds;
