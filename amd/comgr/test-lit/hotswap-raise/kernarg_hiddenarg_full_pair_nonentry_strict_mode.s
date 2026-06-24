@@ -1,11 +1,11 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco
 ; RUN: env HSA_HOTSWAP_STRICT=1 raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:   --assume-hip-global-offset-zero \
-; RUN:   --emit-ir=kernarg_hiddenarg_full_pair_same_block 2>/dev/null \
+; RUN:   --emit-ir=kernarg_hiddenarg_full_pair_same_block \
 ; RUN:   | %FileCheck %s --check-prefix=SAME
 ; RUN: env HSA_HOTSWAP_STRICT=1 raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:   --assume-hip-global-offset-zero \
-; RUN:   --emit-ir=kernarg_hiddenarg_full_pair_successor 2>/dev/null \
+; RUN:   --emit-ir=kernarg_hiddenarg_full_pair_successor \
 ; RUN:   | %FileCheck %s --check-prefix=SUCC
 ;
 ; A full-pair hidden-arg load into s[0:1] proves the physical pair is no
@@ -50,53 +50,23 @@ kernarg_hiddenarg_full_pair_successor:
 	.section	.rodata,"a",@progbits
 	.p2align	6, 0x0
 	.amdhsa_kernel kernarg_hiddenarg_full_pair_same_block
-		.amdhsa_group_segment_fixed_size 0
-		.amdhsa_private_segment_fixed_size 0
 		.amdhsa_kernarg_size 16
 		.amdhsa_user_sgpr_count 2
-		.amdhsa_user_sgpr_dispatch_ptr 0
-		.amdhsa_user_sgpr_queue_ptr 0
 		.amdhsa_user_sgpr_kernarg_segment_ptr 1
-		.amdhsa_user_sgpr_dispatch_id 0
-		.amdhsa_user_sgpr_kernarg_preload_length 0
-		.amdhsa_user_sgpr_kernarg_preload_offset 0
-		.amdhsa_user_sgpr_private_segment_size 0
 		.amdhsa_wavefront_size32 1
-		.amdhsa_uses_dynamic_stack 0
-		.amdhsa_enable_private_segment 0
-		.amdhsa_system_sgpr_workgroup_id_x 1
 		.amdhsa_next_free_vgpr 1
 		.amdhsa_next_free_sgpr 8
-		.amdhsa_reserve_vcc 1
 		.amdhsa_float_denorm_mode_32 3
-		.amdhsa_memory_ordered 1
-		.amdhsa_forward_progress 1
-		.amdhsa_inst_pref_size 4
 	.end_amdhsa_kernel
 	.p2align	6, 0x0
 	.amdhsa_kernel kernarg_hiddenarg_full_pair_successor
-		.amdhsa_group_segment_fixed_size 0
-		.amdhsa_private_segment_fixed_size 0
 		.amdhsa_kernarg_size 16
 		.amdhsa_user_sgpr_count 2
-		.amdhsa_user_sgpr_dispatch_ptr 0
-		.amdhsa_user_sgpr_queue_ptr 0
 		.amdhsa_user_sgpr_kernarg_segment_ptr 1
-		.amdhsa_user_sgpr_dispatch_id 0
-		.amdhsa_user_sgpr_kernarg_preload_length 0
-		.amdhsa_user_sgpr_kernarg_preload_offset 0
-		.amdhsa_user_sgpr_private_segment_size 0
 		.amdhsa_wavefront_size32 1
-		.amdhsa_uses_dynamic_stack 0
-		.amdhsa_enable_private_segment 0
-		.amdhsa_system_sgpr_workgroup_id_x 1
 		.amdhsa_next_free_vgpr 1
 		.amdhsa_next_free_sgpr 8
-		.amdhsa_reserve_vcc 1
 		.amdhsa_float_denorm_mode_32 3
-		.amdhsa_memory_ordered 1
-		.amdhsa_forward_progress 1
-		.amdhsa_inst_pref_size 4
 	.end_amdhsa_kernel
 	.text
 	.p2alignl 7, 3214868480

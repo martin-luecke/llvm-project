@@ -1,15 +1,15 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco
 ; RUN: env HSA_HOTSWAP_STRICT=1 raise_cli %t.hsaco --target-isa=gfx942 \
-; RUN:   --emit-ir=kernarg_memory_load_nonentry_successor_strict_mode 2>/dev/null \
+; RUN:   --emit-ir=kernarg_memory_load_nonentry_successor_strict_mode \
 ; RUN:   | %FileCheck %s --check-prefix=STRICT
 ;
 ; This is the cross-basic-block companion to
 ; kernarg_memory_load_nonentry_strict_mode.s. The first block overwrites the
 ; physical kernarg SGPR pair with an explicit pointer loaded from memory, then
 ; branches to a successor that performs a high-offset load through the same
-; SGPR numbers. Strict mode should use the prepass-computed NonEntry block-entry
-; fact for the successor and lower the load as ordinary memory, not refuse it as
-; an ambiguous source hidden-arg access.
+; SGPR numbers. Strict mode should use the prepass-computed non-entry block
+; entry fact for the successor and lower the load as ordinary memory, not refuse
+; it as an ambiguous source hidden-arg access.
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 5
@@ -34,28 +34,13 @@ kernarg_memory_load_nonentry_successor_strict_mode:
 	.section	.rodata,"a",@progbits
 	.p2align	6, 0x0
 	.amdhsa_kernel kernarg_memory_load_nonentry_successor_strict_mode
-		.amdhsa_group_segment_fixed_size 0
-		.amdhsa_private_segment_fixed_size 0
 		.amdhsa_kernarg_size 32
 		.amdhsa_user_sgpr_count 2
-		.amdhsa_user_sgpr_dispatch_ptr 0
-		.amdhsa_user_sgpr_queue_ptr 0
 		.amdhsa_user_sgpr_kernarg_segment_ptr 1
-		.amdhsa_user_sgpr_dispatch_id 0
-		.amdhsa_user_sgpr_kernarg_preload_length 0
-		.amdhsa_user_sgpr_kernarg_preload_offset 0
-		.amdhsa_user_sgpr_private_segment_size 0
 		.amdhsa_wavefront_size32 1
-		.amdhsa_uses_dynamic_stack 0
-		.amdhsa_enable_private_segment 0
-		.amdhsa_system_sgpr_workgroup_id_x 1
 		.amdhsa_next_free_vgpr 1
 		.amdhsa_next_free_sgpr 8
-		.amdhsa_reserve_vcc 1
 		.amdhsa_float_denorm_mode_32 3
-		.amdhsa_memory_ordered 1
-		.amdhsa_forward_progress 1
-		.amdhsa_inst_pref_size 4
 	.end_amdhsa_kernel
 	.text
 	.p2alignl 7, 3214868480
