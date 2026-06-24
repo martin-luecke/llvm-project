@@ -14,6 +14,9 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "hotswap/canonical-op.h"
+#include "hotswap/decode.h"
+#include "hotswap/decoded-inst.h"
 #include "hotswap/pipeline.h"
 #include "hotswap/raiser.h"
 
@@ -23,6 +26,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/MC/MCInst.h"
 #include "llvm/Support/AMDHSAKernelDescriptor.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -164,4 +168,22 @@ TEST(RaiserScaffolding, PreloadedUnmatchedImplicitOffsetRefusesInStrictMode) {
             COMGR::hotswap::RaiseFailureReason::StrictUnsafeLowering);
   EXPECT_EQ(Result.Failure.Format, "implicitarg.ptr");
   EXPECT_EQ(Result.Failure.Mnemonic, "<preloaded-hidden-kernarg>");
+}
+
+// s_add_pc_i64's successor is Offset + Size + displacement (byte units), not
+// the SOPP dword-scaled target.
+TEST(DecodeBlockSuccessors, AddPcI64UsesByteOffsetNotDwordScaling) {
+  COMGR::hotswap::DecodedInst Di;
+  Di.CanonOp = COMGR::hotswap::CanonicalOp::S_ADD_PC_I64;
+  Di.IsBranch = true; // S_ADD_PC_I64 sets the AMDGPU isBranch bit
+  Di.Offset = 0x8;
+  Di.Size = 4;
+  Di.Inst.addOperand(llvm::MCOperand::createImm(8));
+
+  // 0x8 + 0x4 + 8 = 0x14 (byte); SOPP scaling would give 0x8 + 0x4 + 8*4 = 0x24.
+  llvm::SmallVector<uint64_t> Succ =
+      COMGR::hotswap::computeDecodedBlockSuccessors(Di, /*NextBlockOffset=*/0xC);
+
+  ASSERT_EQ(Succ.size(), 1u);
+  EXPECT_EQ(Succ[0], 0x14u);
 }
