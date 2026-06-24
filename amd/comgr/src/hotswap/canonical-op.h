@@ -55,7 +55,7 @@ enum class CanonicalOp : uint16_t {
   // `S_WAIT_ASYNCCNT` and find both the CanonicalOp, its opcode_map
   // entry, and the handler's no-op arm in one pass.
   S_WAIT_ASYNCCNT, S_WAIT_TENSORCNT,
-  S_WAIT_LOADCNT_DSCNT, S_WAIT_ALU,
+  S_WAIT_LOADCNT_DSCNT, S_WAIT_STORECNT_DSCNT, S_WAIT_ALU,
   S_CLAUSE, S_DELAY_ALU, S_SET_GPR_IDX_ON, S_SET_GPR_IDX_OFF, S_SETVSKIP,
   // Barriers. GFX12+ splits s_barrier into signal + wait; earlier ISAs emit a
   // single s_barrier. Handlers model signal as a no-op and wait as a full
