@@ -141,6 +141,10 @@ ModuloReplicationProjection::emitPackedWorkitemId(IRBuilder<> &B,
     Value *Limit = ConstantInt::get(I32Ty, MaxFlatWG);
     Value *FlatLaneId = emitLaneIdx(B);
     Value *IsRealLane = B.CreateICmpULT(FlatLaneId, Limit, "tid_is_real_lane");
+    // Clamp phantom upper lanes to the literal packed 0 (local id (0, 0, 0));
+    // this copies nothing from lane 0. They stay hardware inactive and cannot
+    // commit source-visible memory, so 0 is only an in-bounds address floor for
+    // any address still computed for them.
     Raw = B.CreateSelect(IsRealLane, Raw, ConstantInt::get(I32Ty, 0),
                          "tid_phantom_clamp");
   }
