@@ -180,6 +180,8 @@ TEST(DecodeBlockSuccessors, AddPcI64UsesByteOffsetNotDwordScaling) {
   Di.Size = 4;
   Di.Inst.addOperand(llvm::MCOperand::createImm(8));
 
+  EXPECT_TRUE(COMGR::hotswap::decodedInstEndsBlock(Di));
+
   // 8 + 4 + 8 = 20 (byte); SOPP scaling would give 8 + 4 + 8*4 = 44.
   llvm::SmallVector<uint64_t> Succ =
       COMGR::hotswap::computeDecodedBlockSuccessors(Di, /*NextBlockOffset=*/12);

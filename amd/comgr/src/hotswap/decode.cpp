@@ -826,6 +826,7 @@ bool decodedInstEndsBlock(const DecodedInst &LastInst) {
   case CanonicalOp::S_CBRANCH_VCCNZ:
   case CanonicalOp::S_CBRANCH_EXECZ:
   case CanonicalOp::S_CBRANCH_EXECNZ:
+  case CanonicalOp::S_ADD_PC_I64:
   case CanonicalOp::S_ENDPGM:
   case CanonicalOp::S_SET_PC_I64:
   case CanonicalOp::S_SWAP_PC_I64:
