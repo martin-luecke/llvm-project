@@ -547,21 +547,6 @@ static llvm::Value *emitCvtScalePk8Bf16Fp4CrossTargetExpansion(
   return Vec;
 }
 
-// The v_cvt fp8/bf8 family emits hardware cvt intrinsics that interpret fp8
-// bytes in the TARGET ISA's format (FNUZ on gfx942, OCP on gfx950/gfx1250),
-// while in-register fp8 bytes are kept in the SOURCE format. When the two
-// differ, decoder *inputs* are re-encoded SRC->TGT before the hw decode and
-// encoder *outputs* are re-encoded TGT->SRC after the hw encode. Returns true
-// (and sets DecodeInputToFnuz for the SRC->TGT direction) iff a re-encode is
-// needed; encoders use the opposite direction.
-bool fp8CvtNeedsReencode(RaiseContext &Ctx, bool &DecodeInputToFnuz) {
-  Fp8Format S = fp8FormatOf(Ctx.Isa), T = fp8FormatOf(Ctx.TargetIsa);
-  if (S == Fp8Format::None || T == Fp8Format::None || S == T)
-    return false;
-  DecodeInputToFnuz = (T == Fp8Format::FNUZ);
-  return true;
-}
-
 // Emit v_cvt_pk_{fp8,bf8}_f32: pack two f32 into two fp8 bytes at the WordSel
 // half of OldVal. When source/target fp8 formats differ, the hw encode (which
 // produces TARGET-format bytes) is run in isolation, re-encoded TGT->SRC, then
@@ -571,15 +556,15 @@ llvm::Value *emitCvtPkFp8F32(RaiseContext &Ctx, llvm::Function *CvtFn,
                              llvm::Value *S0, llvm::Value *S1,
                              llvm::Value *OldVal, bool WordSel, bool IsBf8) {
   auto &B = Ctx.B;
-  bool DecToFnuz;
-  if (!fp8CvtNeedsReencode(Ctx, DecToFnuz))
+  auto ToFnuz = fp8Reencode(Ctx.Isa, Ctx.TargetIsa, Fp8Dir::TgtToSrc);
+  if (!ToFnuz)
     return B.CreateCall(
         CvtFn, {S0, S1, OldVal, ConstantInt::get(Ctx.I1Ty, WordSel)}, "pk_fp8");
   Value *Fresh = B.CreateCall(CvtFn,
                               {S0, S1, ConstantInt::get(Ctx.I32Ty, 0),
                                ConstantInt::get(Ctx.I1Ty, false)},
                               "pk_fp8_raw");
-  Fresh = convertFp8Dword(B, Fresh, IsBf8, /*ToFnuz=*/!DecToFnuz);
+  Fresh = convertFp8Dword(B, Fresh, IsBf8, *ToFnuz);
   Value *Lo = B.CreateAnd(Fresh, ConstantInt::get(Ctx.I32Ty, 0xFFFF));
   if (WordSel)
     return B.CreateOr(B.CreateAnd(OldVal, ConstantInt::get(Ctx.I32Ty, 0xFFFF)),
@@ -3134,14 +3119,10 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
           PkFn,
           {ExtractF(6), ExtractF(7), Dw1Lo, ConstantInt::get(Ctx.I1Ty, 1)},
           "pk_fp8_67");
-      // pk_fp8 produced TARGET-format bytes; re-encode TGT->SRC so the result
-      // VGPR stays in the source fp8 format (see emitCvtPkFp8F32).
-      bool ScaleToFnuz;
-      if (fp8CvtNeedsReencode(Ctx, ScaleToFnuz)) {
-        Dw0 = convertFp8Dword(Ctx.B, Dw0, /*IsBf8=*/false,
-                              /*ToFnuz=*/!ScaleToFnuz);
-        Dw1 = convertFp8Dword(Ctx.B, Dw1, /*IsBf8=*/false,
-                              /*ToFnuz=*/!ScaleToFnuz);
+      if (auto ToFnuz =
+              fp8Reencode(Ctx.Isa, Ctx.TargetIsa, Fp8Dir::TgtToSrc)) {
+        Dw0 = convertFp8Dword(Ctx.B, Dw0, /*IsBf8=*/false, *ToFnuz);
+        Dw1 = convertFp8Dword(Ctx.B, Dw1, /*IsBf8=*/false, *ToFnuz);
       }
       auto *V2I32Ty = FixedVectorType::get(Ctx.I32Ty, 2);
       Value *Packed = PoisonValue::get(V2I32Ty);
@@ -3238,13 +3219,9 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Value *Src = Op.src(0);
     if (Src->getType() != Ctx.I32Ty)
       Src = Ctx.B.CreateBitOrPointerCast(Src, Ctx.I32Ty);
-    // The hw decode reads the selected 16-bit half in the TARGET fp8 format;
-    // re-encode the OCP source bytes SRC->TGT first if the formats differ
-    // (whole-dword byte-wise conversion preserves both halves).
-    bool ToFnuz;
-    if (fp8CvtNeedsReencode(Ctx, ToFnuz))
+    if (auto ToFnuz = fp8Reencode(Ctx.Isa, Ctx.TargetIsa, Fp8Dir::SrcToTgt))
       Src = convertFp8Dword(Ctx.B, Src, Sop == CanonicalOp::V_CVT_PK_F32_BF8,
-                            ToFnuz);
+                            *ToFnuz);
     Intrinsic::ID Iid = (Sop == CanonicalOp::V_CVT_PK_F32_FP8)
                             ? Intrinsic::amdgcn_cvt_pk_f32_fp8
                             : Intrinsic::amdgcn_cvt_pk_f32_bf8;
@@ -3275,12 +3252,9 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Value *Src = Op.src(0);
     if (Src->getType() != Ctx.I32Ty)
       Src = Ctx.B.CreateBitOrPointerCast(Src, Ctx.I32Ty);
-    // The hw decode reads byte 0 in the TARGET fp8 format; re-encode the OCP
-    // source byte SRC->TGT first if the formats differ.
-    bool ToFnuz;
-    if (fp8CvtNeedsReencode(Ctx, ToFnuz))
+    if (auto ToFnuz = fp8Reencode(Ctx.Isa, Ctx.TargetIsa, Fp8Dir::SrcToTgt))
       Src = convertFp8Dword(Ctx.B, Src, Sop == CanonicalOp::V_CVT_F32_BF8,
-                            ToFnuz);
+                            *ToFnuz);
     Intrinsic::ID Iid = (Sop == CanonicalOp::V_CVT_F32_FP8)
                             ? Intrinsic::amdgcn_cvt_f32_fp8
                             : Intrinsic::amdgcn_cvt_f32_bf8;

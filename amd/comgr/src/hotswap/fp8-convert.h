@@ -28,6 +28,8 @@
 
 #include "llvm/ADT/SmallVector.h"
 
+#include <optional>
+
 namespace llvm {
 class Value;
 template <typename FolderTy, typename InserterTy> class IRBuilder;
@@ -46,6 +48,17 @@ enum class Fp8Format { None, OCP, FNUZ };
 /// interprets fp8 bytes.  FNUZ is CDNA3 (gfx940/941/942); every other
 /// fp8-capable target (gfx950 CDNA4, gfx12 / gfx1250 RDNA) is OCP.
 Fp8Format fp8FormatOf(const ISAProfile &P);
+
+/// Data flow across an fp8/bf8 hardware boundary: SrcToTgt for hardware inputs
+/// (MFMA/WMMA operands, decode inputs), TgtToSrc for hardware outputs (encode
+/// results).
+enum class Fp8Dir { SrcToTgt, TgtToSrc };
+
+/// If \p Src and \p Tgt interpret fp8/bf8 bytes differently, return the
+/// `ToFnuz` argument to pass to convertFp8Dword to re-encode in direction
+/// \p Dir; otherwise nullopt (formats match, no re-encode needed).
+std::optional<bool> fp8Reencode(const ISAProfile &Src, const ISAProfile &Tgt,
+                                Fp8Dir Dir);
 
 using HotswapIRBuilder =
     llvm::IRBuilder<llvm::ConstantFolder, llvm::IRBuilderDefaultInserter>;

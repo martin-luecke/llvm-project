@@ -21,10 +21,18 @@ Fp8Format fp8FormatOf(const ISAProfile &P) {
   if (!(P.HasFP8Insts || P.HasFP8ConversionInsts))
     return Fp8Format::None;
   if (P.HasGfx950Insts)
-    return Fp8Format::OCP;     // gfx950 CDNA4
+    return Fp8Format::OCP;
   if (P.HasMfma)
-    return Fp8Format::FNUZ;    // gfx940 / gfx941 / gfx942 CDNA3
-  return Fp8Format::OCP;       // gfx12 / gfx1250 RDNA
+    return Fp8Format::FNUZ;
+  return Fp8Format::OCP;
+}
+
+std::optional<bool> fp8Reencode(const ISAProfile &Src, const ISAProfile &Tgt,
+                                Fp8Dir Dir) {
+  Fp8Format S = fp8FormatOf(Src), T = fp8FormatOf(Tgt);
+  if (S == Fp8Format::None || T == Fp8Format::None || S == T)
+    return std::nullopt;
+  return (Dir == Fp8Dir::SrcToTgt ? T : S) == Fp8Format::FNUZ;
 }
 
 namespace {

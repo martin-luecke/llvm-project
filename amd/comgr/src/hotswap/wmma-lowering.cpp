@@ -560,25 +560,23 @@ Expected<Value *> emitWMMAtoMFMA(RaiseContext &Ctx, Value *A, Value *Vb,
   unpackDwords(B, Vb, 8, Ctx.I32Ty, BDwords);
   unpackDwords(B, C, 8, Ctx.I32Ty, CDwords);
 
-  // gfx12 WMMA fp8/bf8 operands are OCP; the gfx942 fp8/bf8 MFMA reads FNUZ.
-  // Re-encode the A/B fragments OCP->FNUZ when source and target fp8 formats
-  // differ (the only occurring case here is OCP source -> FNUZ gfx942 target).
-  // F16/BF16/IU8 carry no fp8 format and are skipped.
-  if (fp8FormatOf(Ctx.Isa) == Fp8Format::OCP &&
-      fp8FormatOf(Ctx.TargetIsa) == Fp8Format::FNUZ) {
-    bool AIsBf8 = InputType == WMMAInputType::BF8_FP8 ||
-                  InputType == WMMAInputType::BF8_BF8;
-    bool BIsBf8 = InputType == WMMAInputType::FP8_BF8 ||
-                  InputType == WMMAInputType::BF8_BF8;
-    bool IsFp8 = InputType == WMMAInputType::FP8_FP8 ||
-                 InputType == WMMAInputType::FP8_BF8 ||
-                 InputType == WMMAInputType::BF8_FP8 ||
-                 InputType == WMMAInputType::BF8_BF8;
-    if (IsFp8)
+  auto fp8Sides = [&]() -> std::optional<std::pair<bool, bool>> {
+    switch (InputType) {
+    case WMMAInputType::FP8_FP8: return std::pair{false, false};
+    case WMMAInputType::FP8_BF8: return std::pair{false, true};
+    case WMMAInputType::BF8_FP8: return std::pair{true, false};
+    case WMMAInputType::BF8_BF8: return std::pair{true, true};
+    default: return std::nullopt; // F16/BF16/IU8 carry no fp8 byte
+    }
+  }();
+  if (auto ToFnuz = fp8Reencode(Ctx.Isa, Ctx.TargetIsa, Fp8Dir::SrcToTgt)) {
+    if (fp8Sides) {
+      auto [AIsBf8, BIsBf8] = *fp8Sides;
       for (unsigned I = 0; I < 8; ++I) {
-        ADwords[I] = convertFp8Dword(B, ADwords[I], AIsBf8, /*ToFnuz=*/true);
-        BDwords[I] = convertFp8Dword(B, BDwords[I], BIsBf8, /*ToFnuz=*/true);
+        ADwords[I] = convertFp8Dword(B, ADwords[I], AIsBf8, *ToFnuz);
+        BDwords[I] = convertFp8Dword(B, BDwords[I], BIsBf8, *ToFnuz);
       }
+    }
   }
 
   Value *LaneId = emitLaneId(B, M, Ctx.I32Ty);
@@ -1102,11 +1100,8 @@ llvm::Expected<llvm::Value *> emitWMMAScaleF8F6F4toScaledMFMA(
 // gfx1250 v_wmma_scale_f32_16x16x128_f8f6f4 -> gfx942: decompose K=128 into 4
 // K=32 unscaled MFMAs and apply the per-block scale to each partial via
 // fmuladd. FP6/BF6/FP4 widen in-line to FP8/BF8 so the pipeline is
-// format-agnostic. The widened/passthrough fragments are OCP fp8 (E4M3FN /
-// E5M2); since gfx942's fp8/bf8 MFMA interprets operands as FNUZ they are then
-// re-encoded OCP -> FNUZ (see convertOcpFragmentToFnuz). MODREP runs one pass;
-// WaveNative cross-widen runs two (GroupBase 0 and 32) combined by a laneId
-// select.
+// format-agnostic. MODREP runs one pass; WaveNative cross-widen runs two
+// (GroupBase 0 and 32) combined by a laneId select.
 
 namespace {
 
@@ -1420,12 +1415,6 @@ Value *decodeScaleByte(IRBuilder<> &B, Module &M, Type *F32Ty, Value *Byte,
                           "e8m0_decoded");
   }
   case ScaleFmtE4M3: {
-    // Scale format 2 is UE4M3 (unsigned OCP E4M3FN, bias 7). gfx942 has no OCP
-    // fp8 decoder -- amdgcn_cvt_f32_fp8 reads FNUZ (bias 8) and would halve
-    // every scale (e.g. the 0x38 unit scale -> 0.5) -- so decode by hand:
-    //   normal:    (8 + mant) / 8 * 2^(exp - 7)
-    //   subnormal: mant / 8 * 2^-6        (exp == 0)
-    //   NaN:       exp == 15 && mant == 7
     Value *Exp = B.CreateAnd(B.CreateLShr(Byte, B.getInt32(3)), B.getInt32(0xF),
                              "ue4m3_exp");
     Value *Mant = B.CreateAnd(Byte, B.getInt32(0x7), "ue4m3_mant");
@@ -1588,12 +1577,10 @@ Expected<Value *> emitWMMAScaleF8F6F4toMFMA(
   assert(aDwordsArr.size() == 16 && bDwordsArr.size() == 16 &&
          "post-widen fragments must be 16 fp8 dwords / lane");
 
-  // The fragments are now OCP fp8 (E4M3FN / E5M2); gfx942's fp8/bf8 MFMA reads
-  // FNUZ. Re-encode per effective format before feeding the MFMA.
-  convertFp8DwordsInPlace(B, aDwordsArr, /*IsBf8=*/aFmtEff == FmtBF8,
-                          /*ToFnuz=*/true);
-  convertFp8DwordsInPlace(B, bDwordsArr, /*IsBf8=*/bFmtEff == FmtBF8,
-                          /*ToFnuz=*/true);
+  if (auto ToFnuz = fp8Reencode(ctx.Isa, ctx.TargetIsa, Fp8Dir::SrcToTgt)) {
+    convertFp8DwordsInPlace(B, aDwordsArr, /*IsBf8=*/aFmtEff == FmtBF8, *ToFnuz);
+    convertFp8DwordsInPlace(B, bDwordsArr, /*IsBf8=*/bFmtEff == FmtBF8, *ToFnuz);
+  }
 
   Value *LaneId = emitLaneId(B, M, ctx.I32Ty);
 
