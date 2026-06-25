@@ -1,13 +1,16 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && %not %raise_cli %t.hsaco --target-isa=gfx942 \
-; RUN:     --emit-ir=vcc_hi_carryout_kernel 2>&1 | %FileCheck %s
+; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 \
+; RUN:     --emit-ir=vcc_hi_carryout_kernel 2>/dev/null | %FileCheck %s
 ;
-; On wave32, vcc_hi / exec_hi are scratch scalars; the ISA does not allow them
-; as a carry-out destination. Such an encoding must be refused loudly, not
-; folded into the real VCC.
+; On wave32, vcc_hi / exec_hi are scratch scalars that a VOP3 carry-out may
+; legitimately target (the per-lane carry is parked there like any other SGPR
+; slot). It must lower -- recording the per-lane i1 in the scratch wave-mask
+; shadow -- not be refused. (A later `s_mov_b32 vcc_lo, vcc_hi` restore then
+; recovers the full-width mask; see v_div_scale_flag_vcc_hi_chain_wave32.s.)
 
-; CHECK: kernel 'vcc_hi_carryout_kernel'
-; CHECK-SAME: carry-out destination is wave32 vcc_hi/exec_hi scratch
+; CHECK-LABEL: define amdgpu_kernel void @vcc_hi_carryout_kernel(
+; CHECK: = call { i32, i1 } @llvm.uadd.with.overflow.i32(
+; CHECK: = extractvalue { i32, i1 } %{{[0-9]+}}, 1
 
         .amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
         .amdhsa_code_object_version 6

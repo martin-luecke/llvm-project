@@ -297,16 +297,26 @@ void writeCarryOutI1(RaiseContext &Ctx, const DecodedInst &Di,
       }
       return;
     case ParsedReg::VCC_HI_SCRATCH:
-    case ParsedReg::EXEC_HI_SCRATCH:
+    case ParsedReg::EXEC_HI_SCRATCH: {
       // On a wave32 source vcc_hi / exec_hi are general-purpose scratch
-      // scalars, and the ISA does not allow them as a carry-out destination
-      // (wave32 carry operations may not target VCC_HI / EXEC_HI). Refuse
-      // rather than route a per-lane carry through a scalar slot that cannot
-      // represent it.
-      Ctx.recordReadFailure(RaiseFailure::unsupportedInstructionForm(
-          Di, "VALU",
-          "carry-out destination is wave32 vcc_hi/exec_hi scratch"));
+      // scalars. The wave32 fdiv expansion parks a v_div_scale_f32 flag (a
+      // genuine per-lane mask) here, then restores it to VCC via
+      // `s_mov_b32 vcc_lo, vcc_hi` immediately before the consuming
+      // v_div_fmas -- always straight-line within one BB. Record the exact
+      // per-lane i1 in the same-BB scratch wave-mask shadow so the restore
+      // recovers all lanes; the 32-bit data slot alone would re-widen a
+      // truncated mask and drop lanes 32..63 on wave64. Also write a
+      // truncated ballot into the data slot as a best-effort value for any
+      // (unexpected) non-mask reader. Record AFTER the data write so the
+      // write-path invalidation does not clear the shadow we just set.
+      Value *Mask = Ctx.Projection.ballotI1ToWidth(
+          Ctx.B, CarryI1, Ctx.Projection.sourceWaveMaskTy(),
+          "scratch_flag_ballot");
+      Ctx.Regs.writeReg32(Ctx.B, CarryDst,
+                          Ctx.B.CreateZExtOrTrunc(Mask, Ctx.I32Ty));
+      Ctx.recordScratchWaveMaskI1(CarryDst.RegKind, CarryI1);
       return;
+    }
     case ParsedReg::NOREG:
       return;
     default:
@@ -314,27 +324,6 @@ void writeCarryOutI1(RaiseContext &Ctx, const DecodedInst &Di,
     }
   }
   Ctx.Regs.storeVCC(Ctx.B, CarryI1);
-}
-
-// v_div_scale_{f32,f64} write their boolean flag to an explicit SDST
-// (operand 1). On a wave32 source vcc_hi / exec_hi are general-purpose
-// scratch scalars, and -- exactly as for a carry-out destination (see
-// `writeCarryOutI1`) -- the ISA does not allow them as the div-scale flag
-// destination. Classify the SDST so both div_scale arms can refuse before
-// emitting the intrinsic or touching the register file; returns true with
-// `Hr.Failure` set when the encoding must be refused.
-bool refuseDivScaleScratchFlagDest(const DecodedInst &Di, OpResolver &Op,
-                                   HandlerResult &Hr) {
-  if (Di.NumDefs < 2 || !Di.isReg(1))
-    return false;
-  ParsedReg FlagDst = Op.dst(1);
-  if (FlagDst.RegKind != ParsedReg::VCC_HI_SCRATCH &&
-      FlagDst.RegKind != ParsedReg::EXEC_HI_SCRATCH)
-    return false;
-  Hr.Failure = RaiseFailure::unsupportedInstructionForm(
-      Di, "VALU",
-      "v_div_scale flag destination is wave32 vcc_hi/exec_hi scratch");
-  return true;
 }
 
 // Emit the cross-target (gfx1250 -> gfx94x) dequantisation expansion
@@ -1546,10 +1535,6 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
 
   // ---- Division helpers (VOP3) ----
   if (Sop == CanonicalOp::V_DIV_SCALE_F32) {
-    // Refuse a wave32 vcc_hi/exec_hi scratch flag destination up front,
-    // before any IR is emitted or the register file is touched.
-    if (refuseDivScaleScratchFlagDest(Di, Op, Hr))
-      return Hr;
     // `v_div_scale_f32 dst, vcc, src0, src1, src2` scales one operand
     // of a numerator/denominator pair for a subsequent IEEE-conformant
     // divide (rcp + Newton + div_fixup).  The hardware encodes the
@@ -1711,10 +1696,11 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
                  ScaleNumerator ? Ctx.B.getTrue() : Ctx.B.getFalse()}, "divscale");
     Ctx.writeReg32(Op.dst(0), Ctx.B.CreateBitCast(Ctx.B.CreateExtractValue(R, 0), Ctx.I32Ty));
     // Write the boolean flag to the actual SDST destination (operand 1):
-    // vcc_lo, sN, or null. The kernel saves flags to SGPRs and later
-    // restores them to VCC via s_mov_b32 before each v_div_fmas_f32.
-    // (A wave32 vcc_hi/exec_hi scratch destination was already refused
-    // at the top of this handler.)
+    // vcc_lo, sN, vcc_hi/exec_hi scratch, or null. The kernel saves flags to
+    // SGPRs (or a vcc_hi/exec_hi scratch slot) and later restores them to VCC
+    // via s_mov_b32 before each v_div_fmas_f32. writeCarryOutI1 records a
+    // same-BB per-lane shadow for the scratch-slot case so the restore is
+    // full-width (see writeCarryOutI1's VCC_HI_SCRATCH/EXEC_HI_SCRATCH arm).
     // Route the carry-out (i1 per lane) through the shared helper so
     // a downstream `s_mov_b32 vcc_lo, sN` restore finds a proper
     // source-width wave mask in the SGPR alloca, and same-BB consumers
@@ -1778,10 +1764,6 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
   // routing through writeCarryOutI1 are all width-independent. See the
   // V_DIV_SCALE_F32 handler above for the full rationale.
   if (Sop == CanonicalOp::V_DIV_SCALE_F64) {
-    // Refuse a wave32 vcc_hi/exec_hi scratch flag destination up front,
-    // before any IR is emitted or the register file is touched.
-    if (refuseDivScaleScratchFlagDest(Di, Op, Hr))
-      return Hr;
     if (!requireDefaultVOP3FpValuOutputMods(Di, Hr, "v_div_scale_f64"))
       return Hr;
     auto *F64Ty = Type::getDoubleTy(Ctx.C);
@@ -1834,8 +1816,10 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Ctx.writeReg64(
         Op.dst(0),
         Ctx.B.CreateBitCast(Ctx.B.CreateExtractValue(R, 0), Ctx.I64Ty));
-    // A wave32 vcc_hi/exec_hi scratch flag destination was already refused
-    // at the top of this handler.
+    // The flag SDST (vcc_lo, sN, vcc_hi/exec_hi scratch, or null) is routed
+    // through writeCarryOutI1, which records a same-BB per-lane shadow for the
+    // scratch-slot case so a later `s_mov_b32 vcc_lo, vcc_hi` restore is
+    // full-width.
     writeCarryOutI1(Ctx, Di, Op, Ctx.B.CreateExtractValue(R, 1));
     Hr.Handled = true;
     return Hr;

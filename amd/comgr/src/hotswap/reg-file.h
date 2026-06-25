@@ -133,6 +133,13 @@ struct AllocaRegFile {
   // interference defeats the cache).
   llvm::unique_function<void(int)> OnSgprWritten;
 
+  // Fires when a wave32 vcc_hi / exec_hi scratch scalar is overwritten as plain
+  // 32-bit data (e.g. v_readlane_b32 vcc_hi, ...). The handler layer uses it to
+  // drop any stale per-lane wave-mask shadow parked in that slot by a prior
+  // v_div_scale flag, so a later `s_mov_b32 vcc_lo, vcc_hi` mask restore cannot
+  // pick up a dead flag. Symmetric with OnSgprWritten for the two scratch regs.
+  llvm::unique_function<void(ParsedReg::Kind)> OnScratchWritten;
+
   // Initialise storage.
   //
   // `MRI` is queried for the architectural SGPR_32 / TTMP_32 register-

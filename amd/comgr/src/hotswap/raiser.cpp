@@ -1657,6 +1657,9 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   // afterwards via `ctx.recordSgprWaveMaskI1`. See hotswap/docs/sgpr-
   // wave-mask-translation.md section 3.1 for the full contract.
   Regs.OnSgprWritten = [&Ctx](int Idx) { Ctx.invalidateSgprWaveMaskI1(Idx); };
+  Regs.OnScratchWritten = [&Ctx](ParsedReg::Kind K) {
+    Ctx.invalidateScratchWaveMaskI1(K);
+  };
 
   if (UseThreadLoop) {
     auto *IterA = B.CreateAlloca(I32Ty, nullptr, "tl_iter_alloca");

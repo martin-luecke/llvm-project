@@ -1,20 +1,23 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && %not %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=divscale_f32_vcc_hi 2>&1 | %FileCheck %s --check-prefix=F32-VCC
-; RUN: %not %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=divscale_f32_exec_hi 2>&1 | %FileCheck %s --check-prefix=F32-EXEC
-; RUN: %not %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=divscale_f64_vcc_hi 2>&1 | %FileCheck %s --check-prefix=F64-VCC
-; RUN: %not %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=divscale_f64_exec_hi 2>&1 | %FileCheck %s --check-prefix=F64-EXEC
+; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=divscale_f32_vcc_hi 2>/dev/null | %FileCheck %s --check-prefix=F32-VCC
+; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=divscale_f32_exec_hi 2>/dev/null | %FileCheck %s --check-prefix=F32-EXEC
+; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=divscale_f64_vcc_hi 2>/dev/null | %FileCheck %s --check-prefix=F64-VCC
+; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=divscale_f64_exec_hi 2>/dev/null | %FileCheck %s --check-prefix=F64-EXEC
 ;
-; On wave32, vcc_hi / exec_hi are scratch scalars, not the wave mask; the ISA
-; does not allow them as a v_div_scale flag destination. Every such encoding
-; (f32/f64 x vcc_hi/exec_hi) must be refused rather than silently lowered.
+; On wave32, vcc_hi / exec_hi are scratch scalars.  The wave32 fdiv expansion
+; legitimately parks a v_div_scale flag (a per-lane mask) in one of them before
+; restoring it to VCC via `s_mov_b32 vcc_lo, vcc_hi` ahead of the consuming
+; v_div_fmas (see SD3.5's layer-norm kernel).  Each such encoding lowers to the
+; div.scale intrinsic with its per-lane flag recorded in the scratch wave-mask
+; shadow -- it must NOT be refused.  The park/restore/fmas chain is covered by
+; v_div_scale_flag_vcc_hi_chain_wave32.s.
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
 	.text
 
-; F32-VCC: kernel 'divscale_f32_vcc_hi'
-; F32-VCC-SAME: v_div_scale_f32 [VALU]
-; F32-VCC-SAME: v_div_scale flag destination is wave32 vcc_hi/exec_hi scratch
+; F32-VCC-LABEL: define amdgpu_kernel void @divscale_f32_vcc_hi(
+; F32-VCC: call { float, i1 } @llvm.amdgcn.div.scale.f32(
 	.globl	divscale_f32_vcc_hi
 	.p2align	8
 	.type	divscale_f32_vcc_hi,@function
@@ -22,9 +25,8 @@ divscale_f32_vcc_hi:
 	v_div_scale_f32 v5, vcc_hi, v0, v1, v0
 	s_endpgm
 
-; F32-EXEC: kernel 'divscale_f32_exec_hi'
-; F32-EXEC-SAME: v_div_scale_f32 [VALU]
-; F32-EXEC-SAME: v_div_scale flag destination is wave32 vcc_hi/exec_hi scratch
+; F32-EXEC-LABEL: define amdgpu_kernel void @divscale_f32_exec_hi(
+; F32-EXEC: call { float, i1 } @llvm.amdgcn.div.scale.f32(
 	.globl	divscale_f32_exec_hi
 	.p2align	8
 	.type	divscale_f32_exec_hi,@function
@@ -32,9 +34,8 @@ divscale_f32_exec_hi:
 	v_div_scale_f32 v5, exec_hi, v0, v1, v0
 	s_endpgm
 
-; F64-VCC: kernel 'divscale_f64_vcc_hi'
-; F64-VCC-SAME: v_div_scale_f64 [VALU]
-; F64-VCC-SAME: v_div_scale flag destination is wave32 vcc_hi/exec_hi scratch
+; F64-VCC-LABEL: define amdgpu_kernel void @divscale_f64_vcc_hi(
+; F64-VCC: call { double, i1 } @llvm.amdgcn.div.scale.f64(
 	.globl	divscale_f64_vcc_hi
 	.p2align	8
 	.type	divscale_f64_vcc_hi,@function
@@ -42,9 +43,8 @@ divscale_f64_vcc_hi:
 	v_div_scale_f64 v[4:5], vcc_hi, v[0:1], v[2:3], v[0:1]
 	s_endpgm
 
-; F64-EXEC: kernel 'divscale_f64_exec_hi'
-; F64-EXEC-SAME: v_div_scale_f64 [VALU]
-; F64-EXEC-SAME: v_div_scale flag destination is wave32 vcc_hi/exec_hi scratch
+; F64-EXEC-LABEL: define amdgpu_kernel void @divscale_f64_exec_hi(
+; F64-EXEC: call { double, i1 } @llvm.amdgcn.div.scale.f64(
 	.globl	divscale_f64_exec_hi
 	.p2align	8
 	.type	divscale_f64_exec_hi,@function

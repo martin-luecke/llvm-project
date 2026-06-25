@@ -539,7 +539,49 @@ struct RaiseContext {
   // the consumer. A future reaching-definitions pass on the raised
   // IR (see sgpr-wave-mask-translation.md section 7 evolution
   // path) can upgrade this to a proper per-BB merge.
-  void clearSgprWaveMaskShadow() { LastSgprWaveMaskI1.clear(); }
+  void clearSgprWaveMaskShadow() {
+    LastSgprWaveMaskI1.clear();
+    VccHiScratchMaskI1 = nullptr;
+    ExecHiScratchMaskI1 = nullptr;
+  }
+
+  // Same-BB per-lane i1 wave mask parked in a wave32 vcc_hi / exec_hi scratch
+  // scalar. The wave32 fdiv expansion stashes a v_div_scale_f32 flag (a genuine
+  // per-lane mask) in vcc_hi/exec_hi, then restores it to VCC via
+  // `s_mov_b32 vcc_lo, vcc_hi` immediately before the v_div_fmas that consumes
+  // it -- always straight-line within one basic block. Mirror the SGPR
+  // wave-mask shadow (LastSgprWaveMaskI1) but keyed on the two fixed scratch
+  // registers so the restore recovers the full-width i1 instead of re-widening
+  // the truncated 32-bit data slot (which would drop lanes 32..63 on wave64).
+  // Cleared at every BB boundary by clearSgprWaveMaskShadow (the park/restore
+  // never spans a block for any known emitter).
+  llvm::Value *VccHiScratchMaskI1 = nullptr;
+  llvm::Value *ExecHiScratchMaskI1 = nullptr;
+
+  void recordScratchWaveMaskI1(ParsedReg::Kind RegKind, llvm::Value *I1) {
+    if (RegKind == ParsedReg::VCC_HI_SCRATCH)
+      VccHiScratchMaskI1 = I1;
+    else if (RegKind == ParsedReg::EXEC_HI_SCRATCH)
+      ExecHiScratchMaskI1 = I1;
+  }
+
+  llvm::Value *lookupScratchWaveMaskI1(ParsedReg::Kind RegKind) const {
+    if (RegKind == ParsedReg::VCC_HI_SCRATCH)
+      return VccHiScratchMaskI1;
+    if (RegKind == ParsedReg::EXEC_HI_SCRATCH)
+      return ExecHiScratchMaskI1;
+    return nullptr;
+  }
+
+  // Drop the shadow when the scratch register is overwritten as plain data
+  // (e.g. v_readlane_b32 vcc_hi, ...), so a later mask read cannot pick up a
+  // stale flag. Wired from the reg-file write path via OnScratchWritten.
+  void invalidateScratchWaveMaskI1(ParsedReg::Kind RegKind) {
+    if (RegKind == ParsedReg::VCC_HI_SCRATCH)
+      VccHiScratchMaskI1 = nullptr;
+    else if (RegKind == ParsedReg::EXEC_HI_SCRATCH)
+      ExecHiScratchMaskI1 = nullptr;
+  }
 
   void collectSgprWaveMaskShadowAllocas(
       llvm::SmallVectorImpl<llvm::AllocaInst *> &Out) const {

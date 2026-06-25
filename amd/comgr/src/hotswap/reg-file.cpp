@@ -449,6 +449,10 @@ void AllocaRegFile::writeReg32(IRBuilder<> &B, ParsedReg Pr, Value *V) {
       V = B.CreateBitCast(V, B.getInt32Ty());
     B.CreateStore(V, Pr.RegKind == ParsedReg::VCC_HI_SCRATCH ? VccHiScratch
       : ExecHiScratch);
+    // Invalidate any per-lane wave-mask shadow parked in this scratch slot.
+    // Handlers that wrote a wave mask (the v_div_scale flag path) re-record the
+    // i1 immediately after this store; a plain data write leaves it cleared.
+    if (OnScratchWritten) OnScratchWritten(Pr.RegKind);
     return;
   }
   if (Pr.RegKind == ParsedReg::EXEC) {

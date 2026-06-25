@@ -219,6 +219,21 @@ HandlerResult handleSOP1(RaiseContext &Ctx, const DecodedInst &Di,
         return Hr;
       }
     }
+    // s_mov_b32 vcc_lo, vcc_hi (or exec_hi) restores a per-lane wave mask the
+    // wave32 fdiv expansion parked in a vcc_hi/exec_hi scratch slot (the
+    // v_div_scale_f32 flag). Prefer the same-BB scratch shadow recorded by
+    // writeCarryOutI1 so all lanes survive; the 32-bit data slot alone would
+    // re-widen a truncated mask and drop lanes 32..63 on wave64. The park and
+    // this restore are always straight-line within one BB for the fdiv idiom.
+    if (Dst.RegKind == ParsedReg::VCC &&
+        (SrcReg.RegKind == ParsedReg::VCC_HI_SCRATCH ||
+         SrcReg.RegKind == ParsedReg::EXEC_HI_SCRATCH)) {
+      if (Value *Shadow = Ctx.lookupScratchWaveMaskI1(SrcReg.RegKind)) {
+        Ctx.Regs.storeVCC(Ctx.B, Shadow);
+        Hr.Handled = true;
+        return Hr;
+      }
+    }
     Value *Src = Op.src(0);
 
     // Resolve the per-lane i1 wave mask carried by the SGPR, if any.
