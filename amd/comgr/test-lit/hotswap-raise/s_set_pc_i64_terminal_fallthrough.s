@@ -49,10 +49,10 @@ setpc_terminal_fallthrough_kernel:
 .Lpost:
 	s_add_co_u32 s10, s10, (.Ltarget - .Lpost)
 	s_add_co_ci_u32 s11, s11, ((.Ltarget - .Lpost) >> 32)
-; CHECK: br label %[[TGT:bb_0x[0-9a-f]+]]
-; CHECK-NOT: unreachable
-; CHECK: [[TGT]]:
+; CHECK: [[TGT:bb_0x[0-9a-f]+]]:
 	s_set_pc_i64 s[10:11]
+; CHECK: br label %[[TGT]]
+; CHECK-NOT: unreachable
 .Lkernel_end:
 	.size	setpc_terminal_fallthrough_kernel, .Lkernel_end - setpc_terminal_fallthrough_kernel
 	.section	.rodata,"a",@progbits
