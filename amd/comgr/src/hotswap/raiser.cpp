@@ -1193,7 +1193,15 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
       // terminator's debug location, and as raised IR carries no debug info
       // that stale node would propagate onto following instructions and
       // produce verifier-invalid !dbg attachments.
-      if (BbIt->second->getTerminator()) {
+      //
+      // Gate on hasTerminator(), NOT getTerminator(): in release builds the
+      // assert inside getTerminator() is compiled out, so it returns
+      // &InstList.back() unconditionally -- a non-null sentinel for an empty
+      // block and the (non-terminator) last instruction for a partially
+      // filled one.  Either would make SetInsertPoint land in the wrong
+      // place.  hasTerminator() is the predicate the loop-top guard already
+      // uses, so the two now agree.
+      if (BbIt->second->hasTerminator()) {
         DebugLoc SavedDL = B.getCurrentDebugLocation();
         B.SetInsertPoint(BbIt->second->getTerminator());
         B.SetCurrentDebugLocation(SavedDL);
