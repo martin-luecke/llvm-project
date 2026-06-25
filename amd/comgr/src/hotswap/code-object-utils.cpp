@@ -8,6 +8,8 @@
 
 #include "code-object-utils.h"
 
+#include <algorithm>
+
 #include "comgr-metadata.h"
 #include "comgr-symbol.h"
 #include "hotswap-error.h"
@@ -384,26 +386,36 @@ findKernelSymbolExtent(llvm::MemoryBufferRef ElfData,
   Extent.Offset = *AddrOrErr - TextBase;
 
   uint64_t SymbolSize = llvm::object::ELFSymbolRef(*SymOrErr).getSize();
-  if (SymbolSize != 0) {
-    if (SymbolSize > TextEnd - *AddrOrErr)
-      return makeHotswapError("findKernelSymbolExtent: symbol '" + KernelName +
-                              "' size extends past .text");
-    Extent.Size = SymbolSize;
-    return Extent;
-  }
+  if (SymbolSize != 0 && SymbolSize > TextEnd - *AddrOrErr)
+    return makeHotswapError("findKernelSymbolExtent: symbol '" + KernelName +
+                            "' size extends past .text");
 
+  // The kernel's reachable extent is bounded by the next metadata kernel symbol
+  // (or .text end), NOT by st_size. st_size covers only the primary function
+  // body; the linker places branch-relaxation islands (long-branch trampolines
+  // for large kernels) and device/helper functions AFTER the body but still
+  // within .text. Those bytes live beyond st_size yet are legitimate
+  // setpc/long-branch targets that belong to this kernel -- bounding by st_size
+  // mis-flags them as "outside the selected kernel extent". So treat st_size as
+  // a lower bound and extend to the next kernel boundary, the same rule already
+  // used for zero-st_size symbols (device/helper functions between kernels
+  // belong to the selected kernel's reachable body).
   llvm::Expected<llvm::SmallVector<std::string>> KernelNamesOrErr =
       listKernelNames(ElfData);
   if (!KernelNamesOrErr) {
+    // No kernel list to bound by. Fall back to st_size when it is known
+    // (body only -- preserves the historical behavior); a zero-size symbol
+    // with no kernel list is unrecoverable.
+    llvm::consumeError(KernelNamesOrErr.takeError());
+    if (SymbolSize != 0) {
+      Extent.Size = SymbolSize;
+      return Extent;
+    }
     return makeHotswapError(
         "findKernelSymbolExtent: symbol '" + KernelName +
-        "' has zero size and metadata kernel list is unavailable: " +
-        llvm::toString(KernelNamesOrErr.takeError()));
+        "' has zero size and metadata kernel list is unavailable");
   }
 
-  // Some code objects leave st_size at zero. In that case, bound by the next
-  // metadata kernel symbol rather than the next STT_FUNC: device/helper
-  // functions between kernels belong to the selected kernel's reachable body.
   uint64_t NextAddr = TextEnd;
   for (llvm::StringRef OtherKernelName : *KernelNamesOrErr) {
     if (OtherKernelName == KernelName)
@@ -429,7 +441,11 @@ findKernelSymbolExtent(llvm::MemoryBufferRef ElfData,
     if (OtherAddr > *AddrOrErr && OtherAddr < NextAddr)
       NextAddr = OtherAddr;
   }
-  Extent.Size = NextAddr - *AddrOrErr;
+  // st_size is a lower bound on the body; the next-kernel boundary is the outer
+  // bound that also captures trailing islands. Take the larger so a degenerate
+  // object (overlapping/mis-ordered kernel symbols) can never shrink the extent
+  // below the symbol's own declared size.
+  Extent.Size = std::max<uint64_t>(SymbolSize, NextAddr - *AddrOrErr);
   return Extent;
 }
 
