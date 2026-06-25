@@ -172,20 +172,34 @@ TEST(RaiserScaffolding, PreloadedUnmatchedImplicitOffsetRefusesInStrictMode) {
 
 // s_add_pc_i64's successor is Offset + Size + displacement (byte units), not
 // the SOPP dword-scaled target.
-TEST(DecodeBlockSuccessors, AddPcI64UsesByteOffsetNotDwordScaling) {
+TEST(DecodeBlockSuccessors, AddPcI64UsesByteOffsetAndIgnoresLowBits) {
   COMGR::hotswap::DecodedInst Di;
   Di.CanonOp = COMGR::hotswap::CanonicalOp::S_ADD_PC_I64;
   Di.IsBranch = true; // S_ADD_PC_I64 sets the AMDGPU isBranch bit
   Di.Offset = 8;
   Di.Size = 4;
-  Di.Inst.addOperand(llvm::MCOperand::createImm(8));
 
   EXPECT_TRUE(COMGR::hotswap::decodedInstEndsBlock(Di));
 
+  auto SuccessorForImm = [&](int64_t Imm) {
+    Di.Inst = llvm::MCInst();
+    Di.Inst.addOperand(llvm::MCOperand::createImm(Imm));
+    return COMGR::hotswap::computeDecodedBlockSuccessors(
+        Di, /*NextBlockOffset=*/12);
+  };
+
   // 8 + 4 + 8 = 20 (byte); SOPP scaling would give 8 + 4 + 8*4 = 44.
-  llvm::SmallVector<uint64_t> Succ =
-      COMGR::hotswap::computeDecodedBlockSuccessors(Di, /*NextBlockOffset=*/12);
+  llvm::SmallVector<uint64_t> Succ = SuccessorForImm(8);
 
   ASSERT_EQ(Succ.size(), 1u);
   EXPECT_EQ(Succ[0], 20u);
+
+  // The ISA ignores the low two literal bits: +11 behaves as +8 and -1 as -4.
+  Succ = SuccessorForImm(11);
+  ASSERT_EQ(Succ.size(), 1u);
+  EXPECT_EQ(Succ[0], 20u);
+
+  Succ = SuccessorForImm(-1);
+  ASSERT_EQ(Succ.size(), 1u);
+  EXPECT_EQ(Succ[0], 8u);
 }

@@ -45,6 +45,7 @@ namespace COMGR::hotswap {
 namespace {
 
 constexpr unsigned KSoppBranchStrideBytes = 4;
+constexpr int64_t KAddPcI64LiteralAlignmentBytes = 4;
 
 // Build the logical-source view of an MCInst. Walks `desc.operands()` and
 // classifies each operand using TableGen-generated metadata only:
@@ -689,14 +690,16 @@ void decodeVopd(DecodedInst &Di, const MCInstrInfo &MCII,
 // Absolute byte target of an s_add_pc_i64: PC of the following instruction
 // (Off + InstSize) plus the signed byte displacement in operand 0, which may be
 // an immediate or a lit64 MCExpr (hence evalOperandAsConst). The displacement
-// is in bytes, not the dword units of computeSoppBranchTarget.
+// is in bytes, with the low two bits ignored, not the dword units of
+// computeSoppBranchTarget.
 uint64_t computeAddPcI64Target(const MCInst &Inst, uint64_t Off,
                                uint64_t InstSize) {
   std::optional<int64_t> ConstOpt = evalOperandAsConst(Inst, 0);
   if (!ConstOpt)
     report_fatal_error("transpiler: s_add_pc_i64 with non-constant source "
                        "(only immediate-literal and lit64 forms are supported)");
-  int64_t Imm = *ConstOpt;
+  int64_t Imm = divideFloorSigned(*ConstOpt, KAddPcI64LiteralAlignmentBytes) *
+                KAddPcI64LiteralAlignmentBytes;
   assert(InstSize <= UINT64_MAX - Off &&
          "decoded instruction range must not overflow");
   uint64_t Base = Off + InstSize;
