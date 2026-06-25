@@ -32,6 +32,7 @@
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <cassert>
 #include <climits>
 #include <optional>
 #include <string>
@@ -696,8 +697,8 @@ uint64_t computeAddPcI64Target(const MCInst &Inst, uint64_t Off,
     report_fatal_error("transpiler: s_add_pc_i64 with non-constant source "
                        "(only immediate-literal and lit64 forms are supported)");
   int64_t Imm = *ConstOpt;
-  if (InstSize > UINT64_MAX - Off)
-    report_fatal_error("transpiler: s_add_pc_i64 source offset overflow");
+  assert(InstSize <= UINT64_MAX - Off &&
+         "decoded instruction range must not overflow");
   uint64_t Base = Off + InstSize;
   if (Imm < 0) {
     uint64_t Back = llvm::AbsoluteValue(Imm);

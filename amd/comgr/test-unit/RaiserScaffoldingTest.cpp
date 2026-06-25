@@ -176,14 +176,14 @@ TEST(DecodeBlockSuccessors, AddPcI64UsesByteOffsetNotDwordScaling) {
   COMGR::hotswap::DecodedInst Di;
   Di.CanonOp = COMGR::hotswap::CanonicalOp::S_ADD_PC_I64;
   Di.IsBranch = true; // S_ADD_PC_I64 sets the AMDGPU isBranch bit
-  Di.Offset = 0x8;
+  Di.Offset = 8;
   Di.Size = 4;
   Di.Inst.addOperand(llvm::MCOperand::createImm(8));
 
-  // 0x8 + 0x4 + 8 = 0x14 (byte); SOPP scaling would give 0x8 + 0x4 + 8*4 = 0x24.
+  // 8 + 4 + 8 = 20 (byte); SOPP scaling would give 8 + 4 + 8*4 = 44.
   llvm::SmallVector<uint64_t> Succ =
-      COMGR::hotswap::computeDecodedBlockSuccessors(Di, /*NextBlockOffset=*/0xC);
+      COMGR::hotswap::computeDecodedBlockSuccessors(Di, /*NextBlockOffset=*/12);
 
   ASSERT_EQ(Succ.size(), 1u);
-  EXPECT_EQ(Succ[0], 0x14u);
+  EXPECT_EQ(Succ[0], 20u);
 }
