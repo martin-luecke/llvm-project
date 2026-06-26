@@ -997,8 +997,7 @@ DppLaneMap buildDppLaneMap(IRBuilder<> &B, Value *WithinRow,
     // ROW_MIRROR: source within-row = 15 - withinRow.  The mirror is
     // entirely within the 16-lane row, always in-range, and
     // wave-size-oblivious.
-    Value *FifteenVal = ConstantInt::get(I32Ty, 15);
-    Out.SrcWithinRow = B.CreateSub(FifteenVal, WithinRow,
+    Out.SrcWithinRow = B.CreateSub(ConstantInt::get(I32Ty, 15), WithinRow,
                                    "cwd_dpp_mirror_src");
     Out.InRange = ConstantInt::getTrue(B.getContext());
     return Out;

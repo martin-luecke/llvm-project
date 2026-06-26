@@ -27,6 +27,34 @@
 using namespace llvm;
 
 namespace COMGR::hotswap {
+
+/// Rebase a DS byte-offset lane selector from source-wave-local to
+/// target-wave-local under wave32 -> wave64 cross-widening.  Under
+/// WaveNative ModuloReplication each target wave64 carries two source
+/// wave32 halves; a raw target bpermute/permute would treat the selector
+/// as a target-wave-local offset and read from the wrong lane in the
+/// upper half.  Returns Index unchanged when not multi-source or not
+/// wave32 -> wave64.
+static Value *rebaseWave32PermSel(RaiseContext &Ctx, Value *Index,
+                                  const Twine &Pfx) {
+  if (!(Ctx.Projection.numSourceWavesPerTarget() > 1 &&
+        Ctx.Isa.isWave32() && !Ctx.TargetIsa.isWave32()))
+    return Index;
+  constexpr uint32_t kSourceWaveLanes = 32;
+  constexpr uint32_t kDwordBytes = 4;
+  constexpr uint32_t kSourceWaveBytes = kSourceWaveLanes * kDwordBytes;
+  Value *LocalIndex = Ctx.B.CreateAnd(
+      Index, Ctx.B.getInt32(kSourceWaveBytes - 1), Pfx + "_local_addr");
+  Value *LaneId = Ctx.emitLaneIdx();
+  Value *SourceWaveLaneBase = Ctx.B.CreateAnd(
+      LaneId, Ctx.B.getInt32(~(kSourceWaveLanes - 1)),
+      Pfx + "_srcwave_lane_base");
+  Value *SourceWaveByteBase = Ctx.B.CreateShl(
+      SourceWaveLaneBase, Ctx.B.getInt32(2), Pfx + "_srcwave_byte_base");
+  return Ctx.B.CreateOr(LocalIndex, SourceWaveByteBase,
+                        Pfx + "_srcwave_addr");
+}
+
 HandlerResult handleDS(RaiseContext &Ctx, const DecodedInst &Di,
                         OpResolver &Op) {
   HandlerResult Hr;
@@ -786,23 +814,7 @@ HandlerResult handleDS(RaiseContext &Ctx, const DecodedInst &Di,
     // diamond, it must first broadcast the diamond result through a
     // `readfirstlane` / explicit VGPR move outside the diamond,
     // otherwise the cross-lane read will pick up `undef`.
-    Value *Index = Op.src(0);
-    if (Ctx.Projection.numSourceWavesPerTarget() > 1 &&
-        Ctx.Isa.isWave32() && !Ctx.TargetIsa.isWave32()) {
-      constexpr uint32_t kSourceWaveLanes = 32;
-      constexpr uint32_t kDwordBytes = 4;
-      constexpr uint32_t kSourceWaveBytes = kSourceWaveLanes * kDwordBytes;
-      Value *LocalIndex = Ctx.B.CreateAnd(
-          Index, Ctx.B.getInt32(kSourceWaveBytes - 1), "bperm_local_addr");
-      Value *LaneId = Ctx.emitLaneIdx();
-      Value *SourceWaveLaneBase = Ctx.B.CreateAnd(
-          LaneId, Ctx.B.getInt32(~(kSourceWaveLanes - 1)),
-          "bperm_srcwave_lane_base");
-      Value *SourceWaveByteBase = Ctx.B.CreateShl(
-          SourceWaveLaneBase, Ctx.B.getInt32(2), "bperm_srcwave_byte_base");
-      Index = Ctx.B.CreateOr(LocalIndex, SourceWaveByteBase,
-                             "bperm_srcwave_addr");
-    }
+    Value *Index = rebaseWave32PermSel(Ctx, Op.src(0), "bperm");
     Value *Src = Op.src(1);
     Function *Bperm = Intrinsic::getOrInsertDeclaration(
         &Ctx.M, Intrinsic::amdgcn_ds_bpermute);
@@ -813,39 +825,13 @@ HandlerResult handleDS(RaiseContext &Ctx, const DecodedInst &Di,
   }
 
   if (Sop == CanonicalOp::DS_PERMUTE_B32) {
-    // Forward (scatter) permute: each lane writes its `src1` value to
-    // the lane whose index is `src0 >> 2` (the selector is pre-scaled
-    // to DS byte addressing).  Semantically the inverse of
-    // `ds_bpermute_b32` (gather).  Both exist on gfx950.
-    //
-    // Wave32->wave64 selector rebasing is identical to DS_BPERMUTE_B32:
-    // the source-wave-local byte offset must be relocated into the
-    // current source-wave half under ModuloReplication.
-    //
-    // Emitted outside `emitUnderExec` -- convergent instruction, same
-    // contract as DS_BPERMUTE_B32.
-    Value *Index = Op.src(0);
-    if (Ctx.Projection.numSourceWavesPerTarget() > 1 &&
-        Ctx.Isa.isWave32() && !Ctx.TargetIsa.isWave32()) {
-      constexpr uint32_t kSourceWaveLanes = 32;
-      constexpr uint32_t kDwordBytes = 4;
-      constexpr uint32_t kSourceWaveBytes = kSourceWaveLanes * kDwordBytes;
-      Value *LocalIndex = Ctx.B.CreateAnd(
-          Index, Ctx.B.getInt32(kSourceWaveBytes - 1), "perm_local_addr");
-      Value *LaneId = Ctx.emitLaneIdx();
-      Value *SourceWaveLaneBase = Ctx.B.CreateAnd(
-          LaneId, Ctx.B.getInt32(~(kSourceWaveLanes - 1)),
-          "perm_srcwave_lane_base");
-      Value *SourceWaveByteBase = Ctx.B.CreateShl(
-          SourceWaveLaneBase, Ctx.B.getInt32(2), "perm_srcwave_byte_base");
-      Index = Ctx.B.CreateOr(LocalIndex, SourceWaveByteBase,
-                             "perm_srcwave_addr");
-    }
-    Value *Src = Op.src(1);
+    // Forward (scatter) permute — inverse of DS_BPERMUTE_B32. Selector
+    // rebasing and EXEC contract are identical; see DS_BPERMUTE_B32.
+    Value *Index = rebaseWave32PermSel(Ctx, Op.src(0), "perm");
     Function *Perm = Intrinsic::getOrInsertDeclaration(
         &Ctx.M, Intrinsic::amdgcn_ds_permute);
-    Value *Scattered = Ctx.B.CreateCall(Perm, {Index, Src}, "perm");
-    Ctx.writeReg32(Op.dst(), Scattered);
+    Ctx.writeReg32(Op.dst(),
+                   Ctx.B.CreateCall(Perm, {Index, Op.src(1)}, "perm"));
     Hr.Handled = true;
     return Hr;
   }
