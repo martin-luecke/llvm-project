@@ -411,18 +411,16 @@ static bool raiseAndCompileKernel(const TextSection &text,
 
   llvm::SmallVector<char, 4096> objBytes;
   auto llcStart = timingStart(options.CollectTimings);
-  {
+  llvm::Error err = [&] {
     llvm::raw_svector_ostream OS(objBytes);
-    if (llvm::Error err =
-            emitCodeGen(M, *TM, llvm::CodeGenFileType::ObjectFile, OS)) {
-      result.Timings.llcSeconds +=
-          timingElapsed(options.CollectTimings, llcStart);
-      llvm::errs() << "transpiler: llc failed for '" << kernelName
-                   << "': " << llvm::toString(std::move(err)) << "\n";
-      return false;
-    }
-  }
+    return emitCodeGen(M, *TM, llvm::CodeGenFileType::ObjectFile, OS);
+  }();
   result.Timings.llcSeconds += timingElapsed(options.CollectTimings, llcStart);
+  if (err) {
+    llvm::errs() << "transpiler: llc failed for '" << kernelName
+                 << "': " << llvm::toString(std::move(err)) << "\n";
+    return false;
+  }
 
   if (!writeFile(objPath, llvm::ArrayRef<uint8_t>(
                               reinterpret_cast<const uint8_t *>(objBytes.data()),
@@ -435,14 +433,10 @@ static bool raiseAndCompileKernel(const TextSection &text,
     llvm::SmallString<4096> asmText;
     llvm::raw_svector_ostream OS(asmText);
     if (llvm::Error err = emitCodeGen(
-            *asmModule, *TM, llvm::CodeGenFileType::AssemblyFile, OS)) {
+            *asmModule, *TM, llvm::CodeGenFileType::AssemblyFile, OS))
       llvm::consumeError(std::move(err));
-    } else {
-      if (!result.AsmText.empty())
-        result.AsmText += "\n";
-      result.AsmText += asmText;
+    else
       writeFile(tmpDir.filePath(fileStem + ".s"), asmText);
-    }
   }
 
   return true;

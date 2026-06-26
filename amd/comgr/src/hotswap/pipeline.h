@@ -39,7 +39,6 @@ struct PipelineOptions {
 struct PipelineResult {
   std::unique_ptr<llvm::MemoryBuffer> Hsaco;
   std::string IrText;
-  std::string AsmText;
   PipelineTimings Timings;
   std::string FailMnemonic;
   std::string FailKernel;
