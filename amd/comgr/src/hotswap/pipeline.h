@@ -19,8 +19,6 @@ struct PipelineTimings {
   double writeIrSeconds = 0.0;
   double optSeconds = 0.0;
   double llcSeconds = 0.0;
-  double readAsmSeconds = 0.0;
-  double llvmMcSeconds = 0.0;
   double linkSeconds = 0.0;
   double readHsacoSeconds = 0.0;
   double collectMetadataSeconds = 0.0;

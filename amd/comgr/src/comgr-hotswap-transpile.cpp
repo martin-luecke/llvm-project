@@ -93,8 +93,6 @@ struct HotswapComgrTimings {
   double pipelineWriteIrSeconds = 0.0;
   double pipelineOptSeconds = 0.0;
   double pipelineLlcSeconds = 0.0;
-  double pipelineReadAsmSeconds = 0.0;
-  double pipelineLlvmMcSeconds = 0.0;
   double pipelineLinkSeconds = 0.0;
   double pipelineReadHsacoSeconds = 0.0;
   double pipelineCollectMetadataSeconds = 0.0;
@@ -152,8 +150,6 @@ std::string timingJson(const HotswapComgrTimings &Timings) {
       {"pipeline_write_ir_seconds", Timings.pipelineWriteIrSeconds},
       {"pipeline_opt_seconds", Timings.pipelineOptSeconds},
       {"pipeline_llc_seconds", Timings.pipelineLlcSeconds},
-      {"pipeline_read_asm_seconds", Timings.pipelineReadAsmSeconds},
-      {"pipeline_llvm_mc_seconds", Timings.pipelineLlvmMcSeconds},
       {"pipeline_link_seconds", Timings.pipelineLinkSeconds},
       {"pipeline_read_hsaco_seconds", Timings.pipelineReadHsacoSeconds},
       {"pipeline_collect_metadata_seconds",
@@ -221,8 +217,6 @@ void addPipelineTimings(HotswapComgrTimings &Timings,
   Timings.pipelineWriteIrSeconds += pipeline.writeIrSeconds;
   Timings.pipelineOptSeconds += pipeline.optSeconds;
   Timings.pipelineLlcSeconds += pipeline.llcSeconds;
-  Timings.pipelineReadAsmSeconds += pipeline.readAsmSeconds;
-  Timings.pipelineLlvmMcSeconds += pipeline.llvmMcSeconds;
   Timings.pipelineLinkSeconds += pipeline.linkSeconds;
   Timings.pipelineReadHsacoSeconds += pipeline.readHsacoSeconds;
   Timings.pipelineCollectMetadataSeconds += pipeline.collectMetadataSeconds;

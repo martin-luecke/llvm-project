@@ -14,33 +14,21 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
-#include "llvm/MC/MCAsmBackend.h"
-#include "llvm/MC/MCAsmInfo.h"
-#include "llvm/MC/MCCodeEmitter.h"
-#include "llvm/MC/MCContext.h"
-#include "llvm/MC/MCInstrInfo.h"
-#include "llvm/MC/MCObjectFileInfo.h"
-#include "llvm/MC/MCObjectWriter.h"
-#include "llvm/MC/MCParser/MCAsmParser.h"
-#include "llvm/MC/MCParser/MCTargetAsmParser.h"
-#include "llvm/MC/MCRegisterInfo.h"
-#include "llvm/MC/MCStreamer.h"
-#include "llvm/MC/MCSubtargetInfo.h"
-#include "llvm/MC/MCTargetOptions.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/AMDHSAKernelDescriptor.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
-#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/xxhash.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/TargetParser/Triple.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 
 #include <algorithm>
 #include <chrono>
@@ -147,33 +135,22 @@ llvm::OptimizationLevel toOptimizationLevel(unsigned Level) {
   }
 }
 
-llvm::CodeGenOptLevel toCodeGenOptLevel(unsigned Level) {
-  switch (Level) {
-  case 0:
-    return llvm::CodeGenOptLevel::None;
-  case 1:
-    return llvm::CodeGenOptLevel::Less;
-  case 2:
-    return llvm::CodeGenOptLevel::Default;
-  default:
-    return llvm::CodeGenOptLevel::Aggressive;
-  }
-}
-
 std::unique_ptr<llvm::TargetMachine>
 createHotswapTargetMachine(llvm::StringRef targetISA, unsigned OptLevel) {
   std::string err;
   llvm::Triple triple(kAMDGPUTriple);
-  const llvm::Target *target =
-      llvm::TargetRegistry::lookupTarget(triple, err);
-  if (!target) {
-    llvm::errs() << "transpiler: lookupTarget failed: " << err << "\n";
-    return nullptr;
-  }
+  const llvm::Target *target = llvm::TargetRegistry::lookupTarget(triple, err);
+  // The triple is hardcoded and the AMDGPU target is linked in, so a lookup
+  // miss is a build misconfiguration rather than a recoverable error.
+  if (!target)
+    llvm::report_fatal_error(
+        llvm::Twine("transpiler: AMDGPU target not registered: ") + err);
+  llvm::CodeGenOptLevel CGOL = llvm::CodeGenOpt::getLevel(OptLevel).value_or(
+      llvm::CodeGenOptLevel::Default);
   llvm::TargetOptions opts;
   return std::unique_ptr<llvm::TargetMachine>(target->createTargetMachine(
       triple, targetISA, /*Features=*/"", opts, llvm::Reloc::PIC_,
-      /*CodeModel=*/std::nullopt, toCodeGenOptLevel(OptLevel)));
+      /*CodeModel=*/std::nullopt, CGOL));
 }
 
 // In-process `opt`: run the default per-module pipeline at OptLevel.
@@ -197,83 +174,16 @@ void runOptPipeline(llvm::Module &M, llvm::TargetMachine &TM,
   MPM.run(M, MAM);
 }
 
-// In-process `llc`: lower the module to target assembly text.
-llvm::Error emitAssembly(llvm::Module &M, llvm::TargetMachine &TM,
-                         std::string &asmOut) {
-  llvm::SmallString<4096> buffer;
-  llvm::raw_svector_ostream OS(buffer);
+// In-process `llc`: run codegen for `M` and emit `fileType` to `OS`.
+llvm::Error emitCodeGen(llvm::Module &M, llvm::TargetMachine &TM,
+                        llvm::CodeGenFileType fileType,
+                        llvm::raw_pwrite_stream &OS) {
   llvm::legacy::PassManager PM;
-  if (TM.addPassesToEmitFile(PM, OS, /*DwoOut=*/nullptr,
-                             llvm::CodeGenFileType::AssemblyFile))
+  if (TM.addPassesToEmitFile(PM, OS, /*DwoOut=*/nullptr, fileType))
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
-                                   "target cannot emit assembly");
+                                   "target cannot emit requested file type");
   PM.run(M);
-  asmOut.assign(buffer.begin(), buffer.end());
   return llvm::Error::success();
-}
-
-// In-process `llvm-mc`: assemble target assembly text into a relocatable
-// object, written to objOut.
-bool assembleToObject(llvm::StringRef asmText, llvm::TargetMachine &TM,
-                      llvm::SmallVectorImpl<char> &objOut) {
-  const llvm::Target &target = TM.getTarget();
-  const llvm::Triple &triple = TM.getTargetTriple();
-
-  llvm::SourceMgr srcMgr;
-  srcMgr.AddNewSourceBuffer(
-      llvm::MemoryBuffer::getMemBufferCopy(asmText, "<hotswap-asm>"),
-      llvm::SMLoc());
-
-  std::unique_ptr<llvm::MCRegisterInfo> MRI(target.createMCRegInfo(triple));
-  llvm::MCTargetOptions MCOptions;
-  std::unique_ptr<llvm::MCAsmInfo> MAI(
-      MRI ? target.createMCAsmInfo(*MRI, triple, MCOptions) : nullptr);
-  std::unique_ptr<llvm::MCInstrInfo> MCII(target.createMCInstrInfo());
-  if (!MRI || !MAI || !MCII) {
-    llvm::errs() << "transpiler: failed to create MC info for assembly\n";
-    return false;
-  }
-  auto STIOrErr = buildSubtargetInfo(target, TM.getTargetCPU());
-  if (!STIOrErr) {
-    llvm::errs() << "transpiler: " << llvm::toString(STIOrErr.takeError())
-                 << "\n";
-    return false;
-  }
-  std::unique_ptr<llvm::MCSubtargetInfo> STI = std::move(*STIOrErr);
-
-  llvm::MCContext Ctx(triple, *MAI, *MRI, *STI, &srcMgr);
-  std::unique_ptr<llvm::MCObjectFileInfo> MOFI(
-      new llvm::MCObjectFileInfo());
-  MOFI->initMCObjectFileInfo(Ctx, /*PIC=*/true);
-  Ctx.setObjectFileInfo(MOFI.get());
-
-  llvm::raw_svector_ostream Out(objOut);
-  llvm::MCCodeEmitter *CE = target.createMCCodeEmitter(*MCII, Ctx);
-  llvm::MCAsmBackend *MAB = target.createMCAsmBackend(*STI, *MRI, MCOptions);
-  if (!CE || !MAB) {
-    llvm::errs() << "transpiler: failed to create MC code emitter/backend\n";
-    return false;
-  }
-  std::unique_ptr<llvm::MCStreamer> Str(target.createMCObjectStreamer(
-      triple, Ctx, std::unique_ptr<llvm::MCAsmBackend>(MAB),
-      MAB->createObjectWriter(Out), std::unique_ptr<llvm::MCCodeEmitter>(CE),
-      *STI));
-  Str->initSections(*STI);
-
-  std::unique_ptr<llvm::MCAsmParser> Parser(
-      llvm::createMCAsmParser(srcMgr, Ctx, *Str, *MAI));
-  std::unique_ptr<llvm::MCTargetAsmParser> TAP(
-      target.createMCAsmParser(*STI, *Parser, *MCII));
-  if (!TAP) {
-    llvm::errs() << "transpiler: failed to create target asm parser\n";
-    return false;
-  }
-  Parser->setTargetParser(*TAP);
-  if (Parser->Run(/*NoInitialTextSection=*/false)) {
-    llvm::errs() << "transpiler: assembly parsing failed\n";
-    return false;
-  }
-  return true;
 }
 
 struct DumpDir {
@@ -364,7 +274,7 @@ bool isStrictMode() {
   return s_strict;
 }
 
-// Raise one kernel to IR, compile to a relocatable .o via llc + llvm-mc.
+// Raise one kernel to IR, then opt + codegen it to a relocatable .o.
 // On success, writes the .o to objPath and returns true.
 static bool raiseAndCompileKernel(const TextSection &text,
                                   llvm::MemoryBufferRef codeObjectData,
@@ -493,44 +403,47 @@ static bool raiseAndCompileKernel(const TextSection &text,
   runOptPipeline(M, *TM, options.OptLevel);
   result.Timings.optSeconds += timingElapsed(options.CollectTimings, optStart);
 
-  std::string asmText;
+  // Object codegen consumes the module, so clone it first when a debug
+  // assembly dump is still needed.
+  std::unique_ptr<llvm::Module> asmModule;
+  if (tmpDir.persistent)
+    asmModule = llvm::CloneModule(M);
+
+  llvm::SmallVector<char, 4096> objBytes;
   auto llcStart = timingStart(options.CollectTimings);
-  if (llvm::Error err = emitAssembly(M, *TM, asmText)) {
-    result.Timings.llcSeconds += timingElapsed(options.CollectTimings, llcStart);
-    llvm::errs() << "transpiler: llc failed for '" << kernelName
-                 << "': " << llvm::toString(std::move(err)) << "\n";
-    return false;
+  {
+    llvm::raw_svector_ostream OS(objBytes);
+    if (llvm::Error err =
+            emitCodeGen(M, *TM, llvm::CodeGenFileType::ObjectFile, OS)) {
+      result.Timings.llcSeconds +=
+          timingElapsed(options.CollectTimings, llcStart);
+      llvm::errs() << "transpiler: llc failed for '" << kernelName
+                   << "': " << llvm::toString(std::move(err)) << "\n";
+      return false;
+    }
   }
   result.Timings.llcSeconds += timingElapsed(options.CollectTimings, llcStart);
 
-  {
-    auto readAsmStart = timingStart(options.CollectTimings);
-    if (!result.AsmText.empty())
-      result.AsmText += "\n";
-    result.AsmText += asmText;
-    if (tmpDir.persistent)
-      writeFile(tmpDir.filePath(fileStem + ".s"), asmText);
-    result.Timings.readAsmSeconds +=
-        timingElapsed(options.CollectTimings, readAsmStart);
-  }
-
-  llvm::SmallVector<char, 4096> objBytes;
-  auto llvmMcStart = timingStart(options.CollectTimings);
-  if (!assembleToObject(asmText, *TM, objBytes)) {
-    result.Timings.llvmMcSeconds +=
-        timingElapsed(options.CollectTimings, llvmMcStart);
-    llvm::errs() << "transpiler: llvm-mc failed for '" << kernelName << "'\n";
-    return false;
-  }
   if (!writeFile(objPath, llvm::ArrayRef<uint8_t>(
                               reinterpret_cast<const uint8_t *>(objBytes.data()),
-                              objBytes.size()))) {
-    result.Timings.llvmMcSeconds +=
-        timingElapsed(options.CollectTimings, llvmMcStart);
+                              objBytes.size())))
     return false;
+
+  // Textual assembly is a debug-only artifact emitted from the clone so the
+  // object codegen above stays the canonical lowering.
+  if (asmModule) {
+    llvm::SmallString<4096> asmText;
+    llvm::raw_svector_ostream OS(asmText);
+    if (llvm::Error err = emitCodeGen(
+            *asmModule, *TM, llvm::CodeGenFileType::AssemblyFile, OS)) {
+      llvm::consumeError(std::move(err));
+    } else {
+      if (!result.AsmText.empty())
+        result.AsmText += "\n";
+      result.AsmText += asmText;
+      writeFile(tmpDir.filePath(fileStem + ".s"), asmText);
+    }
   }
-  result.Timings.llvmMcSeconds +=
-      timingElapsed(options.CollectTimings, llvmMcStart);
 
   return true;
 }
