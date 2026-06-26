@@ -552,10 +552,6 @@ static const Entry kCanonTable[] = {
     E(V_MAD_I32_I24_e64_gfx12, V_MAD_I32_I24),
     E(V_MAD_U32_U24_e64, V_MAD_U32_U24),
     E(V_MAD_U32_e64, V_MAD_U32),
-    // gfx1250 decodes v_mad_u16 as the gfx9+ op_sel form; the _t16_/_fake16_
-    // and _gfx11/_gfx12 reals all canonicalize onto V_MAD_U16_gfx9_e64
-    // (mirrors V_FMA_F16_gfx9_e64 above).
-    E(V_MAD_U16_gfx9_e64, V_MAD_U16),
     E(V_ADD3_U32_e64, V_ADD3_U32),
     E(V_LSHL_ADD_U32_e64, V_LSHL_ADD_U32),
     E(V_ADD_LSHL_U32_e64, V_ADD_LSHL_U32),
@@ -583,6 +579,9 @@ static const Entry kCanonTable[] = {
     E(V_SUB_NC_U16_e64, V_SUB_NC_U16),
     E(V_ADD_I16_e64, V_ADD_NC_I16),
     E(V_SUB_I16_e64, V_SUB_NC_I16),
+    // gfx1250 decodes v_mad_u16 as the gfx9+ op_sel form; the _t16_/_fake16_
+    // and _gfx11/_gfx12 reals all canonicalize onto V_MAD_U16_gfx9_e64
+    // (mirrors V_FMA_F16_gfx9_e64 above).
     E(V_MAD_U16_e64, V_MAD_U16),
     E(V_MAD_U16_gfx9_e64, V_MAD_U16),
     // gfx1250 add-then-min/max VOP3. The real subtarget opcodes canonicalize

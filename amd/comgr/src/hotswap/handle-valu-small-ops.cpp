@@ -500,25 +500,11 @@ HandlerResult handleValuSmallOps(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
 
-  // ---- 16-bit unsigned integer multiply-add ----
-  // v_mad_u16: D0.u16 = S0.u16 * S1.u16 + S2.u16 (instruction_manual_1250
-  // 17.6.124 / 95118). Operands are 16-bit carried in 32-bit VGPR containers,
-  // so the result is the low 16 bits (wrapping mul+add) zero-extended back.
-  // The manual's optional unsigned saturation is the VOP3 clamp=1 form; the
-  // output-mod guard refuses that shape until it is modeled exactly, so the
-  // plain wrapping path below is correct by construction.
-  case CanonicalOp::V_MAD_U16: {
-    if (!requireDefaultOutputModsIfPresent(Di, Hr))
-      return Hr;
-    Value *A = Ctx.B.CreateTrunc(Op.src(0), I16Ty);
-    Value *B = Ctx.B.CreateTrunc(Op.src(1), I16Ty);
-    Value *C = Ctx.B.CreateTrunc(Op.src(2), I16Ty);
-    Value *Res =
-        Ctx.B.CreateAdd(Ctx.B.CreateMul(A, B, "vmad16_mul"), C, "vmad16");
-    Ctx.writeReg32(Op.dst(), Ctx.B.CreateZExt(Res, Ctx.I32Ty));
-    Hr.Handled = true;
-    return Hr;
-  }
+  // V_MAD_U16 is handled by the upstream hotswap implementation in
+  // handle-valu.cpp (PR #126), which supports the clamp and true16 op_sel
+  // forms. The bring-up's simpler wrapping-only handler that previously lived
+  // here is dropped to avoid shadowing it (it refused the clamp/omod shapes
+  // the #126 handler lifts correctly).
 
   // ---- 16-bit reverse-operand shifts (HW uses src0[3:0]) ----
   case CanonicalOp::V_ASHRREV_I16:

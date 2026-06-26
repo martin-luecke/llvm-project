@@ -487,7 +487,6 @@ enum class CanonicalOp : uint16_t {
   // dst op_sel is set so the preserved half survives the
   // read-modify-write.
   V_ADD_NC_U16, V_SUB_NC_U16, V_ADD_NC_I16, V_SUB_NC_I16,
-  V_MAD_U16,
   // gfx1250 VOP3 add-then-min/max: (s/u)(min/max)((s/u)addsat(src0, src1), src2).
   V_ADD_MIN_U32,
   V_ADD_MAX_U32,

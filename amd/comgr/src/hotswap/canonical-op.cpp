@@ -139,7 +139,6 @@ const char *canonicalOpName(CanonicalOp Op) {
     S(V_LSHL_OR_B32) S(V_AND_OR_B32) S(V_OR3_B32) S(V_XAD_U32) S(V_XOR3_B32)
     S(V_ALIGNBIT_B32)
     S(V_ADD_NC_U16) S(V_SUB_NC_U16) S(V_ADD_NC_I16) S(V_SUB_NC_I16)
-    S(V_MAD_U16)
     S(V_ADD_MIN_U32)
     S(V_ADD_MAX_U32)
     S(V_ADD_MIN_I32)
