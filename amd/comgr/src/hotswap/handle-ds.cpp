@@ -494,12 +494,6 @@ HandlerResult handleDS(RaiseContext &Ctx, const DecodedInst &Di,
   {
     auto [ds2IsRead, ds2WidthBits, ds2UnitBytes] = Ds2Classify(Sop);
     if (ds2UnitBytes > 0) {
-      if (Ctx.LdsGlobalRedirect) {
-        Hr.Failure = RaiseFailure::ldsGlobalRedirectUnsupported(
-            Di, "DS2 two-offset (two independent accesses; redirect needs two "
-                "GEPs per operand which is not yet implemented)");
-        return Hr;
-      }
       unsigned Opc = Di.Inst.getOpcode();
       int Off0Idx = AMDGPU::getNamedOperandIdx(Opc, AMDGPU::OpName::offset0);
       int Off1Idx = AMDGPU::getNamedOperandIdx(Opc, AMDGPU::OpName::offset1);
@@ -522,14 +516,20 @@ HandlerResult handleDS(RaiseContext &Ctx, const DecodedInst &Di,
       int64_t ByteOff1 = RawOff1 * ds2UnitBytes;
 
       Value *Vaddr = Ctx.B.CreateZExt(Op.src(0), Ctx.I64Ty, "ds2_addr");
-      auto *LdsPtrTy = PointerType::get(Ctx.C, 3);
+      // Under LDS->global redirect each of the two independent accesses gets
+      // its own GEP into the per-workgroup global buffer (ptr addrspace(1)
+      // WgLdsBase + intra-WG byte address), mirroring the single-offset path.
+      // Otherwise the access stays in LDS addrspace(3) via inttoptr.  The
+      // loads/stores below are address-space-generic.
       auto MakePtr = [&](int64_t ByteOff, const char *Name) -> Value * {
         Value *A = ByteOff == 0
                        ? Vaddr
                        : Ctx.B.CreateAdd(Vaddr,
                                          ConstantInt::get(Ctx.I64Ty, ByteOff),
                                          "ds2_off");
-        return Ctx.B.CreateIntToPtr(A, LdsPtrTy, Name);
+        if (Ctx.LdsGlobalRedirect)
+          return Ctx.B.CreateInBoundsGEP(Ctx.I8Ty, Ctx.WgLdsBase, A, Name);
+        return Ctx.B.CreateIntToPtr(A, PointerType::get(Ctx.C, 3), Name);
       };
       Value *Ptr0 = MakePtr(ByteOff0, "ds2_p0");
       Value *Ptr1 = MakePtr(ByteOff1, "ds2_p1");

@@ -762,6 +762,51 @@ static uint32_t inferScratchPrivateSegmentSize(ArrayRef<DecodedInst> Insts) {
   return static_cast<uint32_t>(Rounded);
 }
 
+// Returns true if the kernel contains at least one *storage* DS instruction
+// that the LDS->global redirect knows how to rewrite (the read/write byte
+// family handled by handleDS's DsClassify).  Triton kernels carry their LDS
+// as dynamic shared memory, so their `group_segment_fixed_size` is 0 even
+// though they use LDS heavily; this scan is how the redirect recognises a
+// dynamic-LDS kernel without a static size to key on.  Non-storage DS ops
+// (GDS, the TR transpose loads, ds_bpermute/permute, ds_swizzle) are
+// intentionally excluded: those either have no global equivalent or are not
+// LDS storage, and the per-op handlers already RaiseFailure for them under
+// redirect, so a kernel that has only those is left alone here.
+static bool kernelHasRedirectableDsStorage(ArrayRef<DecodedInst> Insts) {
+  for (const DecodedInst &Di : Insts) {
+    switch (Di.CanonOp) {
+    case CanonicalOp::DS_READ_B128:
+    case CanonicalOp::DS_WRITE_B128:
+    case CanonicalOp::DS_READ_B96:
+    case CanonicalOp::DS_WRITE_B96:
+    case CanonicalOp::DS_READ_B64:
+    case CanonicalOp::DS_WRITE_B64:
+    case CanonicalOp::DS_READ_B32:
+    case CanonicalOp::DS_WRITE_B32:
+    case CanonicalOp::DS_READ_U16:
+    case CanonicalOp::DS_READ_I16:
+    case CanonicalOp::DS_WRITE_B16:
+    case CanonicalOp::DS_READ_U8:
+    case CanonicalOp::DS_READ_I8:
+    case CanonicalOp::DS_WRITE_B8:
+    // Two-offset DS storage (DS_READ2/WRITE2 incl. the ST64 stride variants);
+    // handleDS redirects these to two per-access GEPs through wg_lds_base.
+    case CanonicalOp::DS_READ2_B32:
+    case CanonicalOp::DS_READ2_B64:
+    case CanonicalOp::DS_READ2ST64_B32:
+    case CanonicalOp::DS_READ2ST64_B64:
+    case CanonicalOp::DS_WRITE2_B32:
+    case CanonicalOp::DS_WRITE2_B64:
+    case CanonicalOp::DS_WRITE2ST64_B32:
+    case CanonicalOp::DS_WRITE2ST64_B64:
+      return true;
+    default:
+      break;
+    }
+  }
+  return false;
+}
+
 } // namespace
 
 // parseReg, readOp32/64/ExecWidth, and OpResolver are in raise-context.h/cpp
@@ -1294,17 +1339,39 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   // populate from HSA_HOTSWAP_LDS_TO_GLOBAL / _FORCE (or from programmatic
   // callers that set the options directly).  Default is OFF.
   //
-  // GroupSegmentFixedSize == 0 is an unconditional skip: the Force flag only
-  // bypasses the target-cap check, not the "has LDS at all" prerequisite.
-  // Kernels with G=0 have no LDS storage to redirect; attempting to process
-  // their DS instructions (which may be GDS or other non-storage DS ops) hits
-  // unsupported opcodes in the raiser for no benefit.
-  const bool LdsRedirectActive =
+  // GroupSegmentFixedSize == 0 with no DS storage is an unconditional skip:
+  // the Force flag only bypasses the target-cap check, not the "has LDS at
+  // all" prerequisite.  Such kernels have no LDS storage to redirect;
+  // attempting to process their DS instructions (which may be GDS or other
+  // non-storage DS ops) hits unsupported opcodes in the raiser for no benefit.
+  const bool StaticLdsRedirect =
       EnableLdsGlobalRedirect &&
       Meta.GroupSegmentFixedSize > 0 &&
       (ForceLdsGlobalRedirect ||
        Meta.GroupSegmentFixedSize > TargetIsa.LdsByteCapacity);
+
+  // Dynamic-LDS redirect: Triton (and other dynamic-shared-memory) kernels
+  // declare group_segment_fixed_size == 0 but still use LDS, sized at launch
+  // via `sharedMemBytes` (the AMDGPU `hidden_dynamic_lds_size`).  The static
+  // gate above never fires for them, so they could never run on a target whose
+  // LDS cap the launch size exceeds.  When the kernel actually contains
+  // redirectable DS storage we redirect it too.  We cannot compare a launch-
+  // time size to the target cap here, so Force is irrelevant and Enable alone
+  // opts in; the per-workgroup stride G is not a compile-time constant and is
+  // instead supplied at launch through an injected `dyn_lds_g` kernarg (see
+  // below).  v1 redirects every dynamic-LDS kernel unconditionally; a kernel
+  // whose launch size would have fit in LDS still runs correctly but through
+  // global memory.  TODO: an interceptor-side conditional that keeps the
+  // original code object and only swaps in the redirected one when
+  // sharedMemBytes exceeds the target cap.
+  const bool DynamicLdsRedirect =
+      EnableLdsGlobalRedirect &&
+      Meta.GroupSegmentFixedSize == 0 &&
+      kernelHasRedirectableDsStorage(Insts);
+
+  const bool LdsRedirectActive = StaticLdsRedirect || DynamicLdsRedirect;
   unsigned WgLdsBaseArgIdx = ~0u; // set below if LdsRedirectActive
+  unsigned DynLdsGArgIdx = ~0u;   // set below if DynamicLdsRedirect
 
   SmallVector<Type *, 8> ParamTypes;
   KernargLayout Kernargs;
@@ -1322,6 +1389,14 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   if (LdsRedirectActive) {
     WgLdsBaseArgIdx = static_cast<unsigned>(ParamTypes.size());
     ParamTypes.push_back(PointerType::get(C, /*addrspace=*/1));
+  }
+  // Dynamic-LDS kernels also receive the per-workgroup LDS byte size G as an
+  // i32 kernarg, appended right after wg_lds_base.  The launch interceptor
+  // fills it with the original `sharedMemBytes`; the IR multiplies it by the
+  // linear workgroup id to stride into the per-WG slice of the global buffer.
+  if (DynamicLdsRedirect) {
+    DynLdsGArgIdx = static_cast<unsigned>(ParamTypes.size());
+    ParamTypes.push_back(I32Ty);
   }
 
   auto *FuncTy = FunctionType::get(VoidTy, ParamTypes, false);
@@ -1437,6 +1512,8 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
     F->getArg(0)->setName("kargs");
   if (LdsRedirectActive)
     F->getArg(WgLdsBaseArgIdx)->setName("wg_lds_base");
+  if (DynamicLdsRedirect)
+    F->getArg(DynLdsGArgIdx)->setName("dyn_lds_g");
 
   errs() << "transpiler: Kernel '" << KernelName
          << "' kernarg_segment_size=" << Meta.KernargSegmentSize << "\n";
@@ -1703,9 +1780,13 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
                                             WgIdY, "lds_wgzy_row"),
                                 BX, "lds_wgzy_row_bx"),
                     WgIdX, "lds_linear_wg_id");
-    Value *ByteOff = B.CreateMul(
-        LinWgId, ConstantInt::get(I64Ty, Meta.GroupSegmentFixedSize),
-        "lds_wg_byte_off");
+    // Per-workgroup stride G: a compile-time constant for static LDS, or the
+    // runtime `dyn_lds_g` kernarg (the launch's sharedMemBytes) for dynamic LDS.
+    Value *GVal =
+        DynamicLdsRedirect
+            ? B.CreateZExt(F->getArg(DynLdsGArgIdx), I64Ty, "dyn_lds_g_64")
+            : ConstantInt::get(I64Ty, Meta.GroupSegmentFixedSize);
+    Value *ByteOff = B.CreateMul(LinWgId, GVal, "lds_wg_byte_off");
     WgLdsBase = B.CreateInBoundsGEP(I8Ty, F->getArg(WgLdsBaseArgIdx),
                                      ByteOff, "wg_lds_ptr");
   }
@@ -1802,16 +1883,22 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
     Ctx.WgLdsBase = WgLdsBase;
     // Attach IR-level metadata recording G so that --emit-ir dumps are
     // self-documenting.  Note: this metadata is NOT preserved in the output
-    // HSACO ELF; the launch-side interceptor must recover G by comparing
-    // the original binary's MSGPACK group_segment_fixed_size against the
-    // translated binary's (which is 0 when the redirect is active) and
-    // kernarg_segment_size (which grows by 8 for the new wg_lds_base pointer).
+    // HSACO ELF; the launch-side interceptor must recover the redirect by
+    // comparing the original binary's MSGPACK group_segment_fixed_size against
+    // the translated binary's (which is 0 when the redirect is active) and the
+    // kernarg_segment_size growth: +8 for the static path (wg_lds_base ptr
+    // only), +12 for the dynamic path (wg_lds_base ptr + dyn_lds_g i32, with G
+    // supplied at launch as sharedMemBytes).
     F->setMetadata(
         "hotswap.lds_redirect_size",
         MDTuple::get(C, {ConstantAsMetadata::get(ConstantInt::get(
                             Type::getInt32Ty(C), Meta.GroupSegmentFixedSize))}));
-    errs() << "transpiler: LDS->global redirect active for '" << KernelName
-           << "' G=" << Meta.GroupSegmentFixedSize << " bytes\n";
+    if (DynamicLdsRedirect)
+      errs() << "transpiler: LDS->global redirect active for '" << KernelName
+             << "' G=dynamic (sharedMemBytes via dyn_lds_g kernarg)\n";
+    else
+      errs() << "transpiler: LDS->global redirect active for '" << KernelName
+             << "' G=" << Meta.GroupSegmentFixedSize << " bytes\n";
   }
 
   // Dominance-safe SGPR wave-mask shadow storage.
