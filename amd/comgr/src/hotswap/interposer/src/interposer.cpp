@@ -68,7 +68,8 @@ hotswap::interposer::TopologySpoof &spoof() {
 }
 
 bool logEnabled() {
-  static bool Enabled = std::getenv("HOTSWAP_INTERPOSER_LOG") != nullptr;
+  static bool Enabled = std::getenv("HOTSWAP_INTERPOSER_LOG") != nullptr ||
+                        std::getenv("HSA_HOTSWAP_VERBOSE") != nullptr;
   return Enabled;
 }
 
@@ -117,15 +118,24 @@ __attribute__((constructor)) void initInterposer() {
     return;
   }
 
+  // Publish the real device beneath the spoof as the HotSwap transpile target.
+  // Both the in-process tool half and a future native-runtime HotSwap read
+  // HSA_HOTSWAP_TARGET, so the spoof and the transpiler agree on the real ISA
+  // even though the agent now reports the spoofed source. Do not clobber a
+  // value the user set explicitly.
+  std::string RealName =
+      hotswap::interposer::gfxTargetVersionName(spoof().realGfxVersion());
+  if (!RealName.empty())
+    setenv("HSA_HOTSWAP_TARGET", RealName.c_str(), /*overwrite=*/0);
+
   if (logEnabled()) {
-    std::string RealName =
-        hotswap::interposer::gfxTargetVersionName(spoof().realGfxVersion());
     std::string SourceName =
         hotswap::interposer::gfxTargetVersionName(SpoofVersion);
-    std::fprintf(
-        stderr,
-        "[hotswap-interposer] spoofing %s (real device %s) via KFD topology\n",
-        SourceName.c_str(), RealName.c_str());
+    const char *Target = std::getenv("HSA_HOTSWAP_TARGET");
+    std::fprintf(stderr,
+                 "[hotswap-interposer] spoofing %s (real device %s); "
+                 "HSA_HOTSWAP_TARGET=%s\n",
+                 SourceName.c_str(), RealName.c_str(), Target ? Target : "");
   }
 }
 

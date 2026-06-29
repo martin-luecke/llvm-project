@@ -74,9 +74,19 @@ decltype(hsa_code_object_destroy) *GOrigCodeObjectDestroy = nullptr;
 decltype(hsa_isa_get_info_alt) *GOrigIsaGetInfoAlt = nullptr;
 decltype(hsa_agent_iterate_isas) *GOrigAgentIterateIsas = nullptr;
 
+// Diagnostics honour the native HotSwap name (HSA_HOTSWAP_VERBOSE) as well as
+// the interposer's own, so behaviour matches the in-runtime integration.
 bool logEnabled() {
-  static bool Enabled = std::getenv("HOTSWAP_INTERPOSER_LOG") != nullptr;
+  static bool Enabled = std::getenv("HOTSWAP_INTERPOSER_LOG") != nullptr ||
+                        std::getenv("HSA_HOTSWAP_VERBOSE") != nullptr;
   return Enabled;
+}
+
+// Mirror the native runtime's supportability switch: when set, the load layer
+// forwards every code object untouched (no transpile).
+bool hotswapDisabled() {
+  static bool Disabled = std::getenv("HSA_HOTSWAP_DISABLE") != nullptr;
+  return Disabled;
 }
 
 /// Optional debug: dump captured/transpiled code objects to this directory.
@@ -106,20 +116,20 @@ constexpr uint32_t EfAmdgpuMachMask = 0xff;
 // llvm/BinaryFormat/ELF.h (replicated so the tool depends only on <elf.h>).
 #define HOTSWAP_AMDGCN_MACH_LIST(X)                                            \
   X(0x2c, "gfx900")                                                            \
-  X(0x2d, "gfx902") X(0x2e, "gfx904") X(0x2f, "gfx906") X(0x30, "gfx908")      \
-      X(0x31, "gfx909") X(0x32, "gfx90c") X(0x3f, "gfx90a") X(0x4c, "gfx942")  \
-          X(0x4f, "gfx950") X(0x33, "gfx1010") X(0x34, "gfx1011")              \
-              X(0x35, "gfx1012") X(0x42, "gfx1013") X(0x36, "gfx1030")         \
-                  X(0x37, "gfx1031") X(0x38, "gfx1032") X(0x39, "gfx1033")     \
-                      X(0x3e, "gfx1034") X(0x3d, "gfx1035") X(0x45, "gfx1036") \
-                          X(0x41, "gfx1100") X(0x46, "gfx1101")                \
-                              X(0x47, "gfx1102") X(0x44, "gfx1103")            \
-                                  X(0x43, "gfx1150") X(0x4a, "gfx1151")        \
-                                      X(0x55, "gfx1152") X(0x58, "gfx1153")    \
-                                          X(0x48, "gfx1200")                   \
-                                              X(0x4e, "gfx1201")               \
-                                                  X(0x49, "gfx1250")           \
-                                                      X(0x5a, "gfx1251")
+  X(0x2d, "gfx902")                                                            \
+  X(0x2e, "gfx904") X(0x2f, "gfx906") X(0x30, "gfx908") X(0x31, "gfx909")      \
+      X(0x32, "gfx90c") X(0x3f, "gfx90a") X(0x4c, "gfx942") X(0x4f, "gfx950")  \
+          X(0x33, "gfx1010") X(0x34, "gfx1011") X(0x35, "gfx1012")             \
+              X(0x42, "gfx1013") X(0x36, "gfx1030") X(0x37, "gfx1031")         \
+                  X(0x38, "gfx1032") X(0x39, "gfx1033") X(0x3e, "gfx1034")     \
+                      X(0x3d, "gfx1035") X(0x45, "gfx1036") X(0x41, "gfx1100") \
+                          X(0x46, "gfx1101") X(0x47, "gfx1102")                \
+                              X(0x44, "gfx1103") X(0x43, "gfx1150")            \
+                                  X(0x4a, "gfx1151") X(0x55, "gfx1152")        \
+                                      X(0x58, "gfx1153") X(0x48, "gfx1200")    \
+                                          X(0x4e, "gfx1201")                   \
+                                              X(0x49, "gfx1250")               \
+                                                  X(0x5a, "gfx1251")
 
 std::string gfxTargetFromMach(uint32_t Mach) {
   switch (Mach) {
@@ -196,10 +206,13 @@ std::string agentIsaName(hsa_agent_t Agent) {
 }
 
 /// The transpile target: the real device beneath the spoof. Priority:
-/// HOTSWAP_INTERPOSER_TARGET, then the LD_PRELOAD-detected real gfx, then (only
-/// when an agent is available, e.g. agent-scoped loads) the agent ISA.
+/// HSA_HOTSWAP_TARGET (the convergence interface with the native runtime; the
+/// LD_PRELOAD half publishes the detected real device here), then the
+/// in-process detected real gfx, then (only when an agent is available) the
+/// agent ISA. Under the spoof the agent ISA is the spoofed source, so it is the
+/// last resort -- the env/detected value is what names the real device.
 std::string resolveTargetIsa(const hsa_agent_t *Agent) {
-  if (const char *Env = std::getenv("HOTSWAP_INTERPOSER_TARGET")) {
+  if (const char *Env = std::getenv("HSA_HOTSWAP_TARGET")) {
     std::string Gfx = extractGfxName(Env);
     if (!Gfx.empty())
       return "amdgcn-amd-amdhsa--" + Gfx;
@@ -243,6 +256,8 @@ Decision decideAndTranspile(const ByteVec &Bytes, const hsa_agent_t *Agent,
                             void **OutElf, size_t *OutSize) {
   *OutElf = nullptr;
   *OutSize = 0;
+  if (hotswapDisabled())
+    return Decision::Passthrough;
   std::string SourceIsa = readElfIsa(Bytes->data(), Bytes->size());
   std::string TargetIsa = resolveTargetIsa(Agent);
   std::string SourceGfx = extractGfxName(SourceIsa);

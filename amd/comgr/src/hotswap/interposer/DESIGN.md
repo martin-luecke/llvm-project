@@ -101,10 +101,15 @@ The interposer is inert unless explicitly enabled, since it is injectable via
 `LD_PRELOAD`.
 
 - `HOTSWAP_INTERPOSER_SPOOF` -- gfx target to present upward, e.g. `gfx1250` or
-  `125000`. Unset => fully inert passthrough (no redirect, no spoof).
-- `HOTSWAP_INTERPOSER_TARGET` -- optional override of the real transpile target;
-  default is auto-detected from the true topology.
-- `HOTSWAP_INTERPOSER_LOG` -- `1` to emit one-line diagnostics to stderr.
+  `125000`. Unset => fully inert passthrough (no redirect, no spoof). This is the
+  interposer-only device-spoof switch.
+- `HSA_HOTSWAP_TARGET` -- real device ISA to transpile toward. The spoof half
+  auto-publishes the detected real device here; user-overridable. Shared with the
+  native runtime HotSwap as the convergence interface (see INTEGRATION.md).
+- `HSA_HOTSWAP_DISABLE` -- forward every code object untouched (no transpile),
+  matching the native runtime switch.
+- `HSA_HOTSWAP_VERBOSE` / `HOTSWAP_INTERPOSER_LOG` -- one-line diagnostics to
+  stderr.
 
 ## Runtime requirement: a gfx1250-aware ROCr
 
