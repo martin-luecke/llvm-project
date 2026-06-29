@@ -6,9 +6,15 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// HSA_TOOLS_LIB half of the interposer. Hooks the CoreApiTable code-object
-/// load entry points to capture the spoofed-source (gfx1250) ELF at load time,
-/// transpile it to the real device ISA via COMGR, and substitute the result.
+/// HSA_TOOLS_LIB half of the interposer. Hooks every CoreApiTable entry point
+/// through which a code-object ELF becomes a loaded executable, captures the
+/// spoofed-source (gfx1250) ELF while it is still in host memory, transpiles it
+/// to the real device ISA via COMGR, and substitutes the result. Capturing at
+/// the load layer (rather than the KFD mapping) is mandatory: that is the only
+/// place the transpilable ELF exists -- by the time segments are mapped to the
+/// device the metadata note is gone and relocations are applied. Covering all
+/// load entry points makes capture complete by construction at that layer.
+///
 /// The transpile target is the real device detected beneath the KFD spoof by
 /// the LD_PRELOAD half, not the (spoofed) agent ISA. The capture/load plumbing
 /// is adapted from the HotSwap HSA tool lib (rocm-systems/projects/hotswap).
@@ -40,8 +46,11 @@ namespace {
 using ByteVec = std::shared_ptr<std::vector<uint8_t>>;
 using OwnedElf = std::unique_ptr<void, decltype(&std::free)>;
 
-std::mutex GReaderMapMutex;
+// Captured ELF bytes, keyed by the handle of the object that owns them: a
+// code-object reader (modern path) or a hsa_code_object_t (deprecated path).
+std::mutex GMapMutex;
 std::unordered_map<uint64_t, ByteVec> GReaderMap;
+std::unordered_map<uint64_t, ByteVec> GObjMap;
 
 // Rewritten ELFs must outlive the executable: ROCr's LoadedCodeObjectImpl keeps
 // a raw pointer into the ELF data. Kept alive until OnUnload (then leaked
@@ -57,6 +66,11 @@ decltype(hsa_code_object_reader_create_from_file) *GOrigReaderFromFile =
 decltype(hsa_code_object_reader_destroy) *GOrigReaderDestroy = nullptr;
 decltype(hsa_executable_load_agent_code_object) *GOrigLoadAgentCodeObject =
     nullptr;
+decltype(hsa_executable_load_program_code_object) *GOrigLoadProgramCodeObject =
+    nullptr;
+decltype(hsa_executable_load_code_object) *GOrigLoadCodeObject = nullptr;
+decltype(hsa_code_object_deserialize) *GOrigCodeObjectDeserialize = nullptr;
+decltype(hsa_code_object_destroy) *GOrigCodeObjectDestroy = nullptr;
 decltype(hsa_isa_get_info_alt) *GOrigIsaGetInfoAlt = nullptr;
 decltype(hsa_agent_iterate_isas) *GOrigAgentIterateIsas = nullptr;
 
@@ -182,9 +196,9 @@ std::string agentIsaName(hsa_agent_t Agent) {
 }
 
 /// The transpile target: the real device beneath the spoof. Priority:
-/// HOTSWAP_INTERPOSER_TARGET, then the LD_PRELOAD-detected real gfx, then the
-/// (possibly un-spoofed) agent ISA.
-std::string resolveTargetIsa(hsa_agent_t Agent) {
+/// HOTSWAP_INTERPOSER_TARGET, then the LD_PRELOAD-detected real gfx, then (only
+/// when an agent is available, e.g. agent-scoped loads) the agent ISA.
+std::string resolveTargetIsa(const hsa_agent_t *Agent) {
   if (const char *Env = std::getenv("HOTSWAP_INTERPOSER_TARGET")) {
     std::string Gfx = extractGfxName(Env);
     if (!Gfx.empty())
@@ -193,7 +207,21 @@ std::string resolveTargetIsa(hsa_agent_t Agent) {
   if (uint32_t Real = hotswap::interposer::detectedRealGfxVersion())
     return "amdgcn-amd-amdhsa--" +
            hotswap::interposer::gfxTargetVersionName(Real);
-  return agentIsaName(Agent);
+  if (Agent)
+    return agentIsaName(*Agent);
+  return {};
+}
+
+ByteVec lookupReader(uint64_t Handle) {
+  std::scoped_lock Lock(GMapMutex);
+  auto It = GReaderMap.find(Handle);
+  return It != GReaderMap.end() ? It->second : ByteVec{};
+}
+
+ByteVec lookupObj(uint64_t Handle) {
+  std::scoped_lock Lock(GMapMutex);
+  auto It = GObjMap.find(Handle);
+  return It != GObjMap.end() ? It->second : ByteVec{};
 }
 
 void retainRewritten(OwnedElf Elf) {
@@ -205,6 +233,60 @@ void retainRewritten(OwnedElf Elf) {
   }
 }
 
+enum class Decision { Passthrough, Transpiled, Refuse };
+
+/// Shared transpile decision for every load entry point. Returns Passthrough
+/// for objects already built for the real device (load the original untouched),
+/// Transpiled with a malloc'd OutElf for foreign-ISA (spoofed-source) objects,
+/// or Refuse (fail closed) when the source/target ISA cannot be determined.
+Decision decideAndTranspile(const ByteVec &Bytes, const hsa_agent_t *Agent,
+                            void **OutElf, size_t *OutSize) {
+  *OutElf = nullptr;
+  *OutSize = 0;
+  std::string SourceIsa = readElfIsa(Bytes->data(), Bytes->size());
+  std::string TargetIsa = resolveTargetIsa(Agent);
+  std::string SourceGfx = extractGfxName(SourceIsa);
+  std::string TargetGfx = extractGfxName(TargetIsa);
+
+  // A code object with no AMDGPU ISA (e.g. a program-scope object that only
+  // carries variables) is device-independent; load it untouched.
+  if (SourceGfx.empty())
+    return Decision::Passthrough;
+
+  if (TargetGfx.empty()) {
+    std::fprintf(
+        stderr,
+        "[hotswap-interposer] no transpile target for source %s; refusing\n",
+        SourceIsa.c_str());
+    return Decision::Refuse;
+  }
+
+  // Already built for the real device (e.g. CLR's native builtin shaders).
+  if (SourceGfx == TargetGfx)
+    return Decision::Passthrough;
+
+  dumpObject(SourceGfx.c_str(), Bytes->data(), Bytes->size());
+
+  int Rc = hotswap::interposer::retargetCodeObject(
+      Bytes->data(), Bytes->size(), SourceIsa.c_str(), TargetIsa.c_str(),
+      OutElf, OutSize);
+  if (Rc != 0 || !*OutElf || *OutSize == 0) {
+    std::fprintf(
+        stderr,
+        "[hotswap-interposer] transpile %s -> %s failed (rc=%d); refusing\n",
+        SourceIsa.c_str(), TargetIsa.c_str(), Rc);
+    return Decision::Refuse;
+  }
+  if (logEnabled())
+    std::fprintf(stderr,
+                 "[hotswap-interposer] transpiled %s -> %s (%zu bytes)\n",
+                 SourceIsa.c_str(), TargetIsa.c_str(), *OutSize);
+  dumpObject(TargetGfx.c_str(), *OutElf, *OutSize);
+  return Decision::Transpiled;
+}
+
+// -- reader capture (modern path) --
+
 hsa_status_t HSA_API hookReaderFromMemory(const void *CodeObject, size_t Size,
                                           hsa_code_object_reader_t *Reader) {
   hsa_code_object_reader_t R = {};
@@ -215,7 +297,7 @@ hsa_status_t HSA_API hookReaderFromMemory(const void *CodeObject, size_t Size,
     auto Vec = std::make_shared<std::vector<uint8_t>>(
         static_cast<const uint8_t *>(CodeObject),
         static_cast<const uint8_t *>(CodeObject) + Size);
-    std::scoped_lock Lock(GReaderMapMutex);
+    std::scoped_lock Lock(GMapMutex);
     GReaderMap[R.handle] = std::move(Vec);
   } catch (const std::bad_alloc &) {
     GOrigReaderDestroy(R);
@@ -245,7 +327,7 @@ hsa_status_t HSA_API hookReaderFromFile(hsa_file_t File,
     if (St != HSA_STATUS_SUCCESS)
       return St;
     {
-      std::scoped_lock Lock(GReaderMapMutex);
+      std::scoped_lock Lock(GMapMutex);
       GReaderMap[R.handle] = std::move(Vec);
     }
     *Reader = R;
@@ -257,16 +339,18 @@ hsa_status_t HSA_API hookReaderFromFile(hsa_file_t File,
 
 hsa_status_t HSA_API hookReaderDestroy(hsa_code_object_reader_t Reader) {
   {
-    std::scoped_lock Lock(GReaderMapMutex);
+    std::scoped_lock Lock(GMapMutex);
     GReaderMap.erase(Reader.handle);
   }
   return GOrigReaderDestroy(Reader);
 }
 
-hsa_status_t loadRewritten(hsa_executable_t Exec, hsa_agent_t Agent,
-                           const char *Options,
-                           hsa_loaded_code_object_t *Loaded, void *OutElf,
-                           size_t OutSize) {
+// -- agent-scoped load (modern path) --
+
+hsa_status_t loadRewrittenReader(hsa_executable_t Exec, hsa_agent_t Agent,
+                                 const char *Options,
+                                 hsa_loaded_code_object_t *Loaded, void *OutElf,
+                                 size_t OutSize) {
   OwnedElf Owned(OutElf, &std::free);
   hsa_code_object_reader_t NewReader = {};
   hsa_status_t St = GOrigReaderFromMemory(Owned.get(), OutSize, &NewReader);
@@ -284,60 +368,122 @@ hsa_status_t HSA_API hookLoadAgentCodeObject(hsa_executable_t Exec,
                                              hsa_code_object_reader_t Reader,
                                              const char *Options,
                                              hsa_loaded_code_object_t *Loaded) {
-  ByteVec Bytes;
-  {
-    std::scoped_lock Lock(GReaderMapMutex);
-    auto It = GReaderMap.find(Reader.handle);
-    if (It != GReaderMap.end())
-      Bytes = It->second;
-  }
+  ByteVec Bytes = lookupReader(Reader.handle);
   if (!Bytes) {
     std::fprintf(stderr,
                  "[hotswap-interposer] no staged bytes for reader; refusing\n");
     return HSA_STATUS_ERROR_INVALID_CODE_OBJECT_READER;
   }
-
-  std::string SourceIsa = readElfIsa(Bytes->data(), Bytes->size());
-  std::string TargetIsa = resolveTargetIsa(Agent);
-  std::string SourceGfx = extractGfxName(SourceIsa);
-  std::string TargetGfx = extractGfxName(TargetIsa);
-
-  if (SourceGfx.empty() || TargetGfx.empty()) {
-    std::fprintf(stderr,
-                 "[hotswap-interposer] cannot rewrite: source='%s' "
-                 "target='%s'; refusing\n",
-                 SourceIsa.c_str(), TargetIsa.c_str());
-    return HSA_STATUS_ERROR_INVALID_CODE_OBJECT;
-  }
-
-  // A code object already built for the real device (e.g. CLR's native builtin
-  // shaders) is correct as-is; load it untouched.
-  if (SourceGfx == TargetGfx)
-    return GOrigLoadAgentCodeObject(Exec, Agent, Reader, Options, Loaded);
-
-  dumpObject(SourceGfx.c_str(), Bytes->data(), Bytes->size());
-
   void *OutElf = nullptr;
   size_t OutSize = 0;
-  int Rc = hotswap::interposer::retargetCodeObject(
-      Bytes->data(), Bytes->size(), SourceIsa.c_str(), TargetIsa.c_str(),
-      &OutElf, &OutSize);
-  if (Rc != 0 || !OutElf || OutSize == 0) {
-    std::fprintf(
-        stderr,
-        "[hotswap-interposer] transpile %s -> %s failed (rc=%d); refusing\n",
-        SourceIsa.c_str(), TargetIsa.c_str(), Rc);
+  switch (decideAndTranspile(Bytes, &Agent, &OutElf, &OutSize)) {
+  case Decision::Passthrough:
+    return GOrigLoadAgentCodeObject(Exec, Agent, Reader, Options, Loaded);
+  case Decision::Transpiled:
+    return loadRewrittenReader(Exec, Agent, Options, Loaded, OutElf, OutSize);
+  case Decision::Refuse:
+  default:
     return HSA_STATUS_ERROR_INVALID_CODE_OBJECT;
   }
+}
 
-  if (logEnabled())
-    std::fprintf(stderr,
-                 "[hotswap-interposer] transpiled %s -> %s (%zu bytes)\n",
-                 SourceIsa.c_str(), TargetIsa.c_str(), OutSize);
+// -- program-scope load (modern path; no agent) --
 
-  dumpObject(TargetGfx.c_str(), OutElf, OutSize);
+hsa_status_t loadRewrittenProgram(hsa_executable_t Exec, const char *Options,
+                                  hsa_loaded_code_object_t *Loaded,
+                                  void *OutElf, size_t OutSize) {
+  OwnedElf Owned(OutElf, &std::free);
+  hsa_code_object_reader_t NewReader = {};
+  hsa_status_t St = GOrigReaderFromMemory(Owned.get(), OutSize, &NewReader);
+  if (St != HSA_STATUS_SUCCESS)
+    return St;
+  St = GOrigLoadProgramCodeObject(Exec, NewReader, Options, Loaded);
+  GOrigReaderDestroy(NewReader);
+  if (St == HSA_STATUS_SUCCESS)
+    retainRewritten(std::move(Owned));
+  return St;
+}
 
-  return loadRewritten(Exec, Agent, Options, Loaded, OutElf, OutSize);
+hsa_status_t HSA_API hookLoadProgramCodeObject(
+    hsa_executable_t Exec, hsa_code_object_reader_t Reader, const char *Options,
+    hsa_loaded_code_object_t *Loaded) {
+  ByteVec Bytes = lookupReader(Reader.handle);
+  if (!Bytes)
+    return GOrigLoadProgramCodeObject(Exec, Reader, Options, Loaded);
+  void *OutElf = nullptr;
+  size_t OutSize = 0;
+  switch (decideAndTranspile(Bytes, nullptr, &OutElf, &OutSize)) {
+  case Decision::Passthrough:
+    return GOrigLoadProgramCodeObject(Exec, Reader, Options, Loaded);
+  case Decision::Transpiled:
+    return loadRewrittenProgram(Exec, Options, Loaded, OutElf, OutSize);
+  case Decision::Refuse:
+  default:
+    return HSA_STATUS_ERROR_INVALID_CODE_OBJECT;
+  }
+}
+
+// -- deprecated hsa_code_object_t path --
+
+hsa_status_t HSA_API hookCodeObjectDeserialize(void *Serialized, size_t Size,
+                                               const char *Options,
+                                               hsa_code_object_t *CodeObject) {
+  hsa_status_t St =
+      GOrigCodeObjectDeserialize(Serialized, Size, Options, CodeObject);
+  if (St != HSA_STATUS_SUCCESS)
+    return St;
+  try {
+    auto Vec = std::make_shared<std::vector<uint8_t>>(
+        static_cast<const uint8_t *>(Serialized),
+        static_cast<const uint8_t *>(Serialized) + Size);
+    std::scoped_lock Lock(GMapMutex);
+    GObjMap[CodeObject->handle] = std::move(Vec);
+  } catch (const std::bad_alloc &) {
+    // Capture failed; the deprecated load hook will fail closed on the miss.
+  }
+  return HSA_STATUS_SUCCESS;
+}
+
+hsa_status_t HSA_API hookCodeObjectDestroy(hsa_code_object_t CodeObject) {
+  {
+    std::scoped_lock Lock(GMapMutex);
+    GObjMap.erase(CodeObject.handle);
+  }
+  return GOrigCodeObjectDestroy(CodeObject);
+}
+
+hsa_status_t HSA_API hookLoadCodeObject(hsa_executable_t Exec,
+                                        hsa_agent_t Agent,
+                                        hsa_code_object_t CodeObject,
+                                        const char *Options) {
+  ByteVec Bytes = lookupObj(CodeObject.handle);
+  if (!Bytes) {
+    std::fprintf(
+        stderr,
+        "[hotswap-interposer] no staged bytes for code object; refusing\n");
+    return HSA_STATUS_ERROR_INVALID_CODE_OBJECT;
+  }
+  void *OutElf = nullptr;
+  size_t OutSize = 0;
+  switch (decideAndTranspile(Bytes, &Agent, &OutElf, &OutSize)) {
+  case Decision::Passthrough:
+    return GOrigLoadCodeObject(Exec, Agent, CodeObject, Options);
+  case Decision::Transpiled: {
+    OwnedElf Owned(OutElf, &std::free);
+    hsa_code_object_t NewObj = {};
+    hsa_status_t St =
+        GOrigCodeObjectDeserialize(Owned.get(), OutSize, Options, &NewObj);
+    if (St != HSA_STATUS_SUCCESS)
+      return St;
+    St = GOrigLoadCodeObject(Exec, Agent, NewObj, Options);
+    if (St == HSA_STATUS_SUCCESS)
+      retainRewritten(std::move(Owned));
+    return St;
+  }
+  case Decision::Refuse:
+  default:
+    return HSA_STATUS_ERROR_INVALID_CODE_OBJECT;
+  }
 }
 
 } // namespace
@@ -364,6 +510,10 @@ bool OnLoad(HsaApiTable *table, uint64_t runtime_version, uint64_t failed_count,
   GOrigReaderFromFile = Core->hsa_code_object_reader_create_from_file_fn;
   GOrigReaderDestroy = Core->hsa_code_object_reader_destroy_fn;
   GOrigLoadAgentCodeObject = Core->hsa_executable_load_agent_code_object_fn;
+  GOrigLoadProgramCodeObject = Core->hsa_executable_load_program_code_object_fn;
+  GOrigLoadCodeObject = Core->hsa_executable_load_code_object_fn;
+  GOrigCodeObjectDeserialize = Core->hsa_code_object_deserialize_fn;
+  GOrigCodeObjectDestroy = Core->hsa_code_object_destroy_fn;
   GOrigIsaGetInfoAlt = Core->hsa_isa_get_info_alt_fn;
   GOrigAgentIterateIsas = Core->hsa_agent_iterate_isas_fn;
 
@@ -371,6 +521,17 @@ bool OnLoad(HsaApiTable *table, uint64_t runtime_version, uint64_t failed_count,
   Core->hsa_code_object_reader_create_from_file_fn = hookReaderFromFile;
   Core->hsa_code_object_reader_destroy_fn = hookReaderDestroy;
   Core->hsa_executable_load_agent_code_object_fn = hookLoadAgentCodeObject;
+  // Close the remaining load-path holes so capture is complete at the load
+  // layer.
+  if (GOrigLoadProgramCodeObject)
+    Core->hsa_executable_load_program_code_object_fn =
+        hookLoadProgramCodeObject;
+  if (GOrigCodeObjectDeserialize)
+    Core->hsa_code_object_deserialize_fn = hookCodeObjectDeserialize;
+  if (GOrigCodeObjectDestroy)
+    Core->hsa_code_object_destroy_fn = hookCodeObjectDestroy;
+  if (GOrigLoadCodeObject && GOrigCodeObjectDeserialize)
+    Core->hsa_executable_load_code_object_fn = hookLoadCodeObject;
 
   if (logEnabled())
     std::fprintf(
@@ -389,11 +550,21 @@ void OnUnload() {
     GCoreTable->hsa_code_object_reader_destroy_fn = GOrigReaderDestroy;
     GCoreTable->hsa_executable_load_agent_code_object_fn =
         GOrigLoadAgentCodeObject;
+    if (GOrigLoadProgramCodeObject)
+      GCoreTable->hsa_executable_load_program_code_object_fn =
+          GOrigLoadProgramCodeObject;
+    if (GOrigCodeObjectDeserialize)
+      GCoreTable->hsa_code_object_deserialize_fn = GOrigCodeObjectDeserialize;
+    if (GOrigCodeObjectDestroy)
+      GCoreTable->hsa_code_object_destroy_fn = GOrigCodeObjectDestroy;
+    if (GOrigLoadCodeObject && GOrigCodeObjectDeserialize)
+      GCoreTable->hsa_executable_load_code_object_fn = GOrigLoadCodeObject;
     GCoreTable = nullptr;
   }
   {
-    std::scoped_lock Lock(GReaderMapMutex);
+    std::scoped_lock Lock(GMapMutex);
     GReaderMap.clear();
+    GObjMap.clear();
   }
   {
     std::scoped_lock Lock(GRewrittenMutex);
