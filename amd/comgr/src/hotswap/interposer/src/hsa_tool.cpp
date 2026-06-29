@@ -16,8 +16,9 @@
 /// load entry points makes capture complete by construction at that layer.
 ///
 /// The transpile target is the real device detected beneath the KFD spoof by
-/// the LD_PRELOAD half, not the (spoofed) agent ISA. The capture/load plumbing
-/// is adapted from the HotSwap HSA tool lib (rocm-systems/projects/hotswap).
+/// the LD_PRELOAD half, not the (spoofed) agent ISA, because under the spoof
+/// the agent ISA reports the source target. It is supplied via
+/// HSA_HOTSWAP_TARGET.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -113,23 +114,57 @@ void dumpObject(const char *Tag, const void *Data, size_t Size) {
 constexpr uint32_t EfAmdgpuMachMask = 0xff;
 
 // AMDGCN processor value -> gfx target name, mirroring the AMDGPU_MACH_LIST in
-// llvm/BinaryFormat/ELF.h (replicated so the tool depends only on <elf.h>).
+// llvm/BinaryFormat/ELF.h (replicated so the tool depends only on <elf.h>;
+// these are append-only ABI values, refresh from ELF.h for newer GPUs). The
+// list must stay complete -- including the *-generic targets -- because a code
+// object whose mach is unrecognised is treated as device-independent and
+// forwarded untouched, which on a real device would let a foreign-ISA object
+// reach the hardware untranspiled.
 #define HOTSWAP_AMDGCN_MACH_LIST(X)                                            \
   X(0x2c, "gfx900")                                                            \
   X(0x2d, "gfx902")                                                            \
-  X(0x2e, "gfx904") X(0x2f, "gfx906") X(0x30, "gfx908") X(0x31, "gfx909")      \
-      X(0x32, "gfx90c") X(0x3f, "gfx90a") X(0x4c, "gfx942") X(0x4f, "gfx950")  \
-          X(0x33, "gfx1010") X(0x34, "gfx1011") X(0x35, "gfx1012")             \
-              X(0x42, "gfx1013") X(0x36, "gfx1030") X(0x37, "gfx1031")         \
-                  X(0x38, "gfx1032") X(0x39, "gfx1033") X(0x3e, "gfx1034")     \
-                      X(0x3d, "gfx1035") X(0x45, "gfx1036") X(0x41, "gfx1100") \
-                          X(0x46, "gfx1101") X(0x47, "gfx1102")                \
-                              X(0x44, "gfx1103") X(0x43, "gfx1150")            \
-                                  X(0x4a, "gfx1151") X(0x55, "gfx1152")        \
-                                      X(0x58, "gfx1153") X(0x48, "gfx1200")    \
-                                          X(0x4e, "gfx1201")                   \
-                                              X(0x49, "gfx1250")               \
-                                                  X(0x5a, "gfx1251")
+  X(0x2e, "gfx904")                                                            \
+  X(0x2f, "gfx906")                                                            \
+  X(0x30, "gfx908")                                                            \
+  X(0x31, "gfx909")                                                            \
+  X(0x32, "gfx90c")                                                            \
+  X(0x3f, "gfx90a")                                                            \
+  X(0x4c, "gfx942")                                                            \
+  X(0x4f, "gfx950")                                                            \
+  X(0x33, "gfx1010")                                                           \
+  X(0x34, "gfx1011")                                                           \
+  X(0x35, "gfx1012")                                                           \
+  X(0x42, "gfx1013")                                                           \
+  X(0x36, "gfx1030")                                                           \
+  X(0x37, "gfx1031")                                                           \
+  X(0x38, "gfx1032")                                                           \
+  X(0x39, "gfx1033")                                                           \
+  X(0x3e, "gfx1034")                                                           \
+  X(0x3d, "gfx1035")                                                           \
+  X(0x45, "gfx1036")                                                           \
+  X(0x41, "gfx1100")                                                           \
+  X(0x46, "gfx1101")                                                           \
+  X(0x47, "gfx1102")                                                           \
+  X(0x44, "gfx1103")                                                           \
+  X(0x43, "gfx1150")                                                           \
+  X(0x4a, "gfx1151")                                                           \
+  X(0x55, "gfx1152")                                                           \
+  X(0x58, "gfx1153")                                                           \
+  X(0x5d, "gfx1170")                                                           \
+  X(0x5e, "gfx1171")                                                           \
+  X(0x5c, "gfx1172")                                                           \
+  X(0x48, "gfx1200")                                                           \
+  X(0x4e, "gfx1201")                                                           \
+  X(0x49, "gfx1250")                                                           \
+  X(0x5a, "gfx1251")                                                           \
+  X(0x50, "gfx1310")                                                           \
+  X(0x51, "gfx9-generic")                                                      \
+  X(0x52, "gfx10-1-generic")                                                   \
+  X(0x53, "gfx10-3-generic")                                                   \
+  X(0x54, "gfx11-generic")                                                     \
+  X(0x59, "gfx12-generic")                                                     \
+  X(0x5b, "gfx12-5-generic")                                                   \
+  X(0x5f, "gfx9-4-generic")
 
 std::string gfxTargetFromMach(uint32_t Mach) {
   switch (Mach) {
@@ -324,32 +359,47 @@ hsa_status_t HSA_API hookReaderFromMemory(const void *CodeObject, size_t Size,
 
 hsa_status_t HSA_API hookReaderFromFile(hsa_file_t File,
                                         hsa_code_object_reader_t *Reader) {
+  // The caller retains ownership of File and may reuse it, so its read offset
+  // is saved and restored around the slurp. (Converting a file reader to a
+  // memory reader loses the URI provenance the file path would otherwise
+  // carry.)
+  off_t SavedPos = ::lseek(File, 0, SEEK_CUR);
   off_t End = ::lseek(File, 0, SEEK_END);
-  if (End < 0)
+  if (SavedPos < 0 || End < 0)
     return HSA_STATUS_ERROR_INVALID_FILE;
   ::lseek(File, 0, SEEK_SET);
+  hsa_status_t Result = HSA_STATUS_ERROR_INVALID_FILE;
   try {
     auto Vec = std::make_shared<std::vector<uint8_t>>(static_cast<size_t>(End));
     size_t Got = 0;
+    bool ReadOk = true;
     while (Got < Vec->size()) {
       ssize_t N = ::read(File, Vec->data() + Got, Vec->size() - Got);
-      if (N <= 0)
-        return HSA_STATUS_ERROR_INVALID_FILE;
+      if (N <= 0) {
+        ReadOk = false;
+        break;
+      }
       Got += static_cast<size_t>(N);
     }
-    hsa_code_object_reader_t R = {};
-    hsa_status_t St = GOrigReaderFromMemory(Vec->data(), Vec->size(), &R);
-    if (St != HSA_STATUS_SUCCESS)
-      return St;
-    {
-      std::scoped_lock Lock(GMapMutex);
-      GReaderMap[R.handle] = std::move(Vec);
+    if (ReadOk) {
+      hsa_code_object_reader_t R = {};
+      hsa_status_t St = GOrigReaderFromMemory(Vec->data(), Vec->size(), &R);
+      if (St == HSA_STATUS_SUCCESS) {
+        {
+          std::scoped_lock Lock(GMapMutex);
+          GReaderMap[R.handle] = std::move(Vec);
+        }
+        *Reader = R;
+        Result = HSA_STATUS_SUCCESS;
+      } else {
+        Result = St;
+      }
     }
-    *Reader = R;
-    return HSA_STATUS_SUCCESS;
   } catch (const std::bad_alloc &) {
-    return HSA_STATUS_ERROR_OUT_OF_RESOURCES;
+    Result = HSA_STATUS_ERROR_OUT_OF_RESOURCES;
   }
+  ::lseek(File, SavedPos, SEEK_SET);
+  return Result;
 }
 
 hsa_status_t HSA_API hookReaderDestroy(hsa_code_object_reader_t Reader) {
@@ -506,14 +556,14 @@ hsa_status_t HSA_API hookLoadCodeObject(hsa_executable_t Exec,
 extern "C" {
 
 HOTSWAP_EXPORT
-bool OnLoad(HsaApiTable *table, uint64_t runtime_version, uint64_t failed_count,
-            const char *const *failed_names) {
-  (void)runtime_version;
-  (void)failed_count;
-  (void)failed_names;
-  if (!table || !table->core_)
+bool OnLoad(HsaApiTable *Table, uint64_t RuntimeVersion, uint64_t FailedCount,
+            const char *const *FailedNames) {
+  (void)RuntimeVersion;
+  (void)FailedCount;
+  (void)FailedNames;
+  if (!Table || !Table->core_)
     return false;
-  CoreApiTable *Core = table->core_;
+  CoreApiTable *Core = Table->core_;
   if (!Core->hsa_code_object_reader_create_from_memory_fn ||
       !Core->hsa_code_object_reader_create_from_file_fn ||
       !Core->hsa_code_object_reader_destroy_fn ||

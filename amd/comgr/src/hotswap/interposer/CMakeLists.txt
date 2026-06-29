@@ -10,22 +10,30 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# HSA headers (hsa.h, hsa_api_trace.h) for the tool half. The runtime's
-# hsa_api_trace.h includes both "hsa.h" and "inc/hsa_ext_image.h", so it needs
-# the rocr-runtime source layout (the inc/ dir and its parent) rather than the
-# flattened install tree. Defaults to the in-tree rocr-runtime that the matching
-# gfx1250-aware ROCr is built from.
-set(HOTSWAP_HSA_INCLUDE_DIR
-    "$ENV{HOME}/development/rocm-systems/projects/rocr-runtime/runtime/hsa-runtime/inc"
-    CACHE PATH "Directory containing hsa.h / hsa_api_trace.h")
+# External dependencies must be supplied by the caller; there are no defaults so
+# the build is portable and never silently binds a developer-specific path.
+#
+#   HOTSWAP_HSA_INCLUDE_DIR  - directory with hsa.h / hsa_api_trace.h. The
+#       runtime's hsa_api_trace.h includes both "hsa.h" and "inc/hsa_ext_image.h",
+#       so this must be the rocr-runtime source layout (an `inc/` directory whose
+#       parent is also added below), not the flattened install tree.
+#   HOTSWAP_COMGR_INCLUDE_DIR - directory with amd_comgr.h exposing the hotswap API.
+#   HOTSWAP_COMGR_LIBRARY      - libamd_comgr.so exporting amd_comgr_hotswap_transpile.
+set(HOTSWAP_HSA_INCLUDE_DIR "" CACHE PATH
+    "Directory containing hsa.h / hsa_api_trace.h (rocr-runtime inc/ layout)")
+set(HOTSWAP_COMGR_INCLUDE_DIR "" CACHE PATH
+    "Directory containing amd_comgr.h with the hotswap API")
+set(HOTSWAP_COMGR_LIBRARY "" CACHE FILEPATH
+    "libamd_comgr.so exporting amd_comgr_hotswap_transpile")
 
-# Prebuilt COMGR with the hotswap transpile API + its matching public header.
-set(HOTSWAP_COMGR_INCLUDE_DIR
-    "$ENV{HOME}/development/llvm-lds-spill/.worktrees/qwen-moe/comgr-build/include"
-    CACHE PATH "Directory containing amd_comgr.h with the hotswap API")
-set(HOTSWAP_COMGR_LIBRARY
-    "$ENV{HOME}/development/llvm-lds-spill/.worktrees/qwen-moe/comgr-build/libamd_comgr.so"
-    CACHE FILEPATH "Prebuilt libamd_comgr.so exporting amd_comgr_hotswap_transpile")
+foreach(_req HOTSWAP_HSA_INCLUDE_DIR HOTSWAP_COMGR_INCLUDE_DIR HOTSWAP_COMGR_LIBRARY)
+  if(NOT ${_req})
+    message(FATAL_ERROR
+      "${_req} must be set. Point HOTSWAP_HSA_INCLUDE_DIR at a rocr-runtime "
+      "inc/ directory, and HOTSWAP_COMGR_INCLUDE_DIR / HOTSWAP_COMGR_LIBRARY at "
+      "a COMGR build that exports the hotswap transpile API.")
+  endif()
+endforeach()
 
 add_library(hotswap-interposer SHARED
   src/interposer.cpp

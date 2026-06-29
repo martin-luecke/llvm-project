@@ -5,12 +5,18 @@
 /// @brief LD_PRELOAD interposer that presents a spoofed gfx target to the ROCm
 /// stack while forwarding all real device traffic to the real driver.
 ///
-/// @details The libc hook skeleton (the dlsym(RTLD_NEXT) passthrough table and
-/// the glibc stat/open variant handling) is adapted from ROCm
-/// emulation/rocjitsu's kmd/linux/interposer.cpp. Unlike rocjitsu, which
-/// emulates the device, this interposer keeps the real /dev/kfd and /dev/dri
-/// and only redirects reads of the KFD topology `properties` file so the stack
-/// sees a spoofed gfx_target_version. Everything else falls through to libc.
+/// @details Reads of the KFD topology `properties` file are redirected to a
+/// copy whose `gfx_target_version` is overridden, so the whole stack selects
+/// and emits the spoofed source ISA. The real /dev/kfd and /dev/dri are left
+/// untouched (we forward to real hardware rather than emulate it), and every
+/// other path falls through to libc.
+///
+/// Identifiers here intentionally follow the libc/POSIX idiom (lowercase symbol
+/// and parameter names) rather than the surrounding Comgr CamelCase convention:
+/// the interposed entry points must keep the exact libc symbol names, and
+/// naming the function-pointer table and parameters after their libc
+/// counterparts keeps the hooks readable against the man-page signatures they
+/// shadow.
 
 #include "topology_spoof.h"
 

@@ -16,6 +16,7 @@
 #include <cstring>
 #include <dirent.h>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -64,7 +65,7 @@ uint32_t parseGfxField(const std::string &Props) {
       Ss >> Val;
       return static_cast<uint32_t>(Val);
     }
-    Ss.ignore(0x7fffffff, '\n');
+    Ss.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
   }
   return 0;
 }
@@ -211,6 +212,7 @@ bool TopologySpoof::init(uint32_t SpoofGfxVersion) {
   TmpDir = Tmp;
   RealGfxVersion = RealVersion;
   Redirects = std::move(Pending);
+  CreatorPid = ::getpid();
   setDetectedRealGfxVersion(RealVersion);
   return true;
 }
@@ -228,6 +230,11 @@ std::string TopologySpoof::redirect(const char *RealPath) const {
   }
   auto It = Redirects.find(RealPath);
   return It != Redirects.end() ? It->second : std::string{};
+}
+
+TopologySpoof::~TopologySpoof() {
+  if (CreatorPid == ::getpid())
+    cleanup();
 }
 
 void TopologySpoof::cleanup() {

@@ -59,6 +59,11 @@ public:
   /// True once at least one node `properties` file is being redirected.
   bool active() const { return !Redirects.empty(); }
 
+  /// Removes the generated temp directory at destruction, but only in the
+  /// process that created it: forked children inherit the same paths and must
+  /// not delete the directory out from under the parent and their siblings.
+  ~TopologySpoof();
+
   /// Remove the generated temp directory.
   void cleanup();
 
@@ -66,6 +71,7 @@ private:
   std::unordered_map<std::string, std::string> Redirects; // real -> patched
   uint32_t RealGfxVersion = 0;
   std::string TmpDir;
+  int CreatorPid = -1;
 };
 
 } // namespace interposer
