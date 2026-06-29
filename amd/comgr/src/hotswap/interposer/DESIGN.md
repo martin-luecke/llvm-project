@@ -126,7 +126,31 @@ ROCr that lacks the entry the agent is dropped (degraded `ISA Info:`).
 
 - **Phase 1** -- KFD/sysfs identity spoof + passthrough. Gate: `rocminfo` reports
   gfx1250 while running on the real gfx1151. **Done.**
-- **Phase 2** -- load-time capture + COMGR transpile + substitute. Gate: a single HIP
-  kernel runs with correct results, captured and transpiled, nothing native dispatched.
+- **Phase 2** -- load-time capture + COMGR transpile + substitute. **Core proven.**
+  With the spoof active, the HSA tool half captures the gfx1250 ELF at the
+  CoreApiTable load hooks, transpiles it to the real target via
+  `amd_comgr_hotswap_transpile` (the transpile target is the real device detected
+  beneath the spoof by the LD_PRELOAD half, not the spoofed agent ISA), and
+  substitutes the result. Verified end to end: the in-process-transpiled gfx1151
+  object (dumped via `HOTSWAP_INTERPOSER_DUMP_DIR`) executes correctly on the real
+  gfx1151 (`hipModuleLoad` of the transpiled object: correct results).
+
+  Known blocker for a single-process HIP run on this box: CLR (`libamdhip64`)
+  crashes internally on the spoofed gfx1250 agent on this gfx1151 **APU** -- in
+  `hipMemcpy` and `hipLaunchKernel`, *before* the tool is involved (the
+  `hipMemcpy` crash happens with no code object loaded at all). This is CLR taking
+  gfx1250-specific paths that the gfx1151 APU does not satisfy (host-mapped memory
+  via `hipHostMalloc` sidesteps the memcpy crash; the launch path still crashes).
+  Likely a dev-box (APU) artifact: the real dGPU targets gfx942/gfx950 keep the
+  dGPU memory model consistent with gfx1250 and may not hit it. Requires CLR-side
+  gfx1250 robustness work or validation on a dGPU.
+
+  Runtime requires a mutually compatible, gfx1250-aware HIP + ROCr: the working
+  pair on this box is `clr-build` (7.13) `libamdhip64` + `rocr-install`
+  `libhsa-runtime64` (clr-build-712 crashes even natively). COMGR comes from the
+  prebuilt qwen-moe `libamd_comgr` (RPATH).
+
+  Config: `HOTSWAP_INTERPOSER_TARGET` overrides the transpile target;
+  `HOTSWAP_INTERPOSER_DUMP_DIR` dumps captured/transpiled objects.
 - **Phase 3** -- doorbell/AQL backstop. Gate: zero un-transpiled dispatches.
 - **Phase 4** (follow-on) -- SGLang Qwen3-0.6B end to end.

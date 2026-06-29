@@ -8,6 +8,7 @@
 #include "topology_spoof.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cerrno>
 #include <cstdio>
@@ -127,6 +128,18 @@ uint32_t parseGfxTargetVersion(const char *Spec) {
   return Major * 10000 + Minor * 100 + Stepping;
 }
 
+namespace {
+std::atomic<uint32_t> GDetectedRealGfx{0};
+} // namespace
+
+uint32_t detectedRealGfxVersion() {
+  return GDetectedRealGfx.load(std::memory_order_acquire);
+}
+
+void setDetectedRealGfxVersion(uint32_t Version) {
+  GDetectedRealGfx.store(Version, std::memory_order_release);
+}
+
 std::string gfxTargetVersionName(uint32_t Version) {
   if (Version == 0)
     return {};
@@ -198,6 +211,7 @@ bool TopologySpoof::init(uint32_t SpoofGfxVersion) {
   TmpDir = Tmp;
   RealGfxVersion = RealVersion;
   Redirects = std::move(Pending);
+  setDetectedRealGfxVersion(RealVersion);
   return true;
 }
 

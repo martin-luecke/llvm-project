@@ -29,9 +29,15 @@ namespace interposer {
 /// integer ("125000") or a name ("gfx1250"). Returns 0 if unparseable.
 uint32_t parseGfxTargetVersion(const char *Spec);
 
-/// Render an encoded `gfx_target_version` as a "gfxNNNN" name (e.g. 125000 ->
+/// Render an encoded `gfx_target_version` as a "gfxNNNN" name (e.g. 120500 ->
 /// "gfx1250"). Returns empty for 0.
 std::string gfxTargetVersionName(uint32_t Version);
+
+/// Process-global real device `gfx_target_version` detected beneath the spoof.
+/// Published by the LD_PRELOAD half when the spoof activates so the in-process
+/// HSA tool half can use it as the transpile target. 0 if no spoof is active.
+uint32_t detectedRealGfxVersion();
+void setDetectedRealGfxVersion(uint32_t Version);
 
 /// Surgical KFD topology spoof: redirect node `properties` reads to copies
 /// whose `gfx_target_version` is overridden, leaving every other field at its

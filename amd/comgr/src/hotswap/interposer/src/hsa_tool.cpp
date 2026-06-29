@@ -1,0 +1,408 @@
+//===- hsa_tool.cpp - HSA tool half: capture + transpile -----------------===//
+//
+// Part of Comgr, under the Apache License v2.0 with LLVM Exceptions.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// HSA_TOOLS_LIB half of the interposer. Hooks the CoreApiTable code-object
+/// load entry points to capture the spoofed-source (gfx1250) ELF at load time,
+/// transpile it to the real device ISA via COMGR, and substitute the result.
+/// The transpile target is the real device detected beneath the KFD spoof by
+/// the LD_PRELOAD half, not the (spoofed) agent ISA. The capture/load plumbing
+/// is adapted from the HotSwap HSA tool lib (rocm-systems/projects/hotswap).
+///
+//===----------------------------------------------------------------------===//
+
+#include "topology_spoof.h"
+#include "transpile.h"
+
+#include <atomic>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <elf.h>
+#include <hsa.h>
+#include <hsa_api_trace.h>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <unistd.h>
+#include <unordered_map>
+#include <vector>
+
+#define HOTSWAP_EXPORT __attribute__((visibility("default")))
+
+namespace {
+
+using ByteVec = std::shared_ptr<std::vector<uint8_t>>;
+using OwnedElf = std::unique_ptr<void, decltype(&std::free)>;
+
+std::mutex GReaderMapMutex;
+std::unordered_map<uint64_t, ByteVec> GReaderMap;
+
+// Rewritten ELFs must outlive the executable: ROCr's LoadedCodeObjectImpl keeps
+// a raw pointer into the ELF data. Kept alive until OnUnload (then leaked
+// rather than risk a teardown use-after-free).
+std::mutex GRewrittenMutex;
+std::vector<OwnedElf> GRewritten;
+
+CoreApiTable *GCoreTable = nullptr;
+decltype(hsa_code_object_reader_create_from_memory) *GOrigReaderFromMemory =
+    nullptr;
+decltype(hsa_code_object_reader_create_from_file) *GOrigReaderFromFile =
+    nullptr;
+decltype(hsa_code_object_reader_destroy) *GOrigReaderDestroy = nullptr;
+decltype(hsa_executable_load_agent_code_object) *GOrigLoadAgentCodeObject =
+    nullptr;
+decltype(hsa_isa_get_info_alt) *GOrigIsaGetInfoAlt = nullptr;
+decltype(hsa_agent_iterate_isas) *GOrigAgentIterateIsas = nullptr;
+
+bool logEnabled() {
+  static bool Enabled = std::getenv("HOTSWAP_INTERPOSER_LOG") != nullptr;
+  return Enabled;
+}
+
+/// Optional debug: dump captured/transpiled code objects to this directory.
+const char *dumpDir() {
+  static const char *Dir = std::getenv("HOTSWAP_INTERPOSER_DUMP_DIR");
+  return Dir;
+}
+
+void dumpObject(const char *Tag, const void *Data, size_t Size) {
+  const char *Dir = dumpDir();
+  if (!Dir)
+    return;
+  static std::atomic<unsigned> Seq{0};
+  char Path[4096];
+  std::snprintf(Path, sizeof(Path), "%s/co_%u_%s.co", Dir, Seq.fetch_add(1),
+                Tag);
+  if (FILE *F = std::fopen(Path, "wb")) {
+    (void)std::fwrite(Data, 1, Size, F);
+    std::fclose(F);
+  }
+}
+
+// Processor-selection mask for the AMDGPU e_flags field (EF_AMDGPU_MACH).
+constexpr uint32_t EfAmdgpuMachMask = 0xff;
+
+// AMDGCN processor value -> gfx target name, mirroring the AMDGPU_MACH_LIST in
+// llvm/BinaryFormat/ELF.h (replicated so the tool depends only on <elf.h>).
+#define HOTSWAP_AMDGCN_MACH_LIST(X)                                            \
+  X(0x2c, "gfx900")                                                            \
+  X(0x2d, "gfx902") X(0x2e, "gfx904") X(0x2f, "gfx906") X(0x30, "gfx908")      \
+      X(0x31, "gfx909") X(0x32, "gfx90c") X(0x3f, "gfx90a") X(0x4c, "gfx942")  \
+          X(0x4f, "gfx950") X(0x33, "gfx1010") X(0x34, "gfx1011")              \
+              X(0x35, "gfx1012") X(0x42, "gfx1013") X(0x36, "gfx1030")         \
+                  X(0x37, "gfx1031") X(0x38, "gfx1032") X(0x39, "gfx1033")     \
+                      X(0x3e, "gfx1034") X(0x3d, "gfx1035") X(0x45, "gfx1036") \
+                          X(0x41, "gfx1100") X(0x46, "gfx1101")                \
+                              X(0x47, "gfx1102") X(0x44, "gfx1103")            \
+                                  X(0x43, "gfx1150") X(0x4a, "gfx1151")        \
+                                      X(0x55, "gfx1152") X(0x58, "gfx1153")    \
+                                          X(0x48, "gfx1200")                   \
+                                              X(0x4e, "gfx1201")               \
+                                                  X(0x49, "gfx1250")           \
+                                                      X(0x5a, "gfx1251")
+
+std::string gfxTargetFromMach(uint32_t Mach) {
+  switch (Mach) {
+#define HOTSWAP_MACH_CASE(NUM, NAME)                                           \
+  case NUM:                                                                    \
+    return NAME;
+    HOTSWAP_AMDGCN_MACH_LIST(HOTSWAP_MACH_CASE)
+#undef HOTSWAP_MACH_CASE
+  default:
+    return {};
+  }
+}
+
+const Elf64_Ehdr *validateElf64(const uint8_t *Elf, size_t Size) {
+  if (Size < sizeof(Elf64_Ehdr))
+    return nullptr;
+  const auto *Ehdr = reinterpret_cast<const Elf64_Ehdr *>(Elf);
+  if (std::memcmp(Ehdr->e_ident, ELFMAG, SELFMAG) != 0)
+    return nullptr;
+  if (Ehdr->e_ident[EI_CLASS] != ELFCLASS64)
+    return nullptr;
+  return Ehdr;
+}
+
+/// Read the code object's source ISA from the ELF e_flags EF_AMDGPU_MACH field.
+std::string readElfIsa(const uint8_t *Elf, size_t Size) {
+  if (const Elf64_Ehdr *Ehdr = validateElf64(Elf, Size)) {
+    std::string Gfx = gfxTargetFromMach(Ehdr->e_flags & EfAmdgpuMachMask);
+    if (!Gfx.empty())
+      return "amdgcn-amd-amdhsa--" + Gfx;
+  }
+  return {};
+}
+
+std::string extractGfxName(const std::string &Isa) {
+  constexpr const char Prefix[] = "amdgcn-amd-amdhsa--";
+  std::string Target = Isa;
+  if (Target.rfind(Prefix, 0) == 0)
+    Target.erase(0, sizeof(Prefix) - 1);
+  size_t Colon = Target.find(':');
+  if (Colon != std::string::npos)
+    Target.resize(Colon);
+  if (Target.rfind("gfx", 0) != 0 || Target.size() <= 3)
+    return {};
+  return Target;
+}
+
+/// Resolve the real device ISA via the original (un-hooked) entry points. All
+/// HSA calls go through CoreApiTable pointers, never direct hsa_* symbols, so
+/// the library carries no undefined HSA symbols when LD_PRELOAD'd ahead of
+/// libhsa-runtime.
+std::string agentIsaName(hsa_agent_t Agent) {
+  if (!GOrigAgentIterateIsas || !GOrigIsaGetInfoAlt)
+    return {};
+  auto Cb = [](hsa_isa_t Isa, void *Data) -> hsa_status_t {
+    auto *Name = static_cast<std::string *>(Data);
+    uint32_t Len = 0;
+    if (GOrigIsaGetInfoAlt(Isa, HSA_ISA_INFO_NAME_LENGTH, &Len) !=
+        HSA_STATUS_SUCCESS)
+      return HSA_STATUS_ERROR;
+    Name->resize(Len);
+    if (GOrigIsaGetInfoAlt(Isa, HSA_ISA_INFO_NAME, Name->data()) !=
+        HSA_STATUS_SUCCESS) {
+      Name->clear();
+      return HSA_STATUS_ERROR;
+    }
+    if (!Name->empty() && Name->back() == '\0')
+      Name->pop_back();
+    return HSA_STATUS_INFO_BREAK;
+  };
+  std::string Name;
+  GOrigAgentIterateIsas(Agent, Cb, &Name);
+  return Name;
+}
+
+/// The transpile target: the real device beneath the spoof. Priority:
+/// HOTSWAP_INTERPOSER_TARGET, then the LD_PRELOAD-detected real gfx, then the
+/// (possibly un-spoofed) agent ISA.
+std::string resolveTargetIsa(hsa_agent_t Agent) {
+  if (const char *Env = std::getenv("HOTSWAP_INTERPOSER_TARGET")) {
+    std::string Gfx = extractGfxName(Env);
+    if (!Gfx.empty())
+      return "amdgcn-amd-amdhsa--" + Gfx;
+  }
+  if (uint32_t Real = hotswap::interposer::detectedRealGfxVersion())
+    return "amdgcn-amd-amdhsa--" +
+           hotswap::interposer::gfxTargetVersionName(Real);
+  return agentIsaName(Agent);
+}
+
+void retainRewritten(OwnedElf Elf) {
+  try {
+    std::scoped_lock Lock(GRewrittenMutex);
+    GRewritten.push_back(std::move(Elf));
+  } catch (const std::bad_alloc &) {
+    (void)Elf.release();
+  }
+}
+
+hsa_status_t HSA_API hookReaderFromMemory(const void *CodeObject, size_t Size,
+                                          hsa_code_object_reader_t *Reader) {
+  hsa_code_object_reader_t R = {};
+  hsa_status_t St = GOrigReaderFromMemory(CodeObject, Size, &R);
+  if (St != HSA_STATUS_SUCCESS)
+    return St;
+  try {
+    auto Vec = std::make_shared<std::vector<uint8_t>>(
+        static_cast<const uint8_t *>(CodeObject),
+        static_cast<const uint8_t *>(CodeObject) + Size);
+    std::scoped_lock Lock(GReaderMapMutex);
+    GReaderMap[R.handle] = std::move(Vec);
+  } catch (const std::bad_alloc &) {
+    GOrigReaderDestroy(R);
+    return HSA_STATUS_ERROR_OUT_OF_RESOURCES;
+  }
+  *Reader = R;
+  return HSA_STATUS_SUCCESS;
+}
+
+hsa_status_t HSA_API hookReaderFromFile(hsa_file_t File,
+                                        hsa_code_object_reader_t *Reader) {
+  off_t End = ::lseek(File, 0, SEEK_END);
+  if (End < 0)
+    return HSA_STATUS_ERROR_INVALID_FILE;
+  ::lseek(File, 0, SEEK_SET);
+  try {
+    auto Vec = std::make_shared<std::vector<uint8_t>>(static_cast<size_t>(End));
+    size_t Got = 0;
+    while (Got < Vec->size()) {
+      ssize_t N = ::read(File, Vec->data() + Got, Vec->size() - Got);
+      if (N <= 0)
+        return HSA_STATUS_ERROR_INVALID_FILE;
+      Got += static_cast<size_t>(N);
+    }
+    hsa_code_object_reader_t R = {};
+    hsa_status_t St = GOrigReaderFromMemory(Vec->data(), Vec->size(), &R);
+    if (St != HSA_STATUS_SUCCESS)
+      return St;
+    {
+      std::scoped_lock Lock(GReaderMapMutex);
+      GReaderMap[R.handle] = std::move(Vec);
+    }
+    *Reader = R;
+    return HSA_STATUS_SUCCESS;
+  } catch (const std::bad_alloc &) {
+    return HSA_STATUS_ERROR_OUT_OF_RESOURCES;
+  }
+}
+
+hsa_status_t HSA_API hookReaderDestroy(hsa_code_object_reader_t Reader) {
+  {
+    std::scoped_lock Lock(GReaderMapMutex);
+    GReaderMap.erase(Reader.handle);
+  }
+  return GOrigReaderDestroy(Reader);
+}
+
+hsa_status_t loadRewritten(hsa_executable_t Exec, hsa_agent_t Agent,
+                           const char *Options,
+                           hsa_loaded_code_object_t *Loaded, void *OutElf,
+                           size_t OutSize) {
+  OwnedElf Owned(OutElf, &std::free);
+  hsa_code_object_reader_t NewReader = {};
+  hsa_status_t St = GOrigReaderFromMemory(Owned.get(), OutSize, &NewReader);
+  if (St != HSA_STATUS_SUCCESS)
+    return St;
+  St = GOrigLoadAgentCodeObject(Exec, Agent, NewReader, Options, Loaded);
+  GOrigReaderDestroy(NewReader);
+  if (St == HSA_STATUS_SUCCESS)
+    retainRewritten(std::move(Owned));
+  return St;
+}
+
+hsa_status_t HSA_API hookLoadAgentCodeObject(hsa_executable_t Exec,
+                                             hsa_agent_t Agent,
+                                             hsa_code_object_reader_t Reader,
+                                             const char *Options,
+                                             hsa_loaded_code_object_t *Loaded) {
+  ByteVec Bytes;
+  {
+    std::scoped_lock Lock(GReaderMapMutex);
+    auto It = GReaderMap.find(Reader.handle);
+    if (It != GReaderMap.end())
+      Bytes = It->second;
+  }
+  if (!Bytes) {
+    std::fprintf(stderr,
+                 "[hotswap-interposer] no staged bytes for reader; refusing\n");
+    return HSA_STATUS_ERROR_INVALID_CODE_OBJECT_READER;
+  }
+
+  std::string SourceIsa = readElfIsa(Bytes->data(), Bytes->size());
+  std::string TargetIsa = resolveTargetIsa(Agent);
+  std::string SourceGfx = extractGfxName(SourceIsa);
+  std::string TargetGfx = extractGfxName(TargetIsa);
+
+  if (SourceGfx.empty() || TargetGfx.empty()) {
+    std::fprintf(stderr,
+                 "[hotswap-interposer] cannot rewrite: source='%s' "
+                 "target='%s'; refusing\n",
+                 SourceIsa.c_str(), TargetIsa.c_str());
+    return HSA_STATUS_ERROR_INVALID_CODE_OBJECT;
+  }
+
+  // A code object already built for the real device (e.g. CLR's native builtin
+  // shaders) is correct as-is; load it untouched.
+  if (SourceGfx == TargetGfx)
+    return GOrigLoadAgentCodeObject(Exec, Agent, Reader, Options, Loaded);
+
+  dumpObject(SourceGfx.c_str(), Bytes->data(), Bytes->size());
+
+  void *OutElf = nullptr;
+  size_t OutSize = 0;
+  int Rc = hotswap::interposer::retargetCodeObject(
+      Bytes->data(), Bytes->size(), SourceIsa.c_str(), TargetIsa.c_str(),
+      &OutElf, &OutSize);
+  if (Rc != 0 || !OutElf || OutSize == 0) {
+    std::fprintf(
+        stderr,
+        "[hotswap-interposer] transpile %s -> %s failed (rc=%d); refusing\n",
+        SourceIsa.c_str(), TargetIsa.c_str(), Rc);
+    return HSA_STATUS_ERROR_INVALID_CODE_OBJECT;
+  }
+
+  if (logEnabled())
+    std::fprintf(stderr,
+                 "[hotswap-interposer] transpiled %s -> %s (%zu bytes)\n",
+                 SourceIsa.c_str(), TargetIsa.c_str(), OutSize);
+
+  dumpObject(TargetGfx.c_str(), OutElf, OutSize);
+
+  return loadRewritten(Exec, Agent, Options, Loaded, OutElf, OutSize);
+}
+
+} // namespace
+
+extern "C" {
+
+HOTSWAP_EXPORT
+bool OnLoad(HsaApiTable *table, uint64_t runtime_version, uint64_t failed_count,
+            const char *const *failed_names) {
+  (void)runtime_version;
+  (void)failed_count;
+  (void)failed_names;
+  if (!table || !table->core_)
+    return false;
+  CoreApiTable *Core = table->core_;
+  if (!Core->hsa_code_object_reader_create_from_memory_fn ||
+      !Core->hsa_code_object_reader_create_from_file_fn ||
+      !Core->hsa_code_object_reader_destroy_fn ||
+      !Core->hsa_executable_load_agent_code_object_fn)
+    return false;
+
+  GCoreTable = Core;
+  GOrigReaderFromMemory = Core->hsa_code_object_reader_create_from_memory_fn;
+  GOrigReaderFromFile = Core->hsa_code_object_reader_create_from_file_fn;
+  GOrigReaderDestroy = Core->hsa_code_object_reader_destroy_fn;
+  GOrigLoadAgentCodeObject = Core->hsa_executable_load_agent_code_object_fn;
+  GOrigIsaGetInfoAlt = Core->hsa_isa_get_info_alt_fn;
+  GOrigAgentIterateIsas = Core->hsa_agent_iterate_isas_fn;
+
+  Core->hsa_code_object_reader_create_from_memory_fn = hookReaderFromMemory;
+  Core->hsa_code_object_reader_create_from_file_fn = hookReaderFromFile;
+  Core->hsa_code_object_reader_destroy_fn = hookReaderDestroy;
+  Core->hsa_executable_load_agent_code_object_fn = hookLoadAgentCodeObject;
+
+  if (logEnabled())
+    std::fprintf(
+        stderr,
+        "[hotswap-interposer] HSA tool loaded; capturing code objects\n");
+  return true;
+}
+
+HOTSWAP_EXPORT
+void OnUnload() {
+  if (GCoreTable) {
+    GCoreTable->hsa_code_object_reader_create_from_memory_fn =
+        GOrigReaderFromMemory;
+    GCoreTable->hsa_code_object_reader_create_from_file_fn =
+        GOrigReaderFromFile;
+    GCoreTable->hsa_code_object_reader_destroy_fn = GOrigReaderDestroy;
+    GCoreTable->hsa_executable_load_agent_code_object_fn =
+        GOrigLoadAgentCodeObject;
+    GCoreTable = nullptr;
+  }
+  {
+    std::scoped_lock Lock(GReaderMapMutex);
+    GReaderMap.clear();
+  }
+  {
+    std::scoped_lock Lock(GRewrittenMutex);
+    // ROCr/ROCclr teardown may still hold raw pointers into rewritten ELFs;
+    // leak at process exit rather than risk a use-after-free.
+    for (auto &Elf : GRewritten)
+      (void)Elf.release();
+    GRewritten.clear();
+  }
+}
+
+} // extern "C"
