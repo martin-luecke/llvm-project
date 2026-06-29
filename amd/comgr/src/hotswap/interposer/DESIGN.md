@@ -42,7 +42,14 @@ ways and hooking two seams in the same process:
    form at load time. By the time work reaches the queue, the runtime has already copied
    the *loaded image* (not the ELF) into GPU memory, which on a discrete GPU
    (gfx942/gfx950) is not host-readable. This is why capture cannot live purely at the
-   KFD boundary.
+   KFD boundary. Capture is complete by construction at this layer: every
+   `CoreApiTable` route by which an ELF becomes a loaded executable is hooked --
+   `code_object_reader_create_from_memory/_from_file`,
+   `executable_load_agent_code_object`, `executable_load_program_code_object`, and the
+   deprecated `code_object_deserialize` / `executable_load_code_object` /
+   `code_object_destroy` path -- all funnelling through one fail-closed transpile
+   decision (pass through real-device and device-independent objects, transpile
+   foreign spoofed-source objects, refuse when the ISA cannot be determined).
 3. **Completeness backstop (doorbell / AQL).** At queue submit, decode each AQL
    `KERNEL_DISPATCH` (`kernel_object` at byte offset 32) and assert its code object
    passed through transpilation; refuse (production) or loud-log (audit) otherwise.
