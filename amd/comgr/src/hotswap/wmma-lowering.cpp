@@ -1452,14 +1452,11 @@ bool isLegalScaleDataCombo(int aFmt, int aScaleFmt, int bFmt, int bScaleFmt) {
   return true;
 }
 
-// `<4 x float>` splat of factor_A * factor_B. E8M0 x E8M0 uses the
-// combined-exponent shortcut 2^(byteA + byteB - 254); other combinations
-// decode each side and fmul.
-Value *buildScaleFactorVec(IRBuilder<> &B, Module &M, Type *F32Ty,
-                           Value *ScaleAByte, Value *ScaleBByte, int AScaleFmt,
-                           int BScaleFmt) {
-  Value *Factor = nullptr;
-
+// Scalar factor_A * factor_B. E8M0 x E8M0 uses the combined-exponent shortcut
+// 2^(byteA + byteB - 254); other combinations decode each side and fmul.
+Value *buildScaleFactor(IRBuilder<> &B, Module &M, Type *F32Ty,
+                        Value *ScaleAByte, Value *ScaleBByte, int AScaleFmt,
+                        int BScaleFmt) {
   if (AScaleFmt == ScaleFmtE8M0 && BScaleFmt == ScaleFmtE8M0) {
     Value *AIsNaN =
         B.CreateICmpEQ(ScaleAByte, B.getInt32(0xFF), "scale_a_is_nan");
@@ -1473,21 +1470,34 @@ Value *buildScaleFactorVec(IRBuilder<> &B, Module &M, Type *F32Ty,
         &M, Intrinsic::ldexp, {F32Ty, B.getInt32Ty()});
     Value *FiniteFactor = B.CreateCall(
         LdexpFn, {ConstantFP::get(F32Ty, 1.0), Biased}, "finite_factor");
-    Factor = B.CreateSelect(AnyIsNaN, ConstantFP::getQNaN(F32Ty), FiniteFactor,
-                            "scale_factor");
-  } else {
-    Value *FactorA = decodeScaleByte(B, M, F32Ty, ScaleAByte, AScaleFmt);
-    Value *FactorB = decodeScaleByte(B, M, F32Ty, ScaleBByte, BScaleFmt);
-    if (!FactorA || !FactorB)
-      return nullptr;
-    Factor = B.CreateFMul(FactorA, FactorB, "scale_factor");
+    return B.CreateSelect(AnyIsNaN, ConstantFP::getQNaN(F32Ty), FiniteFactor,
+                          "scale_factor");
   }
+  Value *FactorA = decodeScaleByte(B, M, F32Ty, ScaleAByte, AScaleFmt);
+  Value *FactorB = decodeScaleByte(B, M, F32Ty, ScaleBByte, BScaleFmt);
+  if (!FactorA || !FactorB)
+    return nullptr;
+  return B.CreateFMul(FactorA, FactorB, "scale_factor");
+}
 
+// `<4 x float>` of per-output-row scale factors.  The MFMA accumulator holds 4
+// elements per Wave64 lane mapping to output rows 4*(lane/16) + g (g=0..3), all
+// sharing column `lane%16`.  So the B (column) scale byte is shared across the 4
+// elements while the A (row) scale byte varies per element -- hence one
+// ScaleAByte per `g` but a single ScaleBByte.
+Value *buildScaleFactorVec(IRBuilder<> &B, Module &M, Type *F32Ty,
+                           Value *ScaleABytes[4], Value *ScaleBByte,
+                           int AScaleFmt, int BScaleFmt) {
   auto *Vec4 = FixedVectorType::get(F32Ty, 4);
-  Value *Splat = B.CreateInsertElement(PoisonValue::get(Vec4), Factor,
-                                       B.getInt32(0), "factor_lane0");
-  return B.CreateShuffleVector(Splat, PoisonValue::get(Vec4),
-                               ArrayRef<int>{0, 0, 0, 0}, "factor_v4");
+  Value *Vec = PoisonValue::get(Vec4);
+  for (unsigned g = 0; g < 4; ++g) {
+    Value *Factor = buildScaleFactor(B, M, F32Ty, ScaleABytes[g], ScaleBByte,
+                                     AScaleFmt, BScaleFmt);
+    if (!Factor)
+      return nullptr;
+    Vec = B.CreateInsertElement(Vec, Factor, B.getInt32(g), "factor_g");
+  }
+  return Vec;
 }
 
 } // namespace
@@ -1623,8 +1633,30 @@ Expected<Value *> emitWMMAScaleF8F6F4toMFMA(
       Value *Hi = emitDSBpermute(B, M, AddrHi, ScaleSrc);
       return B.CreateSelect(IsOddGroup, Hi, Lo, "scale_redist");
     };
-    Value *ScaleSrc0Pass = RedistributeScale(scaleSrc0);
+    // The B (column) scale rides with the lane's column = lane%16, so it follows
+    // the same A/B-data redistribution as the operands.
     Value *ScaleSrc1Pass = RedistributeScale(scaleSrc1);
+
+    // The A (row) scale is indexed by the OUTPUT row, not by the lane's own
+    // operand: each Wave64 lane's MFMA accumulator covers 4 output rows
+    // 4*(lane/16) + g (g=0..3), and scaleA[row] lives in this pass's source
+    // wave at lane `GroupBase + row` (the source packs Asc[lane%16]).  Gather
+    // one A-scale source per output row, carrying GroupBase so the second
+    // source wave (GroupBase 32) reads its own Asc rather than wave 0's.
+    Value *ScaleSrc0Row[4];
+    if (isa<Constant>(scaleSrc0)) {
+      // Constant A-scale is lane-uniform; every output row sees the same source.
+      for (Value *&Row : ScaleSrc0Row)
+        Row = scaleSrc0;
+    } else {
+      Value *Row4 = B.CreateShl(LaneGroup, B.getInt32(2), "row4");
+      for (unsigned g = 0; g < 4; ++g) {
+        Value *RowLane =
+            B.CreateAdd(Row4, B.getInt32(GroupBase + g), "row_lane");
+        Value *RowAddr = B.CreateShl(RowLane, B.getInt32(2), "row_addr");
+        ScaleSrc0Row[g] = emitDSBpermute(B, M, RowAddr, scaleSrc0);
+      }
+    }
 
     Value *MfmaC[4];
     redistributeAcc(B, M, cDwords, AddrLo, AddrHi, LaneGroup, MfmaC);
@@ -1658,10 +1690,17 @@ Expected<Value *> emitWMMAScaleF8F6F4toMFMA(
                        "kblock_partial"),
           "kblock_partial_wwm");
 
-      Value *ScaleAByte = extractScaleByte(B, ScaleSrc0Pass, kBlock);
+      // The lane's 4 acc elements share column lane%16 but span rows
+      // 4*(lane/16)+g, so one B (column) scale byte but four A (row) bytes.
+      Value *ScaleABytes[4];
+      for (unsigned g = 0; g < 4; ++g)
+        ScaleABytes[g] = extractScaleByte(B, ScaleSrc0Row[g], kBlock);
       Value *ScaleBByte = extractScaleByte(B, ScaleSrc1Pass, kBlock);
-      Value *FactorVec = buildScaleFactorVec(B, M, ctx.F32Ty, ScaleAByte,
-                                             ScaleBByte, aScaleFmt, bScaleFmt);
+      Value *FactorVec = buildScaleFactorVec(
+          B, M, ctx.F32Ty, ScaleABytes, ScaleBByte, aScaleFmt, bScaleFmt);
+      // Only nullptr for a scale fmt decodeScaleByte can't handle (E5M3), which
+      // SupportedScaleFmt rejects before we get here.
+      assert(FactorVec && "unsupported scale fmt reached scaled WMMA lowering");
 
       Acc = B.CreateIntrinsic(Intrinsic::fmuladd, {AccTy},
                               {Partial, FactorVec, Acc}, nullptr,
