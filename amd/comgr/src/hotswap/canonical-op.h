@@ -23,7 +23,8 @@ enum class CanonicalOp : uint16_t {
   S_CBRANCH_SCC0, S_CBRANCH_SCC1,
   S_CBRANCH_VCCZ, S_CBRANCH_VCCNZ,
   S_CBRANCH_EXECZ, S_CBRANCH_EXECNZ,
-  S_WAITCNT, S_WAIT_LOADCNT, S_WAIT_KMCNT, S_WAIT_DSCNT, S_WAIT_XCNT,
+  S_WAITCNT, S_WAIT_LOADCNT, S_WAIT_STORECNT, S_WAIT_KMCNT, S_WAIT_DSCNT,
+  S_WAIT_XCNT,
   // gfx1250 async-memory wait counters. `S_WAIT_ASYNCCNT` is the
   // companion barrier for the `GLOBAL_LOAD_ASYNC_TO_LDS_B*` family
   // below (and `DS_ATOMIC_ASYNC_BARRIER_ARRIVE_B64`); `S_WAIT_TENSORCNT`
@@ -55,7 +56,7 @@ enum class CanonicalOp : uint16_t {
   // `S_WAIT_ASYNCCNT` and find both the CanonicalOp, its opcode_map
   // entry, and the handler's no-op arm in one pass.
   S_WAIT_ASYNCCNT, S_WAIT_TENSORCNT,
-  S_WAIT_LOADCNT_DSCNT, S_WAIT_ALU,
+  S_WAIT_LOADCNT_DSCNT, S_WAIT_STORECNT_DSCNT, S_WAIT_ALU,
   S_CLAUSE, S_DELAY_ALU, S_SET_GPR_IDX_ON, S_SET_GPR_IDX_OFF, S_SETVSKIP,
   // Barriers. GFX12+ splits s_barrier into signal + wait; earlier ISAs emit a
   // single s_barrier. Handlers model signal as a no-op and wait as a full
@@ -796,6 +797,11 @@ enum class CanonicalOp : uint16_t {
   GLOBAL_STORE_BYTE, GLOBAL_STORE_BYTE_D16_HI,
   GLOBAL_STORE_SHORT, GLOBAL_STORE_SHORT_D16_HI,
   GLOBAL_STORE_DWORD, GLOBAL_STORE_DWORDX2, GLOBAL_STORE_DWORDX3, GLOBAL_STORE_DWORDX4,
+  // gfx12+ standalone global cache writeback. Device/system scopes lower to
+  // release fences so the target backend emits the matching L2 writeback and
+  // completion wait. CU scope is an explicit manual-defined no-op; other forms
+  // refuse in handle-flat.cpp until they have an audited target equivalent.
+  GLOBAL_WB,
   SCRATCH_LOAD_UBYTE, SCRATCH_LOAD_SBYTE, SCRATCH_LOAD_USHORT, SCRATCH_LOAD_SSHORT,
   SCRATCH_LOAD_DWORD, SCRATCH_LOAD_DWORDX2, SCRATCH_LOAD_DWORDX3, SCRATCH_LOAD_DWORDX4,
   SCRATCH_STORE_BYTE, SCRATCH_STORE_SHORT,

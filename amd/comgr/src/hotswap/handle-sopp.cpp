@@ -120,8 +120,10 @@ HandlerResult handleSOPP(RaiseContext &Ctx, const DecodedInst &Di,
   // flips after the LDS reshape.  Cross-target counter names do not map 1:1, so
   // use the conservative gfx942-compatible wait-all form.
   if (Sop == CanonicalOp::S_WAITCNT || Sop == CanonicalOp::S_WAIT_LOADCNT ||
-      Sop == CanonicalOp::S_WAIT_KMCNT || Sop == CanonicalOp::S_WAIT_DSCNT ||
-      Sop == CanonicalOp::S_WAIT_XCNT || Sop == CanonicalOp::S_WAIT_LOADCNT_DSCNT) {
+      Sop == CanonicalOp::S_WAIT_STORECNT || Sop == CanonicalOp::S_WAIT_KMCNT ||
+      Sop == CanonicalOp::S_WAIT_DSCNT || Sop == CanonicalOp::S_WAIT_XCNT ||
+      Sop == CanonicalOp::S_WAIT_LOADCNT_DSCNT ||
+      Sop == CanonicalOp::S_WAIT_STORECNT_DSCNT) {
     Function *WaitFn =
         Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::amdgcn_s_waitcnt);
     Ctx.B.CreateCall(WaitFn, {Ctx.B.getInt32(0)});

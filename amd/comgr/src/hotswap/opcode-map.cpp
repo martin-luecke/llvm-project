@@ -97,6 +97,7 @@ static const Entry kCanonTable[] = {
     E(S_CBRANCH_EXECNZ, S_CBRANCH_EXECNZ),
     E(S_WAITCNT, S_WAITCNT),
     E(S_WAIT_LOADCNT, S_WAIT_LOADCNT),
+    E(S_WAIT_STORECNT, S_WAIT_STORECNT),
     E(S_WAIT_KMCNT, S_WAIT_KMCNT),
     E(S_WAIT_DSCNT, S_WAIT_DSCNT),
     E(S_WAIT_XCNT, S_WAIT_XCNT),
@@ -114,6 +115,7 @@ static const Entry kCanonTable[] = {
     E(S_WAIT_ASYNCCNT, S_WAIT_ASYNCCNT),
     E(S_WAIT_TENSORCNT, S_WAIT_TENSORCNT),
     E(S_WAIT_LOADCNT_DSCNT, S_WAIT_LOADCNT_DSCNT),
+    E(S_WAIT_STORECNT_DSCNT, S_WAIT_STORECNT_DSCNT),
     E(S_WAITCNT_DEPCTR, S_WAIT_ALU),
     E(S_CLAUSE, S_CLAUSE),
     E(S_DELAY_ALU, S_DELAY_ALU),
@@ -825,6 +827,7 @@ static const Entry kCanonTable[] = {
     E(GLOBAL_STORE_SHORT_D16_HI, GLOBAL_STORE_SHORT_D16_HI),
     E(GLOBAL_STORE_DWORD, GLOBAL_STORE_DWORD), E(GLOBAL_STORE_DWORDX2, GLOBAL_STORE_DWORDX2),
     E(GLOBAL_STORE_DWORDX3, GLOBAL_STORE_DWORDX3), E(GLOBAL_STORE_DWORDX4, GLOBAL_STORE_DWORDX4),
+    E(GLOBAL_WB, GLOBAL_WB),
     // Scratch/private-segment VMEM. Keep these as explicit CanonicalOps rather than
     // routing through GLOBAL_*: the handler must preserve scratch swizzling and
     // KD private-segment ABI semantics, not global address-space semantics.
