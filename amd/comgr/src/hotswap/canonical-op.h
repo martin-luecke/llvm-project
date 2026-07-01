@@ -798,6 +798,11 @@ enum class CanonicalOp : uint16_t {
   GLOBAL_STORE_BYTE, GLOBAL_STORE_BYTE_D16_HI,
   GLOBAL_STORE_SHORT, GLOBAL_STORE_SHORT_D16_HI,
   GLOBAL_STORE_DWORD, GLOBAL_STORE_DWORDX2, GLOBAL_STORE_DWORDX3, GLOBAL_STORE_DWORDX4,
+  // gfx12+ standalone global cache writeback. Device/system scopes lower to
+  // release fences so the target backend emits the matching L2 writeback and
+  // completion wait. CU scope is an explicit manual-defined no-op; other forms
+  // refuse in handle-flat.cpp until they have an audited target equivalent.
+  GLOBAL_WB,
   SCRATCH_LOAD_DWORD, SCRATCH_LOAD_DWORDX2, SCRATCH_LOAD_DWORDX3, SCRATCH_LOAD_DWORDX4,
   SCRATCH_STORE_DWORD, SCRATCH_STORE_DWORDX2, SCRATCH_STORE_DWORDX3, SCRATCH_STORE_DWORDX4,
 
