@@ -98,6 +98,7 @@ Value *selectRuntimeDword(RaiseContext &Ctx, Value *Idx,
   return Pick;
 }
 
+// Return the decoded cache-policy operand for scoped global cache operations.
 std::optional<int64_t> getCPolImm(const DecodedInst &Di) {
   int CpolIdx =
       AMDGPU::getNamedOperandIdx(Di.Inst.getOpcode(), AMDGPU::OpName::cpol);
@@ -309,8 +310,8 @@ HandlerResult handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
       return Hr;
     }
 
-    // The gfx12 manual defines CU-scope writeback as a no-op that still
-    // returns "done"; there is no target cache operation to preserve.
+    // CU-scope writeback is a no-op that still returns "done"; there is no
+    // target cache operation to preserve.
     if (Scope == AMDGPU::CPol::SCOPE_CU) {
       Hr.Handled = true;
       return Hr;
