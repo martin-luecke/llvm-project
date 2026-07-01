@@ -51,6 +51,18 @@ ArrayRef<CanonicalOpAttrSpec> getHandlerSOP2Attrs() {
       {CanonicalOp::S_ABSDIFF_I32, {/*routesExecThroughStoreExec=*/true}},
       {CanonicalOp::S_LSHL_B32, {/*routesExecThroughStoreExec=*/true}},
       {CanonicalOp::S_LSHL_B64, {/*routesExecThroughStoreExec=*/true}},
+      // s_lshl{1,2,3,4}_add_u32: dst = (src0 << N) + src1. Same SPE shape as
+      // the plain shift/bitwise routers above -- the handler computes the
+      // scalar result and dispatches via writeReg32(), which routes to
+      // storeExec when the destination operand is EXEC. Autotuned Triton
+      // kernels emit these as address/mask scalar math that can land in EXEC;
+      // without these entries the SPE A-level gate aborts with
+      // SPE-unmodeled-EXEC-writer. See the S_LSHL{1,2,3,4}_ADD_U32 handlers
+      // below (all use writeReg32) and SOPInstructions.td:S_LSHLn_ADD_U32.
+      {CanonicalOp::S_LSHL1_ADD_U32, {/*routesExecThroughStoreExec=*/true}},
+      {CanonicalOp::S_LSHL2_ADD_U32, {/*routesExecThroughStoreExec=*/true}},
+      {CanonicalOp::S_LSHL3_ADD_U32, {/*routesExecThroughStoreExec=*/true}},
+      {CanonicalOp::S_LSHL4_ADD_U32, {/*routesExecThroughStoreExec=*/true}},
       {CanonicalOp::S_LSHR_B32, {/*routesExecThroughStoreExec=*/true}},
       {CanonicalOp::S_LSHR_B64, {/*routesExecThroughStoreExec=*/true}},
       {CanonicalOp::S_ASHR_I64, {/*routesExecThroughStoreExec=*/true}},

@@ -239,6 +239,21 @@ target_include_directories(MCContextInlineSrcmgrTests PRIVATE
 
 comgr_configure_test_target(MCContextInlineSrcmgrTests)
 
+# -- CanonicalOpAttrsTests ----------------------------------------------------------
+
+add_executable(CanonicalOpAttrsTests
+  CanonicalOpAttrsTest.cpp)
+
+target_link_libraries(CanonicalOpAttrsTests PRIVATE
+  ${COMGR_GTEST_LIBS}
+  ${LLVM_PTHREAD_LIB})
+comgr_link_hotswap_transpiler(CanonicalOpAttrsTests)
+
+target_include_directories(CanonicalOpAttrsTests PRIVATE
+  ${COMGR_GTEST_INCLUDE_DIRS})
+
+comgr_configure_test_target(CanonicalOpAttrsTests)
+
 # -- OpcodeMapTests -----------------------------------------------------------------
 
 add_executable(OpcodeMapTests
