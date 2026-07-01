@@ -366,6 +366,7 @@ add_custom_target(test-unit
   COMMAND $<TARGET_FILE:CodeObjectUtilsTests>
   COMMAND $<TARGET_FILE:MCContextInlineSrcmgrTests>
   COMMAND $<TARGET_FILE:OpcodeMapTests>
+  COMMAND $<TARGET_FILE:CanonicalOpAttrsTests>
   COMMAND $<TARGET_FILE:RaiserScaffoldingTests>
   COMMAND $<TARGET_FILE:KernargLayoutTests>
   COMMAND $<TARGET_FILE:WaveProjectionTests>
@@ -378,6 +379,7 @@ add_dependencies(test-unit HotswapElfTests HotswapMCTests
   CodeObjectUtilsTests
   MCContextInlineSrcmgrTests
   OpcodeMapTests
+  CanonicalOpAttrsTests
   KernargLayoutTests
   WaveProjectionTests
   SourceHiddenArgsTests
