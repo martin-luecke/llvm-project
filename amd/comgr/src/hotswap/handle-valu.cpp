@@ -47,18 +47,16 @@ std::optional<int64_t> readNamedImmOperand(const DecodedInst &Di,
   return Di.getImm(OperandIdx);
 }
 
-std::optional<bool> readVOP3Clamp(const DecodedInst &Di, HandlerResult &Hr,
-                                  StringRef OpName) {
+Expected<bool> readVOP3Clamp(const DecodedInst &Di, StringRef OpName) {
   std::optional<int64_t> Clamp =
       readNamedImmOperand(Di, AMDGPU::OpName::clamp);
-  if (!Clamp) {
-    Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+  if (!Clamp)
+    return RaiseFailure::unsupportedInstructionForm(
         Di, "VOP3",
-        Twine(OpName) +
+        OpName +
             " missing immediate clamp operand; operand table layout does not "
             "match the expected VOP3 profile");
-    return std::nullopt;
-  }
+
   return *Clamp != 0;
 }
 
@@ -75,18 +73,14 @@ struct True16OpSel {
   bool DstHi = false;
 };
 
-std::optional<True16OpSel> readTrue16OpSel(const DecodedInst &Di,
-                                           OpResolver &Op, unsigned NumSrcs,
-                                           HandlerResult &Hr,
-                                           StringRef OpName) {
+Expected<True16OpSel> readTrue16OpSel(const DecodedInst &Di, OpResolver &Op,
+                                      unsigned NumSrcs, StringRef OpName) {
   assert(NumSrcs == 2 || NumSrcs == 3);
   if (Op.nSrcs() < NumSrcs) {
     const char *ExpectedSrcs = NumSrcs == 2 ? "src0/src1" : "src0/src1/src2";
-    Hr.Failure = RaiseFailure::unsupportedInstructionForm(
-        Di, "VOP3", Twine(OpName) +
-                         " has too few source operands; expected " +
-                         ExpectedSrcs);
-    return std::nullopt;
+    return RaiseFailure::unsupportedInstructionForm(
+        Di, "VOP3",
+        OpName + " has too few source operands; expected " + ExpectedSrcs);
   }
 
   unsigned Src0Mods = Op.srcMod(0);
@@ -95,15 +89,12 @@ std::optional<True16OpSel> readTrue16OpSel(const DecodedInst &Di,
   constexpr unsigned AllowedSrc0Mods =
       SISrcMods::OP_SEL_0 | SISrcMods::DST_OP_SEL;
   constexpr unsigned AllowedSrcMods = SISrcMods::OP_SEL_0;
-  if ((Src0Mods & ~AllowedSrc0Mods) != 0 ||
-      (Src1Mods & ~AllowedSrcMods) != 0 ||
-      (Src2Mods & ~AllowedSrcMods) != 0) {
-    Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+  if ((Src0Mods & ~AllowedSrc0Mods) != 0 || (Src1Mods & ~AllowedSrcMods) != 0 ||
+      (Src2Mods & ~AllowedSrcMods) != 0)
+    return RaiseFailure::unsupportedInstructionForm(
         Di, "VOP3",
-        Twine(OpName) +
+        OpName +
             " has unsupported source modifiers; only op_sel bits are modeled");
-    return std::nullopt;
-  }
 
   True16OpSel Sel;
   Sel.Src0Hi = (Src0Mods & SISrcMods::OP_SEL_0) != 0;
@@ -275,8 +266,8 @@ Value *readCarryInI1(RaiseContext &Ctx, const DecodedInst &Di,
 // For e32 forms (no explicit destination -- `di.numDefs < 2` or the
 // def is not a register) -> `storeVCC` (the e32 implicit VCC
 // semantics).
-void writeCarryOutI1(RaiseContext &Ctx, const DecodedInst &Di,
-                      OpResolver &Op, Value *CarryI1) {
+void writeCarryOutI1(RaiseContext &Ctx, const DecodedInst &Di, OpResolver &Op,
+                     Value *CarryI1) {
   if (Di.NumDefs >= 2 && Di.isReg(1)) {
     ParsedReg CarryDst = Op.dst(1);
     switch (CarryDst.RegKind) {
@@ -321,20 +312,20 @@ void writeCarryOutI1(RaiseContext &Ctx, const DecodedInst &Di,
 // scratch scalars, and -- exactly as for a carry-out destination (see
 // `writeCarryOutI1`) -- the ISA does not allow them as the div-scale flag
 // destination. Classify the SDST so both div_scale arms can refuse before
-// emitting the intrinsic or touching the register file; returns true with
-// `Hr.Failure` set when the encoding must be refused.
-bool refuseDivScaleScratchFlagDest(const DecodedInst &Di, OpResolver &Op,
-                                   HandlerResult &Hr) {
+// emitting the intrinsic or touching the register file; returns an error when
+// the encoding must be refused, success otherwise.
+Error refuseDivScaleScratchFlagDest(const DecodedInst &Di, OpResolver &Op) {
   if (Di.NumDefs < 2 || !Di.isReg(1))
-    return false;
+    return Error::success();
+
   ParsedReg FlagDst = Op.dst(1);
   if (FlagDst.RegKind != ParsedReg::VCC_HI_SCRATCH &&
       FlagDst.RegKind != ParsedReg::EXEC_HI_SCRATCH)
-    return false;
-  Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+    return Error::success();
+
+  return RaiseFailure::unsupportedInstructionForm(
       Di, "VALU",
       "v_div_scale flag destination is wave32 vcc_hi/exec_hi scratch");
-  return true;
 }
 
 // Emit the cross-target (gfx1250 -> gfx94x) dequantisation expansion
@@ -560,8 +551,8 @@ static llvm::Value *emitCvtScalePk8Bf16Fp4CrossTargetExpansion(
 
 } // namespace
 
-HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
-                        OpResolver &Op) {
+Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
+                                   OpResolver &Op) {
   HandlerResult Hr;
   // `mn` is retained for diagnostic messages only; dispatch is driven entirely
   // by `sop`, which the OpcodeMap canonicalizer resolves from the DPP/SDWA/e32
@@ -596,21 +587,19 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
   // result goes through writeSelectedU16Half. Source neg/abs are not
   // meaningful for a bit-pattern move and are refused loudly.
   if (Sop == CanonicalOp::V_MOV_B16) {
-    if (Op.nSrcs() < 1) {
-      Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+    if (Op.nSrcs() < 1)
+      return RaiseFailure::unsupportedInstructionForm(
           Di, "VOP1", "v_mov_b16 missing src0 operand");
-      return Hr;
-    }
+
     unsigned Src0Mods = Op.srcMod(0);
     constexpr unsigned AllowedSrc0Mods =
         SISrcMods::OP_SEL_0 | SISrcMods::DST_OP_SEL;
-    if ((Src0Mods & ~AllowedSrc0Mods) != 0) {
-      Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+    if ((Src0Mods & ~AllowedSrc0Mods) != 0)
+      return RaiseFailure::unsupportedInstructionForm(
           Di, "VOP1",
           "v_mov_b16 has unsupported src0 modifiers; only op_sel/dst_op_sel "
           "are modeled");
-      return Hr;
-    }
+
     const MCRegisterInfo &MRI = *Ctx.Mc.RegInfo;
     bool DstHi = (Src0Mods & SISrcMods::DST_OP_SEL) != 0;
     if (Di.isReg(0) && AMDGPU::isHi16Reg(Di.getReg(0), MRI))
@@ -627,8 +616,8 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
   // ---- Cross-lane primitives (readlane/writelane/permlane/mbcnt/
   //      readfirstlane) -- extracted to handle-valu-cross-lane.cpp ----
   {
-    HandlerResult Sub = handleValuCrossLane(Ctx, Di, Op);
-    if (Sub.Handled || Sub.Failure.hasFailed())
+    Expected<HandlerResult> Sub = handleValuCrossLane(Ctx, Di, Op);
+    if (!Sub || Sub->Handled)
       return Sub;
   }
 
@@ -636,8 +625,8 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
   //      16-bit shifts, V_BFREV_B32 / V_NOT_B32, byte pack) ----
   // Extracted to handle-valu-small-ops.cpp.
   {
-    HandlerResult Sub = handleValuSmallOps(Ctx, Di, Op);
-    if (Sub.Handled || Sub.Failure.hasFailed())
+    Expected<HandlerResult> Sub = handleValuSmallOps(Ctx, Di, Op);
+    if (!Sub || Sub->Handled)
       return Sub;
   }
 
@@ -678,6 +667,7 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Ctx.writeReg32(Op.dst(), Res);
     auto *Ov = Ctx.B.CreateIntrinsic(Intrinsic::uadd_with_overflow, {Ctx.I32Ty}, {S0, S1});
     writeCarryOutI1(Ctx, Di, Op, Ctx.B.CreateExtractValue(Ov, 1));
+
     Hr.Handled = true;
     return Hr;
   }
@@ -687,6 +677,7 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Value *Res = Ctx.B.CreateSub(S0, S1, "vsub_co");
     Ctx.writeReg32(Op.dst(), Res);
     writeCarryOutI1(Ctx, Di, Op, Ctx.B.CreateICmpULT(S0, S1));
+
     Hr.Handled = true;
     return Hr;
   }
@@ -696,6 +687,7 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Value *Res = Ctx.B.CreateSub(S1, S0, "vsubrev_co");
     Ctx.writeReg32(Op.dst(), Res);
     writeCarryOutI1(Ctx, Di, Op, Ctx.B.CreateICmpULT(S1, S0));
+
     Hr.Handled = true;
     return Hr;
   }
@@ -713,6 +705,7 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Value *B2 = Ctx.B.CreateICmpULT(Diff1, Bin);
     Ctx.writeReg32(Op.dst(), Diff2);
     writeCarryOutI1(Ctx, Di, Op, Ctx.B.CreateOr(B1, B2));
+
     Hr.Handled = true;
     return Hr;
   }
@@ -727,6 +720,7 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Value *B2 = Ctx.B.CreateICmpULT(Diff1, Bin);
     Ctx.writeReg32(Op.dst(), Diff2);
     writeCarryOutI1(Ctx, Di, Op, Ctx.B.CreateOr(B1, B2));
+
     Hr.Handled = true;
     return Hr;
   }
@@ -744,6 +738,7 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Value *C2    = Ctx.B.CreateExtractValue(Step2, 1);
     Ctx.writeReg32(Op.dst(), Res);
     writeCarryOutI1(Ctx, Di, Op, Ctx.B.CreateOr(C1, C2));
+
     Hr.Handled = true;
     return Hr;
   }
@@ -797,11 +792,12 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     const bool Clamped = ClampIdx >= 0 && Di.isImm(ClampIdx) &&
                          Di.getImm(ClampIdx) != 0;
     if (Clamped) {
-      Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+      return RaiseFailure::unsupportedInstructionForm(
           Di, "VOP3",
           IsSigned
               ? "v_mad_nc_i64_i32 with clamp=1 (signed 64-bit saturating MAD) "
-                "is not yet lifted: no corpus producer exercises this encoding, "
+                "is not yet lifted: no corpus producer exercises this "
+                "encoding, "
                 "and emitting the plain `add i64` form would silently drop the "
                 "saturation semantics the source kernel's clamp bit requests.  "
                 "Principled upgrade path when a producer surfaces: wrap the "
@@ -812,7 +808,6 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
                 "MAD) is not yet lifted: same rationale as the signed sibling "
                 "above -- no corpus producer, and the upgrade path is "
                 "`llvm.uadd.sat.i64`.  See the V_MAD_NC_* block comment.");
-      return Hr;
     }
     Value *A = IsSigned
                    ? Ctx.B.CreateSExt(Op.src(0), Ctx.I64Ty)
@@ -994,11 +989,10 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     int ClampIdx = AMDGPU::getNamedOperandIdx(Di.Inst.getOpcode(),
                                               AMDGPU::OpName::clamp);
     if (ClampIdx >= 0) {
-      if (!Di.isImm(static_cast<unsigned>(ClampIdx))) {
-        Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+      if (!Di.isImm(static_cast<unsigned>(ClampIdx)))
+        return RaiseFailure::unsupportedInstructionForm(
             Di, "VOP3", "v_mad_i32_i24 clamp operand is not an immediate");
-        return Hr;
-      }
+
       Clamp = Di.getImm(static_cast<unsigned>(ClampIdx)) != 0;
     }
     Value *Acc = nullptr;
@@ -1031,11 +1025,10 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     int ClampIdx = AMDGPU::getNamedOperandIdx(Di.Inst.getOpcode(),
                                               AMDGPU::OpName::clamp);
     if (ClampIdx >= 0) {
-      if (!Di.isImm(static_cast<unsigned>(ClampIdx))) {
-        Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+      if (!Di.isImm(static_cast<unsigned>(ClampIdx)))
+        return RaiseFailure::unsupportedInstructionForm(
             Di, "VOP3", "v_mad_u32_u24 clamp operand is not an immediate");
-        return Hr;
-      }
+
       Clamp = Di.getImm(static_cast<unsigned>(ClampIdx)) != 0;
     }
     Value *Res = nullptr;
@@ -1171,8 +1164,9 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
   if (Sop == CanonicalOp::V_MAXIMUM_F64) {
-    if (!requireDefaultVOP3FpValuOutputMods(Di, Hr, "v_maximum_f64"))
-      return Hr;
+    if (Error Err = requireDefaultVOP3FpValuOutputMods(Di, "v_maximum_f64"))
+      return Err;
+
     auto *F64Ty = Type::getDoubleTy(Ctx.C);
     Value *S0 = Op.applyMods(0, Ctx.B.CreateBitCast(Op.src64(0), F64Ty));
     Value *S1 = Op.applyMods(1, Ctx.B.CreateBitCast(Op.src64(1), F64Ty));
@@ -1186,8 +1180,9 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
   if (Sop == CanonicalOp::V_MINIMUM_F64) {
-    if (!requireDefaultVOP3FpValuOutputMods(Di, Hr, "v_minimum_f64"))
-      return Hr;
+    if (Error Err = requireDefaultVOP3FpValuOutputMods(Di, "v_minimum_f64"))
+      return Err;
+
     auto *F64Ty = Type::getDoubleTy(Ctx.C);
     Value *S0 = Op.applyMods(0, Ctx.B.CreateBitCast(Op.src64(0), F64Ty));
     Value *S1 = Op.applyMods(1, Ctx.B.CreateBitCast(Op.src64(1), F64Ty));
@@ -1222,8 +1217,9 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
   // v_rsq_f64: VOP1 TRANS-class rsqrt approximation, sibling of V_RCP_F64.
   // Lift to llvm.amdgcn.rsq.f64 so gfx942 isels straight back to v_rsq_f64.
   if (Sop == CanonicalOp::V_RSQ_F64) {
-    if (!requireDefaultOutputModsIfPresent(Di, Hr))
-      return Hr;
+    if (Error Err = requireDefaultOutputModsIfPresent(Di))
+      return Err;
+
     auto *F64Ty = Type::getDoubleTy(Ctx.C);
     Value *S = Op.applyMods(0, Ctx.B.CreateBitCast(Op.src64(0), F64Ty));
     Function *Rsq = Intrinsic::getOrInsertDeclaration(
@@ -1237,8 +1233,9 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
   // isels straight back to v_sqrt_f64 (the source op's exact approximation),
   // rather than llvm.sqrt.f64 which may expand to a software sequence.
   if (Sop == CanonicalOp::V_SQRT_F64) {
-    if (!requireDefaultOutputModsIfPresent(Di, Hr))
-      return Hr;
+    if (Error Err = requireDefaultOutputModsIfPresent(Di))
+      return Err;
+
     auto *F64Ty = Type::getDoubleTy(Ctx.C);
     Value *S = Op.applyMods(0, Ctx.B.CreateBitCast(Op.src64(0), F64Ty));
     Function *Sqrt = Intrinsic::getOrInsertDeclaration(
@@ -1253,8 +1250,9 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
   // generic `llvm.ldexp.f64.i32` intrinsic; the AMDGPU backend isels it
   // back to v_ldexp_f64 on targets that have the op.
   if (Sop == CanonicalOp::V_LDEXP_F64) {
-    if (!requireDefaultVOP3FpValuOutputMods(Di, Hr, "v_ldexp_f64"))
-      return Hr;
+    if (Error Err = requireDefaultVOP3FpValuOutputMods(Di, "v_ldexp_f64"))
+      return Err;
+
     auto *F64Ty = Type::getDoubleTy(Ctx.C);
     Value *S0 = Ctx.B.CreateBitCast(Op.src64(0), F64Ty);
     unsigned Src0Mods = Op.srcMod(0);
@@ -1274,8 +1272,9 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
   // modifiers), src1 is the I32 segment selector (no modifiers). Lift to
   // llvm.amdgcn.trig.preop.f64.
   if (Sop == CanonicalOp::V_TRIG_PREOP_F64) {
-    if (!requireDefaultVOP3FpValuOutputMods(Di, Hr, "v_trig_preop_f64"))
-      return Hr;
+    if (Error Err = requireDefaultVOP3FpValuOutputMods(Di, "v_trig_preop_f64"))
+      return Err;
+
     auto *F64Ty = Type::getDoubleTy(Ctx.C);
     Value *S0 = Op.applyMods(0, Ctx.B.CreateBitCast(Op.src64(0), F64Ty));
     Value *S1 = Op.src(1);
@@ -1420,8 +1419,9 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
   if (Sop == CanonicalOp::V_MAXIMUM_F32) {
-    if (!requireDefaultVOP3FpValuOutputMods(Di, Hr, "v_maximum_f32"))
-      return Hr;
+    if (Error Err = requireDefaultVOP3FpValuOutputMods(Di, "v_maximum_f32"))
+      return Err;
+
     Value *S0 = Op.srcF(0), *S1 = Op.srcF(1);
     if (S0->getType() != Ctx.F32Ty) S0 = Ctx.B.CreateBitCast(S0, Ctx.F32Ty);
     if (S1->getType() != Ctx.F32Ty) S1 = Ctx.B.CreateBitCast(S1, Ctx.F32Ty);
@@ -1431,8 +1431,9 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
   if (Sop == CanonicalOp::V_MINIMUM_F32) {
-    if (!requireDefaultVOP3FpValuOutputMods(Di, Hr, "v_minimum_f32"))
-      return Hr;
+    if (Error Err = requireDefaultVOP3FpValuOutputMods(Di, "v_minimum_f32"))
+      return Err;
+
     Value *S0 = Op.srcF(0), *S1 = Op.srcF(1);
     if (S0->getType() != Ctx.F32Ty) S0 = Ctx.B.CreateBitCast(S0, Ctx.F32Ty);
     if (S1->getType() != Ctx.F32Ty) S1 = Ctx.B.CreateBitCast(S1, Ctx.F32Ty);
@@ -1524,16 +1525,19 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
   if (Sop == CanonicalOp::V_FMA_F16) {
     StringRef OpName = "v_fma_f16";
     bool DstHigh = false;
-    if (!requireDefaultVOP3FpValuOutputMods(Di, Hr, OpName) ||
-        !readVOP3F16DstHigh(Di, Hr, OpName, DstHigh))
-      return Hr;
+    if (Error Err = requireDefaultVOP3FpValuOutputMods(Di, OpName))
+      return Err;
+
+    if (Error Err = readVOP3F16DstHigh(Di, OpName, DstHigh))
+      return Err;
 
     SmallVector<Value *, 3> Srcs;
     for (unsigned I = 0; I < 3; ++I) {
-      Value *Src = readOpSelF16(Ctx, Di, Op, Hr, I, OpName);
-      if (!Src)
-        return Hr;
-      Srcs.push_back(Src);
+      Expected<Value *> SrcOrErr = readOpSelF16(Ctx, Di, Op, I, OpName);
+      if (!SrcOrErr)
+        return SrcOrErr.takeError();
+
+      Srcs.push_back(*SrcOrErr);
     }
 
     Function *Fma = Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::fma,
@@ -1548,8 +1552,8 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
   if (Sop == CanonicalOp::V_DIV_SCALE_F32) {
     // Refuse a wave32 vcc_hi/exec_hi scratch flag destination up front,
     // before any IR is emitted or the register file is touched.
-    if (refuseDivScaleScratchFlagDest(Di, Op, Hr))
-      return Hr;
+    if (Error Err = refuseDivScaleScratchFlagDest(Di, Op))
+      return Err;
     // `v_div_scale_f32 dst, vcc, src0, src1, src2` scales one operand
     // of a numerator/denominator pair for a subsequent IEEE-conformant
     // divide (rcp + Newton + div_fixup).  The hardware encodes the
@@ -1646,14 +1650,13 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
       // emitter.  Refuse loudly rather than guess -- consistent with
       // the "refuse when uncertain" rule in
       // hotswap/docs/wave-size-translation.md.
-      Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+      return RaiseFailure::unsupportedInstructionForm(
           Di, "VOP3",
           "v_div_scale_f32 operand triple does not match a known "
           "divide-scaling shape: expected (numer, denom, numer) with "
           "src0 == src2 for scale-numerator, or (denom, denom, numer) "
           "with src0 == src1 for scale-denominator.  See handle-valu.cpp "
           "for the decode rule.");
-      return Hr;
     }
 
     // FP-modifier symmetry check on the matched-identity pair.  The
@@ -1673,7 +1676,7 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     // Refuse loudly rather than guess.
     unsigned Peer = ScaleNumerator ? 2u : 1u;
     if (Op.srcMod(0) != Op.srcMod(Peer)) {
-      Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+      return RaiseFailure::unsupportedInstructionForm(
           Di, "VOP3",
           ScaleNumerator
               ? "v_div_scale_f32 scale-numerator shape (src0 == src2) "
@@ -1690,7 +1693,6 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
                 "only carry one modifier set.  No known codegen "
                 "emitter produces this shape; refusing rather than "
                 "dropping a modifier silently.");
-      return Hr;
     }
 
     // Canonical (numer, denom) sourced from the operand slot that
@@ -1720,6 +1722,7 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     // source-width wave mask in the SGPR alloca, and same-BB consumers
     // like V_DIV_FMAS_F32 can use the cached i1 directly.
     writeCarryOutI1(Ctx, Di, Op, Ctx.B.CreateExtractValue(R, 1));
+
     Hr.Handled = true;
     return Hr;
   }
@@ -1734,8 +1737,9 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
   if (Sop == CanonicalOp::V_DIV_FIXUP_F64) {
-    if (!requireDefaultVOP3FpValuOutputMods(Di, Hr, "v_div_fixup_f64"))
-      return Hr;
+    if (Error Err = requireDefaultVOP3FpValuOutputMods(Di, "v_div_fixup_f64"))
+      return Err;
+
     auto *F64Ty = Type::getDoubleTy(Ctx.C);
     Value *S0 = Op.applyMods(0, Ctx.B.CreateBitCast(Op.src64(0), F64Ty));
     Value *S1 = Op.applyMods(1, Ctx.B.CreateBitCast(Op.src64(1), F64Ty));
@@ -1758,8 +1762,9 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
   if (Sop == CanonicalOp::V_DIV_FMAS_F64) {
-    if (!requireDefaultVOP3FpValuOutputMods(Di, Hr, "v_div_fmas_f64"))
-      return Hr;
+    if (Error Err = requireDefaultVOP3FpValuOutputMods(Di, "v_div_fmas_f64"))
+      return Err;
+
     auto *F64Ty = Type::getDoubleTy(Ctx.C);
     Value *S0 = Op.applyMods(0, Ctx.B.CreateBitCast(Op.src64(0), F64Ty));
     Value *S1 = Op.applyMods(1, Ctx.B.CreateBitCast(Op.src64(1), F64Ty));
@@ -1780,10 +1785,12 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
   if (Sop == CanonicalOp::V_DIV_SCALE_F64) {
     // Refuse a wave32 vcc_hi/exec_hi scratch flag destination up front,
     // before any IR is emitted or the register file is touched.
-    if (refuseDivScaleScratchFlagDest(Di, Op, Hr))
-      return Hr;
-    if (!requireDefaultVOP3FpValuOutputMods(Di, Hr, "v_div_scale_f64"))
-      return Hr;
+    if (Error Err = refuseDivScaleScratchFlagDest(Di, Op))
+      return Err;
+
+    if (Error Err = requireDefaultVOP3FpValuOutputMods(Di, "v_div_scale_f64"))
+      return Err;
+
     auto *F64Ty = Type::getDoubleTy(Ctx.C);
     auto SameOperand = [&](unsigned A, unsigned B) -> bool {
       bool AIsReg = Op.isSrcReg(A), BIsReg = Op.isSrcReg(B);
@@ -1804,23 +1811,21 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     } else if (Src0EqSrc1 && !Src0EqSrc2) {
       ScaleNumerator = false;
     } else {
-      Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+      return RaiseFailure::unsupportedInstructionForm(
           Di, "VOP3",
           "v_div_scale_f64 operand triple does not match a known "
           "divide-scaling shape: expected (numer, denom, numer) with "
           "src0 == src2 for scale-numerator, or (denom, denom, numer) "
           "with src0 == src1 for scale-denominator.");
-      return Hr;
     }
     unsigned Peer = ScaleNumerator ? 2u : 1u;
     if (Op.srcMod(0) != Op.srcMod(Peer)) {
-      Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+      return RaiseFailure::unsupportedInstructionForm(
           Di, "VOP3",
           "v_div_scale_f64 matched-identity operand pair has asymmetric "
           "FP modifiers; the lifted IR can only carry one modifier set. "
           "No known codegen emitter produces this shape; refusing rather "
           "than dropping a modifier silently.");
-      return Hr;
     }
     unsigned NumerIdx = ScaleNumerator ? 0u : 2u;
     Value *Numer =
@@ -1837,6 +1842,7 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     // A wave32 vcc_hi/exec_hi scratch flag destination was already refused
     // at the top of this handler.
     writeCarryOutI1(Ctx, Di, Op, Ctx.B.CreateExtractValue(R, 1));
+
     Hr.Handled = true;
     return Hr;
   }
@@ -2013,13 +2019,13 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     bool IsSigned = Sop == CanonicalOp::V_ADD_NC_I16 ||
                     Sop == CanonicalOp::V_SUB_NC_I16;
     StringRef OpName = true16AddSubOpName(IsSub, IsSigned);
-    std::optional<bool> Clamp = readVOP3Clamp(Di, Hr, OpName);
+    Expected<bool> Clamp = readVOP3Clamp(Di, OpName);
     if (!Clamp)
-      return Hr;
+      return Clamp.takeError();
 
-    std::optional<True16OpSel> Sel = readTrue16OpSel(Di, Op, 2, Hr, OpName);
+    Expected<True16OpSel> Sel = readTrue16OpSel(Di, Op, 2, OpName);
     if (!Sel)
-      return Hr;
+      return Sel.takeError();
 
     Type *I16Ty = Type::getInt16Ty(Ctx.C);
     Value *LHS = extractU16Half(Ctx, Op.src(0), Sel->Src0Hi);
@@ -2042,12 +2048,13 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
   }
   if (Sop == CanonicalOp::V_MAD_U16) {
     StringRef OpName = "v_mad_u16";
-    std::optional<bool> Clamp = readVOP3Clamp(Di, Hr, OpName);
+    Expected<bool> Clamp = readVOP3Clamp(Di, OpName);
     if (!Clamp)
-      return Hr;
-    std::optional<True16OpSel> Sel = readTrue16OpSel(Di, Op, 3, Hr, OpName);
+      return Clamp.takeError();
+
+    Expected<True16OpSel> Sel = readTrue16OpSel(Di, Op, 3, OpName);
     if (!Sel)
-      return Hr;
+      return Sel.takeError();
 
     Value *A = extractU16Half(Ctx, Op.src(0), Sel->Src0Hi);
     Value *B = extractU16Half(Ctx, Op.src(1), Sel->Src1Hi);
@@ -2078,9 +2085,9 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
   // shape refuses loudly instead of being guessed.
   if (Sop == CanonicalOp::V_ADD_MIN_U32 || Sop == CanonicalOp::V_ADD_MAX_U32 ||
       Sop == CanonicalOp::V_ADD_MIN_I32 || Sop == CanonicalOp::V_ADD_MAX_I32) {
-    std::optional<bool> Clamp = readVOP3Clamp(Di, Hr, Di.Mnemonic);
+    Expected<bool> Clamp = readVOP3Clamp(Di, Di.Mnemonic);
     if (!Clamp)
-      return Hr;
+      return Clamp.takeError();
 
     bool IsSinged = Sop == CanonicalOp::V_ADD_MIN_I32 || Sop == CanonicalOp::V_ADD_MAX_I32;
     bool IsMax =  Sop == CanonicalOp::V_ADD_MAX_U32 || Sop == CanonicalOp::V_ADD_MAX_I32;
@@ -2170,10 +2177,10 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
   // other dst half is preserved per the RDNA3+ true16 ISA. The MI400 manual
   // marks this scalar true16 form OPF_NOCLAMP, unlike the packed DPX max3 form.
   if (Sop == CanonicalOp::V_MAX3_I16) {
-    std::optional<True16OpSel> Sel =
-        readTrue16OpSel(Di, Op, 3, Hr, "v_max3_i16");
+    Expected<True16OpSel> Sel = readTrue16OpSel(Di, Op, 3, "v_max3_i16");
     if (!Sel)
-      return Hr;
+      return Sel.takeError();
+
     Type *I16Ty = Type::getInt16Ty(Ctx.C);
     Value *S0 = extractU16Half(Ctx, Op.src(0), Sel->Src0Hi);
     Value *S1 = extractU16Half(Ctx, Op.src(1), Sel->Src1Hi);
@@ -2265,8 +2272,9 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
       Sop == CanonicalOp::V_MINIMUM3_F32) {
     StringRef OpName = (Sop == CanonicalOp::V_MAXIMUM3_F32) ? "v_maximum3_f32"
                                                             : "v_minimum3_f32";
-    if (!requireDefaultVOP3FpValuOutputMods(Di, Hr, OpName))
-      return Hr;
+    if (Error Err = requireDefaultVOP3FpValuOutputMods(Di, OpName))
+      return Err;
+
     Value *S0 = Op.srcF(0), *S1 = Op.srcF(1), *S2 = Op.srcF(2);
     if (S0->getType() != Ctx.F32Ty) S0 = Ctx.B.CreateBitCast(S0, Ctx.F32Ty);
     if (S1->getType() != Ctx.F32Ty) S1 = Ctx.B.CreateBitCast(S1, Ctx.F32Ty);
@@ -2295,8 +2303,8 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     const bool MaxThenMin = Sop == CanonicalOp::V_MAXIMUMMINIMUM_F32;
     StringRef OpName = MaxThenMin ? "v_maximumminimum_f32"
                                   : "v_minimummaximum_f32";
-    if (!requireDefaultVOP3FpValuOutputMods(Di, Hr, OpName))
-      return Hr;
+    if (Error Err = requireDefaultVOP3FpValuOutputMods(Di, OpName))
+      return Err;
 
     Value *S0 = Op.srcF(0), *S1 = Op.srcF(1), *S2 = Op.srcF(2);
     if (S0->getType() != Ctx.F32Ty) S0 = Ctx.B.CreateBitCast(S0, Ctx.F32Ty);
@@ -2360,17 +2368,20 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     }
 
     bool DstHigh = false;
-    if (!requireDefaultVOP3FpValuOutputMods(Di, Hr, OpName) ||
-        !readVOP3F16DstHigh(Di, Hr, OpName, DstHigh))
-      return Hr;
+    if (Error Err = requireDefaultVOP3FpValuOutputMods(Di, OpName))
+      return Err;
+
+    if (Error Err = readVOP3F16DstHigh(Di, OpName, DstHigh))
+      return Err;
 
     const unsigned NumSrcs = IsBinary ? 2 : 3;
     SmallVector<Value *, 3> Srcs;
     for (unsigned I = 0; I < NumSrcs; ++I) {
-      Value *Src = readOpSelF16(Ctx, Di, Op, Hr, I, OpName);
-      if (!Src)
-        return Hr;
-      Srcs.push_back(Src);
+      Expected<Value *> SrcOrErr = readOpSelF16(Ctx, Di, Op, I, OpName);
+      if (!SrcOrErr)
+        return SrcOrErr.takeError();
+
+      Srcs.push_back(*SrcOrErr);
     }
 
     Intrinsic::ID InnerId;
@@ -2407,16 +2418,19 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     const bool MinThenMax = Sop == CanonicalOp::V_MINMAX_NUM_F16;
     StringRef OpName = MinThenMax ? "v_minmax_num_f16" : "v_maxmin_num_f16";
     bool DstHigh = false;
-    if (!requireDefaultVOP3FpValuOutputMods(Di, Hr, OpName) ||
-        !readVOP3F16DstHigh(Di, Hr, OpName, DstHigh))
-      return Hr;
+    if (Error Err = requireDefaultVOP3FpValuOutputMods(Di, OpName))
+      return Err;
+
+    if (Error Err = readVOP3F16DstHigh(Di, OpName, DstHigh))
+      return Err;
 
     SmallVector<Value *, 3> Srcs;
     for (unsigned I = 0; I < 3; ++I) {
-      Value *Src = readOpSelF16(Ctx, Di, Op, Hr, I, OpName);
-      if (!Src)
-        return Hr;
-      Srcs.push_back(Src);
+      Expected<Value *> SrcOrErr = readOpSelF16(Ctx, Di, Op, I, OpName);
+      if (!SrcOrErr)
+        return SrcOrErr.takeError();
+
+      Srcs.push_back(*SrcOrErr);
     }
 
     Function *MaxFn = Intrinsic::getOrInsertDeclaration(
@@ -2442,8 +2456,8 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
       Sop == CanonicalOp::V_MAXMIN_NUM_F32) {
     const bool MinThenMax = Sop == CanonicalOp::V_MINMAX_NUM_F32;
     StringRef OpName = MinThenMax ? "v_minmax_num_f32" : "v_maxmin_num_f32";
-    if (!requireDefaultVOP3FpValuOutputMods(Di, Hr, OpName))
-      return Hr;
+    if (Error Err = requireDefaultVOP3FpValuOutputMods(Di, OpName))
+      return Err;
 
     Value *S0 = Op.srcF(0), *S1 = Op.srcF(1), *S2 = Op.srcF(2);
     if (S0->getType() != Ctx.F32Ty) S0 = Ctx.B.CreateBitCast(S0, Ctx.F32Ty);
@@ -2705,12 +2719,11 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
       Packed = Ctx.B.CreateInsertElement(Packed, Dw1, (uint64_t)1);
       Result = Packed;
     } else {
-      Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+      return RaiseFailure::unsupportedInstructionForm(
           Di, "VOP3",
           "v_cvt_scalef32_pk8_fp8_f32 requires either HasTensorOps "
           "(gfx1250 native) or HasFP8ConversionInsts "
           "(int_amdgcn_cvt_pk_fp8_f32); this target has neither.");
-      return Hr;
     }
     Ctx.writeRegVec(Op.dst(), Result);
     Hr.Handled = true;
@@ -2771,10 +2784,9 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
           int Parsed = 0;
           if (Parts[0].trim().getAsInteger(10, Parsed) ||
               (Parsed != 0 && Parsed != 1)) {
-            Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+            return RaiseFailure::unsupportedInstructionForm(
                 Di, "VOP3",
                 "unparseable or out-of-range op_sel[0] (expected 0 or 1)");
-            return Hr;
           }
           WordSelInt = Parsed;
         }
@@ -2805,11 +2817,10 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
   if (Sop == CanonicalOp::V_CVT_F32_FP8 || Sop == CanonicalOp::V_CVT_F32_BF8) {
     StringRef Text(Di.FullText);
     if (Text.contains("op_sel:") || Text.contains("_sdwa")) {
-      Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+      return RaiseFailure::unsupportedInstructionForm(
           Di, "VOP1",
           "non-default op_sel/sdwa byte_sel on v_cvt_f32_{fp8,bf8} "
           "(only the byte_sel=0 e64 form is wired today)");
-      return Hr;
     }
     Value *Src = Op.src(0);
     if (Src->getType() != Ctx.I32Ty)
@@ -2875,11 +2886,10 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     unsigned Opc = Di.Inst.getOpcode();
     int SelIdx = AMDGPU::getNamedOperandIdx(Opc, AMDGPU::OpName::scale_sel);
     if (SelIdx < 0 || !Di.isImm(SelIdx)) {
-      Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+      return RaiseFailure::unsupportedInstructionForm(
           Di, "VOP3",
           "v_cvt_scale_pk8_bf16_fp4 missing OpName::scale_sel "
           "immediate operand -- operand table mismatch");
-      return Hr;
     }
     int64_t ScaleSel = Di.getImm(SelIdx);
 
@@ -2892,7 +2902,7 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     // same shape as the refusal-of-non-default-op_sel check on
     // V_CVT_F32_{FP8,BF8} higher in this file.
     if (ScaleSel != 0) {
-      Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+      return RaiseFailure::unsupportedInstructionForm(
           Di, "VOP3",
           "v_cvt_scale_pk8_bf16_fp4 scale_sel != 0 is outside the "
           "declared support set (AMD ISA spec semantics for the "
@@ -2900,7 +2910,6 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
           "in-tree today; captured corpus uses only scale_sel=0 "
           "across every instance) -- see hotswap/docs/"
           "matrix-translation.md §7.4");
-      return Hr;
     }
 
     Value *Src = Op.src(0);
@@ -3066,16 +3075,16 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
   // ---- Vector compares (V_CMP / V_CMPX) ----
   // Extracted to handle-valu-vcmp.cpp.
   {
-    HandlerResult Sub = handleValuVcmp(Ctx, Di, Op);
-    if (Sub.Handled || Sub.Failure.hasFailed())
+    Expected<HandlerResult> Sub = handleValuVcmp(Ctx, Di, Op);
+    if (!Sub || Sub->Handled)
       return Sub;
   }
 
   // ---- VOP3P / WMMA / v_fma_mix_f32 / v_cndmask_b32 ----
   // Extracted to handle-valu-vop3p.cpp.
   {
-    HandlerResult Sub = handleValuVoP3P(Ctx, Di, Op);
-    if (Sub.Handled || Sub.Failure.hasFailed())
+    Expected<HandlerResult> Sub = handleValuVoP3P(Ctx, Di, Op);
+    if (!Sub || Sub->Handled)
       return Sub;
   }
 

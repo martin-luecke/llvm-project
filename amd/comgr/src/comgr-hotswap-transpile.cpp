@@ -30,6 +30,7 @@
 #include "hotswap/pipeline.h"
 #include "hotswap/translation-cache.h"
 
+#include "llvm/Support/Error.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBufferRef.h"
 #include "llvm/Support/raw_ostream.h"
@@ -302,22 +303,12 @@ bool hasFlag(const amd_comgr_hotswap_transpile_options_t *options,
   return options && (options->flags & static_cast<uint64_t>(flag));
 }
 
-std::string pipelineFailReason(const COMGR::hotswap::PipelineResult &pipeline) {
-  if (!pipeline.FailReason.empty())
-    return pipeline.FailReason;
-  if (!pipeline.Hsaco || pipeline.Hsaco->getBufferSize() == 0)
-    return "empty_output";
-  return "hotswap_pipeline_failed";
-}
-
-std::string pipelineFailDetail(const COMGR::hotswap::PipelineResult &pipeline) {
-  if (!pipeline.FailDetail.empty())
-    return pipeline.FailDetail;
-  if (!pipeline.FailMnemonic.empty())
-    return pipeline.FailMnemonic;
-  if (!pipeline.FailKernel.empty())
-    return pipeline.FailKernel;
-  return "hotswap pipeline did not produce a loadable HSACO";
+// Lower a pipeline failure into the (reason, detail) pair surfaced on the
+// transpile result.
+void pipelineFailStrings(llvm::Error Err, std::string &Reason,
+                         std::string &Detail) {
+  Reason = "hotswap_pipeline_failed";
+  Detail = llvm::toString(std::move(Err));
 }
 
 amd_comgr_hotswap_cache_lookup_status_t
@@ -357,18 +348,15 @@ writeStatusFromCacheStatus(COMGR::hotswap::TranslationCacheStatus status) {
   return AMD_COMGR_HOTSWAP_CACHE_WRITE_NOT_ATTEMPTED;
 }
 
-void fillResult(HotswapTranspileResult &result, llvm::StringRef sourceGfx,
-                llvm::StringRef targetGfx, bool success, bool cacheHit,
-                amd_comgr_hotswap_cache_lookup_status_t lookupStatus,
-                amd_comgr_hotswap_cache_write_status_t writeStatus,
-                llvm::StringRef cacheDetail,
-                const COMGR::hotswap::PipelineResult *pipeline,
-                llvm::StringRef cacheKey = "",
-                llvm::StringRef cacheMetadataPath = "",
-                llvm::StringRef cacheObjectPath = "",
-                llvm::StringRef FailReason = "",
-                llvm::StringRef FailDetail = "",
-                llvm::StringRef timingJson = "") {
+void fillResult(
+    HotswapTranspileResult &result, llvm::StringRef sourceGfx,
+    llvm::StringRef targetGfx, bool success, bool cacheHit,
+    amd_comgr_hotswap_cache_lookup_status_t lookupStatus,
+    amd_comgr_hotswap_cache_write_status_t writeStatus,
+    llvm::StringRef cacheDetail, const COMGR::hotswap::PipelineStats *stats,
+    llvm::StringRef cacheKey = "", llvm::StringRef cacheMetadataPath = "",
+    llvm::StringRef cacheObjectPath = "", llvm::StringRef FailReason = "",
+    llvm::StringRef FailDetail = "", llvm::StringRef timingJson = "") {
   result.sourceGfx = sourceGfx.str();
   result.targetGfx = targetGfx.str();
   result.success = success;
@@ -382,9 +370,9 @@ void fillResult(HotswapTranspileResult &result, llvm::StringRef sourceGfx,
   result.FailReason = FailReason.str();
   result.FailDetail = FailDetail.str();
   result.timingJson = timingJson.str();
-  if (pipeline) {
-    result.LiftedCount = pipeline->LiftedCount;
-    result.TotalCount = pipeline->TotalCount;
+  if (stats) {
+    result.LiftedCount = stats->LiftedCount;
+    result.TotalCount = stats->TotalCount;
   }
 }
 
@@ -491,6 +479,10 @@ amd_comgr_status_t AMD_COMGR_API amd_comgr_hotswap_transpile_with_options(
   bool CacheHit = false;
 
   COMGR::hotswap::PipelineResult Pipeline;
+  COMGR::hotswap::PipelineStats Stats;
+  std::string PipelineFailReason = "empty_output";
+  std::string PipelineFailDetail =
+      "hotswap pipeline did not produce a loadable HSACO";
   if (!SkippedKernel.empty()) {
     CacheStatus = COMGR::hotswap::TranslationCacheStatus::Bypassed;
     CacheDetail = "kernel listed in HSA_HOTSWAP_CACHE_SKIP_KERNELS: " +
@@ -520,6 +512,7 @@ amd_comgr_status_t AMD_COMGR_API amd_comgr_hotswap_transpile_with_options(
 
     if (Lookup.Status == COMGR::hotswap::TranslationCacheStatus::Hit) {
       Pipeline = std::move(Lookup.Result);
+      Stats = std::move(Lookup.Stats);
       CacheHit = true;
     }
   }
@@ -542,22 +535,28 @@ amd_comgr_status_t AMD_COMGR_API amd_comgr_hotswap_transpile_with_options(
     PipelineOptions.AssumeHipGlobalOffsetZero =
         CacheRequest.AssumeHipGlobalOffsetZero;
     PipelineOptions.OptLevel = CacheRequest.OptLevel;
-    Pipeline = COMGR::hotswap::runPipelineAllKernels(InputBuf,
-                                                 SourceIdent.Processor.str(),
-                                                 TargetIdent.Processor.str(),
-                                                 PipelineOptions);
-    addPipelineTimings(Timings, Pipeline.Timings);
+    // Stats are always collected (the cache persists lift counts and segment
+    // metadata); timing samples within are gated by CollectTimings.
+    llvm::Expected<COMGR::hotswap::PipelineResult> PipelineOrErr =
+        COMGR::hotswap::runPipelineAllKernels(
+            InputBuf, SourceIdent.Processor.str(), TargetIdent.Processor.str(),
+            PipelineOptions, &Stats);
+    if (CollectTimings)
+      addPipelineTimings(Timings, Stats.Timings);
+    if (!PipelineOrErr)
+      pipelineFailStrings(PipelineOrErr.takeError(), PipelineFailReason,
+                          PipelineFailDetail);
+    else
+      Pipeline = std::move(*PipelineOrErr);
   }
 
-  if (!Pipeline.Success || !Pipeline.Hsaco ||
-      Pipeline.Hsaco->getBufferSize() == 0) {
+  if (!Pipeline.Hsaco || Pipeline.Hsaco->getBufferSize() == 0) {
     HotswapTranspileResult Result;
     fillResult(Result, CacheRequest.SourceGfx, CacheRequest.TargetGfx, false,
                CacheHit, lookupStatusFromCacheStatus(CacheStatus),
-               AMD_COMGR_HOTSWAP_CACHE_WRITE_NOT_ATTEMPTED, CacheDetail,
-               &Pipeline, CacheKey, CacheMetadataPath, CacheObjectPath,
-               pipelineFailReason(Pipeline), pipelineFailDetail(Pipeline),
-               finalTimingJson());
+               AMD_COMGR_HOTSWAP_CACHE_WRITE_NOT_ATTEMPTED, CacheDetail, &Stats,
+               CacheKey, CacheMetadataPath, CacheObjectPath, PipelineFailReason,
+               PipelineFailDetail, finalTimingJson());
     if (amd_comgr_status_t ResultStatus =
             returnResult(std::move(Result), result))
       return ResultStatus;
@@ -568,7 +567,7 @@ amd_comgr_status_t AMD_COMGR_API amd_comgr_hotswap_transpile_with_options(
       AMD_COMGR_HOTSWAP_CACHE_WRITE_NOT_ATTEMPTED;
   if (!CacheHit && CacheStatus == COMGR::hotswap::TranslationCacheStatus::Miss) {
     COMGR::hotswap::TranslationCacheWrite Write =
-        COMGR::hotswap::writeTranslationCache(CacheRequest, Pipeline);
+        COMGR::hotswap::writeTranslationCache(CacheRequest, Pipeline, Stats);
     addWriteTimings(Timings, Write.Timings);
     CacheWriteStatus = writeStatusFromCacheStatus(Write.Status);
     if (!Write.key.empty())
@@ -583,7 +582,7 @@ amd_comgr_status_t AMD_COMGR_API amd_comgr_hotswap_transpile_with_options(
       HotswapTranspileResult Result;
       fillResult(Result, CacheRequest.SourceGfx, CacheRequest.TargetGfx, false,
                  false, lookupStatusFromCacheStatus(CacheStatus),
-                 CacheWriteStatus, Write.Reason, &Pipeline, Write.key,
+                 CacheWriteStatus, Write.Reason, &Stats, Write.key,
                  Write.MetadataPath, Write.ObjectPath, "cache_write_failed",
                  Write.Reason, finalTimingJson());
       if (amd_comgr_status_t ResultStatus =
@@ -603,8 +602,8 @@ amd_comgr_status_t AMD_COMGR_API amd_comgr_hotswap_transpile_with_options(
   HotswapTranspileResult Result;
   fillResult(Result, CacheRequest.SourceGfx, CacheRequest.TargetGfx, true,
              CacheHit, lookupStatusFromCacheStatus(CacheStatus),
-             CacheWriteStatus, CacheDetail, &Pipeline, CacheKey,
-             CacheMetadataPath, CacheObjectPath, "", "", finalTimingJson());
+             CacheWriteStatus, CacheDetail, &Stats, CacheKey, CacheMetadataPath,
+             CacheObjectPath, "", "", finalTimingJson());
   if (amd_comgr_status_t ResultStatus =
           returnResult(std::move(Result), result)) {
     amd_comgr_release_data(OutputData);

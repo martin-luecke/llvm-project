@@ -108,12 +108,13 @@
 // raiser.hpp forward-declares llvm::LLVMContext and llvm::Module but
 // RaiseResult holds them by unique_ptr, so the destructor synthesized in
 // main() needs the complete types.
+#include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/ScopeExit.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
@@ -268,15 +269,13 @@ void printBatchFailureLine(llvm::raw_ostream &OS, llvm::StringRef Prefix,
 
 // Replay the child's buffered stdout after it exits so parent-side OK / FAIL
 // records stay serialized even when a kernel crashes during raise.
-bool replayChildOutput(llvm::StringRef Path) {
+llvm::Error replayChildOutput(llvm::StringRef Path) {
   auto BufferOrErr = llvm::MemoryBuffer::getFile(Path);
   if (!BufferOrErr) {
-    llvm::errs() << "raise_cli: could not read child output " << Path << ": "
-                 << BufferOrErr.getError().message() << "\n";
-    return false;
+    return llvm::createFileError(Path, BufferOrErr.getError());
   }
   llvm::outs() << (*BufferOrErr)->getBuffer();
-  return true;
+  return llvm::Error::success();
 }
 
 // Map the child's wait status into the same bracketed crash format the batch
@@ -370,8 +369,8 @@ int main(int argc, char **argv) {
 
   auto kernelNamesOrErr = COMGR::hotswap::listKernelNames(coData);
   if (!kernelNamesOrErr) {
-    llvm::errs() << "raise_cli: no kernels in " << coPath << ": "
-                 << llvm::toString(kernelNamesOrErr.takeError()) << "\n";
+    llvm::logAllUnhandledErrors(kernelNamesOrErr.takeError(), llvm::errs(),
+                                "raise_cli: no kernels in " + coPath + ": ");
     return 2;
   }
   llvm::SmallVector<std::string> kernelNames = std::move(*kernelNamesOrErr);
@@ -382,8 +381,9 @@ int main(int argc, char **argv) {
 
   auto textOrErr = COMGR::hotswap::extractTextSection(coData);
   if (!textOrErr) {
-    llvm::errs() << "raise_cli: could not extract .text from " << coPath
-                 << ": " << llvm::toString(textOrErr.takeError()) << "\n";
+    llvm::logAllUnhandledErrors(textOrErr.takeError(), llvm::errs(),
+                                "raise_cli: could not extract .text from " +
+                                    coPath + ": ");
     return 2;
   }
   COMGR::hotswap::TextSection text = std::move(*textOrErr);
@@ -417,41 +417,34 @@ int main(int argc, char **argv) {
     }
     auto metaOrErr = COMGR::hotswap::extractKernelMeta(coData, target);
     if (!metaOrErr) {
-      llvm::errs() << "raise_cli: kernel '" << target << "' metadata: "
-                   << llvm::toString(metaOrErr.takeError()) << "\n";
+      llvm::logAllUnhandledErrors(metaOrErr.takeError(), llvm::errs(),
+                                  "raise_cli: kernel '" + target +
+                                      "' metadata: ");
       return 1;
     }
     COMGR::hotswap::KernelMeta meta = std::move(*metaOrErr);
     auto kernelExtentOrErr =
         COMGR::hotswap::findKernelSymbolExtent(coData, target);
     if (!kernelExtentOrErr) {
-      std::string err = llvm::toString(kernelExtentOrErr.takeError());
-      llvm::errs() << "raise_cli: kernel '" << target
-                   << "' extent lookup failed: " << err << "\n";
+      llvm::logAllUnhandledErrors(kernelExtentOrErr.takeError(), llvm::errs(),
+                                  "raise_cli: kernel '" + target +
+                                      "' extent lookup failed: ");
       return 1;
     }
     uint64_t kernelOffset = kernelExtentOrErr->Offset;
     uint64_t kernelSize = kernelExtentOrErr->Size;
-    auto raised = COMGR::hotswap::raiseToIR(text.Bytes, isa, target, meta,
-                                        kernelOffset, kernelSize, targetIsa,
-                                        EnableWritelaneRewrite,
-                                        EnableWaveNative,
-                                        AssumeHipGlobalOffsetZeroOpt);
-    if (!raised.Success) {
-      // Contract: raiseToIR only populates RaiseResult::IrText on the
-      // success path (the last write before setting `success = true`),
-      // so we cannot dump partial IR here. Callers that need stderr
-      // diagnostics (abort-gate lit tests, etc.) FileCheck the raiser's
-      // stderr — we leave that untouched.
-      COMGR::hotswap::RaiseFailure Failure =
-          raised.Failure.hasFailed()
-              ? raised.Failure
-              : COMGR::hotswap::RaiseFailure::internalFailure(
-                    "raiseToIR returned failure without a structured reason");
-      llvm::errs() << "raise_cli: kernel '" << target << "' failed to raise: "
-                   << COMGR::hotswap::formatRaiseFailure(Failure) << "\n";
+    llvm::Expected<COMGR::hotswap::RaiseResult> RaisedOrErr =
+        COMGR::hotswap::raiseToIR(text.Bytes, isa, target, meta, kernelOffset,
+                                  kernelSize, targetIsa, EnableWritelaneRewrite,
+                                  EnableWaveNative,
+                                  AssumeHipGlobalOffsetZeroOpt);
+    if (!RaisedOrErr) {
+      llvm::logAllUnhandledErrors(RaisedOrErr.takeError(), llvm::errs(),
+                                  "raise_cli: kernel '" + target +
+                                      "' failed to raise: ");
       return 1;
     }
+    COMGR::hotswap::RaiseResult raised = std::move(*RaisedOrErr);
     llvm::outs().write(raised.IrText.data(), raised.IrText.size());
     return 0;
   }
@@ -491,14 +484,16 @@ int main(int argc, char **argv) {
     pipelineOptions.EnableWaveNative = EnableWaveNative;
     pipelineOptions.AssumeHipGlobalOffsetZero = AssumeHipGlobalOffsetZeroOpt;
     pipelineOptions.OptLevel = std::min<unsigned>(OptLevel, 3);
-    auto pipe = COMGR::hotswap::runPipeline(coData, isa, effectiveTargetIsa,
-                                            target, pipelineOptions);
-    if (!pipe.Success) {
-      llvm::errs() << "raise_cli: pipeline failed for kernel '" << target
-                   << "' (lifted=" << pipe.LiftedCount << "/" << pipe.TotalCount
-                   << ", failure='" << pipe.FailDetail << "')\n";
+    COMGR::hotswap::PipelineStats pipeStats;
+    llvm::Expected<COMGR::hotswap::PipelineResult> pipeOrErr =
+        COMGR::hotswap::runPipeline(coData, isa, effectiveTargetIsa, target,
+                                    pipelineOptions, &pipeStats);
+    if (!pipeOrErr) {
+      llvm::logAllUnhandledErrors(pipeOrErr.takeError(), llvm::errs(),
+                                  "raise_cli: ");
       return 1;
     }
+    COMGR::hotswap::PipelineResult pipe = std::move(*pipeOrErr);
     FILE *fp = std::fopen(writeHsacoPath.c_str(), "wb");
     if (!fp) {
       llvm::errs() << "raise_cli: cannot open " << writeHsacoPath
@@ -516,8 +511,8 @@ int main(int argc, char **argv) {
     }
     llvm::errs() << "raise_cli: wrote " << hsacoSize << " byte HSACO for "
                  << "kernel '" << target << "' to " << writeHsacoPath
-                 << " (lifted " << pipe.LiftedCount << "/" << pipe.TotalCount
-                 << ")\n";
+                 << " (lifted " << pipeStats.LiftedCount << "/"
+                 << pipeStats.TotalCount << ")\n";
     return 0;
   }
 
@@ -589,58 +584,23 @@ int main(int argc, char **argv) {
       } else {
         llvm::consumeError(metaOrErr.takeError());
       }
-      auto raised = COMGR::hotswap::raiseToIR(text.Bytes, isa, kName, meta,
-                                          kernelOffset, kernelSize, targetIsa,
-                                          EnableWritelaneRewrite,
-                                          EnableWaveNative,
-                                          AssumeHipGlobalOffsetZeroOpt);
+      COMGR::hotswap::RaiseStats stats;
+      llvm::Expected<COMGR::hotswap::RaiseResult> raisedOrErr =
+          COMGR::hotswap::raiseToIR(text.Bytes, isa, kName, meta, kernelOffset,
+                                    kernelSize, targetIsa,
+                                    EnableWritelaneRewrite, EnableWaveNative,
+                                    AssumeHipGlobalOffsetZeroOpt, &stats);
       shm->done = true;
-      shm->success = raised.Success;
-      shm->lifted = raised.LiftedCount;
-      shm->total = raised.TotalCount;
+      shm->success = static_cast<bool>(raisedOrErr);
+      shm->lifted = stats.LiftedCount;
+      shm->total = stats.TotalCount;
       shm->numDroppedFailures = 0;
 
-      if (raised.Success) {
-        ChildOut << "OK " << kName << " (" << raised.LiftedCount << "/"
-                 << raised.TotalCount << ")\n";
+      if (raisedOrErr) {
+        ChildOut << "OK " << kName << " (" << stats.LiftedCount << "/"
+                 << stats.TotalCount << ")\n";
       } else {
-        llvm::SmallVector<FailureBucketKey> Seen;
-        int NumEmittedFailures = 0;
-        auto EmitFailure = [&](const COMGR::hotswap::RaiseFailure &Failure,
-                               llvm::StringRef Prefix) {
-          FailureBucketKey Key = failureBucketKey(Failure);
-          for (const FailureBucketKey &SeenKey : Seen) {
-            if (SeenKey == Key)
-              return;
-          }
-          if (NumEmittedFailures >= kMaxTrackedFailures) {
-            ++shm->numDroppedFailures;
-            return;
-          }
-          Seen.push_back(std::move(Key));
-          printBatchFailureLine(ChildOut, Prefix, kName, Failure,
-                                Prefix == "FAIL" ? raised.LiftedCount : -1,
-                                Prefix == "FAIL" ? raised.TotalCount : -1);
-          ++NumEmittedFailures;
-        };
-
-        for (const COMGR::hotswap::RaiseFailure &Failure : raised.AllFailures)
-          EmitFailure(Failure, NumEmittedFailures == 0 ? "FAIL" : "ALSO");
-
-        if (NumEmittedFailures == 0) {
-          COMGR::hotswap::RaiseFailure Failure =
-              raised.Failure.hasFailed()
-                  ? raised.Failure
-                  : COMGR::hotswap::RaiseFailure::internalFailure(
-                        "raiseToIR returned failure without a structured reason");
-          EmitFailure(Failure, "FAIL");
-        }
-
-        if (shm->numDroppedFailures > 0) {
-          ChildOut << "ALSO " << kName << " -> __truncated__ [+"
-                   << shm->numDroppedFailures
-                   << " unique blockers not shown]\n";
-        }
+        llvm::logAllUnhandledErrors(raisedOrErr.takeError(), llvm::errs());
       }
 
       ChildOut.flush();
@@ -674,7 +634,7 @@ int main(int argc, char **argv) {
       continue;
 
     auto ReplayOrCrash = [&]() {
-      if (!replayChildOutput(ChildOutputPath)) {
+      if (replayChildOutput(ChildOutputPath)) {
         ++crashKernels;
         llvm::outs() << "FAIL " << kName << " -> __crash__ [output_missing]\n";
         return false;

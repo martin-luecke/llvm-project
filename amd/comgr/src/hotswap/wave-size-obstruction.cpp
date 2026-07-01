@@ -1185,7 +1185,7 @@ std::string renderObstructionTrace(const ObstructionReport &Report,
 // it as a RaiseFailure for raiser.cpp to propagate.
 // ----------------------------------------------------------------------------
 
-RaiseFailure selectFailureFromReport(const ObstructionReport &Report) {
+llvm::Error createErrorFromReport(const ObstructionReport &Report) {
   // Prefer unrewritable over pending -- the caller should see the
   // strongest refusal reason first. Ties broken by decoded order (the
   // `sites` vector is in decoded order, so `firstUnrewritable` /
@@ -1256,7 +1256,49 @@ RaiseFailure selectFailureFromReport(const ObstructionReport &Report) {
             rewriteIdName(Site->Rewrite) + " pending]");
   }
   // Oblivious / fully-rewritten: no failure.
-  return RaiseFailure();
+  return Error::success();
+}
+
+void logObstructionRefusal(const ObstructionReport &Report,
+                           llvm::StringRef Trace, llvm::raw_ostream &OS) {
+  const ObstructionSite *Site = Report.firstUnrewritable();
+  const bool Unrewritable = Site != nullptr;
+  RaiseFailureReason Reason = RaiseFailureReason::CrossWaveShuffleRewritePending;
+  if (Unrewritable) {
+    switch (Site->Kind) {
+    case ObstructionKind::MbcntHiLaneIdLeak:
+    case ObstructionKind::OutOfRangeLaneOperand:
+    case ObstructionKind::TtmpWaveIdLeak:
+    case ObstructionKind::WaveIdLiftScalarized:
+      Reason = RaiseFailureReason::CrossWaveLaneIdLeak;
+      break;
+    case ObstructionKind::FullWaveRotate:
+      Reason = RaiseFailureReason::CrossWaveUnrewritableShuffle;
+      break;
+    case ObstructionKind::NonCommutativeAtomic:
+      Reason = RaiseFailureReason::CrossWaveReplicaRace;
+      break;
+    case ObstructionKind::CmpxFromLaneId:
+    case ObstructionKind::SaveExecFromLaneId:
+      Reason = RaiseFailureReason::CrossWaveLanePredicatedExec;
+      break;
+    default:
+      break;
+    }
+  } else {
+    Site = Report.firstPending();
+  }
+  if (!Site)
+    return;
+  OS << "transpiler: pre-translation abort: " << reasonString(Reason) << " on '"
+     << Site->Inst->Mnemonic << "' at offset "
+     << llvm::format_hex(Site->Inst->Offset, 1) << " — "
+     << (Unrewritable ? "no rewrite in wave-size-translation.md §7's "
+                        "unrewritable table"
+                      : "rewrite pending (wave-size-translation.md §7's "
+                        "pending-rewrite table)")
+     << "\n"
+     << Trace;
 }
 
 } // namespace COMGR::hotswap

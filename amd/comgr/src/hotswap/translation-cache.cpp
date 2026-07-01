@@ -80,7 +80,7 @@ bool readElfHeaderFields(llvm::MemoryBufferRef buffer, uint16_t &machine,
                          uint32_t &flags) {
   auto objOrErr = llvm::object::ObjectFile::createELFObjectFile(buffer);
   if (!objOrErr) {
-    (void)llvm::toString(objOrErr.takeError());
+    llvm::consumeError(objOrErr.takeError());
     return false;
   }
   const auto *elf =
@@ -452,6 +452,7 @@ bool validateKernelArray(const llvm::json::Object &obj,
 llvm::json::Object metadataObject(const TranslationCacheRequest &request,
                                   const KeyData &keyData,
                                   const PipelineResult &Result,
+                                  const PipelineStats &Stats,
                                   llvm::StringRef objectSha256) {
   return llvm::json::Object{
       {"schema_version", kCacheSchemaVersion},
@@ -479,23 +480,23 @@ llvm::json::Object metadataObject(const TranslationCacheRequest &request,
       {"cached_object_sha256", objectSha256.str()},
       {"cached_object_size",
        static_cast<int64_t>(Result.Hsaco ? Result.Hsaco->getBufferSize() : 0)},
-      {"lifted_count", Result.LiftedCount},
-      {"total_count", Result.TotalCount},
-      {"c5_suppressed_count", Result.C5SuppressedCount},
-      {"c5_suppression_reason", Result.C5SuppressionReason},
-      {"uses_scratch_private_segment", Result.UsesScratchPrivateSegment},
+      {"lifted_count", Stats.LiftedCount},
+      {"total_count", Stats.TotalCount},
+      {"c5_suppressed_count", Stats.C5SuppressedCount},
+      {"c5_suppression_reason", Stats.C5SuppressionReason},
+      {"uses_scratch_private_segment", Stats.UsesScratchPrivateSegment},
       {"source_private_segment_fixed_size",
-       static_cast<int64_t>(Result.SourcePrivateSegmentFixedSize)},
+       static_cast<int64_t>(Stats.SourcePrivateSegmentFixedSize)},
       {"target_private_segment_fixed_size",
-       static_cast<int64_t>(Result.TargetPrivateSegmentFixedSize)},
-      {"target_enable_private_segment", Result.TargetEnablePrivateSegment},
+       static_cast<int64_t>(Stats.TargetPrivateSegmentFixedSize)},
+      {"target_enable_private_segment", Stats.TargetEnablePrivateSegment},
   };
 }
 
 bool validateMetadata(const TranslationCacheRequest &request,
                       const KeyData &keyData, const llvm::json::Object &obj,
                       llvm::StringRef objectSha256, size_t objectSize,
-                      PipelineResult &Result, std::string &Reason) {
+                      PipelineStats &Stats, std::string &Reason) {
   if (!requireEqualInt(obj, "schema_version", kCacheSchemaVersion, Reason) ||
       !requireEqualString(obj, "key", keyData.key, Reason) ||
       !requireEqualString(obj, "source_object_sha256", keyData.sourceSha256,
@@ -549,17 +550,14 @@ bool validateMetadata(const TranslationCacheRequest &request,
       !sourceScratch || !targetScratch || !targetEnable)
     return false;
 
-  Result.Success = true;
-  Result.LiftedCount = static_cast<int>(*lifted);
-  Result.TotalCount = static_cast<int>(*total);
-  Result.C5SuppressedCount = static_cast<int>(*c5Count);
-  Result.C5SuppressionReason = *c5Reason;
-  Result.UsesScratchPrivateSegment = *usesScratch;
-  Result.SourcePrivateSegmentFixedSize =
-      static_cast<uint32_t>(*sourceScratch);
-  Result.TargetPrivateSegmentFixedSize =
-      static_cast<uint32_t>(*targetScratch);
-  Result.TargetEnablePrivateSegment = *targetEnable;
+  Stats.LiftedCount = static_cast<int>(*lifted);
+  Stats.TotalCount = static_cast<int>(*total);
+  Stats.C5SuppressedCount = static_cast<int>(*c5Count);
+  Stats.C5SuppressionReason = *c5Reason;
+  Stats.UsesScratchPrivateSegment = *usesScratch;
+  Stats.SourcePrivateSegmentFixedSize = static_cast<uint32_t>(*sourceScratch);
+  Stats.TargetPrivateSegmentFixedSize = static_cast<uint32_t>(*targetScratch);
+  Stats.TargetEnablePrivateSegment = *targetEnable;
   return true;
 }
 
@@ -682,7 +680,7 @@ TranslationCacheLookup lookupTranslationCache(
   }
   auto metadataValidateStart = timingStart(request.CollectTimings);
   if (!validateMetadata(request, keyData, *obj, objectSha,
-                        objectBufRef.getBufferSize(), lookup.Result,
+                        objectBufRef.getBufferSize(), lookup.Stats,
                         lookup.Reason)) {
     lookup.Timings.metadataValidateSeconds =
         timingElapsed(request.CollectTimings, metadataValidateStart);
@@ -698,8 +696,10 @@ TranslationCacheLookup lookupTranslationCache(
   return finish();
 }
 
-TranslationCacheWrite writeTranslationCache(
-    const TranslationCacheRequest &request, const PipelineResult &Result) {
+TranslationCacheWrite
+writeTranslationCache(const TranslationCacheRequest &request,
+                      const PipelineResult &Result,
+                      const PipelineStats &Stats) {
   auto totalStart = timingStart(request.CollectTimings);
   TranslationCacheWrite write;
   auto finish = [&]() {
@@ -724,8 +724,7 @@ TranslationCacheWrite writeTranslationCache(
   write.MetadataPath = cacheMetadataPath(request, keyData.key);
   write.ObjectPath = cacheObjectPath(request, keyData.key);
 
-  if (!Result.Success || !Result.Hsaco ||
-      Result.Hsaco->getBufferSize() == 0) {
+  if (!Result.Hsaco || Result.Hsaco->getBufferSize() == 0) {
     write.Status = TranslationCacheStatus::WriteFailed;
     write.Reason = "refusing to cache unsuccessful or empty translation";
     return finish();
@@ -762,7 +761,7 @@ TranslationCacheWrite writeTranslationCache(
 
   auto metadataBuildStart = timingStart(request.CollectTimings);
   llvm::json::Object meta =
-      metadataObject(request, keyData, Result, objectSha);
+      metadataObject(request, keyData, Result, Stats, objectSha);
   write.Timings.metadataBuildSeconds =
       timingElapsed(request.CollectTimings, metadataBuildStart);
   auto metadataWriteStart = timingStart(request.CollectTimings);

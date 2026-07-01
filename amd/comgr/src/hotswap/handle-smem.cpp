@@ -34,8 +34,8 @@ Value *addStaticSmemByteOffset64(RaiseContext &Ctx, const DecodedInst &Di,
 
 } // namespace
 
-HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
-                         OpResolver &Op) {
+Expected<HandlerResult> handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
+                                   OpResolver &Op) {
   HandlerResult Hr;
   CanonicalOp Sop = Di.CanonOp;
 
@@ -101,20 +101,18 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
         IsSourceImplicitArgOffset && BaseIsLiveEntry;
     if (IsSourceImplicitArgOffset && !IsEntryImplicitArgLoad &&
         isStrictMode()) {
-      Hr.Failure = RaiseFailure::strictUnsafeLowering(
+      return RaiseFailure::strictUnsafeLowering(
           Di, "implicitarg.ptr",
           "cross-arch implicitarg.ptr lowering is unresolved: source "
           "implicit-arg offsets may be applied to the target runtime "
           "hidden-arg block on some CFG paths");
-      return Hr;
     }
     if (BaseIsKernargPair && !BaseIsKnownNonEntry && !ImmOffset &&
         Ctx.Kernargs.ImplicitArgsBase > 0 && isStrictMode()) {
-      Hr.Failure = RaiseFailure::strictUnsafeLowering(
+      return RaiseFailure::strictUnsafeLowering(
           Di, "implicitarg.ptr",
           "cross-arch implicitarg.ptr lowering is unresolved: dynamic source "
           "kernarg offsets may reach the source implicit-arg range");
-      return Hr;
     }
     if (IsEntryImplicitArgLoad) {
       SourceHiddenArgContext HiddenCtx{Ctx.C,
@@ -129,12 +127,11 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
           emitSourceHiddenDword(HiddenCtx, ByteOffset);
       if (!HiddenBase.Matched) {
         if (isStrictMode()) {
-          Hr.Failure = RaiseFailure::strictUnsafeLowering(
+          return RaiseFailure::strictUnsafeLowering(
               Di, "implicitarg.ptr",
               "cross-arch implicitarg.ptr lowering is unresolved: source "
               "implicit-arg offsets are being applied to the target runtime "
               "hidden-arg block");
-          return Hr;
         }
         Function *FnImplicitArgPtr = Intrinsic::getOrInsertDeclaration(
             &Ctx.M, Intrinsic::amdgcn_implicitarg_ptr);
@@ -159,23 +156,20 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
         return Hr;
       }
       if (!HiddenBase.Value) {
-        Hr.Failure = RaiseFailure::unsupportedSourceHiddenArg(
+        return RaiseFailure::unsupportedSourceHiddenArg(
             Di, "SMEM", HiddenBase.FailureDetail);
-        return Hr;
       }
       for (int D = 0; D < LoadDwords; D++) {
         SourceHiddenArgValue Dw =
             D == 0 ? HiddenBase
                    : emitSourceHiddenDword(HiddenCtx, ByteOffset + D * 4);
         if (!Dw.Matched) {
-          Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+          return RaiseFailure::unsupportedInstructionForm(
               Di, "SMEM", "source hidden-arg SMEM load spans non-hidden bytes");
-          return Hr;
         }
         if (!Dw.Value) {
-          Hr.Failure = RaiseFailure::unsupportedSourceHiddenArg(
-              Di, "SMEM", Dw.FailureDetail);
-          return Hr;
+          return RaiseFailure::unsupportedSourceHiddenArg(Di, "SMEM",
+                                                          Dw.FailureDetail);
         }
         Ctx.Regs.storeSGPR32(Ctx.B, Dest.BaseIdx + D, Dw.Value);
       }
@@ -282,12 +276,11 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
           IsSourceImplicitArgOffset && BaseIsLiveEntry;
       if (IsSourceImplicitArgOffset && !IsEntryImplicitArgLoad &&
           isStrictMode()) {
-        Hr.Failure = RaiseFailure::strictUnsafeLowering(
+        return RaiseFailure::strictUnsafeLowering(
             Di, "implicitarg.ptr",
             "cross-arch implicitarg.ptr lowering is unresolved: source "
             "implicit-arg offsets may be applied to the target runtime "
             "hidden-arg block on some CFG paths");
-        return Hr;
       }
       if (IsEntryImplicitArgLoad) {
         SourceHiddenArgContext HiddenCtx{Ctx.C,
@@ -306,17 +299,15 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
           return Hr;
         }
         if (Hidden.Matched) {
-          Hr.Failure = RaiseFailure::unsupportedSourceHiddenArg(
-              Di, "SMEM", Hidden.FailureDetail);
-          return Hr;
+          return RaiseFailure::unsupportedSourceHiddenArg(Di, "SMEM",
+                                                          Hidden.FailureDetail);
         }
         if (isStrictMode()) {
-          Hr.Failure = RaiseFailure::strictUnsafeLowering(
+          return RaiseFailure::strictUnsafeLowering(
               Di, "implicitarg.ptr",
               "cross-arch implicitarg.ptr lowering is unresolved: source "
               "implicit-arg offsets are being applied to the target runtime "
               "hidden-arg block");
-          return Hr;
         }
       }
       if (Off != 0)
@@ -325,11 +316,10 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
       if (BaseIsKernargPair && !BaseIsKnownNonEntry &&
           Ctx.Kernargs.ImplicitArgsBase > 0 &&
           isStrictMode()) {
-        Hr.Failure = RaiseFailure::strictUnsafeLowering(
+        return RaiseFailure::strictUnsafeLowering(
             Di, "implicitarg.ptr",
             "cross-arch implicitarg.ptr lowering is unresolved: dynamic source "
             "kernarg offsets may reach the source implicit-arg range");
-        return Hr;
       }
       // Narrow SMEM element size for `scale_offset`: 1B for byte,
       // 2B for halfword. Same SCAL-scales-the-SGPR-offset rule as
@@ -368,9 +358,8 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
     if (Data.RegKind != ParsedReg::SGPR || Base.RegKind != ParsedReg::SGPR) {
       llvm::errs() << "transpiler: " << Di.Mnemonic
                    << ": S_STORE expects SGPR data and base\n";
-      Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+      return RaiseFailure::unsupportedInstructionForm(
           Di, "SMEM", "S_STORE expects SGPR data and base");
-      return Hr;
     }
     Value *BaseAddr = Ctx.Regs.loadSGPR64(Ctx.B, Base.BaseIdx);
     Value *Ptr = Ctx.B.CreateIntToPtr(BaseAddr, Ctx.PtrGlobalTy);

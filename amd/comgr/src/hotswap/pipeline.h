@@ -2,6 +2,7 @@
 #define HOTSWAP_TRANSPILER_PIPELINE_H
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/MemoryBufferRef.h"
 
@@ -24,6 +25,25 @@ struct PipelineTimings {
   double collectMetadataSeconds = 0.0;
 };
 
+// Statistics measured during a pipeline run. Callers opt in by passing a
+// non-null PipelineStats pointer; nullptr means do not collect. Timing samples
+// within are additionally gated by PipelineOptions::CollectTimings.
+struct PipelineStats {
+  PipelineTimings Timings;
+  // Successful raises can still carry proof-relevant attribution. Today this
+  // records C5 predicate-chain sites accepted under a projection-specific
+  // proof (for example single-source-wave MODREP with no active replica
+  // lanes); loader proof logs surface these fields on `hotswap_result`.
+  int C5SuppressedCount = 0;
+  std::string C5SuppressionReason;
+  bool UsesScratchPrivateSegment = false;
+  uint32_t SourcePrivateSegmentFixedSize = 0;
+  bool TargetEnablePrivateSegment = false;
+  uint32_t TargetPrivateSegmentFixedSize = 0;
+  int LiftedCount = 0;
+  int TotalCount = 0;
+};
+
 struct PipelineOptions {
   bool EnableWritelaneRewrite = true;
   bool EnableWaveNative = true;
@@ -39,26 +59,6 @@ struct PipelineOptions {
 struct PipelineResult {
   std::unique_ptr<llvm::MemoryBuffer> Hsaco;
   std::string IrText;
-  PipelineTimings Timings;
-  std::string FailMnemonic;
-  std::string FailKernel;
-  std::string FailReason;
-  std::string FailFormat;
-  std::string FailDetail;
-  uint64_t FailOffset = 0;
-  // Successful raises can still carry proof-relevant attribution. Today this
-  // records C5 predicate-chain sites accepted under a projection-specific
-  // proof (for example single-source-wave MODREP with no active replica
-  // lanes); loader proof logs surface these fields on `hotswap_result`.
-  int C5SuppressedCount = 0;
-  std::string C5SuppressionReason;
-  bool UsesScratchPrivateSegment = false;
-  uint32_t SourcePrivateSegmentFixedSize = 0;
-  bool TargetEnablePrivateSegment = false;
-  uint32_t TargetPrivateSegmentFixedSize = 0;
-  int LiftedCount = 0;
-  int TotalCount = 0;
-  bool Success = false;
 };
 
 /// End-to-end pipeline: HSACO binary -> raise to LLVM IR -> llc -> HSACO.
@@ -90,23 +90,25 @@ struct PipelineResult {
 /// under standard conversions).  Callers repeat the ISA string
 /// instead; the ~5 single-ISA call sites that did this pre-fix are
 /// all updated to the two-string form.
-PipelineResult runPipeline(llvm::MemoryBufferRef CodeObjectData,
-                           llvm::StringRef SourceISA, llvm::StringRef TargetISA,
-                           llvm::StringRef KernelName,
-                           PipelineOptions Options = {});
+llvm::Expected<PipelineResult>
+runPipeline(llvm::MemoryBufferRef CodeObjectData, llvm::StringRef SourceISA,
+            llvm::StringRef TargetISA, llvm::StringRef KernelName,
+            PipelineOptions Options = {}, PipelineStats *Stats = nullptr);
 
 /// Raise and lower ALL kernels in a code object, producing a single merged
-/// HSACO containing every kernel.  Returns success only if every kernel was
-/// raised and compiled. On raise failure, the `fail*` fields carry the
-/// structured `RaiseFailure` details for proof logs and corpus summaries.
+/// HSACO containing every kernel.  Succeeds only if every kernel was raised
+/// and compiled; on the first failure it returns an `Error` carrying
+/// the structured `RaiseFailure` attribution for proof logs and corpus
+/// summaries.
 ///
 /// `EnableWritelaneRewrite` / `EnableWaveNative` plumb through to the
 /// per-kernel `raiseToIR` calls; see `raiser.hpp` for the contract and
 /// the in-tree-debug-only caveat.
-PipelineResult runPipelineAllKernels(llvm::MemoryBufferRef CodeObjectData,
-                                     llvm::StringRef SourceISA,
-                                     llvm::StringRef TargetISA,
-                                     PipelineOptions Options = {});
+llvm::Expected<PipelineResult>
+runPipelineAllKernels(llvm::MemoryBufferRef CodeObjectData,
+                      llvm::StringRef SourceISA, llvm::StringRef TargetISA,
+                      PipelineOptions Options = {},
+                      PipelineStats *Stats = nullptr);
 
 /// Process-global "strict mode" toggle, controlled by the
 /// `HSA_HOTSWAP_STRICT` environment variable. When set to a non-empty

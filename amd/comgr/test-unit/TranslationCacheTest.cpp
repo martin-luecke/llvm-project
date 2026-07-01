@@ -236,14 +236,18 @@ COMGR::hotswap::TranslationCacheRequest makeRequest(
 COMGR::hotswap::PipelineResult makeSuccessfulResult(
     std::vector<uint8_t> Hsaco = {0x7f, 'E', 'L', 'F', 1, 2, 3}) {
   COMGR::hotswap::PipelineResult Result;
-  Result.Success = true;
   Result.Hsaco = llvm::MemoryBuffer::getMemBufferCopy(
       llvm::StringRef(reinterpret_cast<const char *>(Hsaco.data()),
                       Hsaco.size()),
       "");
-  Result.LiftedCount = 7;
-  Result.TotalCount = 7;
   return Result;
+}
+
+COMGR::hotswap::PipelineStats makeSuccessfulStats() {
+  COMGR::hotswap::PipelineStats Stats;
+  Stats.LiftedCount = 7;
+  Stats.TotalCount = 7;
+  return Stats;
 }
 
 } // namespace
@@ -264,7 +268,8 @@ TEST(TranslationCache, FirstRunMissWriteSecondRunHit) {
   EXPECT_EQ(First.Status, COMGR::hotswap::TranslationCacheStatus::Miss);
 
   auto Result = makeSuccessfulResult();
-  auto Write = COMGR::hotswap::writeTranslationCache(Request, Result);
+  auto Stats = makeSuccessfulStats();
+  auto Write = COMGR::hotswap::writeTranslationCache(Request, Result, Stats);
   ASSERT_EQ(Write.Status, COMGR::hotswap::TranslationCacheStatus::WriteSuccess)
       << Write.Reason;
 
@@ -273,8 +278,8 @@ TEST(TranslationCache, FirstRunMissWriteSecondRunHit) {
       << Second.Reason;
   ASSERT_TRUE(Second.Result.Hsaco && Result.Hsaco);
   EXPECT_EQ(Second.Result.Hsaco->getBuffer(), Result.Hsaco->getBuffer());
-  EXPECT_EQ(Second.Result.LiftedCount, Result.LiftedCount);
-  EXPECT_EQ(Second.Result.TotalCount, Result.TotalCount);
+  EXPECT_EQ(Second.Stats.LiftedCount, Stats.LiftedCount);
+  EXPECT_EQ(Second.Stats.TotalCount, Stats.TotalCount);
 }
 
 TEST(TranslationCache, ChangedInputHashCausesMiss) {
@@ -288,7 +293,9 @@ TEST(TranslationCache, ChangedInputHashCausesMiss) {
   writeTextFile(Rules, "{\"version\":1,\"rules\":[]}\n");
   auto Source = fakeAmdgpuElf();
   auto Request = makeRequest(bufRef(Source), Rules);
-  ASSERT_EQ(COMGR::hotswap::writeTranslationCache(Request, makeSuccessfulResult()).Status,
+  ASSERT_EQ(COMGR::hotswap::writeTranslationCache(
+                Request, makeSuccessfulResult(), makeSuccessfulStats())
+                .Status,
             COMGR::hotswap::TranslationCacheStatus::WriteSuccess);
 
   Source[HashPerturbOffset] ^= 0x1;
@@ -308,7 +315,9 @@ TEST(TranslationCache, ChangedIsaCausesMiss) {
   writeTextFile(Rules, "{\"version\":1,\"rules\":[]}\n");
   auto Source = fakeAmdgpuElf();
   auto Request = makeRequest(bufRef(Source), Rules);
-  ASSERT_EQ(COMGR::hotswap::writeTranslationCache(Request, makeSuccessfulResult()).Status,
+  ASSERT_EQ(COMGR::hotswap::writeTranslationCache(
+                Request, makeSuccessfulResult(), makeSuccessfulStats())
+                .Status,
             COMGR::hotswap::TranslationCacheStatus::WriteSuccess);
 
   auto ChangedSourceIsa = makeRequest(bufRef(Source), Rules, "gfx1200", "gfx942");
@@ -348,7 +357,8 @@ TEST(TranslationCache, CorruptMetadataIsInvalid) {
   writeTextFile(Rules, "{\"version\":1,\"rules\":[]}\n");
   auto Source = fakeAmdgpuElf();
   auto Request = makeRequest(bufRef(Source), Rules);
-  auto Write = COMGR::hotswap::writeTranslationCache(Request, makeSuccessfulResult());
+  auto Write = COMGR::hotswap::writeTranslationCache(
+      Request, makeSuccessfulResult(), makeSuccessfulStats());
   ASSERT_EQ(Write.Status, COMGR::hotswap::TranslationCacheStatus::WriteSuccess);
 
   writeTextFile(Write.MetadataPath, "not-json\n");
@@ -368,7 +378,8 @@ TEST(TranslationCache, CorruptObjectIsInvalid) {
   writeTextFile(Rules, "{\"version\":1,\"rules\":[]}\n");
   auto Source = fakeAmdgpuElf();
   auto Request = makeRequest(bufRef(Source), Rules);
-  auto Write = COMGR::hotswap::writeTranslationCache(Request, makeSuccessfulResult());
+  auto Write = COMGR::hotswap::writeTranslationCache(
+      Request, makeSuccessfulResult(), makeSuccessfulStats());
   ASSERT_EQ(Write.Status, COMGR::hotswap::TranslationCacheStatus::WriteSuccess);
 
   writeBinaryFile(Write.ObjectPath, {1, 2, 3, 4});
@@ -390,7 +401,8 @@ TEST(TranslationCache, ReadonlyMissDoesNotWrite) {
   auto Lookup = COMGR::hotswap::lookupTranslationCache(Request);
   EXPECT_EQ(Lookup.Status, COMGR::hotswap::TranslationCacheStatus::Miss);
 
-  auto Write = COMGR::hotswap::writeTranslationCache(Request, makeSuccessfulResult());
+  auto Write = COMGR::hotswap::writeTranslationCache(
+      Request, makeSuccessfulResult(), makeSuccessfulStats());
   EXPECT_EQ(Write.Status, COMGR::hotswap::TranslationCacheStatus::Disabled);
 
   auto Second = COMGR::hotswap::lookupTranslationCache(Request);

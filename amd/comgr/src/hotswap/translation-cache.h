@@ -81,6 +81,7 @@ struct TranslationCacheLookup {
   std::string Reason;
   TranslationCacheLookupTimings Timings;
   PipelineResult Result;
+  PipelineStats Stats;
 };
 
 struct TranslationCacheWrite {
@@ -97,8 +98,9 @@ const char *translationCacheStatusString(TranslationCacheStatus Status);
 TranslationCacheLookup lookupTranslationCache(
     const TranslationCacheRequest &request);
 
-TranslationCacheWrite writeTranslationCache(
-    const TranslationCacheRequest &request, const PipelineResult &Result);
+TranslationCacheWrite
+writeTranslationCache(const TranslationCacheRequest &request,
+                      const PipelineResult &Result, const PipelineStats &Stats);
 
 std::string skippedKernelForTranslationCache(
     llvm::ArrayRef<std::string> kernelNames, llvm::StringRef skipList);

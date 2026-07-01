@@ -337,7 +337,13 @@ std::string renderObstructionTrace(const ObstructionReport &Report,
 // have routed the trace through LLVM_DEBUG / errs() before calling.
 // ----------------------------------------------------------------------------
 
-RaiseFailure selectFailureFromReport(const ObstructionReport &Report);
+llvm::Error createErrorFromReport(const ObstructionReport &Report);
+
+// Emit the "transpiler: pre-translation abort: ..." diagnostic for a refusal
+// report, followed by the rendered trace. Mirrors the structured failure from
+// createErrorFromReport on stderr for operators and batch-test FileChecks.
+void logObstructionRefusal(const ObstructionReport &Report,
+                           llvm::StringRef Trace, llvm::raw_ostream &OS);
 
 } // namespace COMGR::hotswap
 
