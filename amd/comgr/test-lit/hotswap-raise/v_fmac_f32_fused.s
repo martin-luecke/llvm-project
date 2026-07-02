@@ -1,20 +1,16 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 \
-; RUN:     --emit-ir=v_fmac_f32_fused_kernel 2>/dev/null \
-; RUN:   | %FileCheck %s --check-prefix=FUSED
-; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 \
-; RUN:     --emit-ir=v_fmac_f32_vopd_kernel 2>/dev/null \
-; RUN:   | %FileCheck %s --check-prefix=VOPD
+; RUN:     --emit-ir=v_fmac_f32_fused_kernel,v_fmac_f32_vopd_kernel 2>/dev/null \
+; RUN:   | %FileCheck %s
 
-; FUSED-LABEL: define amdgpu_kernel void @v_fmac_f32_fused_kernel(
-; FUSED: %fmac = call float @llvm.fma.f32(float %{{.+}}, float %{{.+}}, float %{{.+}})
-; FUSED-NOT: call {{.*}}@llvm.fmuladd.f32
-; FUSED-NOT: fmul {{.*}}float
-; FUSED-NOT: fadd {{.*}}float
-; VOPD-LABEL: define amdgpu_kernel void @v_fmac_f32_vopd_kernel(
-; VOPD: %vopd_fmac = call float @llvm.fma.f32(float %{{.+}}, float %{{.+}}, float %{{.+}})
-; VOPD-NOT: call {{.*}}@llvm.fmuladd.f32
+; CHECK-LABEL: define amdgpu_kernel void @v_fmac_f32_fused_kernel(
+; CHECK: %fmac = call float @llvm.fma.f32(float %{{.+}}, float %{{.+}}, float %{{.+}})
+; CHECK-NOT: call {{.*}}@llvm.fmuladd.f32
+; CHECK-NOT: fmul {{.*}}float
+; CHECK-NOT: fadd {{.*}}float
+; CHECK-LABEL: define amdgpu_kernel void @v_fmac_f32_vopd_kernel(
+; CHECK: %vopd_fmac = call float @llvm.fma.f32(float %{{.+}}, float %{{.+}}, float %{{.+}})
+; CHECK-NOT: call {{.*}}@llvm.fmuladd.f32
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6

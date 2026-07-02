@@ -1,25 +1,25 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_cvt_u32_u16_lo_kernel 2>/dev/null | %FileCheck %s --check-prefix=LO
-; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_cvt_u32_u16_hi_kernel 2>/dev/null | %FileCheck %s --check-prefix=HI
-; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_cvt_u32_u16_e64_hi_kernel 2>/dev/null | %FileCheck %s --check-prefix=E64HI
+; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 \
+; RUN:     --emit-ir=v_cvt_u32_u16_lo_kernel,v_cvt_u32_u16_hi_kernel,v_cvt_u32_u16_e64_hi_kernel 2>/dev/null \
+; RUN:   | %FileCheck %s
 ; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --write-hsaco=%t.out --kernel=v_cvt_u32_u16_lo_kernel 2>&1 | %FileCheck %s --check-prefix=PIPE
 
-; LO-LABEL: define amdgpu_kernel void @v_cvt_u32_u16_lo_kernel(
-; LO: trunc i32 {{.*}} to i16
-; LO: %cvt_u32_u16{{.*}} = zext i16 {{.*}} to i32
-; LO-NOT: lshr i32 {{.*}}, 16
-; LO-NOT: sext
-; HI-LABEL: define amdgpu_kernel void @v_cvt_u32_u16_hi_kernel(
-; HI: lshr i32 {{.*}}, 16
-; HI: trunc i32 {{.*}} to i16
-; HI: %cvt_u32_u16{{.*}} = zext i16 {{.*}} to i32
-; HI-NOT: sext
-; E64HI-LABEL: define amdgpu_kernel void @v_cvt_u32_u16_e64_hi_kernel(
-; E64HI: lshr i32 {{.*}}, 16
-; E64HI: trunc i32 {{.*}} to i16
-; E64HI: %cvt_u32_u16{{.*}} = zext i16 {{.*}} to i32
-; E64HI-NOT: sext
-; E64HI-NOT: unsupported source modifiers
+; CHECK-LABEL: define amdgpu_kernel void @v_cvt_u32_u16_lo_kernel(
+; CHECK: trunc i32 {{.*}} to i16
+; CHECK: %cvt_u32_u16{{.*}} = zext i16 {{.*}} to i32
+; CHECK-NOT: lshr i32 {{.*}}, 16
+; CHECK-NOT: sext
+; CHECK-LABEL: define amdgpu_kernel void @v_cvt_u32_u16_hi_kernel(
+; CHECK: lshr i32 {{.*}}, 16
+; CHECK: trunc i32 {{.*}} to i16
+; CHECK: %cvt_u32_u16{{.*}} = zext i16 {{.*}} to i32
+; CHECK-NOT: sext
+; CHECK-LABEL: define amdgpu_kernel void @v_cvt_u32_u16_e64_hi_kernel(
+; CHECK: lshr i32 {{.*}}, 16
+; CHECK: trunc i32 {{.*}} to i16
+; CHECK: %cvt_u32_u16{{.*}} = zext i16 {{.*}} to i32
+; CHECK-NOT: sext
+; CHECK-NOT: unsupported source modifiers
 ; PIPE: raise_cli: wrote
 ; PIPE-SAME: v_cvt_u32_u16_lo_kernel
 

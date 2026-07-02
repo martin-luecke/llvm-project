@@ -1,37 +1,34 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_mov_b16_lo_lo_kernel 2>/dev/null | %FileCheck %s --check-prefix=LOLO
-; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_mov_b16_hi_lo_kernel 2>/dev/null | %FileCheck %s --check-prefix=HILO
-; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_mov_b16_lo_hi_kernel 2>/dev/null | %FileCheck %s --check-prefix=LOHI
-; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_mov_b16_hi_hi_kernel 2>/dev/null | %FileCheck %s --check-prefix=HIHI
+; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_mov_b16_lo_lo_kernel,v_mov_b16_hi_lo_kernel,v_mov_b16_lo_hi_kernel,v_mov_b16_hi_hi_kernel 2>/dev/null | %FileCheck %s
 
-; LOLO-LABEL: define amdgpu_kernel void @v_mov_b16_lo_lo_kernel(
-; LOLO: trunc i32 {{.*}} to i16
-; LOLO: zext i16 {{.*}} to i32
-; LOLO: and i32 {{.*}}, -65536
-; LOLO: %v_mov_b16_merge{{.*}} = or i32
-; LOLO-NOT: lshr i32 {{.*}}, 16
-; LOLO-NOT: shl i32 {{.*}}, 16
-; HILO-LABEL: define amdgpu_kernel void @v_mov_b16_hi_lo_kernel(
-; HILO: lshr i32 {{.*}}, 16
-; HILO: trunc i32 {{.*}} to i16
-; HILO: zext i16 {{.*}} to i32
-; HILO: and i32 {{.*}}, -65536
-; HILO: %v_mov_b16_merge{{.*}} = or i32
-; HILO-NOT: shl i32 {{.*}}, 16
-; LOHI-LABEL: define amdgpu_kernel void @v_mov_b16_lo_hi_kernel(
-; LOHI: trunc i32 {{.*}} to i16
-; LOHI: zext i16 {{.*}} to i32
-; LOHI: and i32 {{.*}}, 65535
-; LOHI: shl i32 {{.*}}, 16
-; LOHI: %v_mov_b16_merge{{.*}} = or i32
-; LOHI-NOT: lshr i32 {{.*}}, 16
-; HIHI-LABEL: define amdgpu_kernel void @v_mov_b16_hi_hi_kernel(
-; HIHI: lshr i32 {{.*}}, 16
-; HIHI: trunc i32 {{.*}} to i16
-; HIHI: zext i16 {{.*}} to i32
-; HIHI: and i32 {{.*}}, 65535
-; HIHI: shl i32 {{.*}}, 16
-; HIHI: %v_mov_b16_merge{{.*}} = or i32
+; CHECK-LABEL: define amdgpu_kernel void @v_mov_b16_lo_lo_kernel(
+; CHECK: trunc i32 {{.*}} to i16
+; CHECK: zext i16 {{.*}} to i32
+; CHECK: and i32 {{.*}}, -65536
+; CHECK: %v_mov_b16_merge{{.*}} = or i32
+; CHECK-NOT: lshr i32 {{.*}}, 16
+; CHECK-NOT: shl i32 {{.*}}, 16
+; CHECK-LABEL: define amdgpu_kernel void @v_mov_b16_hi_lo_kernel(
+; CHECK: lshr i32 {{.*}}, 16
+; CHECK: trunc i32 {{.*}} to i16
+; CHECK: zext i16 {{.*}} to i32
+; CHECK: and i32 {{.*}}, -65536
+; CHECK: %v_mov_b16_merge{{.*}} = or i32
+; CHECK-NOT: shl i32 {{.*}}, 16
+; CHECK-LABEL: define amdgpu_kernel void @v_mov_b16_lo_hi_kernel(
+; CHECK: trunc i32 {{.*}} to i16
+; CHECK: zext i16 {{.*}} to i32
+; CHECK: and i32 {{.*}}, 65535
+; CHECK: shl i32 {{.*}}, 16
+; CHECK: %v_mov_b16_merge{{.*}} = or i32
+; CHECK-NOT: lshr i32 {{.*}}, 16
+; CHECK-LABEL: define amdgpu_kernel void @v_mov_b16_hi_hi_kernel(
+; CHECK: lshr i32 {{.*}}, 16
+; CHECK: trunc i32 {{.*}} to i16
+; CHECK: zext i16 {{.*}} to i32
+; CHECK: and i32 {{.*}}, 65535
+; CHECK: shl i32 {{.*}}, 16
+; CHECK: %v_mov_b16_merge{{.*}} = or i32
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6

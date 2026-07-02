@@ -1,17 +1,15 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco
-; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=global_load_negative_offset_kernel 2>/dev/null | %FileCheck %s --check-prefix=LOAD
-; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=global_store_negative_offset_kernel 2>/dev/null | %FileCheck %s --check-prefix=STORE
-; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=flat_load_saddr_negative_offset_kernel 2>/dev/null | %FileCheck %s --check-prefix=FLAT
+; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=global_load_negative_offset_kernel,global_store_negative_offset_kernel,flat_load_saddr_negative_offset_kernel 2>/dev/null | %FileCheck %s
 
-; LOAD-LABEL: define amdgpu_kernel void @global_load_negative_offset_kernel
-; LOAD: getelementptr i8, ptr addrspace(1) %{{.*}}, i64 -19200
-; LOAD-NOT: getelementptr i8, ptr addrspace(1) %{{.*}}, i64 16758016
-; STORE-LABEL: define amdgpu_kernel void @global_store_negative_offset_kernel
-; STORE: getelementptr i8, ptr addrspace(1) %{{.*}}, i64 -19200
-; STORE-NOT: getelementptr i8, ptr addrspace(1) %{{.*}}, i64 16758016
-; FLAT-LABEL: define amdgpu_kernel void @flat_load_saddr_negative_offset_kernel
-; FLAT: getelementptr i8, ptr addrspace(1) %{{.*}}, i64 -19200
-; FLAT-NOT: getelementptr i8, ptr addrspace(1) %{{.*}}, i64 16758016
+; CHECK-LABEL: define amdgpu_kernel void @global_load_negative_offset_kernel
+; CHECK: getelementptr i8, ptr addrspace(1) %{{.*}}, i64 -19200
+; CHECK-NOT: getelementptr i8, ptr addrspace(1) %{{.*}}, i64 16758016
+; CHECK-LABEL: define amdgpu_kernel void @global_store_negative_offset_kernel
+; CHECK: getelementptr i8, ptr addrspace(1) %{{.*}}, i64 -19200
+; CHECK-NOT: getelementptr i8, ptr addrspace(1) %{{.*}}, i64 16758016
+; CHECK-LABEL: define amdgpu_kernel void @flat_load_saddr_negative_offset_kernel
+; CHECK: getelementptr i8, ptr addrspace(1) %{{.*}}, i64 -19200
+; CHECK-NOT: getelementptr i8, ptr addrspace(1) %{{.*}}, i64 16758016
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6

@@ -1,35 +1,32 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=buffer_store_short_sentinel_srd_kernel 2>/dev/null | %FileCheck %s --check-prefix=SENTINEL
-; RUN: raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=buffer_store_short_finite_srd_kernel 2>/dev/null | %FileCheck %s --check-prefix=FINITE
-; RUN: raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=buffer_store_short_allones_srd_kernel 2>/dev/null | %FileCheck %s --check-prefix=ALLONES
-; RUN: raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=buffer_store_short_ambiguous_srd_kernel 2>/dev/null | %FileCheck %s --check-prefix=AMBIG
+; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=buffer_store_short_sentinel_srd_kernel,buffer_store_short_finite_srd_kernel,buffer_store_short_allones_srd_kernel,buffer_store_short_ambiguous_srd_kernel 2>/dev/null | %FileCheck %s
 
-; SENTINEL-LABEL: define amdgpu_kernel void @buffer_store_short_sentinel_srd_kernel(
-; SENTINEL: icmp eq i32 {{.*}}16777215
-; SENTINEL: select i1 {{.*}}, i32 2147483646, i32 16777215
-; SENTINEL-NOT: insertelement <4 x i32> {{.*}}, i32 131072, i64 3
-; SENTINEL: insertelement <4 x i32> {{.*}}, i32 159744, i64 3
-; SENTINEL: call void @llvm.amdgcn.raw.buffer.store.i16(
-; FINITE-LABEL: define amdgpu_kernel void @buffer_store_short_finite_srd_kernel(
-; FINITE: icmp eq i32 {{.*}}16777215
-; FINITE: select i1 {{.*}}, i32 2147483646, i32 4096
-; FINITE-NOT: insertelement <4 x i32> {{.*}}, i32 131072, i64 3
-; FINITE: insertelement <4 x i32> {{.*}}, i32 159744, i64 3
-; FINITE: call void @llvm.amdgcn.raw.buffer.store.i16(
-; ALLONES-LABEL: define amdgpu_kernel void @buffer_store_short_allones_srd_kernel(
-; ALLONES: icmp eq i32 {{.*}}16777215
-; ALLONES: select i1 {{.*}}, i32 2147483646, i32 {{(-1|4294967295)}}
-; ALLONES-NOT: insertelement <4 x i32> {{.*}}, i32 131072, i64 3
-; ALLONES: insertelement <4 x i32> {{.*}}, i32 159744, i64 3
-; ALLONES: call void @llvm.amdgcn.raw.buffer.store.i16(
-; AMBIG-LABEL: define amdgpu_kernel void @buffer_store_short_ambiguous_srd_kernel(
-; AMBIG: icmp eq i32 1, 0
-; AMBIG: icmp eq i32 1, 131072
-; AMBIG: icmp eq i32 1, 147456
-; AMBIG: icmp eq i32 1, 159744
-; AMBIG: select i1 {{.*}}, i32 2147483646, i32 16777215
-; AMBIG-NOT: select i1 true, i32 2147483646, i32 16777215
-; AMBIG: call void @llvm.amdgcn.raw.buffer.store.i16(
+; CHECK-LABEL: define amdgpu_kernel void @buffer_store_short_sentinel_srd_kernel(
+; CHECK: icmp eq i32 {{.*}}16777215
+; CHECK: select i1 {{.*}}, i32 2147483646, i32 16777215
+; CHECK-NOT: insertelement <4 x i32> {{.*}}, i32 131072, i64 3
+; CHECK: insertelement <4 x i32> {{.*}}, i32 159744, i64 3
+; CHECK: call void @llvm.amdgcn.raw.buffer.store.i16(
+; CHECK-LABEL: define amdgpu_kernel void @buffer_store_short_finite_srd_kernel(
+; CHECK: icmp eq i32 {{.*}}16777215
+; CHECK: select i1 {{.*}}, i32 2147483646, i32 4096
+; CHECK-NOT: insertelement <4 x i32> {{.*}}, i32 131072, i64 3
+; CHECK: insertelement <4 x i32> {{.*}}, i32 159744, i64 3
+; CHECK: call void @llvm.amdgcn.raw.buffer.store.i16(
+; CHECK-LABEL: define amdgpu_kernel void @buffer_store_short_allones_srd_kernel(
+; CHECK: icmp eq i32 {{.*}}16777215
+; CHECK: select i1 {{.*}}, i32 2147483646, i32 {{(-1|4294967295)}}
+; CHECK-NOT: insertelement <4 x i32> {{.*}}, i32 131072, i64 3
+; CHECK: insertelement <4 x i32> {{.*}}, i32 159744, i64 3
+; CHECK: call void @llvm.amdgcn.raw.buffer.store.i16(
+; CHECK-LABEL: define amdgpu_kernel void @buffer_store_short_ambiguous_srd_kernel(
+; CHECK: icmp eq i32 1, 0
+; CHECK: icmp eq i32 1, 131072
+; CHECK: icmp eq i32 1, 147456
+; CHECK: icmp eq i32 1, 159744
+; CHECK: select i1 {{.*}}, i32 2147483646, i32 16777215
+; CHECK-NOT: select i1 true, i32 2147483646, i32 16777215
+; CHECK: call void @llvm.amdgcn.raw.buffer.store.i16(
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6

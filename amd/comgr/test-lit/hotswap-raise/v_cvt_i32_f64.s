@@ -1,19 +1,18 @@
 ; RUN: %llvm_mc -mcpu=gfx942 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco
-; RUN: %raise_cli %t.hsaco --emit-ir=v_cvt_i32_f64_kernel | %FileCheck %s --check-prefix=I32
-; RUN: %raise_cli %t.hsaco --emit-ir=v_cvt_u32_f64_kernel | %FileCheck %s --check-prefix=U32
+; RUN: %raise_cli %t.hsaco --emit-ir=v_cvt_i32_f64_kernel,v_cvt_u32_f64_kernel | %FileCheck %s
 
-; I32-LABEL: define amdgpu_kernel void @v_cvt_i32_f64_kernel(
-; I32: %cvt_i32_f64 = call i32 @llvm.fptosi.sat.i32.f64(double %{{[^,]+}})
-; I32: %neg = fneg double %{{[^,]+}}
-; I32: %cvt_i32_f64{{[0-9]*}} = call i32 @llvm.fptosi.sat.i32.f64(double %neg)
-; I32: %abs = call double @llvm.fabs.f64(double %{{[^,]+}})
-; I32: %cvt_i32_f64{{[0-9]*}} = call i32 @llvm.fptosi.sat.i32.f64(double %abs)
-; I32-NOT: fptoui double
-; I32-NOT: fptosi double
-; U32-LABEL: define amdgpu_kernel void @v_cvt_u32_f64_kernel(
-; U32: %cvt_u32_f64 = call i32 @llvm.fptoui.sat.i32.f64(double %{{[^,]+}})
-; U32-NOT: fptoui double
-; U32-NOT: fptosi double
+; CHECK-LABEL: define amdgpu_kernel void @v_cvt_i32_f64_kernel(
+; CHECK: %cvt_i32_f64 = call i32 @llvm.fptosi.sat.i32.f64(double %{{[^,]+}})
+; CHECK: %neg = fneg double %{{[^,]+}}
+; CHECK: %cvt_i32_f64{{[0-9]*}} = call i32 @llvm.fptosi.sat.i32.f64(double %neg)
+; CHECK: %abs = call double @llvm.fabs.f64(double %{{[^,]+}})
+; CHECK: %cvt_i32_f64{{[0-9]*}} = call i32 @llvm.fptosi.sat.i32.f64(double %abs)
+; CHECK-NOT: fptoui double
+; CHECK-NOT: fptosi double
+; CHECK-LABEL: define amdgpu_kernel void @v_cvt_u32_f64_kernel(
+; CHECK: %cvt_u32_f64 = call i32 @llvm.fptoui.sat.i32.f64(double %{{[^,]+}})
+; CHECK-NOT: fptoui double
+; CHECK-NOT: fptosi double
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx942"
 	.amdhsa_code_object_version 6
