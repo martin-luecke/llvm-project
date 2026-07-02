@@ -2,20 +2,13 @@
 ; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=global_load_negative_offset_kernel 2>/dev/null | %FileCheck %s --check-prefix=LOAD
 ; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=global_store_negative_offset_kernel 2>/dev/null | %FileCheck %s --check-prefix=STORE
 ; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=flat_load_saddr_negative_offset_kernel 2>/dev/null | %FileCheck %s --check-prefix=FLAT
-;
-; gfx1250 GLOBAL/FLAT memory offsets are signed byte offsets. MC can expose a
-; negative encoded offset as its raw 24-bit field; the raiser must sign-extend
-; before building the target pointer, or `offset:-19200` becomes a huge positive
-; GEP and guarded Triton loads fault on gfx942.
 
 ; LOAD-LABEL: define amdgpu_kernel void @global_load_negative_offset_kernel
 ; LOAD: getelementptr i8, ptr addrspace(1) %{{.*}}, i64 -19200
 ; LOAD-NOT: getelementptr i8, ptr addrspace(1) %{{.*}}, i64 16758016
-
 ; STORE-LABEL: define amdgpu_kernel void @global_store_negative_offset_kernel
 ; STORE: getelementptr i8, ptr addrspace(1) %{{.*}}, i64 -19200
 ; STORE-NOT: getelementptr i8, ptr addrspace(1) %{{.*}}, i64 16758016
-
 ; FLAT-LABEL: define amdgpu_kernel void @flat_load_saddr_negative_offset_kernel
 ; FLAT: getelementptr i8, ptr addrspace(1) %{{.*}}, i64 -19200
 ; FLAT-NOT: getelementptr i8, ptr addrspace(1) %{{.*}}, i64 16758016

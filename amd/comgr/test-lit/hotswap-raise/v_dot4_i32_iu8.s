@@ -2,11 +2,6 @@
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx1250 --emit-ir=v_dot4_i32_iu8_signed_kernel 2>/dev/null | %FileCheck %s --check-prefix=SIGNED
 ; RUN: raise_cli %t.hsaco --target-isa=gfx1250 --emit-ir=v_dot4_i32_iu8_unsigned_kernel 2>/dev/null | %FileCheck %s --check-prefix=UNSIGNED
 ; RUN: raise_cli %t.hsaco --target-isa=gfx1250 --emit-ir=v_dot4_i32_iu8_clamp_kernel 2>/dev/null | %FileCheck %s --check-prefix=CLAMP
-;
-; Lift test for gfx11+ `v_dot4_i32_iu8`. The `iu8` opcode family carries
-; per-source signedness in the VOP3P neg_lo modifier bits: neg_lo[0] signs
-; src0's bytes, neg_lo[1] signs src1's bytes. The raiser lowers the unclamped
-; forms to canonical integer IR so the semantics remain target-independent.
 
 ; SIGNED-LABEL: define amdgpu_kernel void @v_dot4_i32_iu8_signed_kernel(
 ; SIGNED: sext i8 %{{[^ ]+}} to i64
@@ -14,13 +9,11 @@
 ; SIGNED: %dot4_acc{{[0-9]*}} = add i64
 ; SIGNED: trunc i64 %dot4_acc{{[0-9]*}} to i32
 ; SIGNED-NOT: @llvm.amdgcn.sudot4
-
 ; UNSIGNED-LABEL: define amdgpu_kernel void @v_dot4_i32_iu8_unsigned_kernel(
 ; UNSIGNED: zext i8 %{{[^ ]+}} to i64
 ; UNSIGNED-NOT: sext i8
 ; UNSIGNED: trunc i64 %dot4_acc{{[0-9]*}} to i32
 ; UNSIGNED-NOT: @llvm.amdgcn.sudot4
-
 ; CLAMP-LABEL: define amdgpu_kernel void @v_dot4_i32_iu8_clamp_kernel(
 ; CLAMP: icmp slt i64 %{{[^,]+}}, -2147483648
 ; CLAMP: select i1 %{{[^,]+}}, i64 -2147483648

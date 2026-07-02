@@ -1,26 +1,9 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_fmamk_fmaak_f64_kernel 2>/dev/null | %FileCheck %s
-;
-; Lift test for gfx1250 vector mandatory-literal FMA forms (f64). Manual:
-;   v_fmamk_f64 vd, src0, K, src1: vd = fma(src0, K, src1)
-;   v_fmaak_f64 vd, src0, src1, K: vd = fma(src0, src1, K)
-; K is a 64-bit literal (KImmFP64). Operand position of K must survive
-; the lift -- v_fmamk routes K to the second fma argument, v_fmaak routes
-; it to the third, mirroring the F32 forms' convention.
 
 ; CHECK-LABEL: define amdgpu_kernel void @v_fmamk_fmaak_f64_kernel(
-
-; v_fmamk_f64: K = pi (0x400921FB54442D18) lands at the middle slot.
-; The literal can render either as a hex-double `0x400921FB54442D18`
-; or its disambiguated `f0x...` form; matching either is sufficient to
-; pin the bit pattern and operand position.
 ; CHECK: call {{.*}}double @llvm.fma.f64(double {{.*}}, double {{f?0x400921FB54442D18}}, double {{.*}})
-
-; v_fmaak_f64: K = e (0x4005BF0A8B145769) lands at the trailing slot.
 ; CHECK: call {{.*}}double @llvm.fma.f64(double {{.*}}, double {{.*}}, double {{f?0x4005BF0A8B145769}})
-
-; The intrinsic declaration must be present (proves the call wasn't
-; created against the wrong overload).
 ; CHECK: declare {{.*}}double @llvm.fma.f64(double, double, double)
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"

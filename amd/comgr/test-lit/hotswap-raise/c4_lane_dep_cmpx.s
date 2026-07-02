@@ -1,35 +1,13 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %not raise_cli %t.hsaco --target-isa=gfx942 --disable-wave-native \
 ; RUN:     --emit-ir=c4_lane_dep_cmpx_kernel 2>&1 | %FileCheck %s --check-prefix=STDERR
-;
-; Class 4 "lane-position-dependent EXEC writes" under modulo-replication
-; (hotswap/docs/wave-size-translation.md §6). The v_cmpx's LHS flows from
-; v_mbcnt_lo, which makes the compare semantically "enable lanes below a
-; source-wave-local lane-id threshold". WaveNative has a principled projection
-; for this family; this fixture pins the opt-out MODREP refusal.
-;
-; This is the structural counter-example to lit_tests/cross_wave_warn,
-; whose v_cmpx uses a lane-position-INDEPENDENT bounds expression
-; (an 8-vs-lane-value compare with a constant bound, where the
-; lane_id is not routed through a mbcnt-derived path). That warn-
-; only fixture remains valid under the new gate because its
-; compare is provably lane-position-independent.
-;
-; CLASSIFIER CONTRACT. The decoded-provenance classifier flags this
-; kernel because the v_cmpx source register is defined by v_mbcnt_lo.
-; This is the unsafe path: an EXEC predicate rooted in absolute
-; lane-id arithmetic. Kernels that use v_mbcnt_* only for unrelated
-; ds_bpermute selectors and write EXEC from bounds masks should not
-; trip this fixture's refusal.
 
 ; STDERR: transpiler: pre-translation abort:
 ; STDERR-SAME: cross-wave-lane-predicated-exec
 ; STDERR-SAME: v_cmpx
-
 ; STDERR: CmpxFromLaneId
 ; STDERR-SAME: Class 4
 ; STDERR: outcome: (c) refuse
-
 ; STDERR: raise_cli: kernel 'c4_lane_dep_cmpx_kernel' failed to raise:
 ; STDERR-SAME: v_cmpx
 

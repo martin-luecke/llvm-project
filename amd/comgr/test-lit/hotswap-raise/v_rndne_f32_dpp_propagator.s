@@ -2,11 +2,6 @@
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:     --emit-ir=v_rndne_f32_dpp_propagator_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
-;
-; V_RNDNE_F32 lowers to llvm.roundeven.f32. When a DPP result feeds that
-; intrinsic, the cross-widen pass must treat roundeven as a VGPR-safe
-; propagator; otherwise the shared DPP rewrite would be blocked as if the
-; DPP value flowed into an unaudited or SGPR-forced use.
 
 ; CHECK-LABEL: define amdgpu_kernel void @v_rndne_f32_dpp_propagator_kernel(
 ; CHECK-NOT: call i32 @llvm.amdgcn.update.dpp.i32(

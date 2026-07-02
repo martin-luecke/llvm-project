@@ -1,10 +1,5 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_add_sub_nc_i16_kernel 2>/dev/null | %FileCheck %s
-;
-; Lift test for signed true16 v_{add,sub}_nc_i16. Pins:
-;   * unclamped forms are plain wrapping i16 add/sub;
-;   * clamp uses signed i16 saturation, distinct from the unsigned U16 forms;
-;   * selected destination-half writes preserve the other half.
 
 ; CHECK-LABEL: define amdgpu_kernel void @v_add_sub_nc_i16_kernel(
 ; CHECK: %vadd_nc_i16{{[0-9]*}} = add i16 %{{[^,]+}}, %{{[^ ]+}}

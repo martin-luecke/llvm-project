@@ -1,8 +1,5 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=s_wait_storecnt_kernel 2>/dev/null | %FileCheck %s
-;
-; gfx942 folds store ordering into vmcnt, so gfx1250's `s_wait_storecnt N`
-; lowers to the conservative wait-all form (`s_waitcnt 0`).
 
 ; CHECK-LABEL: define amdgpu_kernel void @s_wait_storecnt_kernel(
 ; CHECK: store i32 {{.*}}, ptr addrspace(1) %{{[^,]+}}

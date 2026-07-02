@@ -7,33 +7,21 @@
 ; RUN: %not %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_maximum3_f32_omod_kernel 2>&1 | %FileCheck %s --check-prefix=MAX3-F32-OMOD
 ; RUN: %not %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_maximumminimum_f16_clamp_kernel 2>&1 | %FileCheck %s --check-prefix=F16-CLAMP
 ; RUN: %not %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_maximumminimum_f16_omod_kernel 2>&1 | %FileCheck %s --check-prefix=F16-OMOD
-;
-; Refusal canaries for output modifier shapes that are not modeled by the IEEE
-; minimum/maximum handlers. VOP3 clamp saturates FP results to [0,1] and omod
-; scales by 0.5/2/4 (MI400 §4.6.2.3); these must fail loudly instead of being
-; silently dropped.
 
 ; F32-CLAMP: failed to raise
 ; F32-CLAMP-SAME: v_maximumminimum_f32 has clamp=1
-
 ; F32-OMOD: failed to raise
 ; F32-OMOD-SAME: v_maximumminimum_f32 has nonzero omod
-
 ; MAX-F32-CLAMP: failed to raise
 ; MAX-F32-CLAMP-SAME: v_maximum_f32 has clamp=1
-
 ; MAX-F32-OMOD: failed to raise
 ; MAX-F32-OMOD-SAME: v_maximum_f32 has nonzero omod
-
 ; MAX3-F32-CLAMP: failed to raise
 ; MAX3-F32-CLAMP-SAME: v_maximum3_f32 has clamp=1
-
 ; MAX3-F32-OMOD: failed to raise
 ; MAX3-F32-OMOD-SAME: v_maximum3_f32 has nonzero omod
-
 ; F16-CLAMP: failed to raise
 ; F16-CLAMP-SAME: v_maximumminimum_f16 has clamp=1
-
 ; F16-OMOD: failed to raise
 ; F16-OMOD-SAME: v_maximumminimum_f16 has nonzero omod
 

@@ -2,9 +2,6 @@
 ; RUN:   && %not %raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:     --emit-ir=v_frexp_exp_i32_f64_dpp_kernel 2>&1 \
 ; RUN:   | %FileCheck %s
-;
-; Negative fixture: v_frexp_exp_i32_f64 with DPP must fail closed
-; (mixed f64-source/i32-dest widths).
 
 ; CHECK: kernel 'v_frexp_exp_i32_f64_dpp_kernel' failed to raise:
 ; CHECK-SAME: v_frexp_exp_i32_f64

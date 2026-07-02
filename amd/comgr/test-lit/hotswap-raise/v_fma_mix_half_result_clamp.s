@@ -2,14 +2,8 @@
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:     --emit-ir=v_fma_mix_half_result_clamp_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
-;
-; Pins clamp for V_FMA_MIX{LO,HI}_{F16,BF16}. The hardware applies clamp after
-; destination narrow-type rounding; the untouched destination half must still be
-; preserved through the tied output register.
 
 ; CHECK-LABEL: define amdgpu_kernel void @v_fma_mix_half_result_clamp_kernel(
-
-; F16 low-half form: f32 FMA -> f16 round -> f16 clamp -> low-half pack.
 ; CHECK: %fma_mixlo_f16 = call float @llvm.fma.f32(
 ; CHECK: %fma_mixlo_f16_round = fptrunc float %fma_mixlo_f16 to half
 ; CHECK: %fma_mixlo_f16_clamp_lo = call half @llvm.maxnum.f16(half %fma_mixlo_f16_round,
@@ -17,8 +11,6 @@
 ; CHECK: bitcast half %fma_mixlo_f16_clamp to i16
 ; CHECK: %fma_mixlo_f16_old_hi = and i32 %{{.*}}, -65536
 ; CHECK: %fma_mixlo_f16_pack = or i32 %fma_mixlo_f16_old_hi, %{{.*}}
-
-; BF16 high-half form: f32 FMA -> bf16 round -> bf16 clamp -> high-half pack.
 ; CHECK: %fma_mixhi_bf16 = call float @llvm.fma.f32(
 ; CHECK: %fma_mixhi_bf16_round = fptrunc float %fma_mixhi_bf16 to bfloat
 ; CHECK: %fma_mixhi_bf16_clamp_lo = call bfloat @llvm.maxnum.bf16(bfloat %fma_mixhi_bf16_round,

@@ -3,19 +3,6 @@
 ; RUN: raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=buffer_store_short_finite_srd_kernel 2>/dev/null | %FileCheck %s --check-prefix=FINITE
 ; RUN: raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=buffer_store_short_allones_srd_kernel 2>/dev/null | %FileCheck %s --check-prefix=ALLONES
 ; RUN: raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=buffer_store_short_ambiguous_srd_kernel 2>/dev/null | %FileCheck %s --check-prefix=AMBIG
-;
-; GPT-OSS decode_attention._fwd_kernel_stage2 stores its bf16 output through
-; gfx12 `buffer_store_b16`.  On gfx942 the raw-buffer descriptor's RSRC2/RSRC3
-; must be target-normalised, but not by widening every source bound:
-;
-;   * gfx1250 Triton's raw-pointer max sentinel, RSRC2=0x00ffffff, maps to
-;     gfx942's native raw-buffer max sentinel, 0x7ffffffe when the descriptor
-;     has raw-pointer shape, including gfx1250's high word1 marker bits.
-;   * finite NUM_RECORDS values stay finite, so source-OOB accesses still
-;     zero/drop on the target instead of becoming real memory accesses.
-;   * true all-ones NUM_RECORDS remains all-ones / OOB-disabled.
-;   * ambiguous constant non-raw descriptor shapes do not map the sentinel.
-;   * RSRC3 uses gfx942's native FORMAT_32 + NUM_FORMAT_FLOAT shape, 0x27000.
 
 ; SENTINEL-LABEL: define amdgpu_kernel void @buffer_store_short_sentinel_srd_kernel(
 ; SENTINEL: icmp eq i32 {{.*}}16777215
@@ -23,21 +10,18 @@
 ; SENTINEL-NOT: insertelement <4 x i32> {{.*}}, i32 131072, i64 3
 ; SENTINEL: insertelement <4 x i32> {{.*}}, i32 159744, i64 3
 ; SENTINEL: call void @llvm.amdgcn.raw.buffer.store.i16(
-
 ; FINITE-LABEL: define amdgpu_kernel void @buffer_store_short_finite_srd_kernel(
 ; FINITE: icmp eq i32 {{.*}}16777215
 ; FINITE: select i1 {{.*}}, i32 2147483646, i32 4096
 ; FINITE-NOT: insertelement <4 x i32> {{.*}}, i32 131072, i64 3
 ; FINITE: insertelement <4 x i32> {{.*}}, i32 159744, i64 3
 ; FINITE: call void @llvm.amdgcn.raw.buffer.store.i16(
-
 ; ALLONES-LABEL: define amdgpu_kernel void @buffer_store_short_allones_srd_kernel(
 ; ALLONES: icmp eq i32 {{.*}}16777215
 ; ALLONES: select i1 {{.*}}, i32 2147483646, i32 {{(-1|4294967295)}}
 ; ALLONES-NOT: insertelement <4 x i32> {{.*}}, i32 131072, i64 3
 ; ALLONES: insertelement <4 x i32> {{.*}}, i32 159744, i64 3
 ; ALLONES: call void @llvm.amdgcn.raw.buffer.store.i16(
-
 ; AMBIG-LABEL: define amdgpu_kernel void @buffer_store_short_ambiguous_srd_kernel(
 ; AMBIG: icmp eq i32 1, 0
 ; AMBIG: icmp eq i32 1, 131072

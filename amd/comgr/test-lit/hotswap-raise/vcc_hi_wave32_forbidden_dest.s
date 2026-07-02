@@ -3,10 +3,6 @@
 ; RUN: %not %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=divscale_f32_exec_hi 2>&1 | %FileCheck %s --check-prefix=F32-EXEC
 ; RUN: %not %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=divscale_f64_vcc_hi 2>&1 | %FileCheck %s --check-prefix=F64-VCC
 ; RUN: %not %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=divscale_f64_exec_hi 2>&1 | %FileCheck %s --check-prefix=F64-EXEC
-;
-; On wave32, vcc_hi / exec_hi are scratch scalars, not the wave mask; the ISA
-; does not allow them as a v_div_scale flag destination. Every such encoding
-; (f32/f64 x vcc_hi/exec_hi) must be refused rather than silently lowered.
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6

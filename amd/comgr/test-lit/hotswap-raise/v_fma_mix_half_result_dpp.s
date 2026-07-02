@@ -5,14 +5,6 @@
 ; RUN: %not %raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:     --emit-ir=v_fma_mix_half_result_dpp8_refuse_kernel 2>&1 \
 ; RUN:   | %FileCheck %s --check-prefix=DPP8
-;
-; DPP16 is already a generic source-pathway modifier in the raiser: src0 is
-; wrapped in llvm.amdgcn.update.dpp before the MIX source-selection logic sees
-; it. Under gfx1250:32 -> gfx942 cross-widening, the update.dpp site is then
-; rewritten to an explicit ds_bpermute topology.
-;
-; DPP8 remains intentionally unsupported in the generic DPP path. This fixture
-; keeps that fail-closed contract pinned for the mixed-FMA family.
 
 ; DPP16-LABEL: define amdgpu_kernel void @v_fma_mix_half_result_dpp16_kernel(
 ; DPP16-NOT: call i32 @llvm.amdgcn.update.dpp.i32(
@@ -23,7 +15,6 @@
 ; DPP16: %fma_mixlo_f16_round = fptrunc float %fma_mixlo_f16 to half
 ; DPP16-NOT: call i32 @llvm.amdgcn.update.dpp.i32(
 ; DPP16: declare i32 @llvm.amdgcn.ds.bpermute(i32, i32)
-
 ; DPP8-DAG: kernel 'v_fma_mix_half_result_dpp8_refuse_kernel'
 ; DPP8-DAG: DPP cross-lane site
 ; DPP8-DAG: hasDpp == false

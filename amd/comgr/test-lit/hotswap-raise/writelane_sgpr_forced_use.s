@@ -3,32 +3,11 @@
 ; RUN:     --enable-writelane-rewrite \
 ; RUN:     --emit-ir=writelane_sgpr_forced_use_kernel 2>&1 \
 ; RUN:   | %FileCheck %s --check-prefix=REWRITE
-;
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:     --disable-writelane-rewrite \
 ; RUN:     --emit-ir=writelane_sgpr_forced_use_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s --check-prefix=UNCHANGED
-;
-; Pins the forward use-chain classifier and post-raise rewrite for a
-; divergent `v_writelane_b32` feeding `v_readfirstlane_b32`. Under
-; cross-widening the explicit readfirstlane is rewritten to a source-wave
-; `ds_bpermute` broadcast, so WaveNative keeps the two packed source waves
-; independent without taking ThreadLoopProjection.
-;
-; REWRITE path (--enable-writelane-rewrite on):
-;   Asserts the post-raise rewrite owns both the writelane and explicit
-;   readfirstlane. There must be no ThreadLoop retry and no target-wave-native
-;   AMDGPU lane intrinsics left in the raised IR.
-;
-; UNCHANGED path (flag off):
-;   The kernel has no WMMA, so the Phase 1.4.5
-;   `WaveIdLiftScalarized` classifier does NOT refuse the lift (the
-;   three-way co-occurrence requires WMMA). The raiser emits
-;   `@llvm.amdgcn.writelane` + `@llvm.amdgcn.readfirstlane` verbatim
-;   and exits successfully. This arm is the regression guard for the
-;   "no behaviour change when the flag is off" contract — ensures
-;   the classifier does not leak refusal into the flag-off path.
 
 ; REWRITE-NOT: ThreadLoopProjection
 ; REWRITE-LABEL: define amdgpu_kernel void @writelane_sgpr_forced_use_kernel(

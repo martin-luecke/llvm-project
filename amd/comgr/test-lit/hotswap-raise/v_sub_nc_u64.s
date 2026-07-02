@@ -1,28 +1,8 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_sub_nc_u64_kernel 2>/dev/null | %FileCheck %s
-;
-; Lift test for v_sub_nc_u64. Pins that the gfx1250 VOP2 64-bit
-; no-carry subtract lowers to a single i64 `sub` with source order
-; preserved. The handler lives in transpiler/handle_valu.cpp under
-; `if (sop == SemOp::V_SUB_NC_U64) { ... }`; the SemOp lives in
-; transpiler/semop.hpp under "64-bit vector ops".
-;
-; LLVM's AMDGPU definitions are the semantic source here:
-;   - VOP2Instructions.td defines V_SUB_U64 as printed mnemonic
-;     "v_sub_nc_u64" and marks it non-commutable.
-;   - SIInstructions.td gives the pseudo the i64
-;     `DivergentBinFrag<sub>` pattern over src0, src1.
-; `nc` means no carry/borrow result is produced for Hotswap to model, so the
-; IR must be a plain `sub i64`, not an overflow/borrow-tracked lowering.
 
 ; CHECK-LABEL: define amdgpu_kernel void @v_sub_nc_u64_kernel(
-
-; The handler's `vsub64` value-name is the canonical breadcrumb.
 ; CHECK: sub {{.*}}i64 %{{[^,]+}}, %{{[^,]+}}
-
-; Negative checks:
-;   - no overflow/borrow-tracked intrinsic
-;   - no narrowing to a 32-bit subtract for this kernel body
 ; CHECK-NOT: @llvm.usub.with.overflow
 ; CHECK-NOT: sub {{.*}}i32
 

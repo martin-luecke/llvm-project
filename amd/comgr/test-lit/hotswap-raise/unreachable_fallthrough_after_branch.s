@@ -1,9 +1,5 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx1250 --emit-ir=unreachable_fallthrough_after_branch 2>/dev/null | %FileCheck %s
-;
-; An unconditional branch terminates the recovered CFG path. Decoded bytes in
-; the branch's non-leader fallthrough are unreachable and must not be emitted
-; into the already-terminated LLVM block.
 
 ; CHECK-LABEL: define amdgpu_kernel void @unreachable_fallthrough_after_branch(
 ; CHECK: br label %bb_0x8

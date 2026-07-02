@@ -1,9 +1,6 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:     --emit-ir=vcc_hi_cndmask_cond_kernel | %FileCheck %s
-;
-; A wave32 vcc_hi used as a v_cndmask condition must route to its own scratch
-; slot, not the real VCC. See ParsedReg::VCC_HI_SCRATCH.
 
         .amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
         .amdhsa_code_object_version 6
@@ -16,7 +13,6 @@ vcc_hi_cndmask_cond_kernel:
 ; CHECK: %vcmp = icmp slt
         v_cmp_lt_i32 vcc_lo, v0, v1
         s_mov_b32 vcc_hi, s4
-; The cndmask condition is the per-lane bit of the vcc_hi scratch, not %vcmp:
 ; CHECK: %{{.*}} = and i64 %{{.*}}, 1
 ; CHECK: %cndmask = select i1 %wn_mask_lane_i1{{[0-9]*}}, i32 {{.*}}, i32 %tid
 ; CHECK-NOT: %cndmask = select i1 %vcmp

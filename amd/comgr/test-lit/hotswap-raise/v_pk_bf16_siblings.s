@@ -1,9 +1,6 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_pk_bf16_siblings_kernel 2>/dev/null | %FileCheck %s --check-prefix=IR
 ; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --write-hsaco=%t.out --kernel=v_pk_bf16_siblings_kernel 2>&1 | %FileCheck %s --check-prefix=PIPE
-;
-; Lift test for the remaining gfx1250 packed BF16 VOP3P arithmetic siblings:
-; `v_pk_mul_bf16`, `v_pk_min_num_bf16`, and `v_pk_max_num_bf16`.
 
 ; IR-LABEL: define amdgpu_kernel void @v_pk_bf16_siblings_kernel(
 ; IR: [[MUL_SRC:%[^ ]+]] = bitcast i32 {{[^ ]+}} to <2 x bfloat>

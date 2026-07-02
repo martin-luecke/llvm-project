@@ -1,53 +1,9 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %not raise_cli %t.hsaco --target-isa=gfx1250 --emit-ir=scratch_refusal_kernel 2>&1 | %FileCheck %s --check-prefix=STDERR
-;
-; Lift refusal test for a structurally invalid FLAT scratch source kernel:
-; it executes `scratch_*` instructions but its KD does not request any private
-; segment allocation. Hotswap must not invent scratch backing in that case.
-;
-; === Why this still refuses ===
-;
-; Valid scratch lifting requires source KD private backing, surfaced as
-; non-zero `.private_segment_fixed_size` plus the corresponding
-; `compute_pgm_rsrc2.ENABLE_PRIVATE_SEGMENT` launch state. This fixture
-; intentionally omits that state while using scratch opcodes, so the raiser
-; refuses with the raw source scratch KD fields in the diagnostic.
-;
-; === What this fixture asserts ===
-;
-; Two things:
-;
-;   1. The raiser exits non-zero (`%not` inverts the exit code — the
-;      test passes only when raise_cli actually failed).
-;   2. The stderr diagnostic names the offending mnemonic
-;      (`scratch_store_b32`), the encoding format (`FLAT`), and the
-;      architecturally-specific rationale — crucially the back-pointer
-;      to the `buffer_store_no_scratch_alloca` regression guard, so a
-;      future reader tracing the failure has a single anchor for the
-;      ABI-level design constraint. Also pins the
-;      `flat_scratch_init` mention and the mnemonic-family token
-;      (`scratch_*`) so a future diagnostic rewrite that drifted to a
-;      generic wording would fail this fixture.
-;
-; raise_cli's failure-line format is fixed (raise_cli.cpp:213):
-;   `kernel '<name>' failed to raise: <mnemonic> [<format>]
-;    @offset=0x<offset> :: <detail>`
-;
-; The handler also emits an explicit `transpiler: FLAT scratch
-; refused: ...` line; pinning that line keeps the diagnostic text
-; from drifting into something less actionable for users who read
-; raise_cli's stderr directly.
 
-; The handler-side refusal line names the family and dumps source KD scratch
-; fields.
 ; STDERR: transpiler: FLAT scratch refused: scratch_store_b32
 ; STDERR-SAME: private_segment_fixed_size=0
 ; STDERR-SAME: enable_private_segment=0
-
-; The raise_cli failure line names the mnemonic, the encoding format,
-; and the detailed rationale (same source KD fields, independently cited — a
-; future split of stderr vs. the returned RaiseFailure must keep both
-; sides audit-clean).
 ; STDERR: raise_cli: kernel 'scratch_refusal_kernel' failed to raise:
 ; STDERR-SAME: scratch_store_b32
 ; STDERR-SAME: [FLAT]

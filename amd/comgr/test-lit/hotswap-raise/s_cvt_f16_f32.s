@@ -1,9 +1,6 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=s_cvt_f16_f32_kernel 2>/dev/null | %FileCheck %s --check-prefix=IR
 ; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --write-hsaco=%t.out --kernel=s_cvt_f16_f32_kernel 2>&1 | %FileCheck %s --check-prefix=PIPE
-;
-; Scalar F32 -> low-half F16 conversion.  The manual states that scalar F16
-; destinations write the low 16 bits and zero the high half of the SGPR.
 
 ; IR-LABEL: define amdgpu_kernel void @s_cvt_f16_f32_kernel(
 ; IR: [[SRC:%[^ ]+]] = bitcast i32 {{%[^ ]+}} to float
@@ -11,7 +8,6 @@
 ; IR-NEXT: [[BITS:%[^ ]+]] = bitcast half [[HALF]] to i16
 ; IR-NEXT: zext i16 [[BITS]] to i32
 ; IR-NOT: unsupported instruction
-
 ; PIPE: raise_cli: wrote
 ; PIPE-SAME: s_cvt_f16_f32_kernel
 

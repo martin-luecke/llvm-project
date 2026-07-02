@@ -4,16 +4,10 @@
 ; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_prng_b32_kernel \
 ; RUN:     2>/dev/null \
 ; RUN:   | %FileCheck %s --check-prefixes=CHECK,CROSS
-;
-; v_prng_b32: out = (in << 1) ^ (in[31] ? 197 : 0).
-;   SAME  -- gfx950 has FeaturePrngInst: emit llvm.amdgcn.prng.b32.
-;   CROSS -- gfx942 lacks it: expand the LFSR step in IR.
 
 ; CHECK-LABEL: define amdgpu_kernel void @v_prng_b32_kernel(
-
 ; SAME: %prng_b32{{[0-9]*}} = call i32 @llvm.amdgcn.prng.b32(i32 %{{[^)]+}})
 ; SAME-NOT: select i1
-
 ; CROSS: %prng_shl{{[0-9]*}} = shl i32 %{{[^,]+}}, 1
 ; CROSS: %prng_neg{{[0-9]*}} = icmp slt i32 %{{[^,]+}}, 0
 ; CROSS: %prng_tap{{[0-9]*}} = select i1 %prng_neg{{[0-9]*}}, i32 197, i32 0

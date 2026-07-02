@@ -2,12 +2,6 @@
 ; RUN:   && %not raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:     --emit-ir=setreg_b32_mode_vgpr_msb_kernel 2>&1 \
 ; RUN:   | %FileCheck %s --check-prefix=STDERR
-;
-; Regression guard: s_setreg_b32 targeting HW_REG_MODE with a field that
-; overlaps VGPR_MSB bits [12:19] must be refused on gfx1250+. The raiser
-; cannot statically determine the SGPR value, so it cannot update
-; Ctx.VgprMsBs -- silently preserving the write would leave subsequent VGPR
-; operand decoding using stale bank-selector state.
 
 ; STDERR: transpiler: s_setreg_b32 writes MODE with field overlapping VGPR_MSB bits
 ; STDERR-SAME: [12:19]

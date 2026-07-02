@@ -1,10 +1,5 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_exp_log_f32_kernel 2>/dev/null | %FileCheck %s
-;
-; Lift test for vector f32 special functions. The ISA manual defines these as
-; approximate transcendental instructions with flushed f32 denormals; preserve
-; that hardware contract through AMDGPU intrinsics rather than generic LLVM
-; libm-style intrinsics or arithmetic expansion.
 
 ; CHECK-LABEL: define amdgpu_kernel void @v_exp_log_f32_kernel(
 ; CHECK: call float @llvm.amdgcn.exp2.f32(float {{.*}})

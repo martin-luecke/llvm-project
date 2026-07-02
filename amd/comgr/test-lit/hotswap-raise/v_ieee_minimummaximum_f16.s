@@ -1,10 +1,6 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_ieee_minimummaximum_f16_kernel 2>/dev/null | %FileCheck %s --check-prefix=IR
 ; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --write-hsaco=%t.out --kernel=v_ieee_minimummaximum_f16_kernel 2>&1 | %FileCheck %s --check-prefix=PIPE
-;
-; Canary for the f16 minimum/maximum family. IEEE forms must use
-; NaN-propagating half intrinsics, .NUM forms must use maximumnum/minimumnum,
-; and high-half source/destination op_sel must be explicit in IR.
 
 ; IR-LABEL: define amdgpu_kernel void @v_ieee_minimummaximum_f16_kernel(
 ; IR-NOT: @llvm.maxnum.f16
@@ -27,7 +23,6 @@
 ; IR: call half @llvm.minimumnum.f16(half [[NUM_MAXMIN_INNER]], half %{{[^)]+}})
 ; IR: f16_src_hi
 ; IR: f16_merge_hi
-
 ; PIPE: raise_cli: wrote
 ; PIPE-SAME: v_ieee_minimummaximum_f16_kernel
 

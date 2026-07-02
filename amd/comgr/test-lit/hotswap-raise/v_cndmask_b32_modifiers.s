@@ -2,8 +2,6 @@
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:     --emit-ir=v_cndmask_b32_modifiers_kernel \
 ; RUN:   | %FileCheck %s
-;
-; Lift test for VOP3 v_cndmask_b32 source modifiers.
 
 ; CHECK-LABEL: define amdgpu_kernel void @v_cndmask_b32_modifiers_kernel(
 

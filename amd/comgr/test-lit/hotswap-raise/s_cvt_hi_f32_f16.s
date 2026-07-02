@@ -1,11 +1,6 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=s_cvt_hi_f32_f16_kernel 2>/dev/null | %FileCheck %s --check-prefix=IR
 ; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --write-hsaco=%t.out --kernel=s_cvt_hi_f32_f16_kernel 2>&1 | %FileCheck %s --check-prefix=PIPE
-;
-; Translation canary for the AISE P-1 llama blocker:
-; `s_cvt_hi_f32_f16` converts the high 16 bits of the scalar source as an
-; FP16 value and writes the FP32 result.  The low-half sibling is supported by
-; the same handler, but this fixture pins the documented high-half extraction.
 
 ; IR-LABEL: define amdgpu_kernel void @s_cvt_hi_f32_f16_kernel(
 ; IR: [[HI:%[^ ]+]] = lshr i32 {{%[^,]+}}, 16
@@ -14,7 +9,6 @@
 ; IR-NEXT: [[F32:%[^ ]+]] = fpext half [[HALF]] to float
 ; IR-NEXT: bitcast float [[F32]] to i32
 ; IR-NOT: unsupported instruction
-
 ; PIPE: raise_cli: wrote
 ; PIPE-SAME: s_cvt_hi_f32_f16_kernel
 

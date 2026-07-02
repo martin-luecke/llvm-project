@@ -1,11 +1,5 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=s_fmaak_fmamk_f32_kernel 2>/dev/null | %FileCheck %s
-;
-; Lift test for gfx12 scalar literal fused multiply-add forms. The instruction
-; manual defines:
-;   s_fmaak_f32: D0.f32 = fma(S0.f32, S1.f32, SIMM32.f32)
-;   s_fmamk_f32: D0.f32 = fma(S0.f32, SIMM32.f32, S1.f32)
-; The literal position must survive the lift.
 
 ; CHECK-LABEL: define amdgpu_kernel void @s_fmaak_fmamk_f32_kernel(
 ; CHECK: [[FMAAK:%[^ ]+]] = call float @llvm.fma.f32(float %{{[^,]+}}, float %{{[^,]+}}, float 1.000000e+00)

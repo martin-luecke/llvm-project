@@ -2,26 +2,15 @@
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:     --emit-ir=v_fma_mixlo_f16_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
-;
-; Pins V_FMA_MIXLO_F16 lowering. This is the f16-result sibling of
-; V_FMA_MIXLO_BF16: mixed selected inputs feed an f32 `llvm.fma`, the result
-; rounds to half, and only the low 16 bits of the tied destination are written.
 
 ; CHECK-LABEL: define amdgpu_kernel void @v_fma_mixlo_f16_kernel(
-
-; Source selection matches v_fma_mix_f32: src0 uses the low f16 half, src1 uses
-; the high f16 half, and src2 remains a full f32 source.
 ; CHECK-DAG: %mixlo_cvt = fpext half %{{.*}} to float
 ; CHECK-DAG: lshr i32 %{{.*}}, 16
 ; CHECK-DAG: %mixlo_cvt{{[0-9]+}} = fpext half %{{.*}} to float
-
-; The arithmetic is a fused f32 FMA followed by an f16 round.
 ; CHECK: %fma_mixlo_f16 = call float @llvm.fma.f32(float %mixlo_cvt, float %mixlo_cvt{{[0-9]+}}, float %{{.*}})
 ; CHECK: %fma_mixlo_f16_round = fptrunc float %fma_mixlo_f16 to half
 ; CHECK: bitcast half %fma_mixlo_f16_round to i16
 ; CHECK: zext i16 %{{.*}} to i32
-
-; Low-half writeback preserves the old destination high half explicitly.
 ; CHECK: %fma_mixlo_f16_old_hi = and i32 %{{.*}}, -65536
 ; CHECK: %fma_mixlo_f16_pack = or i32 %fma_mixlo_f16_old_hi, %{{.*}}
 ; CHECK-NOT: unsupported instruction

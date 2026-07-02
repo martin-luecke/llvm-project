@@ -19,7 +19,7 @@
 ; RUN:     --emit-ir=sop2_wave_mask_scalar_scc_kernel \
 ; RUN:   | %FileCheck %s --check-prefix=SCALAR \
 ; RUN:     --implicit-check-not=_scc_ballot
-;
+
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
 	.text

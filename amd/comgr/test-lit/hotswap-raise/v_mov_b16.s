@@ -3,25 +3,6 @@
 ; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_mov_b16_hi_lo_kernel 2>/dev/null | %FileCheck %s --check-prefix=HILO
 ; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_mov_b16_lo_hi_kernel 2>/dev/null | %FileCheck %s --check-prefix=LOHI
 ; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_mov_b16_hi_hi_kernel 2>/dev/null | %FileCheck %s --check-prefix=HIHI
-;
-; Lift test for gfx1250 v_mov_b16. True16 move: copies one 16-bit half of
-; src0 (selected by src0_modifiers[OP_SEL_0]) into one 16-bit half of vdst
-; (selected by src0_modifiers[DST_OP_SEL]), preserving the untouched dst
-; half.
-;
-; The handler in handle-valu.cpp lifts each combination as
-;   src_half = trunc i32 [src0 >> (src0_hi ? 16 : 0)] to i16
-;   merged   = (dst & mask_other_half) | (zext src_half << (dst_hi ? 16 : 0))
-;
-; All four (src_lo|src_hi) x (dst_lo|dst_hi) combinations are valid and
-; this fixture pins all four. The hi->hi case in particular exercises the
-; modifier-carried path: on gfx1250 the true16 _e64 form encodes both
-; halves as op_sel:[1,1] in src0_modifiers, so the handler must read both
-; OP_SEL_0 and DST_OP_SEL bits (not only the subreg name) to recover the
-; correct halves. The handler refuses any non-op_sel modifier bit
-; (neg/abs) loudly so future TableGen drift surfaces as a clear
-; "unsupported source modifiers" diagnostic rather than a silent wrong
-; lift.
 
 ; LOLO-LABEL: define amdgpu_kernel void @v_mov_b16_lo_lo_kernel(
 ; LOLO: trunc i32 {{.*}} to i16
@@ -30,7 +11,6 @@
 ; LOLO: %v_mov_b16_merge{{.*}} = or i32
 ; LOLO-NOT: lshr i32 {{.*}}, 16
 ; LOLO-NOT: shl i32 {{.*}}, 16
-
 ; HILO-LABEL: define amdgpu_kernel void @v_mov_b16_hi_lo_kernel(
 ; HILO: lshr i32 {{.*}}, 16
 ; HILO: trunc i32 {{.*}} to i16
@@ -38,7 +18,6 @@
 ; HILO: and i32 {{.*}}, -65536
 ; HILO: %v_mov_b16_merge{{.*}} = or i32
 ; HILO-NOT: shl i32 {{.*}}, 16
-
 ; LOHI-LABEL: define amdgpu_kernel void @v_mov_b16_lo_hi_kernel(
 ; LOHI: trunc i32 {{.*}} to i16
 ; LOHI: zext i16 {{.*}} to i32
@@ -46,7 +25,6 @@
 ; LOHI: shl i32 {{.*}}, 16
 ; LOHI: %v_mov_b16_merge{{.*}} = or i32
 ; LOHI-NOT: lshr i32 {{.*}}, 16
-
 ; HIHI-LABEL: define amdgpu_kernel void @v_mov_b16_hi_hi_kernel(
 ; HIHI: lshr i32 {{.*}}, 16
 ; HIHI: trunc i32 {{.*}} to i16

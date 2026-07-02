@@ -1,17 +1,12 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_maxmin_num_f32_kernel 2>/dev/null | %FileCheck %s --check-prefix=IR
 ; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --write-hsaco=%t.out --kernel=v_maxmin_num_f32_kernel 2>&1 | %FileCheck %s --check-prefix=PIPE
-;
-; Lift test for v_maxmin_num_f32, the .NUM dual of v_minmax_num_f32:
-;   dst = minimumnum(maximumnum(src0, src1), src2)
-; This is the NaN-pruning family and must not use IEEE maximum/minimum.
 
 ; IR-LABEL: define amdgpu_kernel void @v_maxmin_num_f32_kernel(
 ; IR: [[INNER:%[^ ]+]] = call float @llvm.maximumnum.f32(float %{{[^,]+}}, float %{{[^)]+}})
 ; IR: [[OUT:%[^ ]+]] = call float @llvm.minimumnum.f32(float [[INNER]], float %{{[^)]+}})
 ; IR-NOT: call {{.*}}@llvm.maximum.f32
 ; IR-NOT: call {{.*}}@llvm.minimum.f32
-
 ; PIPE: raise_cli: wrote
 ; PIPE-SAME: v_maxmin_num_f32_kernel
 

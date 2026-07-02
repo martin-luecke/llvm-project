@@ -2,15 +2,6 @@
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=add_pc_i64_short_kernel 2>/dev/null | %FileCheck %s --check-prefix=SHORT
 ; RUN: raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=add_pc_i64_long_kernel 2>/dev/null | %FileCheck %s --check-prefix=LONG
 ; RUN: raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=add_pc_i64_lit64_kernel | %FileCheck %s --check-prefix=LIT64
-;
-; s_add_pc_i64 (gfx1250 SOP1 PC-relative direct branch). Both forms must
-; resolve the target via Di.Size read from the actual encoding.
-;
-; Short form: operand fits inline, SOP1 is 4 bytes.
-;   target = 0x08 (site) + 0x04 (size) + 8 (imm) = 0x14
-; Long form: operand needs a 32-bit literal, SOP1 is 8 bytes; pins that
-; Di.Size is read from the encoding, not assumed to be 4.
-;   target = 0x08 (site) + 0x08 (size) + 0x80 (imm) = 0x90
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6

@@ -2,17 +2,6 @@
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:     --emit-ir=c2_dpp_row_xmask_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
-;
-; Positive canary for the DPP16 row_xmask family under cross-widening
-; (gfx1250 wave32 -> gfx942 wave64).  RWKV7's Triton lowering emits
-; row_xmask:2 and row_xmask:1 DPP sites; the ISA manual defines every
-; row_xmask:N as:
-;
-;   lane[n].src0 = lane[(n & 0x30) + ((n & 0xf) ^ N)].src0
-;
-; The XOR is confined to the low 4 bits, so the source lane remains in
-; the same 16-lane row for every N in [0, 15].  The rewrite therefore
-; uses the existing row-base projection with `withinRow ^ N`.
 
 ; CHECK-LABEL: define amdgpu_kernel void @c2_dpp_row_xmask_kernel(
 ; CHECK-NOT: call i32 @llvm.amdgcn.update.dpp.i32(

@@ -1,6 +1,5 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx1250 --emit-ir=v_mad_u16_kernel | %FileCheck %s
-;
 ; CHECK-LABEL: define amdgpu_kernel void @v_mad_u16_kernel(
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"

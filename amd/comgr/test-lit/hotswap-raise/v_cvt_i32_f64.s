@@ -2,20 +2,14 @@
 ; RUN: %raise_cli %t.hsaco --emit-ir=v_cvt_i32_f64_kernel | %FileCheck %s --check-prefix=I32
 ; RUN: %raise_cli %t.hsaco --emit-ir=v_cvt_u32_f64_kernel | %FileCheck %s --check-prefix=U32
 
-; F64 -> I32/U32 conversions saturate out-of-range inputs and map NaN to 0,
-; so they lower to the fptosi.sat/fptoui.sat intrinsics rather than plain
-; fptosi/fptoui (which are UB on overflow).
-
 ; I32-LABEL: define amdgpu_kernel void @v_cvt_i32_f64_kernel(
 ; I32: %cvt_i32_f64 = call i32 @llvm.fptosi.sat.i32.f64(double %{{[^,]+}})
-; e64 src0 modifiers applied to the f64 source before the convert:
 ; I32: %neg = fneg double %{{[^,]+}}
 ; I32: %cvt_i32_f64{{[0-9]*}} = call i32 @llvm.fptosi.sat.i32.f64(double %neg)
 ; I32: %abs = call double @llvm.fabs.f64(double %{{[^,]+}})
 ; I32: %cvt_i32_f64{{[0-9]*}} = call i32 @llvm.fptosi.sat.i32.f64(double %abs)
 ; I32-NOT: fptoui double
 ; I32-NOT: fptosi double
-
 ; U32-LABEL: define amdgpu_kernel void @v_cvt_u32_f64_kernel(
 ; U32: %cvt_u32_f64 = call i32 @llvm.fptoui.sat.i32.f64(double %{{[^,]+}})
 ; U32-NOT: fptoui double

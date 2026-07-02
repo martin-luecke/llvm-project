@@ -2,10 +2,6 @@
 ; RUN:   && env HSA_HOTSWAP_STRICT=1 %not raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:     --emit-ir=kernarg_register_offset_half_write_strict_refuse 2>&1 \
 ; RUN:   | %FileCheck %s
-;
-; A write to only one lane of the physical kernarg SGPR pair leaves ambiguous
-; provenance: one lane is unknown while the other may still be the entry
-; pointer. Dynamic offsets through that mixed pair must refuse in strict mode.
 
 ; CHECK: dynamic source kernarg offsets may reach the source implicit-arg range
 

@@ -2,12 +2,6 @@
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:     --emit-ir=c2_dpp_row_xmask_partial_mask_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
-;
-; Partial row_mask / bank_mask canary.  The DPP manuals define both
-; masks as destination-write masks only; they do not affect source
-; fetch.  Under wave32 -> wave64 the rewrite must evaluate those mask
-; bits from the source-wave-local lane (`lane_id & 31`), not from the
-; target wave's physical rows 0..3.
 
 ; CHECK-LABEL: define amdgpu_kernel void @c2_dpp_row_xmask_partial_mask_kernel(
 ; CHECK-NOT: call i32 @llvm.amdgcn.update.dpp.i32(

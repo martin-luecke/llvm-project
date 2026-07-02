@@ -2,10 +2,6 @@
 ; RUN:   && env HSA_HOTSWAP_STRICT=1 %not raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:     --emit-ir=kernarg_register_offset_full_write_strict_refuse 2>&1 \
 ; RUN:   | %FileCheck %s
-;
-; A generic full-pair SGPR write kills the entry-pointer reaching definition but
-; does not prove a non-entry value. This no-op add preserves the pointer value,
-; so strict mode must still refuse dynamic source implicit-arg offsets.
 
 ; CHECK: dynamic source kernarg offsets may reach the source implicit-arg range
 

@@ -7,9 +7,6 @@
 ; RUN:   --assume-hip-global-offset-zero \
 ; RUN:   --emit-ir=kernarg_hiddenarg_full_pair_successor \
 ; RUN:   | %FileCheck %s --check-prefix=SUCC
-;
-; A full-pair hidden-arg load into s[0:1] proves the physical pair is no
-; longer the entry kernarg pointer. Cover same-BB and successor-BB consumers.
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6

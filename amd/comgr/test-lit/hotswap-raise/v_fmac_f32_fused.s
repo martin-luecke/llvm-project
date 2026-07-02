@@ -12,7 +12,6 @@
 ; FUSED-NOT: call {{.*}}@llvm.fmuladd.f32
 ; FUSED-NOT: fmul {{.*}}float
 ; FUSED-NOT: fadd {{.*}}float
-
 ; VOPD-LABEL: define amdgpu_kernel void @v_fmac_f32_vopd_kernel(
 ; VOPD: %vopd_fmac = call float @llvm.fma.f32(float %{{.+}}, float %{{.+}}, float %{{.+}})
 ; VOPD-NOT: call {{.*}}@llvm.fmuladd.f32

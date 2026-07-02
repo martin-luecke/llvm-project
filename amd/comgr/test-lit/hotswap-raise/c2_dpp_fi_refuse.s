@@ -1,7 +1,3 @@
-; Negative fixture: DPP16 `fi:1` must refuse loudly. The manuals'
-; Table 57 gives FI-specific inactive-source behavior, but
-; llvm.amdgcn.update.dpp has no FI operand today.
-
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %not %raise_cli %t.hsaco \
 ; RUN:     --target-isa=gfx942 --emit-ir=c2_dpp_fi_refuse_kernel \
@@ -18,7 +14,6 @@
 ; CROSS-DAG: llvm.amdgcn.update.dpp has no FI operand
 ; CROSS-DAG: Table 57 fetch-inactive semantics
 ; CROSS-DAG: rewrite pending
-
 ; SAME-DAG: kernel 'c2_dpp_fi_refuse_kernel'
 ; SAME-DAG: DPP16 FI fetch-inactive form
 ; SAME-DAG: llvm.amdgcn.update.dpp has no FI operand

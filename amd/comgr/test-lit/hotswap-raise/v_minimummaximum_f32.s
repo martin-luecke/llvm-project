@@ -1,12 +1,6 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_minimummaximum_f32_kernel 2>/dev/null | %FileCheck %s --check-prefix=IR
 ; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --write-hsaco=%t.out --kernel=v_minimummaximum_f32_kernel 2>&1 | %FileCheck %s --check-prefix=PIPE
-;
-; Lift test for v_minimummaximum_f32, the exact dual of
-; v_maximumminimum_f32:
-;   dst = maximum(minimum(src0, src1), src2)
-; It uses IEEE-754 2019 NaN-propagating intrinsics, not the `.NUM`
-; maxnum/minnum family.
 
 ; IR-LABEL: define amdgpu_kernel void @v_minimummaximum_f32_kernel(
 ; IR-NOT: @llvm.maxnum
@@ -17,7 +11,6 @@
 ; IR: [[OUT:%[^ ]+]] = call float @llvm.maximum.f32(float [[INNER]], float %{{[^)]+}})
 ; IR-NOT: @llvm.maxnum
 ; IR-NOT: @llvm.minnum
-
 ; PIPE: raise_cli: wrote
 ; PIPE-SAME: v_minimummaximum_f32_kernel
 

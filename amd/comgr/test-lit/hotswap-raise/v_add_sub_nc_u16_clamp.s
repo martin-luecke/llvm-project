@@ -1,9 +1,5 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_add_sub_nc_u16_clamp_kernel 2>/dev/null | %FileCheck %s
-;
-; Pins VOP3 integer clamp for v_{add,sub}_nc_u16. The manuals define clamp in
-; the unsigned 16-bit integer domain for these U16 forms, so the lift must use
-; saturating i16 arithmetic before merging the selected half back into vdst.
 
 ; CHECK-LABEL: define amdgpu_kernel void @v_add_sub_nc_u16_clamp_kernel(
 ; CHECK: %vadd_nc_u16{{[0-9]*}} = call i16 @llvm.uadd.sat.i16(
