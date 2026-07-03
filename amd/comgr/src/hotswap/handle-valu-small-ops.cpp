@@ -71,6 +71,60 @@ FunctionCallee getF32Intrinsic(RaiseContext &Ctx, Intrinsic::ID IID) {
   return Intrinsic::getOrInsertDeclaration(&Ctx.M, IID, {Ctx.F32Ty});
 }
 
+struct Cvt16HalfSelect {
+  bool SrcHi = false;
+  bool DstHi = false;
+  unsigned SrcMods = 0;
+};
+
+bool readCvt16HalfSelect(RaiseContext &Ctx, const DecodedInst &Di,
+                         OpResolver &Op, HandlerResult &Hr,
+                         StringRef OpName, bool AllowFpSrcMods,
+                         Cvt16HalfSelect &Sel) {
+  if (!readOptionalVOP3F16SrcMods(Di, Hr, 0, OpName, Sel.SrcMods))
+    return false;
+
+  if (!AllowFpSrcMods &&
+      (Sel.SrcMods & (SISrcMods::NEG | SISrcMods::ABS)) != 0) {
+    Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+        Di, "VOP1",
+        (Twine(OpName) +
+         " has unsupported integer source modifiers; only op_sel/dst_op_sel "
+         "half selection is modeled")
+            .str());
+    return false;
+  }
+
+  const MCRegisterInfo &MRI = *Ctx.Mc.RegInfo;
+  unsigned SrcSlot = Op.srcIdx(0);
+  Sel.SrcHi =
+      (Sel.SrcMods & SISrcMods::OP_SEL_0) != 0 ||
+      (Di.isReg(SrcSlot) && AMDGPU::isHi16Reg(Di.getReg(SrcSlot), MRI));
+  Sel.DstHi = (Sel.SrcMods & SISrcMods::DST_OP_SEL) != 0 ||
+              (Di.isReg(0) && AMDGPU::isHi16Reg(Di.getReg(0), MRI));
+  return true;
+}
+
+Value *readSelectedI16(RaiseContext &Ctx, OpResolver &Op,
+                       const Cvt16HalfSelect &Sel, StringRef Name) {
+  Value *Raw = Op.src(0);
+  if (Sel.SrcHi)
+    Raw = Ctx.B.CreateLShr(Raw, 16, (Name + "_src_hi").str());
+  return Ctx.B.CreateTrunc(Raw, Type::getInt16Ty(Ctx.C));
+}
+
+Value *readSelectedF16(RaiseContext &Ctx, OpResolver &Op,
+                       const Cvt16HalfSelect &Sel, StringRef Name) {
+  Value *Bits = readSelectedI16(Ctx, Op, Sel, Name);
+  Value *V = Ctx.B.CreateBitCast(Bits, Ctx.F16Ty);
+  if ((Sel.SrcMods & SISrcMods::ABS) != 0)
+    V = Ctx.B.CreateUnaryIntrinsic(Intrinsic::fabs, V, nullptr,
+                                   (Name + "_abs").str());
+  if ((Sel.SrcMods & SISrcMods::NEG) != 0)
+    V = Ctx.B.CreateFNeg(V, (Name + "_neg").str());
+  return V;
+}
+
 } // namespace
 
 // "Small ops": conversions (F32<->{U,I}32, F16<->F32, F16<->{U,I}16, byte
@@ -131,20 +185,61 @@ HandlerResult handleValuSmallOps(RaiseContext &Ctx, const DecodedInst &Di,
     Hr.Handled = true;
     return Hr;
   }
-  case CanonicalOp::V_CVT_F16_U16: {
-    Value *S = Ctx.B.CreateTrunc(Op.src(0), I16Ty);
-    Value *Res = Ctx.B.CreateUIToFP(S, Ctx.F16Ty, "cvt_f16_u16");
-    Ctx.writeReg32(Op.dst(),
-                   Ctx.B.CreateZExt(Ctx.B.CreateBitCast(Res, I16Ty),
-                                    Ctx.I32Ty));
+  case CanonicalOp::V_CVT_F16_U16:
+  case CanonicalOp::V_CVT_F16_I16: {
+    // VOP1 true16 conversion: the manuals define these as `vdst 16, src 16`.
+    // OPSEL selects the source and destination halves, and the unselected
+    // destination half is preserved. TableGen models the numeric operation as
+    // uint_to_fp / sint_to_fp and marks it FPDPRounding; the lift uses the same
+    // target-independent FP conversion IR shape as the existing f16 conversion
+    // handlers and leaves MODE-sensitive dynamic rounding to the existing
+    // HotSwap MODE policy.
+    const bool IsSigned = Di.CanonOp == CanonicalOp::V_CVT_F16_I16;
+    StringRef OpName = IsSigned ? "v_cvt_f16_i16" : "v_cvt_f16_u16";
+    if (!requireDefaultOutputModsIfPresent(Di, Hr))
+      return Hr;
+    Cvt16HalfSelect Sel;
+    if (!readCvt16HalfSelect(Ctx, Di, Op, Hr, OpName,
+                             /*AllowFpSrcMods=*/false, Sel))
+      return Hr;
+
+    Value *S = readSelectedI16(Ctx, Op, Sel, OpName);
+    Value *Res = IsSigned ? Ctx.B.CreateSIToFP(S, Ctx.F16Ty, "cvt_f16_i16")
+                          : Ctx.B.CreateUIToFP(S, Ctx.F16Ty, "cvt_f16_u16");
+    writeOpSelF16(Ctx, Op, Res, Sel.DstHi,
+                  IsSigned ? "cvt_f16_i16_merge_lo"
+                           : "cvt_f16_u16_merge_lo",
+                  IsSigned ? "cvt_f16_i16_merge_hi"
+                           : "cvt_f16_u16_merge_hi");
     Hr.Handled = true;
     return Hr;
   }
-  case CanonicalOp::V_CVT_U16_F16: {
-    Value *S = Ctx.B.CreateBitCast(Ctx.B.CreateTrunc(Op.srcF(0), I16Ty),
-                                    Ctx.F16Ty);
-    Value *Res = Ctx.B.CreateFPToUI(S, I16Ty, "cvt_u16_f16");
-    Ctx.writeReg32(Op.dst(), Ctx.B.CreateZExt(Res, Ctx.I32Ty));
+  case CanonicalOp::V_CVT_U16_F16:
+  case CanonicalOp::V_CVT_I16_F16: {
+    // The reverse VOP1 true16 conversions naturally saturate in AMDGPU
+    // TableGen (`fp_to_{u,s}int_sat` patterns). Plain fptoui/fptosi would be
+    // poison for out-of-range finite inputs, so use LLVM's saturating
+    // intrinsics and merge the i16 result into the selected destination half.
+    const bool IsSigned = Di.CanonOp == CanonicalOp::V_CVT_I16_F16;
+    StringRef OpName = IsSigned ? "v_cvt_i16_f16" : "v_cvt_u16_f16";
+    if (!requireDefaultOutputModsIfPresent(Di, Hr))
+      return Hr;
+    Cvt16HalfSelect Sel;
+    if (!readCvt16HalfSelect(Ctx, Di, Op, Hr, OpName,
+                             /*AllowFpSrcMods=*/true, Sel))
+      return Hr;
+
+    Value *S = readSelectedF16(Ctx, Op, Sel, OpName);
+    Intrinsic::ID SatId =
+        IsSigned ? Intrinsic::fptosi_sat : Intrinsic::fptoui_sat;
+    Function *SatFn =
+        Intrinsic::getOrInsertDeclaration(&Ctx.M, SatId, {I16Ty, Ctx.F16Ty});
+    Value *Res = Ctx.B.CreateCall(SatFn, {S}, OpName);
+    writeSelectedI16Bits(Ctx, Op.dst(), Res, Sel.DstHi,
+                         IsSigned ? "cvt_i16_f16_merge_lo"
+                                  : "cvt_u16_f16_merge_lo",
+                         IsSigned ? "cvt_i16_f16_merge_hi"
+                                  : "cvt_u16_f16_merge_hi");
     Hr.Handled = true;
     return Hr;
   }
