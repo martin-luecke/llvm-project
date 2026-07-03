@@ -106,39 +106,21 @@ v_cos_f32_omod_refuse_kernel:
         .amdgpu_metadata
 ---
 amdhsa.kernels:
-  - .args: []
-    .group_segment_fixed_size: 0
-    .kernarg_segment_align: 8
+  - .group_segment_fixed_size: 0
     .kernarg_segment_size: 0
     .max_flat_workgroup_size: 1024
     .name:           v_sin_cos_f32_kernel
     .private_segment_fixed_size: 0
-    .sgpr_count:     8
-    .symbol:         v_sin_cos_f32_kernel.kd
-    .vgpr_count:     4
-    .wavefront_size: 32
-  - .args: []
-    .group_segment_fixed_size: 0
-    .kernarg_segment_align: 8
+  - .group_segment_fixed_size: 0
     .kernarg_segment_size: 0
     .max_flat_workgroup_size: 1024
     .name:           v_sin_f32_clamp_refuse_kernel
     .private_segment_fixed_size: 0
-    .sgpr_count:     8
-    .symbol:         v_sin_f32_clamp_refuse_kernel.kd
-    .vgpr_count:     1
-    .wavefront_size: 32
-  - .args: []
-    .group_segment_fixed_size: 0
-    .kernarg_segment_align: 8
+  - .group_segment_fixed_size: 0
     .kernarg_segment_size: 0
     .max_flat_workgroup_size: 1024
     .name:           v_cos_f32_omod_refuse_kernel
     .private_segment_fixed_size: 0
-    .sgpr_count:     8
-    .symbol:         v_cos_f32_omod_refuse_kernel.kd
-    .vgpr_count:     1
-    .wavefront_size: 32
 amdhsa.version: [1, 2]
 ...
 
