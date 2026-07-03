@@ -202,8 +202,7 @@ public:
   virtual llvm::Value *extractLaneBitFromWaveMask(llvm::IRBuilder<> &B,
                                                    llvm::Value *V) const = 0;
 
-  // Source-width mask observed by the current source wave. Used for source-ISA
-  // mask operands such as `v_mbcnt_lo`.
+  // Return the source-wave slice of a wave mask, e.g. for `v_mbcnt_lo`.
   virtual llvm::Value *emitCurrentSourceWaveMask(
       llvm::IRBuilder<> &B, llvm::Value *Mask,
       const llvm::Twine &Name = "source_wave_mask") const;
