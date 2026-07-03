@@ -261,6 +261,7 @@ TEST(SourceHiddenArgs, HostcallUsesTargetImplicitArgOffset) {
   EXPECT_EQ(IR.find("amdgpu-no-hostcall-ptr"), std::string::npos);
 }
 
+// Pointer hidden args must use target-COV offsets, not source metadata offsets.
 TEST(SourceHiddenArgs, PointerIdentityHiddenArgsUseTargetImplicitArgOffsets) {
   struct Case {
     const char *Name;
@@ -307,6 +308,7 @@ TEST(SourceHiddenArgs, PointerIdentityHiddenArgsUseTargetImplicitArgOffsets) {
   }
 }
 
+// COV4 has no heap pointer field; reading that offset would be a wrong ABI.
 TEST(SourceHiddenArgs, HeapV1RefusesBeforeCodeObjectV5) {
   std::vector<KernelArgMeta> Args = {
       makeArg("heap", 56, 8, "hidden_heap_v1"),
@@ -325,6 +327,7 @@ TEST(SourceHiddenArgs, HeapV1RefusesBeforeCodeObjectV5) {
   EXPECT_NE(Value.FailureDetail.find("hidden_heap_v1"), std::string::npos);
 }
 
+// Bad helper widths should report through SourceHiddenArgValue, not abort.
 TEST(SourceHiddenArgs, UnsupportedIntegerWidthFailsWithoutFatalError) {
   std::vector<KernelArgMeta> Args = {
       makeArg("hostcall", 56, 8, "hidden_hostcall_buffer"),

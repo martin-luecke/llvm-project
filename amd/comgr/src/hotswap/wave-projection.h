@@ -202,10 +202,8 @@ public:
   virtual llvm::Value *extractLaneBitFromWaveMask(llvm::IRBuilder<> &B,
                                                    llvm::Value *V) const = 0;
 
-  // Project a wave-mask value to the source-width mask observed by the current
-  // source wave. This is the wave-level analogue of `emitLaneActiveBit`: callers
-  // that need source-ISA mask operands (notably `v_mbcnt_lo`) use this instead
-  // of reading the low 32 bits of a widened EXEC/VCC mask directly.
+  // Source-width mask observed by the current source wave. Used for source-ISA
+  // mask operands such as `v_mbcnt_lo`.
   virtual llvm::Value *emitCurrentSourceWaveMask(
       llvm::IRBuilder<> &B, llvm::Value *Mask,
       const llvm::Twine &Name = "source_wave_mask") const;
@@ -241,12 +239,8 @@ public:
   // `readfirstlane` would collapse those instances together.
   virtual bool sourceWaveScopedLaneOps() const { return false; }
 
-  // True iff this projection can preserve an EXEC write whose predicate
-  // is derived from source-wave-local `v_mbcnt_*` state. Modulo-replication
-  // cannot: it stores one source-width EXEC mask and aliases target lanes `L`
-  // and `L + W_s`. Wave-native keeps target-width EXEC storage and the V_CMPX
-  // handler ballots the per-lane compare to that width, so the two
-  // source-wave halves keep independent EXEC bits.
+  // True when mbcnt-derived V_CMPX predicates remain independent for each
+  // packed source wave's EXEC mask.
   virtual bool preservesMbcntDerivedVcmpxExec() const { return false; }
 
   // Number of source waves whose per-lane fragment data is present in

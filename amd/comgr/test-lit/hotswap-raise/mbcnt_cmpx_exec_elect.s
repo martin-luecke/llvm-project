@@ -7,32 +7,9 @@
 ; RUN:     --emit-ir=mbcnt_cmpx_exec_elect_kernel 2>&1 \
 ; RUN:   | %FileCheck %s --check-prefix=MODREP
 ;
-; Wave32 single-lane elect idiom:
-;
-;   v_mbcnt_lo exec_lo, 0
-;   v_mbcnt_hi exec_hi, mbcnt_lo
-;   v_cmpx_eq mbcnt, 0
-;
-; Under wave32 -> wave64 WaveNative, target lanes 0..31 and 32..63 model
-; two independent source waves. The mbcnt input mask must therefore be the
-; current lane's source-wave slice of widened EXEC, and V_CMPX must ballot the
-; compare into full target-width EXEC storage. MODREP still refuses the same
-; structural C4 site because it aliases both halves through one source EXEC.
-
-; WN-LABEL: define amdgpu_kernel void @mbcnt_cmpx_exec_elect_kernel(
-; WN: %exec_srcwave_mask_base = and i32 %{{[^,]+}}, -32
-; WN: %exec_srcwave_mask_at_srcwave = lshr i64 %{{[^,]+}}, %exec_srcwave_mask_shift
-; WN: %exec_srcwave_mask = trunc i64 %exec_srcwave_mask_at_srcwave to i32
-; WN: %mbcnt_masked{{[0-9]*}} = and i32 %exec_srcwave_mask, %mbcnt_below_mask{{[0-9]*}}
-; WN: %[[MBCNT_VGPR:.*]] = phi i32 [ %mbcnt_lo_srcwave{{[0-9]*}},
-; WN: %[[CMP:.*]] = icmp eq i32 %[[MBCNT_VGPR]], 0
-; WN-NEXT: %cmpx_ballot = call i64 @llvm.amdgcn.ballot.i64(i1 %[[CMP]])
-; WN-NEXT: %cmpx_exec = and i64 {{[^,]+}}, %cmpx_ballot
-; WN: lshr i64 %cmpx_exec,
-
-; MODREP: cross-wave-lane-predicated-exec
-; MODREP: CmpxFromLaneId
-; MODREP: outcome: (c) refuse
+; Wave32 single-lane elect: mbcnt(exec) == 0 updates EXEC. WaveNative must
+; slice the current source-wave EXEC for mbcnt, then ballot V_CMPX to i64.
+; MODREP keeps refusing this C4 shape.
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
@@ -40,16 +17,27 @@
 	.globl	mbcnt_cmpx_exec_elect_kernel
 	.p2align	8
 	.type	mbcnt_cmpx_exec_elect_kernel,@function
+; WN-LABEL: define amdgpu_kernel void @mbcnt_cmpx_exec_elect_kernel(
 mbcnt_cmpx_exec_elect_kernel:
 	s_load_b64 s[0:1], s[0:1], 0x0
 	s_wait_kmcnt 0x0
-	;;#ASMSTART
+; WN: %exec_srcwave_mask_base = and i32 %{{[^,]+}}, -32
+; WN: %exec_srcwave_mask_at_srcwave = lshr i64 %{{[^,]+}}, %exec_srcwave_mask_shift
+; WN: %exec_srcwave_mask = trunc i64 %exec_srcwave_mask_at_srcwave to i32
+; WN: %mbcnt_masked{{[0-9]*}} = and i32 %exec_srcwave_mask, %mbcnt_below_mask{{[0-9]*}}
 	v_mbcnt_lo_u32_b32 v1, exec_lo, 0
 	v_mbcnt_hi_u32_b32 v1, exec_hi, v1
+; WN: %[[MBCNT_VGPR:.*]] = phi i32 [ %mbcnt_lo_srcwave{{[0-9]*}},
+; WN: %[[CMP:.*]] = icmp eq i32 %[[MBCNT_VGPR]], 0
+; WN-NEXT: %cmpx_ballot = call i64 @llvm.amdgcn.ballot.i64(i1 %[[CMP]])
+; WN-NEXT: %cmpx_exec = and i64 {{[^,]+}}, %cmpx_ballot
+; MODREP: cross-wave-lane-predicated-exec
+; MODREP: CmpxFromLaneId
+; MODREP: outcome: (c) refuse
 	v_cmpx_eq_u32_e64 v1, 0
+; WN: lshr i64 %cmpx_exec,
 	global_store_b32 v0, v1, s[0:1] scale_offset
 	s_wait_storecnt 0
-	;;#ASMEND
 	s_endpgm
 	.section	.rodata,"a",@progbits
 	.p2align	6, 0x0
