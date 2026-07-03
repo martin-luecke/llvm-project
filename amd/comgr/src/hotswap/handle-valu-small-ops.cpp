@@ -71,12 +71,20 @@ FunctionCallee getF32Intrinsic(RaiseContext &Ctx, Intrinsic::ID IID) {
   return Intrinsic::getOrInsertDeclaration(&Ctx.M, IID, {Ctx.F32Ty});
 }
 
+// Half-selection state for VOP1 true16 conversions. Source half selection can
+// come from either a true16 subregister name (`vN.h`) or from the VOP3
+// `src0_modifiers` OP_SEL bit; destination half selection follows the same
+// subregister/modifier split.
 struct Cvt16HalfSelect {
   bool SrcHi = false;
   bool DstHi = false;
   unsigned SrcMods = 0;
 };
 
+// Decode source/destination half selection for VOP1 true16 conversion
+// instructions. Integer-source conversions disallow FP abs/neg modifiers;
+// F16-source conversions keep them because VOP3Mods in TableGen makes those
+// modifiers part of the floating source operand.
 bool readCvt16HalfSelect(RaiseContext &Ctx, const DecodedInst &Di,
                          OpResolver &Op, HandlerResult &Hr,
                          StringRef OpName, bool AllowFpSrcMods,
@@ -105,6 +113,7 @@ bool readCvt16HalfSelect(RaiseContext &Ctx, const DecodedInst &Di,
   return true;
 }
 
+// Read the selected 16-bit source lane as integer bits.
 Value *readSelectedI16(RaiseContext &Ctx, OpResolver &Op,
                        const Cvt16HalfSelect &Sel, StringRef Name) {
   Value *Raw = Op.src(0);
@@ -113,6 +122,8 @@ Value *readSelectedI16(RaiseContext &Ctx, OpResolver &Op,
   return Ctx.B.CreateTrunc(Raw, Type::getInt16Ty(Ctx.C));
 }
 
+// Read the selected 16-bit source lane as an F16 value and apply any decoded
+// floating-point source modifiers.
 Value *readSelectedF16(RaiseContext &Ctx, OpResolver &Op,
                        const Cvt16HalfSelect &Sel, StringRef Name) {
   Value *Bits = readSelectedI16(Ctx, Op, Sel, Name);
