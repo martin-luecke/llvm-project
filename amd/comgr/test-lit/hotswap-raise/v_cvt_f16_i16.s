@@ -1,8 +1,8 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_cvt_f16_i16_kernel 2>/dev/null | %FileCheck %s --check-prefix=F16I16
-; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_cvt_i16_f16_kernel 2>/dev/null | %FileCheck %s --check-prefix=I16F16
-; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_cvt_f16_u16_kernel 2>/dev/null | %FileCheck %s --check-prefix=F16U16
-; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_cvt_u16_f16_kernel 2>/dev/null | %FileCheck %s --check-prefix=U16F16
+; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_cvt_f16_i16_kernel | %FileCheck %s --check-prefix=F16I16
+; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_cvt_i16_f16_kernel | %FileCheck %s --check-prefix=I16F16
+; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_cvt_f16_u16_kernel | %FileCheck %s --check-prefix=F16U16
+; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_cvt_u16_f16_kernel | %FileCheck %s --check-prefix=U16F16
 ;
 ; gfx1250 VOP1 true16 signed conversion coverage. The ISA manual records both
 ; opcodes as scalar-per-lane 16-bit conversions (`vdst 16, src 16`), so the
