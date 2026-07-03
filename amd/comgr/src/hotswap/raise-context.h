@@ -177,6 +177,11 @@ struct RaiseContext {
   llvm::Value *readOp32(const DecodedInst &Di, unsigned OpIdx);
   llvm::Value *readOp64(const DecodedInst &Di, unsigned OpIdx);
   llvm::Value *readOpExecWidth(const DecodedInst &Di, unsigned OpIdx);
+  // Read a source-width wave-mask operand for source-wave-local prefix-count
+  // operations such as `v_mbcnt_lo`. This helper resolves EXEC/VCC/SGPR-shadow
+  // sources, then delegates the source-wave mask projection to WaveProjection.
+  // Ordinary scalar operands fall back to readOp32.
+  llvm::Value *readOpSourceWaveMask32(const DecodedInst &Di, unsigned OpIdx);
 
   // Emit `llvm.amdgcn.update.dpp.<i32>(old, src, ctrl, row_mask, bank_mask,
   // bound_ctrl)` -- the P5 lowering for src0-path DPP modifiers; see the

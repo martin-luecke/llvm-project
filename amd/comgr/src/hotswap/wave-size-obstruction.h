@@ -22,6 +22,7 @@
 namespace COMGR::hotswap {
 
 struct MCState;
+class WaveProjection;
 
 // ============================================================================
 // Wave-size obstruction classifier.
@@ -39,11 +40,9 @@ struct MCState;
 //
 // The decider function `decideProjection` consumes that report and
 // returns either a projection to run (outcome a / b) or a structured
-// `RaiseFailure` to propagate (outcome c). The projection today is
-// always `ModuloReplicationProjection` -- wave-size-translation.md
-// §2.2's coverage ladder envisions `ThreadLoopProjection` /
-// `ScalarizationProjection` as future rungs, but no corpus kernel
-// reaches them in the currently audited corpus.
+// `RaiseFailure` to propagate (outcome c). Some sites are discharged by
+// the selected projection itself; for example WaveNative handles
+// mbcnt-derived `V_CMPX` EXEC predicates while ModRep still refuses them.
 //
 // Analysis strategy -- mostly syntactic, with decoded-register provenance
 // where needed.
@@ -76,10 +75,13 @@ struct MCState;
 //     `amdgcn.mbcnt.{lo,hi}`?". The implementation tracks decoded
 //     physical-register provenance across the MC stream and refuses
 //     only when the EXEC writer's predicate/mask is actually
-//     mbcnt-derived. This is still conservative across unmodelled
-//     memory/control-flow joins, but it avoids the old kernel-wide
-//     false positive where a shuffle selector used mbcnt and an
-//     unrelated bounds-check v_cmpx appeared in the same kernel.
+//     mbcnt-derived. WaveNative discharges the V_CMPX half by slicing
+//     source-wave masks before mbcnt and balloting into target-width
+//     EXEC; scalar saveexec masks remain refused. This is still
+//     conservative across unmodelled memory/control-flow joins, but it
+//     avoids the old kernel-wide false positive where a shuffle selector
+//     used mbcnt and an unrelated bounds-check v_cmpx appeared in the
+//     same kernel.
 //
 // The sound direction of the imprecision is preserved: false
 // positives (refuse a safe kernel) are benign; false negatives
@@ -194,6 +196,8 @@ enum class ObstructionKind : uint8_t {
   // position; under modulo-replication the projection does not
   // reproduce the source's intent.
   CmpxFromLaneId,           // v_cmpx predicate is derived from v_mbcnt_*.
+                            // Implemented under WaveNative, refused under
+                            // modulo-replication.
   SaveExecFromLaneId,       // s_*_saveexec_b32 source mask is derived from v_mbcnt_*.
 };
 
@@ -217,6 +221,9 @@ enum class RewriteId : uint8_t {
                             // WaveIdLiftScalarized site as "implemented rewrite
                             // available" instead of "refuse outright" so the
                             // classifier lets the kernel through to Phase 6.5.
+  WaveNativeMbcntCmpx,      // WaveNative projection of source-wave-local
+                            // mbcnt-derived V_CMPX predicates into target-width
+                            // EXEC storage.
 };
 
 // Human-readable short label for an `ObstructionKind` -- used in the
@@ -303,8 +310,7 @@ struct ObstructionReport {
 // explicitly. See wave-size-translation.md §5.6.3.
 ObstructionReport buildObstructionReport(llvm::ArrayRef<DecodedInst> Insts,
                                           const MCState &Mc,
-                                          const ISAProfile &Src,
-                                          const ISAProfile &Tgt,
+                                          const WaveProjection &Projection,
                                           bool EnableWritelaneRewrite = true);
 
 // ----------------------------------------------------------------------------
