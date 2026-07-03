@@ -129,6 +129,25 @@ TEST(OpcodeMap, Gfx1250AddMinRealOpcodeMapsToSemOp) {
             COMGR::hotswap::CanonicalOp::V_ADD_MIN_U32);
 }
 
+TEST(OpcodeMap, Gfx1250MulDx9ZeroF32RealOpcodeMapsToSemOp) {
+  ensureAMDGPURegistered();
+
+  COMGR::hotswap::MCState State;
+  llvm::cantFail(COMGR::hotswap::initMCState(State, "gfx1250"));
+
+  COMGR::hotswap::OpcodeMap Map;
+  Map.build(*State.InstrInfo);
+
+  // v_mul_dx9_zero_f32 (the gfx11+ real for the V_MUL_LEGACY_F32 pseudo) must
+  // canonicalize to V_MUL_LEGACY_F32 for both the e32 and e64 encodings so the
+  // raiser lowers it via llvm.amdgcn.fmul.legacy instead of failing with
+  // UnsupportedOpcode.
+  EXPECT_EQ(Map.lookup(llvm::AMDGPU::V_MUL_DX9_ZERO_F32_e32_gfx12),
+            COMGR::hotswap::CanonicalOp::V_MUL_LEGACY_F32);
+  EXPECT_EQ(Map.lookup(llvm::AMDGPU::V_MUL_DX9_ZERO_F32_e64_gfx12),
+            COMGR::hotswap::CanonicalOp::V_MUL_LEGACY_F32);
+}
+
 TEST(OpcodeMap, Gfx1250SubNcU16RealOpcodeMapsToSemOp) {
   ensureAMDGPURegistered();
 

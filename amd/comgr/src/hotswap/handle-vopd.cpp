@@ -336,6 +336,19 @@ bool lowerVopdHalf(RaiseContext &Ctx, const DecodedInst &Di,
       Res = Ctx.B.CreateFSub(S0, S1, "vopd_fsub");
     return Queue(Ctx.B.CreateBitCast(Res, Ctx.I32Ty));
   }
+  case CanonicalOp::V_MUL_LEGACY_F32: {
+    // v_dual_mul_dx9_zero_f32: DX9 zero-flush multiply (see V_MUL_LEGACY_F32
+    // in canonical-op.h for the rationale).
+    if (!requireVopdSources(Half, 2, Di, Hr)) return false;
+    Value *S0 = Ctx.B.CreateBitCast(readVopdSource(Ctx, Half.Src[0], 0),
+                                    Ctx.F32Ty);
+    Value *S1 = Ctx.B.CreateBitCast(readVopdSource(Ctx, Half.Src[1], 1),
+                                    Ctx.F32Ty);
+    Function *Fn = Intrinsic::getOrInsertDeclaration(
+        &Ctx.M, Intrinsic::amdgcn_fmul_legacy);
+    return Queue(Ctx.B.CreateBitCast(
+        Ctx.B.CreateCall(Fn, {S0, S1}, "vopd_fmul_legacy"), Ctx.I32Ty));
+  }
   case CanonicalOp::V_FMAC_F32: {
     if (!requireVopdSources(Half, 2, Di, Hr)) return false;
     Value *S0 = Ctx.B.CreateBitCast(readVopdSource(Ctx, Half.Src[0], 0),

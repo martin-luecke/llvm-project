@@ -1390,6 +1390,19 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Hr.Handled = true;
     return Hr;
   }
+  if (Sop == CanonicalOp::V_MUL_LEGACY_F32) {
+    // v_mul_dx9_zero_f32: DX9 zero-flush multiply; lowered via the legacy
+    // intrinsic (see V_MUL_LEGACY_F32 in canonical-op.h for the rationale).
+    Value *S0 = Op.srcF(0), *S1 = Op.srcF(1);
+    if (S0->getType() != Ctx.F32Ty) S0 = Ctx.B.CreateBitCast(S0, Ctx.F32Ty);
+    if (S1->getType() != Ctx.F32Ty) S1 = Ctx.B.CreateBitCast(S1, Ctx.F32Ty);
+    Function *Fn = Intrinsic::getOrInsertDeclaration(
+        &Ctx.M, Intrinsic::amdgcn_fmul_legacy);
+    Ctx.writeReg32(Op.dst(), Ctx.B.CreateBitCast(
+        Ctx.B.CreateCall(Fn, {S0, S1}, "fmul_legacy"), Ctx.I32Ty));
+    Hr.Handled = true;
+    return Hr;
+  }
   if (Sop == CanonicalOp::V_SUB_F32) {
     Value *S0 = Op.srcF(0), *S1 = Op.srcF(1);
     if (S0->getType() != Ctx.F32Ty) S0 = Ctx.B.CreateBitCast(S0, Ctx.F32Ty);
