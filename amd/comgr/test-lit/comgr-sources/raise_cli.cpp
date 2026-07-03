@@ -433,10 +433,10 @@ int main(int argc, char **argv) {
     uint64_t kernelOffset = kernelExtentOrErr->Offset;
     uint64_t kernelSize = kernelExtentOrErr->Size;
     auto raised = COMGR::hotswap::raiseToIR(text.Bytes, isa, target, meta,
-                                            kernelOffset, kernelSize, targetIsa,
-                                            EnableWritelaneRewrite,
-                                            EnableWaveNative,
-                                            AssumeHipGlobalOffsetZeroOpt);
+                                        kernelOffset, kernelSize, targetIsa,
+                                        EnableWritelaneRewrite,
+                                        EnableWaveNative,
+                                        AssumeHipGlobalOffsetZeroOpt);
     if (!raised.Success) {
       // Contract: raiseToIR only populates RaiseResult::IrText on the
       // success path (the last write before setting `success = true`),
@@ -590,11 +590,10 @@ int main(int argc, char **argv) {
         llvm::consumeError(metaOrErr.takeError());
       }
       auto raised = COMGR::hotswap::raiseToIR(text.Bytes, isa, kName, meta,
-                                              kernelOffset, kernelSize,
-                                              targetIsa,
-                                              EnableWritelaneRewrite,
-                                              EnableWaveNative,
-                                              AssumeHipGlobalOffsetZeroOpt);
+                                          kernelOffset, kernelSize, targetIsa,
+                                          EnableWritelaneRewrite,
+                                          EnableWaveNative,
+                                          AssumeHipGlobalOffsetZeroOpt);
       shm->done = true;
       shm->success = raised.Success;
       shm->lifted = raised.LiftedCount;
