@@ -261,7 +261,7 @@ TEST(SourceHiddenArgs, HostcallUsesTargetImplicitArgOffset) {
   EXPECT_EQ(IR.find("amdgpu-no-hostcall-ptr"), std::string::npos);
 }
 
-// Pointer hidden args must use target-COV offsets, not source metadata offsets.
+// Pointer hidden args move between source and target ABI offsets.
 TEST(SourceHiddenArgs, PointerIdentityHiddenArgsUseTargetImplicitArgOffsets) {
   struct Case {
     const char *Name;
@@ -308,7 +308,7 @@ TEST(SourceHiddenArgs, PointerIdentityHiddenArgsUseTargetImplicitArgOffsets) {
   }
 }
 
-// COV4 has no heap pointer field; reading that offset would be a wrong ABI.
+// COV4 has no heap pointer field, so heap_v1 must refuse.
 TEST(SourceHiddenArgs, HeapV1RefusesBeforeCodeObjectV5) {
   std::vector<KernelArgMeta> Args = {
       makeArg("heap", 56, 8, "hidden_heap_v1"),
