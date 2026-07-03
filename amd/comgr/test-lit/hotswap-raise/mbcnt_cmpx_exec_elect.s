@@ -24,10 +24,11 @@
 ; WN: %exec_srcwave_mask_at_srcwave = lshr i64 %{{[^,]+}}, %exec_srcwave_mask_shift
 ; WN: %exec_srcwave_mask = trunc i64 %exec_srcwave_mask_at_srcwave to i32
 ; WN: %mbcnt_masked{{[0-9]*}} = and i32 %exec_srcwave_mask, %mbcnt_below_mask{{[0-9]*}}
-; WN: %[[CMP:.*]] = icmp eq i32 %mbcnt_lo_srcwave{{[0-9]*}}, 0
+; WN: %[[MBCNT_VGPR:.*]] = phi i32 [ %mbcnt_lo_srcwave{{[0-9]*}},
+; WN: %[[CMP:.*]] = icmp eq i32 %[[MBCNT_VGPR]], 0
 ; WN-NEXT: %cmpx_ballot = call i64 @llvm.amdgcn.ballot.i64(i1 %[[CMP]])
 ; WN-NEXT: %cmpx_exec = and i64 {{[^,]+}}, %cmpx_ballot
-; WN: store i64 %cmpx_exec
+; WN: lshr i64 %cmpx_exec,
 
 ; MODREP: cross-wave-lane-predicated-exec
 ; MODREP: CmpxFromLaneId
