@@ -198,13 +198,8 @@ HandlerResult handleValuSmallOps(RaiseContext &Ctx, const DecodedInst &Di,
   }
   case CanonicalOp::V_CVT_F16_U16:
   case CanonicalOp::V_CVT_F16_I16: {
-    // VOP1 true16 conversion: the manuals define these as `vdst 16, src 16`.
-    // OPSEL selects the source and destination halves, and the unselected
-    // destination half is preserved. TableGen models the numeric operation as
-    // uint_to_fp / sint_to_fp and marks it FPDPRounding; the lift uses the same
-    // target-independent FP conversion IR shape as the existing f16 conversion
-    // handlers and leaves MODE-sensitive dynamic rounding to the existing
-    // HotSwap MODE policy.
+    // True16 conversion: select one i16 source half, convert with the requested
+    // signedness, then merge the f16 result into the selected destination half.
     const bool IsSigned = Di.CanonOp == CanonicalOp::V_CVT_F16_I16;
     StringRef OpName = IsSigned ? "v_cvt_f16_i16" : "v_cvt_f16_u16";
     if (!requireDefaultOutputModsIfPresent(Di, Hr))
@@ -227,10 +222,8 @@ HandlerResult handleValuSmallOps(RaiseContext &Ctx, const DecodedInst &Di,
   }
   case CanonicalOp::V_CVT_U16_F16:
   case CanonicalOp::V_CVT_I16_F16: {
-    // The reverse VOP1 true16 conversions naturally saturate in AMDGPU
-    // TableGen (`fp_to_{u,s}int_sat` patterns). Plain fptoui/fptosi would be
-    // poison for out-of-range finite inputs, so use LLVM's saturating
-    // intrinsics and merge the i16 result into the selected destination half.
+    // Hardware saturates f16-to-i16 conversions; plain fptoui/fptosi would be
+    // poison for out-of-range inputs.
     const bool IsSigned = Di.CanonOp == CanonicalOp::V_CVT_I16_F16;
     StringRef OpName = IsSigned ? "v_cvt_i16_f16" : "v_cvt_u16_f16";
     if (!requireDefaultOutputModsIfPresent(Di, Hr))
