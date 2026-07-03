@@ -15,7 +15,6 @@
 #include "llvm/IR/IntrinsicsAMDGPU.h"
 #include "llvm/Support/ErrorHandling.h"
 
-#include <limits>
 #include <optional>
 
 using namespace llvm;
@@ -240,18 +239,8 @@ SourceHiddenArgValue emitHiddenArgValue(SourceHiddenArgContext &Ctx,
 // Emit one byte from the source hidden-argument metadata view.
 SourceHiddenArgValue emitSourceHiddenByte(SourceHiddenArgContext &Ctx,
                                           int64_t ByteOffset) {
-  if (ByteOffset < std::numeric_limits<int>::min() ||
-      ByteOffset > std::numeric_limits<int>::max()) {
-    SourceHiddenArgValue Result;
-    Result.Matched = true;
-    Result.FailureDetail =
-        (Twine("source hidden-arg byte offset ") + Twine(ByteOffset) +
-         " is outside the representable source metadata offset range")
-            .str();
-    return Result;
-  }
   std::optional<SourceHiddenArgByte> Byte =
-      classifySourceHiddenArgByte(Ctx.Args, static_cast<int>(ByteOffset));
+      classifySourceHiddenArgByte(Ctx.Args, ByteOffset);
   if (!Byte)
     return {};
 
