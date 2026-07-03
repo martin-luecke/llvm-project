@@ -180,14 +180,10 @@ TEST(OpcodeMap, Gfx1250VectorF32F64RealOpcodesMapToCanonicalOps) {
             COMGR::hotswap::CanonicalOp::V_CVT_F64_F32);
 }
 
-// Regression for rocm-systems#144: the F64 VOP1 transcendentals expose both
-// an `_e32` (VOP1) and an `_e64` (VOP3) real encoding, and the opcode map only
-// lists the `_e64` pseudo -- the `_e32` real is expected to collapse onto it via
-// the `getVOPe64` step in `canonicalize()`. #144 reported `v_sqrt_f64_e32`
-// surfacing as UnsupportedOpcode; that was an older checkout predating
-// v_sqrt_f64 support (PR #155). Pin BOTH encodings here so a future change to
-// the canonicalize chain that breaks the e32->e64 collapse is caught. RCP/RSQ
-// are pinned alongside because they share the exact same NO_DPP e32/e64 shape.
+// Regression for rocm-systems#144: these gfx12 FP64 VOP1 ops have both
+// e32 and e64 real encodings. OpcodeMap only lists the e64 pseudo, so the
+// e32 form must canonicalize through AMDGPU::getVOPe64() before lookup.
+// Pin the reported sqrt case and the RCP/RSQ siblings with the same shape.
 TEST(OpcodeMap, Gfx1250F64TransBothEncodingsMapToCanonicalOps) {
   ensureAMDGPURegistered();
 
