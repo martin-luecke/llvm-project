@@ -38,10 +38,9 @@ class WaveProjection;
 // landed-rewrites table (if any) that would discharge it, and
 // (c) whether the rewrite is implemented in the current raiser.
 //
-// The decider function `decideProjection` consumes that report and
-// returns either a projection to run (outcome a / b) or a structured
-// `RaiseFailure` to propagate (outcome c). Some sites are discharged by
-// the selected projection itself; for example WaveNative handles
+// The raiser selects a `WaveProjection` before this classifier runs, and the
+// report is computed against that selected projection. Some sites are
+// discharged by the projection itself; for example WaveNative handles
 // mbcnt-derived `V_CMPX` EXEC predicates while ModRep still refuses them.
 //
 // Analysis strategy -- mostly syntactic, with decoded-register provenance
