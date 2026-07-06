@@ -2273,23 +2273,21 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
                     Sop == CanonicalOp::V_MAXMIN_I32;
     bool MinThenMax = Sop == CanonicalOp::V_MINMAX_I32 ||
                       Sop == CanonicalOp::V_MINMAX_U32;
-    StringRef OpName;
-    switch (Sop) {
-    case CanonicalOp::V_MINMAX_I32:
-      OpName = "v_minmax_i32";
-      break;
-    case CanonicalOp::V_MAXMIN_I32:
-      OpName = "v_maxmin_i32";
-      break;
-    case CanonicalOp::V_MINMAX_U32:
-      OpName = "v_minmax_u32";
-      break;
-    case CanonicalOp::V_MAXMIN_U32:
-      OpName = "v_maxmin_u32";
-      break;
-    default:
-      llvm_unreachable("filtered by integer min/max switch");
-    }
+    auto IntMinMaxOpName = [](CanonicalOp Op) -> StringRef {
+      switch (Op) {
+      case CanonicalOp::V_MINMAX_I32:
+        return "v_minmax_i32";
+      case CanonicalOp::V_MAXMIN_I32:
+        return "v_maxmin_i32";
+      case CanonicalOp::V_MINMAX_U32:
+        return "v_minmax_u32";
+      case CanonicalOp::V_MAXMIN_U32:
+        return "v_maxmin_u32";
+      default:
+        llvm_unreachable("not an integer ternary min/max opcode");
+      }
+    };
+    StringRef OpName = IntMinMaxOpName(Sop);
 
     if (!requireDefaultVOP3OutputMods(Di, Hr, OpName,
                                       VOP3OutputModPresence::IfPresent,
