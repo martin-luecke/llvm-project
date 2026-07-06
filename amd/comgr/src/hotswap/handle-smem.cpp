@@ -171,14 +171,12 @@ SourceScalarBufferResource decodeSourceScalarBufferResource(RaiseContext &Ctx,
         Ctx.B.CreateShl(zextToI64(Ctx, Dw3), Ctx.B.getInt64(32)),
         "sbuf_rsrc_hi");
 
-    // The AMDGPU manuals call the four-SGPR buffer resource a V#.
-    // S_BUFFER_LOAD uses these gfx12+ fields:
+    // S_BUFFER_LOAD uses these gfx12+ buffer resource fields:
     //   base_address = resource[56:0]
     //   num_records  = resource[101:57]
     //   stride       = resource[121:108]
-    // The manual states that other descriptor bits are not consumed by
-    // S_BUFFER_LOAD, so they are deliberately not copied into the target
-    // resource.
+    // S_BUFFER_LOAD ignores the other descriptor bits, so they are not copied
+    // into the target resource.
     constexpr uint64_t Base57Mask = (1ULL << 57) - 1;
     constexpr uint64_t NumRecordsHigh38Mask = (1ULL << 38) - 1;
     Value *Base57 =
