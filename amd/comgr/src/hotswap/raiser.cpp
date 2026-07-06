@@ -758,7 +758,7 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
               llvm::StringRef CompilationTargetIsa, bool EnableWritelaneRewrite,
               bool EnableWaveNative, bool ForceThreadLoopProjection,
               bool SuppressC5ForThreadLoopRoute,
-              bool AssumeHipGlobalOffsetZero) {
+              bool AssumeHipGlobalOffsetZero, RaiseStats *Stats) {
   RaiseResult Result;
 
   // Reject obviously-bad ISA inputs before reaching the MC stack -- an
@@ -1043,7 +1043,8 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
     BlockStarts.insert(Addr);
   }
 
-  Result.TotalCount = static_cast<int>(Insts.size());
+  if (Stats)
+    Stats->TotalCount = static_cast<int>(Insts.size());
 
   // Source disassembly is only consumed by the `.dis` debug dump. Skip the
   // string build on the production path; the pipeline only writes it when a
@@ -2010,7 +2011,8 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
     }
   }
 
-  Result.LiftedCount = RaisedCount;
+  if (Stats)
+    Stats->LiftedCount = RaisedCount;
 
   // If any instructions failed to raise, skip Phases 6-7.
   if (RaiseFailures) {
@@ -2125,7 +2127,7 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
                              /*enableWaveNative=*/false,
                              /*forceThreadLoopProjection=*/true,
                              /*suppressC5ForThreadLoopRoute=*/true,
-                             AssumeHipGlobalOffsetZero);
+                             AssumeHipGlobalOffsetZero, Stats);
       }
       if (!ForceThreadLoopProjection &&
           TlDecision.Decision == ThreadLoopDecision::EligibleButGateOff) {
@@ -2301,7 +2303,7 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
                              /*enableWaveNative=*/false,
                              /*forceThreadLoopProjection=*/true,
                              /*suppressC5ForThreadLoopRoute=*/true,
-                             AssumeHipGlobalOffsetZero);
+                             AssumeHipGlobalOffsetZero, Stats);
       }
       errs() << "transpiler: pre-translation abort: "
              << reasonString(RaiseFailureReason::CrossWavePredicateChain)
@@ -2349,11 +2351,12 @@ llvm::Expected<RaiseResult>
 raiseToIR(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
           llvm::StringRef KernelName, const KernelMeta &Meta,
           llvm::StringRef CompilationTargetIsa, bool EnableWritelaneRewrite,
-          bool EnableWaveNative) {
+          bool EnableWaveNative, RaiseStats *Stats) {
   return raiseToIR(TextBytes, SourceIsa, KernelName, Meta,
                    /*KernelOffset=*/0,
                    /*KernelSize=*/0, CompilationTargetIsa,
-                   EnableWritelaneRewrite, EnableWaveNative);
+                   EnableWritelaneRewrite, EnableWaveNative,
+                   /*AssumeHipGlobalOffsetZero=*/false, Stats);
 }
 
 llvm::Expected<RaiseResult>
@@ -2361,12 +2364,13 @@ raiseToIR(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
           llvm::StringRef KernelName, const KernelMeta &Meta,
           uint64_t KernelOffset, uint64_t KernelSize,
           llvm::StringRef CompilationTargetIsa, bool EnableWritelaneRewrite,
-          bool EnableWaveNative, bool AssumeHipGlobalOffsetZero) {
+          bool EnableWaveNative, bool AssumeHipGlobalOffsetZero,
+          RaiseStats *Stats) {
   return raiseToIRImpl(
       TextBytes, SourceIsa, KernelName, Meta, KernelOffset, KernelSize,
       CompilationTargetIsa, EnableWritelaneRewrite, EnableWaveNative,
       /*forceThreadLoopProjection=*/false,
-      /*suppressC5ForThreadLoopRoute=*/false, AssumeHipGlobalOffsetZero);
+      /*suppressC5ForThreadLoopRoute=*/false, AssumeHipGlobalOffsetZero, Stats);
 }
 
 } // namespace COMGR::hotswap
