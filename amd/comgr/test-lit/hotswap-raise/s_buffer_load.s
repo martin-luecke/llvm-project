@@ -1,6 +1,6 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco
 ; RUN: %raise_cli %t.hsaco --target-isa=gfx942 \
-; RUN:   --emit-ir=s_buffer_load_success_kernel 2>/dev/null \
+; RUN:   --emit-ir=s_buffer_load_success_kernel \
 ; RUN:   | %FileCheck %s --check-prefix=SUCCESS
 ; RUN: %raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:   --write-hsaco=%t.gfx942.hsaco --kernel=s_buffer_load_success_kernel \
@@ -9,7 +9,7 @@
 ; RUN:   --emit-ir=s_buffer_load_scope_refuse_kernel 2>&1 \
 ; RUN:   | %FileCheck %s --check-prefix=SCOPE
 ; RUN: %raise_cli %t.hsaco --target-isa=gfx942 \
-; RUN:   --emit-ir=s_buffer_load_unrepresentable_base_kernel 2>/dev/null \
+; RUN:   --emit-ir=s_buffer_load_unrepresentable_base_kernel \
 ; RUN:   | %FileCheck %s --check-prefix=TRAP
 ;
 ; gfx12 S_BUFFER_LOAD consumes a four-SGPR buffer resource descriptor. The
