@@ -40,24 +40,39 @@ Value *addStaticSmemByteOffset64(RaiseContext &Ctx, const DecodedInst &Di,
   return Ctx.B.CreateAdd(Offset, Ctx.B.getInt64(*Di.StaticOffset), Name);
 }
 
-// Return the dword payload width for scalar buffer-resource loads.
-std::optional<unsigned> getScalarBufferLoadDwordCount(CanonicalOp Sop) {
+// Match scalar buffer-resource loads as a single handler family.
+bool isScalarBufferLoad(CanonicalOp Sop) {
   switch (Sop) {
   case CanonicalOp::S_BUFFER_LOAD_B32:
-    return 1u;
   case CanonicalOp::S_BUFFER_LOAD_B64:
-    return 2u;
   case CanonicalOp::S_BUFFER_LOAD_B96:
-    return 3u;
   case CanonicalOp::S_BUFFER_LOAD_B128:
-    return 4u;
   case CanonicalOp::S_BUFFER_LOAD_B256:
-    return 8u;
   case CanonicalOp::S_BUFFER_LOAD_B512:
-    return 16u;
+    return true;
   default:
-    return std::nullopt;
+    return false;
   }
+}
+
+// Return the TableGen destination register-class width for an explicit def.
+unsigned defRegClassDwordCount(RaiseContext &Ctx, const DecodedInst &Di,
+                               unsigned DefIdx) {
+  const MCInstrInfo &MII = *Ctx.Mc.InstrInfo;
+  const MCRegisterInfo &MRI = *Ctx.Mc.RegInfo;
+  const MCSubtargetInfo &STI = *Ctx.Mc.SubtargetInfo;
+  const MCInstrDesc &Desc = MII.get(Di.Inst.getOpcode());
+  ArrayRef<MCOperandInfo> Operands = Desc.operands();
+  assert(DefIdx < Operands.size() && "missing SMEM def operand metadata");
+
+  int16_t RegClassId = MII.getOpRegClassID(
+      Operands[DefIdx], STI.getHwMode(MCSubtargetInfo::HwMode_RegInfo));
+  assert(RegClassId >= 0 && "SMEM def operand must have a register class");
+
+  unsigned Bits = MRI.getRegClass(RegClassId).getSizeInBits();
+  assert(Bits != 0 && Bits % 32 == 0 &&
+         "SMEM def register class must have dword width");
+  return Bits / 32;
 }
 
 // Build descriptor arithmetic in a common 64-bit integer type.
@@ -433,9 +448,7 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
 
-  if (std::optional<unsigned> MaybeLoadDwords =
-          getScalarBufferLoadDwordCount(Sop)) {
-    unsigned LoadDwords = *MaybeLoadDwords;
+  if (isScalarBufferLoad(Sop)) {
     ParsedReg Dest = Op.dst();
     ParsedReg Base = Op.srcReg(0);
 
@@ -444,6 +457,8 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
           Di, "SMEM", "S_BUFFER_LOAD expects an SGPR destination");
       return Hr;
     }
+    // The payload width is encoded in the TableGen destination operand class.
+    unsigned LoadDwords = defRegClassDwordCount(Ctx, Di, /*DefIdx=*/0);
     if (Base.RegKind != ParsedReg::SGPR || Base.BaseIdx < 0 ||
         (Base.BaseIdx % 4) != 0 ||
         static_cast<size_t>(Base.BaseIdx + 3) >= Ctx.Regs.Sgpr.size()) {
