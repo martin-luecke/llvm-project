@@ -522,7 +522,7 @@ enum class CanonicalOp : uint16_t {
   // generated assembly recovers the original instruction without
   // codegen quality loss.
   V_MED3_I32,
-  // Ternary nested min/max family; see handle-valu.cpp for lowering details.
+  // Ternary nested min/max family.
   V_MINMAX_I32, V_MAXMIN_I32, V_MINMAX_U32, V_MAXMIN_U32,
   // IEEE-754-2019 maximumNumber/minimumNumber: numeric operand preferred over NaN.
   V_MAX_NUM_F32, V_MIN_NUM_F32,

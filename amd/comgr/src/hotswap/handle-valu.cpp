@@ -69,11 +69,13 @@ bool requireNoVOP3IntMinMaxSrcMods(const DecodedInst &Di, HandlerResult &Hr,
     if (ModIdx == UINT_MAX)
       continue;
     if (!Di.isImm(ModIdx)) {
-      Hr.Failure = RaiseFailure::unsupportedInstructionForm(
-          Di, "VOP3",
-          Twine(OpName) + " has malformed src" + Twine(I) +
-              "_modifiers operand; operand table layout does not match the "
-              "expected VOP3 integer profile");
+      std::string Detail;
+      raw_string_ostream Os(Detail);
+      Os << OpName << " has malformed src" << I
+         << "_modifiers operand; operand table layout does not match the "
+            "expected VOP3 integer profile";
+      Hr.Failure = RaiseFailure::unsupportedInstructionForm(Di, "VOP3",
+                                                            Detail);
       return false;
     }
     int64_t Raw = Di.getImm(ModIdx);
