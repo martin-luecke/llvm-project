@@ -51,6 +51,42 @@ std::optional<bool> readVOP3Clamp(const DecodedInst &Di, HandlerResult &Hr,
   return *Clamp != 0;
 }
 
+bool requireNoVOP3IntMinMaxSrcMods(const DecodedInst &Di, HandlerResult &Hr,
+                                   StringRef OpName) {
+  constexpr unsigned NumSrcs = 3;
+  if (Di.NumSrcs < NumSrcs) {
+    Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+        Di, "VOP3",
+        Twine(OpName) + " has too few source operands; expected " +
+            Twine(NumSrcs));
+    return false;
+  }
+
+  for (unsigned I = 0; I < NumSrcs; ++I) {
+    unsigned ModIdx = Di.ModMap[I];
+    if (ModIdx == UINT_MAX)
+      continue;
+    if (!Di.isImm(ModIdx)) {
+      Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+          Di, "VOP3",
+          Twine(OpName) + " has malformed src" + Twine(I) +
+              "_modifiers operand; operand table layout does not match the "
+              "expected VOP3 integer profile");
+      return false;
+    }
+    int64_t Raw = Di.getImm(ModIdx);
+    if (Raw != 0) {
+      Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+          Di, "VOP3",
+          Twine(OpName) +
+              " has non-default source modifiers; integer ternary min/max "
+              "does not define abs/neg/op_sel modifier semantics");
+      return false;
+    }
+  }
+  return true;
+}
+
 // True16 VOP3 half-select helpers. For code-object disassembly, LLVM decodes
 // these op_sel bits into src*_modifiers; the non-DPP path does not reliably
 // synthesize a standalone OpName::op_sel operand. The destination selector is
@@ -2215,6 +2251,66 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Ctx.writeReg32(
         Op.dst(),
         Ctx.B.CreateCall(SmaxFn, {Lo, Clamped}, "vmed3"));
+    Hr.Handled = true;
+    return Hr;
+  }
+  // VOP3 integer ternary min/max family. MI400 documents:
+  //   v_minmax_i32: dst = smax(smin(src0, src1), src2)
+  //   v_maxmin_i32: dst = smin(smax(src0, src1), src2)
+  //   v_minmax_u32: dst = umax(umin(src0, src1), src2)
+  //   v_maxmin_u32: dst = umin(umax(src0, src1), src2)
+  // and marks source abs/neg plus output clamp/omod unsupported.  Source
+  // modifiers flow through DecodedInst::ModMap and are refused below when
+  // present and nonzero.  LLVM does not expose clamp/omod operands for these
+  // NOCLAMP/NOOMOD profiles; the IfPresent guard is intentionally only a drift
+  // check in case TableGen grows those operands later.  The IR shape mirrors
+  // LLVM's IntMinMaxPat entries so same-family targets can reselect the single
+  // opcodes, while cross-target gfx942 gets ordinary integer min/max ops.
+  if (Sop == CanonicalOp::V_MINMAX_I32 ||
+      Sop == CanonicalOp::V_MAXMIN_I32 ||
+      Sop == CanonicalOp::V_MINMAX_U32 ||
+      Sop == CanonicalOp::V_MAXMIN_U32) {
+    bool IsSigned = Sop == CanonicalOp::V_MINMAX_I32 ||
+                    Sop == CanonicalOp::V_MAXMIN_I32;
+    bool MinThenMax = Sop == CanonicalOp::V_MINMAX_I32 ||
+                      Sop == CanonicalOp::V_MINMAX_U32;
+    StringRef OpName;
+    switch (Sop) {
+    case CanonicalOp::V_MINMAX_I32:
+      OpName = "v_minmax_i32";
+      break;
+    case CanonicalOp::V_MAXMIN_I32:
+      OpName = "v_maxmin_i32";
+      break;
+    case CanonicalOp::V_MINMAX_U32:
+      OpName = "v_minmax_u32";
+      break;
+    case CanonicalOp::V_MAXMIN_U32:
+      OpName = "v_maxmin_u32";
+      break;
+    default:
+      llvm_unreachable("filtered by integer min/max switch");
+    }
+
+    if (!requireDefaultVOP3OutputMods(Di, Hr, OpName,
+                                      VOP3OutputModPresence::IfPresent,
+                                      VOP3OutputModDiag::Combined) ||
+        !requireNoVOP3IntMinMaxSrcMods(Di, Hr, OpName))
+      return Hr;
+
+    Value *S0 = Op.src(0), *S1 = Op.src(1), *S2 = Op.src(2);
+    Intrinsic::ID MinId = IsSigned ? Intrinsic::smin : Intrinsic::umin;
+    Intrinsic::ID MaxId = IsSigned ? Intrinsic::smax : Intrinsic::umax;
+    Intrinsic::ID InnerId = MinThenMax ? MinId : MaxId;
+    Intrinsic::ID OuterId = MinThenMax ? MaxId : MinId;
+    Function *InnerFn =
+        Intrinsic::getOrInsertDeclaration(&Ctx.M, InnerId, {Ctx.I32Ty});
+    Function *OuterFn =
+        Intrinsic::getOrInsertDeclaration(&Ctx.M, OuterId, {Ctx.I32Ty});
+    Value *Inner =
+        Ctx.B.CreateCall(InnerFn, {S0, S1}, Twine(OpName) + "_inner");
+    Ctx.writeReg32(Op.dst(),
+                   Ctx.B.CreateCall(OuterFn, {Inner, S2}, OpName));
     Hr.Handled = true;
     return Hr;
   }
