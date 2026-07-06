@@ -121,7 +121,7 @@ void emitTrapUnless(RaiseContext &Ctx, Value *Condition,
   Ctx.B.SetInsertPoint(ContBB);
 }
 
-// Check that the source V# base fits in the target V# base field.
+// Check that the source buffer-resource base fits in the target descriptor.
 void emitBufferBaseRepresentabilityGuard(RaiseContext &Ctx, Value *BaseAddr) {
   if (Ctx.TargetIsa.BufferResourceBaseBits >= Ctx.Isa.BufferResourceBaseBits)
     return;
@@ -137,19 +137,19 @@ void emitBufferBaseRepresentabilityGuard(RaiseContext &Ctx, Value *BaseAddr) {
                                       "sbuf_base_target_sext");
   Value *Representable =
       Ctx.B.CreateICmpEQ(RoundTrip, BaseAddr, "sbuf_base_target_ok");
-  // A source gfx12 V# can carry a wider base than a gfx942 target descriptor.
+  // A gfx12 descriptor can carry a wider base than a gfx942 descriptor.
   // The runtime normally constructs descriptors from target-valid process
   // pointers; this guard makes that contract explicit for dynamic descriptors.
   emitTrapUnless(Ctx, Representable, "sbuf_base_unrepresentable");
 }
 
-// Source V# fields after projecting them to the target raw-buffer contract.
+// Source descriptor fields after projecting them to the target raw-buffer form.
 struct SourceScalarBufferResource {
   Value *BasePtr = nullptr;
   Value *ExtentBytes = nullptr;
 };
 
-// Decode the source V# fields that S_BUFFER_LOAD observes.
+// Decode the source buffer-resource descriptor fields used by S_BUFFER_LOAD.
 SourceScalarBufferResource decodeSourceScalarBufferResource(RaiseContext &Ctx,
                                                             ParsedReg Base) {
   Value *Dw0 = Ctx.Regs.loadSGPR32(Ctx.B, Base.BaseIdx);
@@ -171,7 +171,8 @@ SourceScalarBufferResource decodeSourceScalarBufferResource(RaiseContext &Ctx,
         Ctx.B.CreateShl(zextToI64(Ctx, Dw3), Ctx.B.getInt64(32)),
         "sbuf_rsrc_hi");
 
-    // Source scalar-buffer V# fields used by SMEM on gfx12+:
+    // The AMDGPU manuals call the four-SGPR buffer resource a V#.
+    // S_BUFFER_LOAD uses these gfx12+ fields:
     //   base_address = resource[56:0]
     //   num_records  = resource[101:57]
     //   stride       = resource[121:108]
@@ -524,16 +525,16 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
     Value *Rsrc = emitTargetBufferResource(Ctx, Resource);
     Value *Soffset = ConstantInt::get(Ctx.I32Ty, 0);
     Value *AuxFlags = ConstantInt::get(Ctx.I32Ty, 0);
-    // S_BUFFER_LOAD reads through the V# value in sbase. Decode the source V#
-    // fields this instruction uses, then rebuild a target resource with the
-    // same base and byte extent. Target buffer hardware then returns zero for
-    // out-of-bounds load elements.
+    // S_BUFFER_LOAD reads through the buffer resource in sbase. Decode the
+    // source fields this instruction uses, then rebuild a target resource with
+    // the same base and byte extent. Target buffer hardware then returns zero
+    // for out-of-bounds load elements.
     // This path is limited to the default cache policy; explicit SMEM TH/SCOPE
     // bits are rejected above.
     //
     // Use raw-pointer buffer loads because WaveNative can carry different
     // descriptor values for the two source-wave halves inside one target wave.
-    // The backend can waterfall those non-uniform resource fields.
+    // The backend lowers such non-uniform resource values correctly.
     for (unsigned D = 0; D < LoadDwords;) {
       // Target raw-buffer loads select up to dwordx4, so split wider scalar
       // buffer loads into consecutive chunks.
