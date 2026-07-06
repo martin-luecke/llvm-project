@@ -355,10 +355,6 @@ enum class CanonicalOp : uint16_t {
   V_CVT_F32_F64, V_CVT_F64_F32,
   V_CVT_F64_U32, V_CVT_F64_I32, V_CVT_U32_F64, V_CVT_I32_F64,
   V_RCP_IFLAG_F32, V_RCP_F32, V_RSQ_F32, V_SQRT_F32, V_EXP_F32, V_LOG_F32,
-  // VOP1/VOP3 F32 trigonometric TRANS ops. The ISA defines these as
-  // sin/cos(src * 2*pi), not generic radian-domain sin/cos; lower through
-  // the AMDGPU intrinsics that select the hardware TRANS instructions.
-  V_SIN_F32, V_COS_F32,
   V_FREXP_EXP_I32_F64,
   // Targets with native tanh support lower this through `llvm.amdgcn.tanh.*`;
   // other targets use OCML when a matching OCML entry point exists.
@@ -451,7 +447,7 @@ enum class CanonicalOp : uint16_t {
   V_PRNG_B32,
 
   // -- VOP2 / VOP3 --
-  V_ADD_F32, V_SUB_F32, V_SUBREV_F32, V_MUL_F32,
+  V_ADD_F32, V_SUB_F32, V_SUBREV_F32, V_MUL_F32, V_MUL_LEGACY_F32,
   V_FMAC_F32, V_FMA_F32, V_FMAMK_F32, V_FMAAK_F32,
   V_ADD_NC_U32, V_SUB_NC_U32, V_SUBREV_NC_U32,
   V_ADD_CO_U32, V_ADD_CO_CI_U32,
@@ -802,7 +798,6 @@ enum class CanonicalOp : uint16_t {
   GLOBAL_STORE_BYTE, GLOBAL_STORE_BYTE_D16_HI,
   GLOBAL_STORE_SHORT, GLOBAL_STORE_SHORT_D16_HI,
   GLOBAL_STORE_DWORD, GLOBAL_STORE_DWORDX2, GLOBAL_STORE_DWORDX3, GLOBAL_STORE_DWORDX4,
-  GLOBAL_WB,
   SCRATCH_LOAD_DWORD, SCRATCH_LOAD_DWORDX2, SCRATCH_LOAD_DWORDX3, SCRATCH_LOAD_DWORDX4,
   SCRATCH_STORE_DWORD, SCRATCH_STORE_DWORDX2, SCRATCH_STORE_DWORDX3, SCRATCH_STORE_DWORDX4,
 
@@ -1280,13 +1275,6 @@ enum class CanonicalOp : uint16_t {
   GLOBAL_LOAD_ASYNC_TO_LDS_B32,
   GLOBAL_LOAD_ASYNC_TO_LDS_B64,
   GLOBAL_LOAD_ASYNC_TO_LDS_B128,
-
-  GLOBAL_LOAD_TR4_B64,
-  GLOBAL_LOAD_TR6_B96,
-  GLOBAL_LOAD_TR8_B64,
-  GLOBAL_LOAD_TR16_B128,
-  GLOBAL_LOAD_TR_FIRST = GLOBAL_LOAD_TR4_B64,
-  GLOBAL_LOAD_TR_LAST = GLOBAL_LOAD_TR16_B128,
 
   // -- gfx1250 VMEM prefetch (FLAT, hint-class) --
   //

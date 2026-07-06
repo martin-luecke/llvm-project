@@ -178,17 +178,15 @@ static bool isSemOpInRange(CanonicalOp Op, CanonicalOp First, CanonicalOp Last) 
 // treating source implicit-arg offsets as hidden-arg accesses once the full
 // pair is known not to hold the dispatch-provided entry pointer.
 //
-// The prepass below computes one conservative fact for the physical SGPR pair
-// that originally held kernarg_segment_ptr at each decoded basic block:
-//   * Entry+Const(N) - every incoming path carries the dispatch-provided entry
-//                     kernarg pointer plus the same constant byte offset N.
-//   * NonEntry      - every incoming path overwrote the pair with a value loaded
-//                     from memory rather than the dispatch-provided entry SGPR
-//                     value. Constant rebases of such a value remain NonEntry.
-//   * Unknown       - paths disagree, are unreachable, or include an
-//                     unclassified write. Strict hidden-arg lowering refuses.
-// Partial-lane writes are Unknown because the two 32-bit lanes no longer form a
-// coherent pointer fact.
+// The prepass below computes one conservative fact per kernarg-pointer lane at
+// each decoded basic block:
+//   * LiveEntry   - every incoming path still carries that entry-pointer lane.
+//   * NonEntry    - every incoming path overwrote that lane with a value loaded
+//                  from memory rather than the dispatch-provided entry SGPR
+//                  value.
+//   * Unknown     - paths disagree, are unreachable, or cannot be classified.
+// Only a full pair of LiveEntry lanes permits hidden-arg synthesis. A full pair
+// of NonEntry lanes uses ordinary memory lowering; mixed facts are ambiguous.
 //
 // Register identity comes from MC register classes and TableGen-declared defs;
 // mnemonic text and TSFlags are insufficient for overlap checks.
@@ -231,21 +229,9 @@ enum class KernargPtrLaneDataflowState {
 struct KernargPtrDataflowState {
   KernargPtrLaneDataflowState Low = KernargPtrLaneDataflowState::Unvisited;
   KernargPtrLaneDataflowState High = KernargPtrLaneDataflowState::Unvisited;
-  int64_t EntryByteOffset = 0;
 
   bool operator==(KernargPtrDataflowState Other) const {
-    return Low == Other.Low && High == Other.High &&
-           EntryByteOffset == Other.EntryByteOffset;
-  }
-
-  bool isLiveEntry() const {
-    return Low == KernargPtrLaneDataflowState::LiveEntry &&
-           High == KernargPtrLaneDataflowState::LiveEntry;
-  }
-
-  bool isNonEntry() const {
-    return Low == KernargPtrLaneDataflowState::NonEntry &&
-           High == KernargPtrLaneDataflowState::NonEntry;
+    return Low == Other.Low && High == Other.High;
   }
 };
 
@@ -270,6 +256,8 @@ struct KernargProvenanceBlock {
   unsigned LastIdx = 0;
   // False when Start is a recovered leader but no instruction decodes there.
   bool HasInsts = false;
+  // Sequential effect of this block's instructions on the kernarg SGPR lanes.
+  KernargPtrLaneEffect Effect;
   // Indices into the Blocks vector.
   SmallVector<unsigned, 2> Successors;
 };
@@ -298,9 +286,7 @@ static KernargPrepassDef classifyKernargPrepassDef(const MCRegisterInfo &MRI,
   default:
     break;
   }
-  // Query the canonical low lane, not the tuple register. Tuple encodings can
-  // carry aggregate metadata; the dataflow fact is keyed on 32-bit SGPR lanes.
-  unsigned Enc = MRI.getEncodingValue(Lane);
+  unsigned Enc = MRI.getEncodingValue(Reg);
   if (Enc & (AMDGPU::HWEncoding::IS_VGPR | AMDGPU::HWEncoding::IS_AGPR))
     return {KernargPrepassDef::Kind::NotTracked, 0};
   if (!AMDGPU::isSGPR(Lane, &MRI))
@@ -425,52 +411,8 @@ static KernargPtrLaneDataflowState applyKernargPtrLaneEffect(
 static KernargPtrDataflowState
 applyKernargPtrEffect(KernargPtrDataflowState State,
                       KernargPtrLaneEffect Effect) {
-  KernargPtrDataflowState Result = {
-      applyKernargPtrLaneEffect(State.Low, Effect.Low),
-      applyKernargPtrLaneEffect(State.High, Effect.High),
-      State.EntryByteOffset};
-  if (!Result.isLiveEntry())
-    Result.EntryByteOffset = 0;
-  return Result;
-}
-
-// Apply one decoded instruction to the pair-level dataflow fact. Most
-// instructions reduce to lane overwrite effects; scalar add/sub of a literal
-// gets a pair-level transfer because it can preserve `Entry+Const` or
-// `NonEntry` provenance through a constant rebase.
-static KernargPtrDataflowState
-applyKernargPtrInstructionEffect(const MCRegisterInfo &MRI,
-                                 const MCInstrInfo &MII,
-                                 const MCSubtargetInfo &STI,
-                                 KernargPtrDataflowState State,
-                                 const DecodedInst &Di,
-                                 unsigned KernargPtrSgpr) {
-  if (State.Low == KernargPtrLaneDataflowState::Unvisited &&
-      State.High == KernargPtrLaneDataflowState::Unvisited)
-    return State;
-
-  auto IsKernargPair = [&](MCRegister Reg) {
-    KernargPrepassDef Def = classifyKernargPrepassDef(MRI, Reg);
-    return Def.DefKind == KernargPrepassDef::Kind::IndexedSgpr &&
-           Def.Index == KernargPtrSgpr;
-  };
-  KernargPtrConstRebase Rebase =
-      classifyKernargPtrConstRebase(Di, IsKernargPair);
-  if (Rebase.TouchesKernargPtr) {
-    if (Rebase.Delta) {
-      if (State.isLiveEntry()) {
-        State.EntryByteOffset += *Rebase.Delta;
-        return State;
-      }
-      if (State.isNonEntry())
-        return State;
-    }
-    return {KernargPtrLaneDataflowState::Unknown,
-            KernargPtrLaneDataflowState::Unknown, 0};
-  }
-
-  return applyKernargPtrEffect(
-      State, instructionKernargPtrEffect(MRI, MII, STI, Di, KernargPtrSgpr));
+  return {applyKernargPtrLaneEffect(State.Low, Effect.Low),
+          applyKernargPtrLaneEffect(State.High, Effect.High)};
 }
 
 // Join two predecessor facts for one lane. Unvisited is bottom; disagreements
@@ -491,24 +433,8 @@ joinKernargPtrLaneStates(KernargPtrLaneDataflowState Lhs,
 static KernargPtrDataflowState
 joinKernargPtrStates(KernargPtrDataflowState Lhs,
                      KernargPtrDataflowState Rhs) {
-  if (Lhs.Low == KernargPtrLaneDataflowState::Unvisited &&
-      Lhs.High == KernargPtrLaneDataflowState::Unvisited)
-    return Rhs;
-  if (Rhs.Low == KernargPtrLaneDataflowState::Unvisited &&
-      Rhs.High == KernargPtrLaneDataflowState::Unvisited)
-    return Lhs;
-
-  KernargPtrDataflowState Result = {
-      joinKernargPtrLaneStates(Lhs.Low, Rhs.Low),
-      joinKernargPtrLaneStates(Lhs.High, Rhs.High), 0};
-  if (Result.isLiveEntry()) {
-    if (Lhs.isLiveEntry() && Rhs.isLiveEntry() &&
-        Lhs.EntryByteOffset == Rhs.EntryByteOffset)
-      Result.EntryByteOffset = Lhs.EntryByteOffset;
-    else
-      Result.Low = Result.High = KernargPtrLaneDataflowState::Unknown;
-  }
-  return Result;
+  return {joinKernargPtrLaneStates(Lhs.Low, Rhs.Low),
+          joinKernargPtrLaneStates(Lhs.High, Rhs.High)};
 }
 
 // Export solver-only bottom as Unknown before storing facts in RaiseContext.
@@ -530,12 +456,20 @@ toFinalKernargPtrLaneProvenance(KernargPtrLaneDataflowState State) {
 // by instruction lowering.
 static KernargPtrProvenance
 toFinalKernargPtrProvenance(KernargPtrDataflowState State) {
-  KernargPtrProvenance Result = {toFinalKernargPtrLaneProvenance(State.Low),
-                                 toFinalKernargPtrLaneProvenance(State.High),
-                                 0};
-  if (Result.isLiveEntry())
-    Result.EntryByteOffset = State.EntryByteOffset;
-  return Result;
+  return {toFinalKernargPtrLaneProvenance(State.Low),
+          toFinalKernargPtrLaneProvenance(State.High)};
+}
+
+// Compose instruction effects in source program order. A later write to a lane
+// replaces the earlier fact for that lane; preserve effects leave it untouched.
+static KernargPtrLaneEffect
+composeKernargPtrEffect(KernargPtrLaneEffect BlockEffect,
+                        KernargPtrLaneEffect InstEffect) {
+  if (InstEffect.Low != KernargPtrLaneEffectKind::Preserve)
+    BlockEffect.Low = InstEffect.Low;
+  if (InstEffect.High != KernargPtrLaneEffectKind::Preserve)
+    BlockEffect.High = InstEffect.High;
+  return BlockEffect;
 }
 
 // Build the strict-mode failure for an unsupported preloaded hidden kernarg.
@@ -649,6 +583,10 @@ computeKernargPtrProvenance(RaiseContext &Ctx, ArrayRef<DecodedInst> Insts,
     for (unsigned J = Block.FirstIdx;
          J < NumInsts && Insts[J].Offset < NextStart; ++J) {
       Block.LastIdx = J;
+      Block.Effect = composeKernargPtrEffect(
+          Block.Effect,
+          instructionKernargPtrEffect(MRI, MII, STI, Insts[J],
+                                      KernargPtrSgpr));
       if (decodedInstEndsBlock(Insts[J]))
         break;
     }
@@ -689,27 +627,15 @@ computeKernargPtrProvenance(RaiseContext &Ctx, ArrayRef<DecodedInst> Insts,
             {KernargPtrLaneDataflowState::LiveEntry,
              KernargPtrLaneDataflowState::LiveEntry});
 
-  // Walk each instruction so transfer functions can depend on the incoming
-  // pair fact; Entry+Const rebases cannot be pre-composed as lane effects.
-  auto TransferThroughBlock = [&](KernargPtrDataflowState In,
-                                  const KernargProvenanceBlock &Block) {
-    if (!Block.HasInsts)
-      return In;
-    for (unsigned J = Block.FirstIdx; J <= Block.LastIdx; ++J)
-      In = applyKernargPtrInstructionEffect(MRI, MII, STI, In, Insts[J],
-                                            KernargPtrSgpr);
-    return In;
-  };
-
-  // Finite-height lattice: facts only move upward from Unvisited to a concrete
-  // path fact and then, if paths disagree or a write is unknown, to Unknown.
-  // Entry+Const joins preserve only identical offsets; differing offsets become
-  // Unknown, so backedges that increment the entry pointer converge by refusing.
+  // Finite-height per-lane diamond lattice: facts only move upward from
+  // Unvisited to a concrete path fact and then, if paths disagree or a write is
+  // unknown, to Unknown. Unknown is absorbing under join, so backedges converge.
   bool Changed = true;
   while (Changed) {
     Changed = false;
     for (unsigned I = 0; I < NumBlocks; ++I) {
-      KernargPtrDataflowState Out = TransferThroughBlock(State[I], Blocks[I]);
+      KernargPtrDataflowState Out =
+          applyKernargPtrEffect(State[I], Blocks[I].Effect);
       for (unsigned Succ : Blocks[I].Successors)
         Changed |= MergeInto(Succ, Out);
     }
@@ -748,9 +674,6 @@ static bool threadLoopUnsupportedWorkgroupMemoryOrBarrier(
       if (isSemOpInRange(Di.CanonOp, CanonicalOp::DS_LOAD_TR16_B128,
                          CanonicalOp::DS_SWIZZLE_B32))
         Kind = "LDS access";
-      else if (isSemOpInRange(Di.CanonOp, CanonicalOp::GLOBAL_LOAD_TR_FIRST,
-                              CanonicalOp::GLOBAL_LOAD_TR_LAST))
-        Kind = "cross-lane transpose load";
       break;
     }
 
@@ -949,26 +872,20 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
       Meta.MaxFlatWorkgroupSize > 0 &&
       static_cast<unsigned>(Meta.MaxFlatWorkgroupSize) < TargetIsa.WaveSize;
   const bool UseThreadLoop = ForceThreadLoopProjection;
-  const bool UseWaveNative = !UseThreadLoop && EnableWaveNative &&
-                             Isa.isWave32() && !TargetIsa.isWave32() &&
-                             !PhantomLaneRegime;
+  const bool WaveNativeEligible = !UseThreadLoop && EnableWaveNative &&
+                                  Isa.isWave32() && !TargetIsa.isWave32() &&
+                                  !PhantomLaneRegime;
+  // Projection is constructed AFTER decode (below): the WaveNative-vs-MODREP
+  // choice for a multi-warp workgroup depends on whether the kernel contains
+  // WMMA. WaveNative packs two source wave32 warps into one target wave64,
+  // which breaks kernels that derive a subgroup id from `tid >> log2(W_src)`
+  // (ttmp8[29:25]) and use it in address arithmetic -- the source tid->warp
+  // ->data mapping is not preserved, producing out-of-bounds addresses (silent
+  // miscompile -> GPU memory fault). MODREP preserves the source wave32 layout
+  // and is correct for those kernels. WaveNative is only *required* for
+  // WMMA->MFMA layout transposes that need all 64 target lanes simultaneously,
+  // so restrict it to kernels that actually contain WMMA.
   std::unique_ptr<WaveProjection> ProjectionPtr;
-  if (UseThreadLoop) {
-    ProjectionPtr = std::make_unique<ThreadLoopProjection>(
-        Isa, TargetIsa, I32Ty, I64Ty);
-    errs() << "transpiler: kernel '" << KernelName
-           << "' selected ThreadLoopProjection (analysis-triggered "
-              "cross-widen route; writelane/readlane rewrite may be "
-              "disabled by the retry caller)\n";
-  } else if (UseWaveNative) {
-    ProjectionPtr = std::make_unique<WaveNativeProjection>(Isa, TargetIsa,
-                                                             I32Ty, I64Ty);
-  } else {
-    ProjectionPtr = std::make_unique<ModuloReplicationProjection>(
-        Isa, TargetIsa, I32Ty, I64Ty);
-  }
-  ProjectionPtr->setMaxFlatWorkgroupSize(Meta.MaxFlatWorkgroupSize);
-  WaveProjection &Projection = *ProjectionPtr;
 
   if (!UseThreadLoop && EnableWaveNative && PhantomLaneRegime && Isa.isWave32() &&
       !TargetIsa.isWave32()) {
@@ -1020,6 +937,53 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
                    KernelOffset, KernelEndOffset);
   auto &Insts = Decoded.Insts;
   auto &BlockStarts = Decoded.BlockStarts;
+
+  // Projection selection (deferred from above so we can inspect the decoded
+  // stream). WaveNative only for WMMA kernels; everything else uses MODREP.
+  // See the WaveNativeEligible comment above for the correctness rationale.
+  bool HasWMMA = false;
+  for (const DecodedInst &Di : Insts) {
+    switch (Di.CanonOp) {
+    case CanonicalOp::V_WMMA_F32_16x16x32_F16:
+    case CanonicalOp::V_WMMA_F32_16x16x32_BF16:
+    case CanonicalOp::V_WMMA_F32_16x16x4_F32:
+    case CanonicalOp::V_WMMA_F32_16x16x64_FP8_FP8:
+    case CanonicalOp::V_WMMA_F32_16x16x64_FP8_BF8:
+    case CanonicalOp::V_WMMA_F32_16x16x64_BF8_FP8:
+    case CanonicalOp::V_WMMA_F32_16x16x64_BF8_BF8:
+    case CanonicalOp::V_WMMA_I32_16x16x64_IU8:
+    case CanonicalOp::V_WMMA_SCALE_F32_16x16x128_F8F6F4:
+      HasWMMA = true;
+      break;
+    default:
+      break;
+    }
+    if (HasWMMA)
+      break;
+  }
+  const bool UseWaveNative = WaveNativeEligible && HasWMMA;
+  if (UseThreadLoop) {
+    ProjectionPtr = std::make_unique<ThreadLoopProjection>(
+        Isa, TargetIsa, I32Ty, I64Ty);
+    errs() << "transpiler: kernel '" << KernelName
+           << "' selected ThreadLoopProjection (analysis-triggered "
+              "cross-widen route; writelane/readlane rewrite may be "
+              "disabled by the retry caller)\n";
+  } else if (UseWaveNative) {
+    ProjectionPtr = std::make_unique<WaveNativeProjection>(Isa, TargetIsa,
+                                                             I32Ty, I64Ty);
+  } else {
+    ProjectionPtr = std::make_unique<ModuloReplicationProjection>(
+        Isa, TargetIsa, I32Ty, I64Ty);
+    if (WaveNativeEligible && !HasWMMA)
+      errs() << "transpiler: kernel '" << KernelName
+             << "' is a cross-widen candidate but contains no WMMA; using "
+                "ModuloReplicationProjection (WaveNative packing would break "
+                "tid>>log2(W_src) subgroup-id addressing on multi-warp "
+                "workgroups). See raiser.cpp projection-selection comment.\n";
+  }
+  ProjectionPtr->setMaxFlatWorkgroupSize(Meta.MaxFlatWorkgroupSize);
+  WaveProjection &Projection = *ProjectionPtr;
 
   // ==== Phase 1.1: s_set_pc_i64 analysis ====
   //
@@ -1134,7 +1098,7 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   {
     ObstructionReport Report =
         buildObstructionReport(Insts, Mc, Isa, TargetIsa,
-                               EnableWritelaneRewrite);
+                               EnableWritelaneRewrite, &Projection);
     for (const auto &S : Report.Sites)
       if (S.Kind == ObstructionKind::WaveIdLiftScalarized)
         ++ClassifierWaveIdLiftScalarizedSites;
@@ -1473,21 +1437,10 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
     Regs.storeSGPR32(B, UserSgprLayout.WorkgroupIdYSgpr,
                      B.CreateCall(FnWorkgroupIdY, {}, "wg_id_y"));
   }
-  // Hidden-arg remaps use the ABI version the backend will emit for this
-  // module. If target emission starts pinning a module flag, thread that value
-  // here instead of relying on LLVM's default.
-  unsigned TargetCodeObjectVersion = AMDGPU::getDefaultAMDHSACodeObjectVersion();
   auto EmitPreloadedKernargDword = [&](IRBuilder<> &SeedB,
                                        int ByteOffset) -> Value * {
-    SourceHiddenArgContext HiddenCtx{C,
-                                     M,
-                                     SeedB,
-                                     I8Ty,
-                                     I32Ty,
-                                     I64Ty,
-                                     Meta.Args,
-                                     AssumeHipGlobalOffsetZero,
-                                     TargetCodeObjectVersion};
+    SourceHiddenArgContext HiddenCtx{
+        C, M, SeedB, I8Ty, I32Ty, I64Ty, Meta.Args, AssumeHipGlobalOffsetZero};
     SourceHiddenArgValue Hidden = emitSourceHiddenDword(HiddenCtx, ByteOffset);
     if (Hidden.Matched && Hidden.Value)
       return Hidden.Value;
@@ -1688,8 +1641,8 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   auto *F64Ty = Type::getDoubleTy(C);
   // `userSgprLayout` was built above before Phase 4 so entry SGPR seeding
   // and handler-side ABI decisions use the same descriptor-derived mapping.
-  RaiseContext Ctx{C, M, B, Regs, Projection, Mc, Isa, TargetIsa,
-                   TargetCodeObjectVersion, Kernargs, &UserSgprLayout, F,
+  RaiseContext Ctx{C, M, B, Regs, Projection, Mc, Isa, TargetIsa, Kernargs,
+                   &UserSgprLayout, F,
                    nullptr,
                    I1Ty, I8Ty, I32Ty, I64Ty, F32Ty, F16Ty, F64Ty,
                    PtrGlobalTy, OffsetToBb, KernelOffset, KernelEndOffset};
@@ -2293,26 +2246,48 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
         }
         return false;
       };
-      constexpr bool kEnableThreadLoopC5Retry = false;
+      // C5 predicate-chain refusal -> retry under ThreadLoopProjection.
+      // TLP iterates the kernel body once per source wave with a synthetic
+      // per-iteration source tid (see ThreadLoopProjection::emitWorkitemIdX),
+      // so a workitem.id.x-derived predicate that would diverge across MODREP
+      // replicas / WaveNative packing is evaluated correctly per source wave.
+      // TLP's own C5 gate (shouldRefuseC5) returns false when
+      // SuppressThreadLoopC5 is on, precisely because the loop makes the
+      // predicate source-wave-scoped. Eligible for any cross-widen C5 refusal
+      // (multiplicative wave ratio), not just the WaveNative-equality
+      // sub-case: the MODREP multi-warp (>1 source wave) refusal -- e.g.
+      // HunyuanVideo's RoPE `icmp ult tid-derived, W_s-1` -- needs the same
+      // per-source-wave iteration. Matrix ops still route to WaveNative (they
+      // need all target lanes simultaneously); TLP is refused for kernels with
+      // LDS/barriers (barrier hoisting + LDS aliasing are unimplemented) via
+      // threadLoopUnsupportedWorkgroupMemoryOrBarrier below.
       const bool CanRetryThreadLoop =
-          kEnableThreadLoopC5Retry &&
-          PredReport.WaveNativeEqualityRefusal && !ForceThreadLoopProjection &&
+          PredReport.Refused && !ForceThreadLoopProjection &&
           TargetIsa.WaveSize > Isa.WaveSize &&
           (TargetIsa.WaveSize % Isa.WaveSize) == 0 && !HasMatrixOp();
       if (CanRetryThreadLoop) {
-        errs() << "transpiler: post-raise fallback: retrying kernel '"
-               << KernelName
-               << "' under ThreadLoopProjection after WaveNative C5 equality "
-                  "refusal (analysis-triggered, no user opt-in)\n";
-        errs() << "transpiler: thread-loop fallback trigger: "
-               << PredReport.RefusalDetail << "\n";
-        return raiseToIRImpl(TextBytes, SourceIsa, KernelName, Meta,
-                             KernelOffset, KernelSize, CompilationTargetIsa,
-                             /*enableWritelaneRewrite=*/false,
-                             /*enableWaveNative=*/false,
-                             /*forceThreadLoopProjection=*/true,
-                             /*suppressC5ForThreadLoopRoute=*/true,
-                             AssumeHipGlobalOffsetZero);
+        std::string ThreadLoopUnsupportedDetail;
+        if (threadLoopUnsupportedWorkgroupMemoryOrBarrier(
+                Insts, ThreadLoopUnsupportedDetail)) {
+          errs() << "transpiler: thread-loop C5 fallback not eligible for "
+                    "kernel '"
+                 << KernelName << "': " << ThreadLoopUnsupportedDetail
+                 << "; keeping principled C5 refusal\n";
+        } else {
+          errs() << "transpiler: post-raise fallback: retrying kernel '"
+                 << KernelName
+                 << "' under ThreadLoopProjection after C5 predicate-chain "
+                    "refusal (analysis-triggered, no user opt-in)\n";
+          errs() << "transpiler: thread-loop fallback trigger: "
+                 << PredReport.RefusalDetail << "\n";
+          return raiseToIRImpl(TextBytes, SourceIsa, KernelName, Meta,
+                               KernelOffset, KernelSize, CompilationTargetIsa,
+                               /*enableWritelaneRewrite=*/false,
+                               /*enableWaveNative=*/false,
+                               /*forceThreadLoopProjection=*/true,
+                               /*suppressC5ForThreadLoopRoute=*/true,
+                               AssumeHipGlobalOffsetZero);
+        }
       }
       RaiseFailure F = RaiseFailure::crossWavePredicateChain(
           KernelName, PredReport.RefusalDetail);

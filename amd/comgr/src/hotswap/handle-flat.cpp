@@ -10,8 +10,6 @@
 #include "handlers.h"
 
 #include "canonical-op.h"
-#include "SIDefines.h"
-#include "Utils/AMDGPUBaseInfo.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/IR/Constants.h"
@@ -23,7 +21,6 @@
 #include "llvm/Support/AMDHSAKernelDescriptor.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
@@ -33,7 +30,6 @@
 #include <optional>
 #include <string>
 #include <tuple>
-#include <utility>
 
 #define DEBUG_TYPE "transpiler"
 
@@ -42,74 +38,6 @@ using namespace llvm;
 namespace COMGR::hotswap {
 
 namespace {
-
-// ds_bpermute addresses its source lane by byte: lane N reads byte N*4.
-constexpr unsigned kBpermuteLaneByteShift = 2;
-
-// {lane index within its GroupSize-lane group, lane id of the group's
-// element 0}. GroupSize must be a power of two.
-std::pair<Value *, Value *> emitTransposeGroup(RaiseContext &Ctx,
-                                               unsigned GroupSize) {
-  Value *LaneId = Ctx.emitLaneIdx();
-  Value *LaneInGroup =
-      Ctx.B.CreateAnd(LaneId, Ctx.B.getInt32(GroupSize - 1), "lane_in_group");
-  Value *GroupBase = Ctx.B.CreateAnd(
-      LaneId, Ctx.B.CreateNot(Ctx.B.getInt32(GroupSize - 1)), "group_base");
-  return {LaneInGroup, GroupBase};
-}
-
-// Load NumDwords dwords from Addr and ds_bpermute-gather every lane's raw
-// dwords across the group. Returns a flat GroupSize x NumDwords grid indexed
-// [K * NumDwords + D]. Emit inside an emitUnderExec region.
-llvm::SmallVector<Value *>
-gatherTransposeDwords(RaiseContext &Ctx, Value *Addr, Value *GroupBase,
-                      unsigned GroupSize, unsigned NumDwords,
-                      const Twine &RawName, const Twine &GatheredName) {
-  Function *Bperm =
-      Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::amdgcn_ds_bpermute);
-  auto *VecTy = FixedVectorType::get(Ctx.I32Ty, NumDwords);
-  // These per-lane tile addresses are only dword-aligned; don't let the
-  // vector type's larger ABI alignment over-promise.
-  Value *Raw = Ctx.B.CreateAlignedLoad(VecTy, Addr, Align(4), RawName);
-  llvm::SmallVector<Value *> RawDword(NumDwords);
-  for (unsigned D = 0; D < NumDwords; ++D)
-    RawDword[D] = Ctx.B.CreateExtractElement(Raw, Ctx.B.getInt32(D));
-
-  llvm::SmallVector<Value *> Gathered(GroupSize * NumDwords);
-  for (unsigned K = 0; K < GroupSize; ++K) {
-    Value *SrcLane = Ctx.B.CreateAdd(GroupBase, Ctx.B.getInt32(K));
-    Value *Sel =
-        Ctx.B.CreateShl(SrcLane, Ctx.B.getInt32(kBpermuteLaneByteShift));
-    for (unsigned D = 0; D < NumDwords; ++D)
-      Gathered[K * NumDwords + D] =
-          Ctx.B.CreateCall(Bperm, {Sel, RawDword[D]}, GatheredName);
-  }
-  return Gathered;
-}
-
-// Pick Dwords[Idx] for a runtime Idx via an equality select chain; Dwords[0]
-// is the Idx==0 / default case.
-Value *selectRuntimeDword(RaiseContext &Ctx, Value *Idx,
-                          ArrayRef<Value *> Dwords) {
-  Value *Pick = Dwords[0];
-  for (unsigned D = 1; D < Dwords.size(); ++D)
-    Pick = Ctx.B.CreateSelect(Ctx.B.CreateICmpEQ(Idx, Ctx.B.getInt32(D)),
-                              Dwords[D], Pick);
-  return Pick;
-}
-
-// Return the decoded cache-policy operand for scoped global cache operations.
-std::optional<int64_t> getCPolImm(const DecodedInst &Di) {
-  int CpolIdx =
-      AMDGPU::getNamedOperandIdx(Di.Inst.getOpcode(), AMDGPU::OpName::cpol);
-  if (CpolIdx < 0 ||
-      static_cast<unsigned>(CpolIdx) >= Di.Inst.getNumOperands())
-    return std::nullopt;
-  const MCOperand &Mop = Di.Inst.getOperand(static_cast<unsigned>(CpolIdx));
-  if (!Mop.isImm())
-    return std::nullopt;
-  return Mop.getImm();
-}
 
 // Shared helper for the `_D16_HI` half-register-store lift shape.
 //
@@ -292,49 +220,6 @@ HandlerResult handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
   HandlerResult Hr;
   StringRef Mn(Di.Mnemonic);
   CanonicalOp Sop = Di.CanonOp;
-
-  if (Sop == CanonicalOp::GLOBAL_WB) {
-    std::optional<int64_t> Cpol = getCPolImm(Di);
-    if (!Cpol) {
-      Hr.Failure = RaiseFailure::unsupportedInstructionForm(
-          Di, "FLAT", "global_wb missing immediate cpol/scope operand");
-      return Hr;
-    }
-
-    uint64_t RawCpol = static_cast<uint64_t>(*Cpol);
-    uint64_t Scope = RawCpol & AMDGPU::CPol::SCOPE;
-    if ((RawCpol & ~static_cast<uint64_t>(AMDGPU::CPol::SCOPE)) != 0) {
-      Hr.Failure = RaiseFailure::unsupportedInstructionForm(
-          Di, "FLAT",
-          "global_wb cache-policy bits outside SCOPE are not modelled");
-      return Hr;
-    }
-
-    // CU-scope writeback is a no-op that still returns "done"; there is no
-    // target cache operation to preserve.
-    if (Scope == AMDGPU::CPol::SCOPE_CU) {
-      Hr.Handled = true;
-      return Hr;
-    }
-
-    if (Scope == AMDGPU::CPol::SCOPE_DEV) {
-      SyncScope::ID AgentScope = Ctx.C.getOrInsertSyncScopeID("agent");
-      Ctx.B.CreateFence(AtomicOrdering::Release, AgentScope);
-      Hr.Handled = true;
-      return Hr;
-    }
-
-    if (Scope == AMDGPU::CPol::SCOPE_SYS) {
-      Ctx.B.CreateFence(AtomicOrdering::Release, SyncScope::System);
-      Hr.Handled = true;
-      return Hr;
-    }
-
-    Hr.Failure = RaiseFailure::unsupportedInstructionForm(
-        Di, "FLAT",
-        "global_wb SCOPE_SE cannot be represented by gfx942 writeback fences");
-    return Hr;
-  }
 
   // ---------------------------------------------------------------------
   // FLAT scratch family (`scratch_load_*`, `scratch_store_*`).
@@ -1016,159 +901,6 @@ HandlerResult handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
 
-  // gfx1250 WMMA load-with-transpose: per-lane global load + cross-lane
-  // transpose via ds_bpermute. Byte-aligned widths share this path; TR6
-  // (bit-tight) is below.
-  if (Sop == CanonicalOp::GLOBAL_LOAD_TR4_B64 ||
-      Sop == CanonicalOp::GLOBAL_LOAD_TR8_B64 ||
-      Sop == CanonicalOp::GLOBAL_LOAD_TR16_B128) {
-    unsigned ElemBits;
-    unsigned NumDwords;
-    unsigned GroupSize;
-    switch (Sop) {
-    case CanonicalOp::GLOBAL_LOAD_TR4_B64:
-      ElemBits = 4;
-      NumDwords = 2;
-      GroupSize = 16;
-      break;
-    case CanonicalOp::GLOBAL_LOAD_TR8_B64:
-      ElemBits = 8;
-      NumDwords = 2;
-      GroupSize = 8;
-      break;
-    case CanonicalOp::GLOBAL_LOAD_TR16_B128:
-      ElemBits = 16;
-      NumDwords = 4;
-      GroupSize = 8;
-      break;
-    default:
-      llvm_unreachable("unhandled TR width");
-    }
-    assert(ElemBits != 0 && 32 % ElemBits == 0 &&
-           "byte-aligned TR element width must divide a dword");
-    assert(llvm::isPowerOf2_32(GroupSize) &&
-           "TR transpose lane group must be a power of two");
-    const unsigned TotalBytes = NumDwords * 4;
-    const unsigned ElemsPerDword = 32 / ElemBits;
-    const uint32_t ElemMask = llvm::maskTrailingOnes<uint32_t>(ElemBits);
-    assert(NumDwords * ElemsPerDword == GroupSize &&
-           "byte-aligned TR packing assumes one element per (lane, dword slot)");
-
-    ParsedReg Dest = Op.dst();
-    FlatAddr Fa =
-        decodeGlobalLoadAddr(Ctx, Di, Op, TotalBytes, "GLOBAL_LOAD_TR");
-    Value *Addr = Fa.Ptr;
-
-    auto [LaneInGroup, GroupBase] = emitTransposeGroup(Ctx, GroupSize);
-
-    Ctx.emitUnderExec([&] {
-      llvm::SmallVector<Value *> Gathered = gatherTransposeDwords(
-          Ctx, Addr, GroupBase, GroupSize, NumDwords, "tr_raw", "tr_gathered");
-
-      Value *SrcDwordIdx = Ctx.B.CreateUDiv(
-          LaneInGroup, Ctx.B.getInt32(ElemsPerDword), "tr_src_dword");
-      Value *ElemInDword = Ctx.B.CreateURem(
-          LaneInGroup, Ctx.B.getInt32(ElemsPerDword), "tr_elem_in_dword");
-      Value *ShiftBits =
-          Ctx.B.CreateMul(ElemInDword, Ctx.B.getInt32(ElemBits), "tr_shift");
-
-      for (unsigned J = 0; J < NumDwords; ++J) {
-        Value *OutDword = ConstantInt::get(Ctx.I32Ty, 0);
-        for (unsigned I = 0; I < ElemsPerDword; ++I) {
-          unsigned K = J * ElemsPerDword + I;
-          Value *Pick = selectRuntimeDword(
-              Ctx, SrcDwordIdx,
-              ArrayRef(Gathered).slice(K * NumDwords, NumDwords));
-          Value *Shifted = Ctx.B.CreateLShr(Pick, ShiftBits);
-          Value *Elem =
-              Ctx.B.CreateAnd(Shifted, Ctx.B.getInt32(ElemMask), "tr_elem");
-          Value *Placed =
-              Ctx.B.CreateShl(Elem, Ctx.B.getInt32(I * ElemBits), "tr_place");
-          OutDword = Ctx.B.CreateOr(OutDword, Placed, "tr_pack");
-        }
-        Ctx.Regs.storeVGPR32(Ctx.B, Dest.BaseIdx + J, OutDword);
-      }
-    });
-
-    Hr.Handled = true;
-    return Hr;
-  }
-
-  // TR6_B96: i6 elements packed bit-tight across 3 dwords; extraction and
-  // packing walk bit positions, not byte slots.
-  if (Sop == CanonicalOp::GLOBAL_LOAD_TR6_B96) {
-    const unsigned ElemBits = 6;
-    const unsigned NumDwords = 3;
-    const unsigned GroupSize = 16;
-    const unsigned NumElems = 16;
-    const unsigned TotalBytes = NumDwords * 4;
-    const uint32_t ElemMask = llvm::maskTrailingOnes<uint32_t>(ElemBits);
-    assert(NumElems == GroupSize &&
-           "TR6 packs one element per source lane in the group");
-
-    ParsedReg Dest = Op.dst();
-    FlatAddr Fa =
-        decodeGlobalLoadAddr(Ctx, Di, Op, TotalBytes, "GLOBAL_LOAD_TR6");
-    Value *Addr = Fa.Ptr;
-
-    auto [LaneInGroup, GroupBase] = emitTransposeGroup(Ctx, GroupSize);
-
-    Ctx.emitUnderExec([&] {
-      llvm::SmallVector<Value *> Gathered =
-          gatherTransposeDwords(Ctx, Addr, GroupBase, GroupSize, NumDwords,
-                                "tr6_raw", "tr6_gathered");
-
-      Value *BitOff =
-          Ctx.B.CreateMul(LaneInGroup, Ctx.B.getInt32(ElemBits), "tr6_bit");
-      Value *SrcLoIdx =
-          Ctx.B.CreateUDiv(BitOff, Ctx.B.getInt32(32), "tr6_lo_idx");
-      Value *BitInDword =
-          Ctx.B.CreateURem(BitOff, Ctx.B.getInt32(32), "tr6_bit_in_dword");
-
-      Value *Zero = ConstantInt::get(Ctx.I32Ty, 0);
-      llvm::SmallVector<Value *> OutDword(NumDwords, Zero);
-      for (unsigned K = 0; K < NumElems; ++K) {
-        ArrayRef<Value *> G =
-            ArrayRef(Gathered).slice(K * NumDwords, NumDwords);
-        // Lo = dwords[SrcLoIdx], Hi = dwords[SrcLoIdx+1] (0 past the end).
-        Value *Lo = selectRuntimeDword(Ctx, SrcLoIdx, G);
-        Value *Hi = selectRuntimeDword(Ctx, SrcLoIdx, {G[1], G[2], Zero});
-
-        // i6 to low bits of a 64-bit Lo|(Hi<<32) window.
-        Value *Lo64 = Ctx.B.CreateZExt(Lo, Ctx.I64Ty);
-        Value *Hi64 = Ctx.B.CreateZExt(Hi, Ctx.I64Ty);
-        Value *Win = Ctx.B.CreateOr(
-            Lo64, Ctx.B.CreateShl(Hi64, ConstantInt::get(Ctx.I64Ty, 32)),
-            "tr6_win");
-        Value *BitInDword64 = Ctx.B.CreateZExt(BitInDword, Ctx.I64Ty);
-        Value *Shifted64 = Ctx.B.CreateLShr(Win, BitInDword64);
-        Value *Elem64 =
-            Ctx.B.CreateAnd(Shifted64, ConstantInt::get(Ctx.I64Ty, ElemMask));
-        Value *Elem = Ctx.B.CreateTrunc(Elem64, Ctx.I32Ty, "tr6_elem");
-
-        // Compile-time output bit position.
-        const unsigned OutBit = K * ElemBits;
-        const unsigned OutDwordIdx = OutBit / 32;
-        const unsigned BitInOutDword = OutBit % 32;
-        OutDword[OutDwordIdx] = Ctx.B.CreateOr(
-            OutDword[OutDwordIdx],
-            Ctx.B.CreateShl(Elem, Ctx.B.getInt32(BitInOutDword)), "tr6_pack");
-        if (BitInOutDword + ElemBits > 32 && OutDwordIdx + 1 < NumDwords) {
-          Value *Hi32 =
-              Ctx.B.CreateLShr(Elem, Ctx.B.getInt32(32 - BitInOutDword));
-          OutDword[OutDwordIdx + 1] =
-              Ctx.B.CreateOr(OutDword[OutDwordIdx + 1], Hi32, "tr6_pack");
-        }
-      }
-
-      for (unsigned J = 0; J < NumDwords; ++J)
-        Ctx.Regs.storeVGPR32(Ctx.B, Dest.BaseIdx + J, OutDword[J]);
-    });
-
-    Hr.Handled = true;
-    return Hr;
-  }
-
   // ---------------------------------------------------------------------
   // gfx1250 FLAT VMEM prefetch (VFLAT 0x05D -- flat_prefetch_b8 /
   // global_prefetch_b8).
@@ -1746,8 +1478,18 @@ HandlerResult handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     FlatAddr Fa = decodeGlobalStoreAddr(Ctx, Di, Op,
                                          /*elemBytes=*/IsF64 ? 8 : 4,
                                          "GLOBAL_ATOMIC");
+    // b64 integer swap (`global_atomic_swap_x2`, collapsed to
+    // GLOBAL_ATOMIC_SWAP in opcode-map): the vdata operand is a 2-dword
+    // VGPR pair, so read/atomic/write at 64-bit width like the F64 path
+    // but as a plain integer (no fp bitcast).
+    const bool IsB64IntSwap =
+        Sop == CanonicalOp::GLOBAL_ATOMIC_SWAP &&
+        (Fa.StData.WidthInDwords >= 2 ||
+         StringRef(Di.Mnemonic).contains("_b64") ||
+         StringRef(Di.Mnemonic).contains("_x2"));
+    const bool Use64 = IsF64 || IsB64IntSwap;
     Value *Addr = Fa.Ptr;
-    Value *Data = IsF64 ? Ctx.Regs.readReg64(Ctx.B, Fa.StData)
+    Value *Data = Use64 ? Ctx.Regs.readReg64(Ctx.B, Fa.StData)
                         : Ctx.Regs.readReg32(Ctx.B, Fa.StData);
 
     if (Sop == CanonicalOp::GLOBAL_ATOMIC_CMPSWAP) {
@@ -1784,7 +1526,10 @@ HandlerResult handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     case CanonicalOp::GLOBAL_ATOMIC_SMAX: AtomicOp = AtomicRMWInst::Max; break;
     case CanonicalOp::GLOBAL_ATOMIC_UMIN: AtomicOp = AtomicRMWInst::UMin; break;
     case CanonicalOp::GLOBAL_ATOMIC_UMAX: AtomicOp = AtomicRMWInst::UMax; break;
-    case CanonicalOp::GLOBAL_ATOMIC_SWAP: AtomicOp = AtomicRMWInst::Xchg; break;
+    case CanonicalOp::GLOBAL_ATOMIC_SWAP:
+      AtomicOp = AtomicRMWInst::Xchg;
+      if (IsB64IntSwap) AtomicTy = Ctx.I64Ty;
+      break;
     case CanonicalOp::GLOBAL_ATOMIC_ADD_F32:
       AtomicOp = AtomicRMWInst::FAdd; AtomicTy = Ctx.F32Ty; IsFp = true; break;
     case CanonicalOp::GLOBAL_ATOMIC_PK_ADD_BF16:
@@ -1806,19 +1551,56 @@ HandlerResult handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
       return Hr;
     }
     if (IsFp) Data = Ctx.B.CreateBitCast(Data, AtomicTy);
-    Ctx.emitUnderExec([&] {
-      Value *Prev = Ctx.B.CreateAtomicRMW(AtomicOp, Addr, Data, MaybeAlign(),
-                                          AtomicOrdering::Monotonic);
-      if (Di.NumDefs > 0) {
-        if (IsF64) {
-          if (IsFp) Prev = Ctx.B.CreateBitCast(Prev, Ctx.I64Ty);
-          Ctx.Regs.writeReg64(Ctx.B, Op.dst(), Prev);
-        } else {
-          if (IsFp) Prev = Ctx.B.CreateBitCast(Prev, Ctx.I32Ty);
-          Ctx.Regs.writeReg32(Ctx.B, Op.dst(), Prev);
+    auto EmitSwapRMW = [&] {
+      Ctx.emitUnderExec([&] {
+        Value *Prev = Ctx.B.CreateAtomicRMW(AtomicOp, Addr, Data, MaybeAlign(),
+                                            AtomicOrdering::Monotonic);
+        if (Di.NumDefs > 0) {
+          if (Use64) {
+            if (IsFp) Prev = Ctx.B.CreateBitCast(Prev, Ctx.I64Ty);
+            Ctx.Regs.writeReg64(Ctx.B, Op.dst(), Prev);
+          } else {
+            if (IsFp) Prev = Ctx.B.CreateBitCast(Prev, Ctx.I32Ty);
+            Ctx.Regs.writeReg32(Ctx.B, Op.dst(), Prev);
+          }
         }
-      }
-    });
+      });
+    };
+    // P8 one-replica gate: a store-only (numDefs==0) SWAP under a widening
+    // MODREP projection (numSourceWavesPerTarget()==1, no full-wave EXEC
+    // invariant) would double-issue -- target lanes `i` and `i+W_s` are
+    // redundant projections of the same source lane and both pass the
+    // `emitUnderExec` mask `bit[lane_id mod W_s]`. Predicate the atomic on
+    // `lane_id < W_s` so only replica-0 issues, i.e. exactly one atomic
+    // per source lane -- matching native wave32. Must stay in lockstep
+    // with the P8_AtomicOneReplica rescue in wave-size-obstruction.cpp:
+    // returning swaps and non-MODREP projections are NOT gated here and
+    // are refused there.
+    const bool GateOneReplica =
+        Sop == CanonicalOp::GLOBAL_ATOMIC_SWAP && Di.NumDefs == 0 &&
+        Ctx.TargetIsa.WaveSize > Ctx.Isa.WaveSize &&
+        Ctx.Projection.numSourceWavesPerTarget() == 1 &&
+        !Ctx.Projection.providesFullWaveExecInvariant();
+    if (GateOneReplica) {
+      Value *LaneId = Ctx.emitLaneIdx();
+      Value *WsC = ConstantInt::get(LaneId->getType(), Ctx.Isa.WaveSize);
+      Value *IsRep0 = Ctx.B.CreateICmpULT(LaneId, WsC, "p8_replica0");
+      BasicBlock *PreBb = Ctx.B.GetInsertBlock();
+      Function *Fn = PreBb->getParent();
+      BasicBlock *DoBb = BasicBlock::Create(Ctx.C, "p8_atomic_do", Fn);
+      BasicBlock *SkipBb = BasicBlock::Create(Ctx.C, "p8_atomic_skip", Fn);
+      Ctx.B.CreateCondBr(IsRep0, DoBb, SkipBb);
+      Ctx.B.SetInsertPoint(DoBb);
+      EmitSwapRMW();
+      if (!Ctx.B.GetInsertBlock()->hasTerminator())
+        Ctx.B.CreateBr(SkipBb);
+      Ctx.B.SetInsertPoint(SkipBb);
+      // The manual EXEC-narrowing branch invalidates the memoised
+      // lane-active bit for any subsequent emission of this instruction.
+      Ctx.resetLaneActiveCache();
+    } else {
+      EmitSwapRMW();
+    }
     Hr.Handled = true;
     return Hr;
   }

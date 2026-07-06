@@ -50,6 +50,16 @@ ArrayRef<CanonicalOpAttrSpec> getHandlerSOP2Attrs() {
       // storeExec for safety.
       {CanonicalOp::S_ABSDIFF_I32, {/*routesExecThroughStoreExec=*/true}},
       {CanonicalOp::S_LSHL_B32, {/*routesExecThroughStoreExec=*/true}},
+      // s_lshl{1,2,3,4}_add_u32 write their i32 (shift-then-add) result
+      // through writeReg32(), which routes an explicit EXEC destination
+      // through storeExec (see reg-file.cpp). Triton's gfx12 divergent-
+      // region exit emits `s_lshl2_add_u32 exec_lo, exec_lo, sMASK` as a
+      // fused EXEC update; declare the attr so the SPE gate accepts it
+      // (the handler already lowers it correctly).
+      {CanonicalOp::S_LSHL1_ADD_U32, {/*routesExecThroughStoreExec=*/true}},
+      {CanonicalOp::S_LSHL2_ADD_U32, {/*routesExecThroughStoreExec=*/true}},
+      {CanonicalOp::S_LSHL3_ADD_U32, {/*routesExecThroughStoreExec=*/true}},
+      {CanonicalOp::S_LSHL4_ADD_U32, {/*routesExecThroughStoreExec=*/true}},
       {CanonicalOp::S_LSHL_B64, {/*routesExecThroughStoreExec=*/true}},
       {CanonicalOp::S_LSHR_B32, {/*routesExecThroughStoreExec=*/true}},
       {CanonicalOp::S_LSHR_B64, {/*routesExecThroughStoreExec=*/true}},
@@ -504,48 +514,26 @@ HandlerResult handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
     Hr.Handled = true;
     return Hr;
   }
-  // s_add/sub_nc_u64: gfx12 64-bit scalar add/sub, no carry. SCC is *not*
-  // updated (the `nc` suffix) for either form; see
+  // s_add_nc_u64: gfx12 64-bit scalar add, no carry.  SCC is *not*
+  // updated (the `nc` suffix), matching S_SUB_NC_U64 below; see
   // SOPInstructions.td ~661 for both opcodes' shared `no-Defs-[SCC]`
   // shape.  Opcode-map row: `opcode-map.cpp` folds LLVM's
   // `S_ADD_U64` pseudo into this single CanonicalOp (gfx12 renamed the
   // mnemonic).  An earlier version of this handler also matched a
   // dead `CanonicalOp::S_ADD_U64`; that enum entry is gone, see
   // opcode-map.cpp's S_ADD_U64 comment for the audit trail.
-  if (Sop == CanonicalOp::S_ADD_NC_U64 ||
-      Sop == CanonicalOp::S_SUB_NC_U64) {
-    RaiseContext::KernargPtrProvenance PreKernargProvenance =
-        Ctx.getKernargPtrProvenance();
-    bool UpdatesEntryKernargOffset = false;
-    bool PreservesNonEntryKernarg = false;
-    int64_t NewEntryKernargOffset = 0;
-    auto IsKernargPair = [&](MCRegister Reg) {
-      return Ctx.isEntryKernargSegmentPtrSgpr(Ctx.parseReg(Reg));
-    };
-    KernargPtrConstRebase Rebase =
-        classifyKernargPtrConstRebase(Di, IsKernargPair);
-    if (Rebase.TouchesKernargPtr &&
-        (PreKernargProvenance.isLiveEntry() ||
-         PreKernargProvenance.isNonEntry())) {
-      if (Rebase.Delta) {
-        if (PreKernargProvenance.isLiveEntry()) {
-          UpdatesEntryKernargOffset = true;
-          NewEntryKernargOffset =
-              PreKernargProvenance.EntryByteOffset + *Rebase.Delta;
-        } else {
-          PreservesNonEntryKernarg = true;
-        }
-      }
-    }
-    Value *Result =
-        Sop == CanonicalOp::S_ADD_NC_U64
-            ? Ctx.B.CreateAdd(Op.src64(0), Op.src64(1), "sadd64")
-            : Ctx.B.CreateSub(Op.src64(0), Op.src64(1), "ssub64");
-    Ctx.Regs.writeReg64(Ctx.B, Op.dst(), Result);
-    if (UpdatesEntryKernargOffset)
-      Ctx.setKernargPtrLiveEntryByteOffset(NewEntryKernargOffset);
-    else if (PreservesNonEntryKernarg)
-      Ctx.setKernargPtrNonEntry();
+  if (Sop == CanonicalOp::S_ADD_NC_U64) {
+    Ctx.Regs.writeReg64(Ctx.B, Op.dst(),
+                        Ctx.B.CreateAdd(Op.src64(0), Op.src64(1), "sadd64"));
+    Hr.Handled = true;
+    return Hr;
+  }
+  // s_sub_nc_u64: gfx12 64-bit scalar subtract, no carry. Mirror
+  // of S_ADD_NC_U64 above. SCC is *not* updated (the `nc` suffix);
+  // see SOPInstructions.td 661 (no `Defs = [SCC]`).
+  if (Sop == CanonicalOp::S_SUB_NC_U64) {
+    Ctx.Regs.writeReg64(Ctx.B, Op.dst(),
+                        Ctx.B.CreateSub(Op.src64(0), Op.src64(1), "ssub64"));
     Hr.Handled = true;
     return Hr;
   }

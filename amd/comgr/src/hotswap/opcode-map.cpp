@@ -423,8 +423,6 @@ static const Entry kCanonTable[] = {
     E(V_SQRT_F32_e64, V_SQRT_F32),
     E(V_EXP_F32_e64, V_EXP_F32),
     E(V_LOG_F32_e64, V_LOG_F32),
-    E(V_SIN_F32_e64, V_SIN_F32),
-    E(V_COS_F32_e64, V_COS_F32),
     E(V_FREXP_EXP_I32_F64_e64, V_FREXP_EXP_I32_F64),
     // Targets with native tanh support use `llvm.amdgcn.tanh.*`; targets
     // without native support lower through matching OCML entry points.
@@ -467,6 +465,8 @@ static const Entry kCanonTable[] = {
     E(V_SUB_F32_e64, V_SUB_F32),
     E(V_SUBREV_F32_e64, V_SUBREV_F32),
     E(V_MUL_F32_e64, V_MUL_F32),
+    E(V_MUL_LEGACY_F32_e32, V_MUL_LEGACY_F32),
+    E(V_MUL_LEGACY_F32_e64, V_MUL_LEGACY_F32),
     E(V_FMAC_F32_e64, V_FMAC_F32),
     E(V_FMA_F32_e64, V_FMA_F32),
     E(V_FMAMK_F32, V_FMAMK_F32),
@@ -827,7 +827,6 @@ static const Entry kCanonTable[] = {
     E(GLOBAL_STORE_SHORT_D16_HI, GLOBAL_STORE_SHORT_D16_HI),
     E(GLOBAL_STORE_DWORD, GLOBAL_STORE_DWORD), E(GLOBAL_STORE_DWORDX2, GLOBAL_STORE_DWORDX2),
     E(GLOBAL_STORE_DWORDX3, GLOBAL_STORE_DWORDX3), E(GLOBAL_STORE_DWORDX4, GLOBAL_STORE_DWORDX4),
-    E(GLOBAL_WB, GLOBAL_WB),
     // Scratch/private-segment VMEM. Keep these as explicit CanonicalOps rather than
     // routing through GLOBAL_*: the handler must preserve scratch swizzling and
     // KD private-segment ABI semantics, not global address-space semantics.
@@ -928,6 +927,10 @@ static const Entry kCanonTable[] = {
     E(GLOBAL_ATOMIC_UMIN, GLOBAL_ATOMIC_UMIN),
     E(GLOBAL_ATOMIC_UMAX, GLOBAL_ATOMIC_UMAX),
     E(GLOBAL_ATOMIC_SWAP, GLOBAL_ATOMIC_SWAP),
+    // b64 (X2) swap: reuse the GLOBAL_ATOMIC_SWAP canonical op; the
+    // handler detects 64-bit width from the vdata register class.
+    E(GLOBAL_ATOMIC_SWAP_X2, GLOBAL_ATOMIC_SWAP),
+    E(GLOBAL_ATOMIC_SWAP_X2_SADDR, GLOBAL_ATOMIC_SWAP),
     E(GLOBAL_ATOMIC_CMPSWAP, GLOBAL_ATOMIC_CMPSWAP),
     E(GLOBAL_ATOMIC_ADD_F32, GLOBAL_ATOMIC_ADD_F32),
     E(GLOBAL_ATOMIC_PK_ADD_BF16, GLOBAL_ATOMIC_PK_ADD_BF16),
@@ -1373,16 +1376,6 @@ static const Entry kCanonTable[] = {
     E(GLOBAL_PREFETCH_B8_SADDR, GLOBAL_PREFETCH_B8),
     E(FLAT_PREFETCH_B8,         FLAT_PREFETCH_B8),
     E(FLAT_PREFETCH_B8_SADDR,   FLAT_PREFETCH_B8),
-
-    // FLAT WMMA load-with-transpose (gfx1250 wave32).
-    E(GLOBAL_LOAD_TR_B128_w32,       GLOBAL_LOAD_TR16_B128),
-    E(GLOBAL_LOAD_TR_B128_w32_SADDR, GLOBAL_LOAD_TR16_B128),
-    E(GLOBAL_LOAD_TR_B64_w32,        GLOBAL_LOAD_TR8_B64),
-    E(GLOBAL_LOAD_TR_B64_w32_SADDR,  GLOBAL_LOAD_TR8_B64),
-    E(GLOBAL_LOAD_TR4_B64,           GLOBAL_LOAD_TR4_B64),
-    E(GLOBAL_LOAD_TR4_B64_SADDR,     GLOBAL_LOAD_TR4_B64),
-    E(GLOBAL_LOAD_TR6_B96,           GLOBAL_LOAD_TR6_B96),
-    E(GLOBAL_LOAD_TR6_B96_SADDR,     GLOBAL_LOAD_TR6_B96),
 };
 
 #undef SMEM3
