@@ -51,6 +51,8 @@ std::optional<bool> readVOP3Clamp(const DecodedInst &Di, HandlerResult &Hr,
   return *Clamp != 0;
 }
 
+// These integer VOP3 profiles have no source-modifier semantics. Accept the
+// ordinary absent/zero encoding, and fail loudly if decoding ever exposes bits.
 bool requireNoVOP3IntMinMaxSrcMods(const DecodedInst &Di, HandlerResult &Hr,
                                    StringRef OpName) {
   constexpr unsigned NumSrcs = 3;
@@ -2254,18 +2256,13 @@ HandlerResult handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Hr.Handled = true;
     return Hr;
   }
-  // VOP3 integer ternary min/max family. MI400 documents:
+  // VOP3 integer ternary min/max family:
   //   v_minmax_i32: dst = smax(smin(src0, src1), src2)
   //   v_maxmin_i32: dst = smin(smax(src0, src1), src2)
   //   v_minmax_u32: dst = umax(umin(src0, src1), src2)
   //   v_maxmin_u32: dst = umin(umax(src0, src1), src2)
-  // and marks source abs/neg plus output clamp/omod unsupported.  Source
-  // modifiers flow through DecodedInst::ModMap and are refused below when
-  // present and nonzero.  LLVM does not expose clamp/omod operands for these
-  // NOCLAMP/NOOMOD profiles; the IfPresent guard is intentionally only a drift
-  // check in case TableGen grows those operands later.  The IR shape mirrors
-  // LLVM's IntMinMaxPat entries so same-family targets can reselect the single
-  // opcodes, while cross-target gfx942 gets ordinary integer min/max ops.
+  // The nested intrinsic shape matches LLVM's AMDGPU selection patterns; the
+  // IfPresent output-modifier guard is only a future TableGen drift check.
   if (Sop == CanonicalOp::V_MINMAX_I32 ||
       Sop == CanonicalOp::V_MAXMIN_I32 ||
       Sop == CanonicalOp::V_MINMAX_U32 ||

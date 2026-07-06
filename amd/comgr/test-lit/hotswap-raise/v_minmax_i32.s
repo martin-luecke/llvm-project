@@ -6,21 +6,9 @@
 ; RUN:   --write-hsaco=%t.gfx942.hsaco --kernel=v_int_minmax_family_kernel \
 ; RUN:   2>&1 | %FileCheck %s --check-prefix=PIPE
 ;
-; Lift test for the gfx11+/gfx12 integer ternary min/max family. MI400 defines:
-;   v_minmax_i32: dst = smax(smin(src0, src1), src2)
-;   v_maxmin_i32: dst = smin(smax(src0, src1), src2)
-;   v_minmax_u32: dst = umax(umin(src0, src1), src2)
-;   v_maxmin_u32: dst = umin(umax(src0, src1), src2)
+; Lift test for the gfx11+/gfx12 integer ternary min/max family.
 
 ; IR-LABEL: define amdgpu_kernel void @v_int_minmax_family_kernel(
-; IR: %v_minmax_i32_inner{{[0-9]*}} = call i32 @llvm.smin.i32(i32 %{{[^,]+}}, i32 %{{[^)]+}})
-; IR: %v_minmax_i32{{[0-9]*}} = call i32 @llvm.smax.i32(i32 %v_minmax_i32_inner{{[0-9]*}}, i32 %{{[^)]+}})
-; IR: %v_maxmin_i32_inner{{[0-9]*}} = call i32 @llvm.smax.i32(i32 %{{[^,]+}}, i32 %{{[^)]+}})
-; IR: %v_maxmin_i32{{[0-9]*}} = call i32 @llvm.smin.i32(i32 %v_maxmin_i32_inner{{[0-9]*}}, i32 %{{[^)]+}})
-; IR: %v_minmax_u32_inner{{[0-9]*}} = call i32 @llvm.umin.i32(i32 %{{[^,]+}}, i32 %{{[^)]+}})
-; IR: %v_minmax_u32{{[0-9]*}} = call i32 @llvm.umax.i32(i32 %v_minmax_u32_inner{{[0-9]*}}, i32 %{{[^)]+}})
-; IR: %v_maxmin_u32_inner{{[0-9]*}} = call i32 @llvm.umax.i32(i32 %{{[^,]+}}, i32 %{{[^)]+}})
-; IR: %v_maxmin_u32{{[0-9]*}} = call i32 @llvm.umin.i32(i32 %v_maxmin_u32_inner{{[0-9]*}}, i32 %{{[^)]+}})
 ; IR-NOT: call {{.*}}@llvm.minnum
 ; IR-NOT: call {{.*}}@llvm.maxnum
 ; PIPE: raise_cli: wrote {{[0-9]+}} byte HSACO for kernel 'v_int_minmax_family_kernel'
@@ -55,9 +43,17 @@ v_int_minmax_family_kernel:
 	v_lshl_add_u64 v[0:1], v[0:1], 2, s[2:3]
 	global_load_b96 v[0:2], v[0:1], off
 	s_wait_loadcnt 0x0
+; IR: %v_minmax_i32_inner{{[0-9]*}} = call i32 @llvm.smin.i32(i32 %{{[^,]+}}, i32 %{{[^)]+}})
+; IR: %v_minmax_i32{{[0-9]*}} = call i32 @llvm.smax.i32(i32 %v_minmax_i32_inner{{[0-9]*}}, i32 %{{[^)]+}})
 	v_minmax_i32 v4, v0, v1, v2
+; IR: %v_maxmin_i32_inner{{[0-9]*}} = call i32 @llvm.smax.i32(i32 %{{[^,]+}}, i32 %{{[^)]+}})
+; IR: %v_maxmin_i32{{[0-9]*}} = call i32 @llvm.smin.i32(i32 %v_maxmin_i32_inner{{[0-9]*}}, i32 %{{[^)]+}})
 	v_maxmin_i32 v5, v0, v1, v2
+; IR: %v_minmax_u32_inner{{[0-9]*}} = call i32 @llvm.umin.i32(i32 %{{[^,]+}}, i32 %{{[^)]+}})
+; IR: %v_minmax_u32{{[0-9]*}} = call i32 @llvm.umax.i32(i32 %v_minmax_u32_inner{{[0-9]*}}, i32 %{{[^)]+}})
 	v_minmax_u32 v6, v0, v1, v2
+; IR: %v_maxmin_u32_inner{{[0-9]*}} = call i32 @llvm.umax.i32(i32 %{{[^,]+}}, i32 %{{[^)]+}})
+; IR: %v_maxmin_u32{{[0-9]*}} = call i32 @llvm.umin.i32(i32 %v_maxmin_u32_inner{{[0-9]*}}, i32 %{{[^)]+}})
 	v_maxmin_u32 v7, v0, v1, v2
 	global_store_b128 v3, v[4:7], s[0:1] scale_offset
 	s_endpgm

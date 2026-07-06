@@ -522,17 +522,7 @@ enum class CanonicalOp : uint16_t {
   // generated assembly recovers the original instruction without
   // codegen quality loss.
   V_MED3_I32,
-  // VOP3 integer ternary min/max family:
-  //   V_MINMAX_I32: smax(smin(s0, s1), s2)
-  //   V_MAXMIN_I32: smin(smax(s0, s1), s2)
-  //   V_MINMAX_U32: umax(umin(s0, s1), s2)
-  //   V_MAXMIN_U32: umin(umax(s0, s1), s2)
-  // The MI400 manual marks source abs/neg and output clamp/omod unsupported
-  // for these opcodes; LLVM's generated MC profile omits clamp/omod operands,
-  // and the handler refuses nonzero source modifier operands instead of
-  // dropping them. LLVM's AMDGPU ISel has direct nested min/max patterns back
-  // to the single opcodes on targets that support them, while gfx942 lowers
-  // the same generic intrinsic chains to ordinary integer min/max ops.
+  // Ternary nested min/max family; see handle-valu.cpp for lowering details.
   V_MINMAX_I32, V_MAXMIN_I32, V_MINMAX_U32, V_MAXMIN_U32,
   // IEEE-754-2019 maximumNumber/minimumNumber: numeric operand preferred over NaN.
   V_MAX_NUM_F32, V_MIN_NUM_F32,
