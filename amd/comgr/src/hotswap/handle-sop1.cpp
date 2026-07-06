@@ -298,67 +298,67 @@ HandlerResult handleSOP1(RaiseContext &Ctx, const DecodedInst &Di,
         Ctx.Projection.extractLaneBitFromWaveMask(Ctx.B, OldExec);
     Ctx.recordSgprWaveMaskI1(Dst.BaseIdx, OldExecI1, /*isPair=*/false);
   };
+  auto ReadSaveExecSrc = [&]() -> RaiseContext::ExecMaskRead {
+    RaiseContext::ExecMaskRead Read = Op.srcExecMask(0);
+    if (Ctx.saveExecRequiresExecWidthMask(Di.Offset) &&
+        Read.Kind != RaiseContext::ExecMaskReadKind::ExecWidthMask) {
+      Hr.Failure = RaiseFailure::crossWaveLanePredicatedExec(
+          Di, "SaveExecFromLaneId [SAVEEXEC source mask lacks an "
+              "EXEC-width wave-mask proof; source-width fallback widening "
+              "would alias packed WaveNative source waves]");
+    }
+    return Read;
+  };
+  auto EmitSaveExec = [&](llvm::function_ref<Value *(Value *, Value *)> Combine)
+      -> HandlerResult {
+    Value *OldExec = Ctx.Regs.loadExec(Ctx.B);
+    RaiseContext::ExecMaskRead SrcRead = ReadSaveExecSrc();
+    if (Hr.Failure.hasFailed())
+      return Hr;
+    Ctx.Regs.writeRegExecWidth(Ctx.B, Op.dst(), OldExec);
+    RecordOldExecShadowOnDst(OldExec);
+    Value *NewExec = Combine(OldExec, SrcRead.Value);
+    Ctx.Regs.storeExec(Ctx.B, NewExec);
+    Hr.SccResult = NewExec;
+    Hr.Handled = true;
+    return Hr;
+  };
 
   if (Sop == CanonicalOp::S_AND_SAVEEXEC_B32) {
-    Value *OldExec = Ctx.Regs.loadExec(Ctx.B);
-    Value *Src = Op.srcExecWidth(0);
-    Ctx.Regs.writeRegExecWidth(Ctx.B, Op.dst(), OldExec);
-    RecordOldExecShadowOnDst(OldExec);
-    Value *NewExec = Ctx.B.CreateAnd(OldExec, Src, "new_exec");
-    Ctx.Regs.storeExec(Ctx.B, NewExec);
-    Hr.SccResult = NewExec;
-    Hr.Handled = true;
-    return Hr;
+    return EmitSaveExec(
+        [&](Value *OldExec, Value *Src) {
+          return Ctx.B.CreateAnd(OldExec, Src, "new_exec");
+        });
   }
   if (Sop == CanonicalOp::S_OR_SAVEEXEC_B32) {
-    Value *OldExec = Ctx.Regs.loadExec(Ctx.B);
-    Value *Src = Op.srcExecWidth(0);
-    Ctx.Regs.writeRegExecWidth(Ctx.B, Op.dst(), OldExec);
-    RecordOldExecShadowOnDst(OldExec);
-    Value *NewExec = Ctx.B.CreateOr(OldExec, Src, "new_exec");
-    Ctx.Regs.storeExec(Ctx.B, NewExec);
-    Hr.SccResult = NewExec;
-    Hr.Handled = true;
-    return Hr;
+    return EmitSaveExec(
+        [&](Value *OldExec, Value *Src) {
+          return Ctx.B.CreateOr(OldExec, Src, "new_exec");
+        });
   }
   if (Sop == CanonicalOp::S_XOR_SAVEEXEC_B32) {
-    Value *OldExec = Ctx.Regs.loadExec(Ctx.B);
-    Value *Src = Op.srcExecWidth(0);
-    Ctx.Regs.writeRegExecWidth(Ctx.B, Op.dst(), OldExec);
-    RecordOldExecShadowOnDst(OldExec);
-    Value *NewExec = Ctx.B.CreateXor(OldExec, Src, "new_exec");
-    Ctx.Regs.storeExec(Ctx.B, NewExec);
-    Hr.SccResult = NewExec;
-    Hr.Handled = true;
-    return Hr;
+    return EmitSaveExec(
+        [&](Value *OldExec, Value *Src) {
+          return Ctx.B.CreateXor(OldExec, Src, "new_exec");
+        });
   }
   if (Sop == CanonicalOp::S_ANDN2_SAVEEXEC_B32) {
     // S_AND_NOT1_SAVEEXEC (canonical ANDN2): D = EXEC; EXEC = S0 & ~EXEC.
     // "not1" inverts the EXEC operand, not the SGPR source: `Src & ~OldExec`.
     // Unlike commutative AND/OR/XOR_SAVEEXEC, the swapped `OldExec & ~Src` is a
     // different (not0) op and breaks the if/else divergence idiom.
-    Value *OldExec = Ctx.Regs.loadExec(Ctx.B);
-    Value *Src = Op.srcExecWidth(0);
-    Ctx.Regs.writeRegExecWidth(Ctx.B, Op.dst(), OldExec);
-    RecordOldExecShadowOnDst(OldExec);
-    Value *NewExec = Ctx.B.CreateAnd(Src, Ctx.B.CreateNot(OldExec), "new_exec");
-    Ctx.Regs.storeExec(Ctx.B, NewExec);
-    Hr.SccResult = NewExec;
-    Hr.Handled = true;
-    return Hr;
+    return EmitSaveExec(
+        [&](Value *OldExec, Value *Src) {
+          return Ctx.B.CreateAnd(Src, Ctx.B.CreateNot(OldExec), "new_exec");
+        });
   }
   if (Sop == CanonicalOp::S_ORN2_SAVEEXEC_B32) {
     // S_OR_NOT1_SAVEEXEC (canonical ORN2): D = EXEC; EXEC = S0 | ~EXEC.
     // "not1" inverts EXEC, giving `Src | ~OldExec` (see ANDN2 above).
-    Value *OldExec = Ctx.Regs.loadExec(Ctx.B);
-    Value *Src = Op.srcExecWidth(0);
-    Ctx.Regs.writeRegExecWidth(Ctx.B, Op.dst(), OldExec);
-    RecordOldExecShadowOnDst(OldExec);
-    Value *NewExec = Ctx.B.CreateOr(Src, Ctx.B.CreateNot(OldExec), "new_exec");
-    Ctx.Regs.storeExec(Ctx.B, NewExec);
-    Hr.SccResult = NewExec;
-    Hr.Handled = true;
-    return Hr;
+    return EmitSaveExec(
+        [&](Value *OldExec, Value *Src) {
+          return Ctx.B.CreateOr(Src, Ctx.B.CreateNot(OldExec), "new_exec");
+        });
   }
   if (Sop == CanonicalOp::S_GETPC_B64) {
     // Stub: the destination's symbolic PC is irrelevant for raised

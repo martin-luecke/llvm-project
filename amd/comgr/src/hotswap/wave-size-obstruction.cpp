@@ -99,6 +99,8 @@ const char *rewriteIdName(RewriteId R) {
            "readlane -> ds.bpermute)";
   case RewriteId::WaveNativeMbcntCmpx:
     return "WaveNative source-wave mbcnt -> V_CMPX EXEC projection";
+  case RewriteId::WaveNativeMbcntSaveExec:
+    return "WaveNative source-wave mbcnt -> SAVEEXEC mask proof";
   }
   return "UnknownRewriteId";
 }
@@ -276,23 +278,48 @@ struct LanePredicatedExecSite {
 
 class LaneIdProvenanceTracker {
 public:
-  explicit LaneIdProvenanceTracker(const MCRegisterInfo &MRI) : MRI(MRI) {}
+  explicit LaneIdProvenanceTracker(const MCRegisterInfo &MRI) : MRI(MRI) {
+    setRegWaveMaskSafe(AMDGPU::EXEC_LO, true);
+    setRegWaveMaskSafe(AMDGPU::EXEC_HI, true);
+    setRegWaveMaskSafe(AMDGPU::EXEC, true);
+  }
 
   bool anySourceTainted(const DecodedInst &Di) const {
-    for (unsigned I = 0; I < Di.NumSrcs; ++I) {
-      unsigned OpIdx = Di.SrcMap[I];
-      if (OpIdx >= Di.Inst.getNumOperands())
-        continue;
-      const MCOperand &Op = Di.Inst.getOperand(OpIdx);
-      if (Op.isReg() && isRegTainted(Op.getReg()))
-        return true;
-    }
-    return false;
+    return anyRegSource(Di, [&](MCRegister Reg) { return isRegTainted(Reg); });
+  }
+
+  bool anyRegSourceWaveMaskSafe(const DecodedInst &Di) const {
+    return anyRegSource(
+        Di, [&](MCRegister Reg) { return isRegWaveMaskSafe(Reg); });
+  }
+
+  bool anyRegSourceTaintedAndNotWaveMaskSafe(const DecodedInst &Di) const {
+    return anyRegSource(Di, [&](MCRegister Reg) {
+      return isRegTainted(Reg) && !isRegWaveMaskSafe(Reg);
+    });
   }
 
   bool execTainted() const {
     return isRegTainted(AMDGPU::EXEC_LO) || isRegTainted(AMDGPU::EXEC_HI) ||
            isRegTainted(AMDGPU::EXEC);
+  }
+
+  bool execWaveMaskSafe() const {
+    return isRegWaveMaskSafe(AMDGPU::EXEC_LO) ||
+           isRegWaveMaskSafe(AMDGPU::EXEC_HI) ||
+           isRegWaveMaskSafe(AMDGPU::EXEC);
+  }
+
+  // True when any source register currently carries wave-mask algebra rather
+  // than an arbitrary scalarized lane-id value.
+  bool sourceWaveMaskSafe(const DecodedInst &Di) const {
+    return anyRegSourceWaveMaskSafe(Di);
+  }
+
+  // SOP2 mask algebra remains safe if every tainted register source is already
+  // a wave mask; untainted scalar masks apply uniformly to both packed waves.
+  bool allSourcesWaveMaskSafeOrUntainted(const DecodedInst &Di) const {
+    return Di.NumSrcs != 0 && !anyRegSourceTaintedAndNotWaveMaskSafe(Di);
   }
 
   bool anyVopdHalfSourceTainted(const DecodedInst::VopdHalf &Half) const {
@@ -312,29 +339,55 @@ public:
 
   void updateAfterInstruction(const DecodedInst &Di, bool ExplicitDefsTainted,
                               bool VccTainted, bool ExecTainted,
-                              bool SccTainted) {
+                              bool SccTainted,
+                              bool ExplicitDefsWaveMaskSafe = false,
+                              bool VccWaveMaskSafe = false,
+                              bool ExecWaveMaskSafe = false) {
     for (unsigned I = 0; I < Di.NumDefs; ++I) {
       if (I >= Di.Inst.getNumOperands())
         continue;
       const MCOperand &Op = Di.Inst.getOperand(I);
-      if (Op.isReg())
+      if (Op.isReg()) {
         setRegTaint(Op.getReg(), ExplicitDefsTainted);
+        setRegWaveMaskSafe(Op.getReg(), ExplicitDefsWaveMaskSafe);
+      }
     }
     if (Di.DefsVcc) {
       setRegTaint(AMDGPU::VCC_LO, VccTainted);
       setRegTaint(AMDGPU::VCC_HI, VccTainted);
       setRegTaint(AMDGPU::VCC, VccTainted);
+      setRegWaveMaskSafe(AMDGPU::VCC_LO, VccWaveMaskSafe);
+      setRegWaveMaskSafe(AMDGPU::VCC_HI, VccWaveMaskSafe);
+      setRegWaveMaskSafe(AMDGPU::VCC, VccWaveMaskSafe);
     }
     if (Di.DefsExec) {
       setRegTaint(AMDGPU::EXEC_LO, ExecTainted);
       setRegTaint(AMDGPU::EXEC_HI, ExecTainted);
       setRegTaint(AMDGPU::EXEC, ExecTainted);
+      setRegWaveMaskSafe(AMDGPU::EXEC_LO, ExecWaveMaskSafe);
+      setRegWaveMaskSafe(AMDGPU::EXEC_HI, ExecWaveMaskSafe);
+      setRegWaveMaskSafe(AMDGPU::EXEC, ExecWaveMaskSafe);
     }
     if (Di.DefsScc)
       setRegTaint(AMDGPU::SCC, SccTainted);
   }
 
 private:
+  // Return true if any decoded register source satisfies `Pred`.  Constants and
+  // expressions do not carry mbcnt register provenance.
+  bool anyRegSource(const DecodedInst &Di,
+                    function_ref<bool(MCRegister)> Pred) const {
+    for (unsigned I = 0; I < Di.NumSrcs; ++I) {
+      unsigned OpIdx = Di.SrcMap[I];
+      if (OpIdx >= Di.Inst.getNumOperands())
+        continue;
+      const MCOperand &Op = Di.Inst.getOperand(OpIdx);
+      if (Op.isReg() && Pred(Op.getReg()))
+        return true;
+    }
+    return false;
+  }
+
   void appendCanonicalRegLanes(MCRegister Reg,
                                SmallVectorImpl<unsigned> &Out) const {
     if (!Reg)
@@ -358,6 +411,15 @@ private:
     appendCanonicalRegLanes(Reg, Lanes);
     for (unsigned Lane : Lanes)
       if (TaintedRegs.contains(Lane))
+        return true;
+    return false;
+  }
+
+  bool isRegWaveMaskSafe(MCRegister Reg) const {
+    SmallVector<unsigned> Lanes;
+    appendCanonicalRegLanes(Reg, Lanes);
+    for (unsigned Lane : Lanes)
+      if (WaveMaskSafeRegs.contains(Lane))
         return true;
     return false;
   }
@@ -392,8 +454,20 @@ private:
     }
   }
 
+  void setRegWaveMaskSafe(MCRegister Reg, bool Safe) {
+    SmallVector<unsigned> Lanes;
+    appendCanonicalRegLanes(Reg, Lanes);
+    for (unsigned Lane : Lanes) {
+      if (Safe)
+        WaveMaskSafeRegs.insert(Lane);
+      else
+        WaveMaskSafeRegs.erase(Lane);
+    }
+  }
+
   const MCRegisterInfo &MRI;
   DenseSet<unsigned> TaintedRegs;
+  DenseSet<unsigned> WaveMaskSafeRegs;
 };
 
 bool isSaveExecB32(CanonicalOp Sop) {
@@ -402,6 +476,20 @@ bool isSaveExecB32(CanonicalOp Sop) {
          Sop == CanonicalOp::S_XOR_SAVEEXEC_B32 ||
          Sop == CanonicalOp::S_ANDN2_SAVEEXEC_B32 ||
          Sop == CanonicalOp::S_ORN2_SAVEEXEC_B32;
+}
+
+// Semantic subset of SOP2 bitwise ops that preserve wave-mask meaning when
+// their tainted inputs are already masks. This is not a TableGen bit: TSFlags
+// can tell us "SOP2" or "writes EXEC", but not "safe mask algebra".
+bool isWaveMaskSop2(CanonicalOp Sop) {
+  return Sop == CanonicalOp::S_AND_B32 || Sop == CanonicalOp::S_OR_B32 ||
+         Sop == CanonicalOp::S_XOR_B32 || Sop == CanonicalOp::S_ANDN2_B32 ||
+         Sop == CanonicalOp::S_ORN2_B32 || Sop == CanonicalOp::S_NAND_B32 ||
+         Sop == CanonicalOp::S_NOR_B32 || Sop == CanonicalOp::S_XNOR_B32 ||
+         Sop == CanonicalOp::S_AND_B64 || Sop == CanonicalOp::S_OR_B64 ||
+         Sop == CanonicalOp::S_XOR_B64 || Sop == CanonicalOp::S_ANDN2_B64 ||
+         Sop == CanonicalOp::S_ORN2_B64 || Sop == CanonicalOp::S_NAND_B64 ||
+         Sop == CanonicalOp::S_NOR_B64 || Sop == CanonicalOp::S_XNOR_B64;
 }
 
 SmallVector<LanePredicatedExecSite>
@@ -419,11 +507,16 @@ findLanePredicatedExecSites(ArrayRef<DecodedInst> Insts,
     }
     const bool SourceTainted = Tracker.anySourceTainted(Di);
     const bool OldExecTainted = Tracker.execTainted();
+    const bool SourceWaveMaskSafe = Tracker.sourceWaveMaskSafe(Di);
+    const bool OldExecWaveMaskSafe = Tracker.execWaveMaskSafe();
 
     bool ExplicitDefsTainted = SourceTainted;
     bool VccTainted = SourceTainted;
     bool ExecTainted = SourceTainted || OldExecTainted;
     bool SccTainted = SourceTainted;
+    bool ExplicitDefsWaveMaskSafe = false;
+    bool VccWaveMaskSafe = false;
+    bool ExecWaveMaskSafe = false;
 
     if (Sop == CanonicalOp::V_MBCNT_LO_U32_B32 ||
         Sop == CanonicalOp::V_MBCNT_HI_U32_B32) {
@@ -454,23 +547,56 @@ findLanePredicatedExecSites(ArrayRef<DecodedInst> Insts,
       VccTainted = false;
       ExecTainted = OldExecTainted || SourceTainted;
       SccTainted = false;
+      ExecWaveMaskSafe = true;
+    } else if (Sop == CanonicalOp::V_CMP) {
+      ExplicitDefsWaveMaskSafe = true;
+      VccWaveMaskSafe = true;
+      ExecWaveMaskSafe = OldExecWaveMaskSafe;
+    } else if (Sop == CanonicalOp::S_MOV_B32 ||
+               Sop == CanonicalOp::S_MOV_B64) {
+      ExplicitDefsWaveMaskSafe = SourceWaveMaskSafe;
+      VccWaveMaskSafe = SourceWaveMaskSafe;
+      ExecWaveMaskSafe = SourceWaveMaskSafe;
+    } else if (isWaveMaskSop2(Sop)) {
+      bool ResultWaveMaskSafe = Tracker.allSourcesWaveMaskSafeOrUntainted(Di);
+      ExplicitDefsWaveMaskSafe = ResultWaveMaskSafe;
+      VccWaveMaskSafe = ResultWaveMaskSafe;
+      ExecWaveMaskSafe = ResultWaveMaskSafe;
     } else if (isSaveExecB32(Sop)) {
-      if (SourceTainted) {
-        Sites.push_back(
-            {&Di, ObstructionKind::SaveExecFromLaneId,
-             RewriteId::None, /*RewriteImplemented=*/false,
-             "s_*_saveexec_b32 source mask dataflow is derived from "
-             "v_mbcnt_*; no target-width source-wave mask projection is "
-             "implemented for scalar saveexec masks"});
+      if (SourceTainted &&
+          (!SourceWaveMaskSafe ||
+           !Projection.preservesMbcntDerivedVcmpxExec())) {
+        if (Projection.preservesMbcntDerivedVcmpxExec()) {
+          Sites.push_back(
+              {&Di, ObstructionKind::SaveExecFromLaneId,
+               RewriteId::WaveNativeMbcntSaveExec,
+               /*RewriteImplemented=*/true,
+               "s_*_saveexec_b32 source mask dataflow is derived from "
+               "v_mbcnt_*; WaveNative lowering must prove the mask operand "
+               "is an EXEC-width wave mask before routing the EXEC write "
+               "through storeExec"});
+        } else {
+          Sites.push_back(
+              {&Di, ObstructionKind::SaveExecFromLaneId, RewriteId::None,
+               /*RewriteImplemented=*/false,
+               "s_*_saveexec_b32 source mask dataflow is derived from "
+               "v_mbcnt_*; EXEC would need independent source-wave masks, "
+               "but the selected projection aliases target lanes L and L+W_s "
+               "through one source-width EXEC mask"});
+        }
       }
       ExplicitDefsTainted = OldExecTainted;
       VccTainted = false;
       ExecTainted = OldExecTainted || SourceTainted;
       SccTainted = ExecTainted;
+      ExplicitDefsWaveMaskSafe = OldExecWaveMaskSafe;
+      ExecWaveMaskSafe = OldExecWaveMaskSafe && SourceWaveMaskSafe;
     }
 
     Tracker.updateAfterInstruction(Di, ExplicitDefsTainted, VccTainted,
-                                   ExecTainted, SccTainted);
+                                   ExecTainted, SccTainted,
+                                   ExplicitDefsWaveMaskSafe, VccWaveMaskSafe,
+                                   ExecWaveMaskSafe);
   }
 
   return Sites;
@@ -1136,7 +1262,8 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
   // Second pass: emit Class-4 EXEC writers whose predicate/mask was
   // actually proven to depend on a v_mbcnt_* result by the decoded-
   // register provenance pre-walk. WaveNative marks mbcnt-fed V_CMPX
-  // as implemented; MODREP and scalar saveexec masks still refuse.
+  // as directly implemented; scalar SAVEEXEC sites pass only with a
+  // handler-time EXEC-width mask proof. MODREP still refuses.
   for (const auto &Pw : LanePredicatedExecSites) {
     ObstructionSite Site;
     Site.Inst = Pw.Inst;

@@ -290,6 +290,13 @@ additionally pins a cross-BB / scalar-interleaved variant.
 
 - V_CMP_*_e64 writers of arbitrary SGPR destinations (single or pair).
 - V_CNDMASK_B32_e64 consumers of SGPR masks.
+- Class-4 `s_*_saveexec_b32` consumers that the wave-size classifier marks as
+  lane-position-sensitive, but only when `readOpExecMask` can classify the
+  source operand as an EXEC-width mask.
+- SOP2 mask algebra that can read its inputs from same-BB shadows, durable
+  EXEC-width SGPR masks, VCC/EXEC, or constants.  Tainted scalarized operands
+  without such a fact are refused at SAVEEXEC instead of being promoted from
+  source-width fallback.
 - Intra-BB dataflow with no intervening scalar write to the mask SGPR.
 - Invalidation on any scalar SGPR write routed through
   `AllocaRegFile::writeReg32 / writeReg64`.
@@ -305,12 +312,13 @@ additionally pins a cross-BB / scalar-interleaved variant.
   V_CNDMASK` falls back correctly. Fixing this requires §4 or a scalar-
   write-that-preserves-wave-mask-role annotation scheme.
 - **Other wave-mask consumers.** `S_AND_B32 sexec, sN, sM` and friends
-  that read an SGPR as a wave mask on the EXEC path still go through
-  `readOpExecWidth`, which has its own widening story (`widenToExec`'s
-  `(v << W_src) | v` broadcast). That path is not changed; its
-  correctness is bounded by the same narrow-write limitation at the
-  V_CMP producer. Extending the shadow to drive those consumers is a
-  natural follow-up.
+  that read an SGPR as a wave mask on the EXEC path still go through the
+  ordinary `readOpExecWidth` compatibility path.  Its
+  `widenToExec` broadcast is not a correctness proof for lane-position-
+  sensitive masks.  Class-4 SAVEEXEC sites therefore use the stricter
+  `readOpExecMask` read and refuse if the source would fall back to source-width
+  widening; extending that strict contract to more consumers is a natural
+  follow-up.
 - **V_CMPX.** V_CMPX writes EXEC, not an SGPR, and its consumer is the
   EXEC alloca read path (already wave-native-width-correct under
   `WaveNativeProjection`). Unchanged by this design.

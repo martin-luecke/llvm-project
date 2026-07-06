@@ -1135,12 +1135,18 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   // classifier and we refuse post-raise rather than emit silently
   // unchanged IR that scalarises the divergent wave_id lift.
   unsigned ClassifierWaveIdLiftScalarizedSites = 0;
+  DenseSet<uint64_t> SaveExecRequiresExecWidthMask;
   {
     ObstructionReport Report =
         buildObstructionReport(Insts, Mc, Projection, EnableWritelaneRewrite);
-    for (const auto &S : Report.Sites)
+    for (const auto &S : Report.Sites) {
       if (S.Kind == ObstructionKind::WaveIdLiftScalarized)
         ++ClassifierWaveIdLiftScalarizedSites;
+      if (S.Kind == ObstructionKind::SaveExecFromLaneId &&
+          S.Rewrite == RewriteId::WaveNativeMbcntSaveExec &&
+          S.RewriteImplemented && S.Inst)
+        SaveExecRequiresExecWidthMask.insert(S.Inst->Offset);
+    }
     std::string Trace = renderObstructionTrace(
         Report, KernelName, SourceIsa,
         CompilationTargetIsa.empty() ? SourceIsa : CompilationTargetIsa,
@@ -1706,6 +1712,7 @@ static RaiseResult raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   Ctx.SourceComputePgmRsrc2 = Meta.ComputePgmRsrc2;
   Ctx.SourceKernelCodeProperties = Meta.KernelCodeProperties;
   Ctx.AssumeHipGlobalOffsetZero = AssumeHipGlobalOffsetZero;
+  Ctx.SaveExecRequiresExecWidthMask = std::move(SaveExecRequiresExecWidthMask);
   computeKernargPtrProvenance(Ctx, Insts, Decoded.BlockStarts, KernelOffset,
                               OffsetToBb);
   auto EntryBbIt = OffsetToBb.find(KernelOffset);
