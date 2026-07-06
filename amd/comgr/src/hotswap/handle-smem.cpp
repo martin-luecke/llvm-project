@@ -526,7 +526,8 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
     Value *AuxFlags = ConstantInt::get(Ctx.I32Ty, 0);
     // S_BUFFER_LOAD reads through the V# value in sbase. Decode the source V#
     // fields this instruction uses, then rebuild a target resource with the
-    // same base and byte extent so target buffer hardware keeps OOB loads zero.
+    // same base and byte extent. Target buffer hardware then returns zero for
+    // out-of-bounds load elements.
     // This path is limited to the default cache policy; explicit SMEM TH/SCOPE
     // bits are rejected above.
     //

@@ -15,25 +15,14 @@
 ; gfx12 S_BUFFER_LOAD consumes a four-SGPR V# resource descriptor, not a raw
 ; pointer. The raiser decodes the source descriptor fields used by scalar
 ; buffer loads, rebuilds a target raw-buffer resource with the source byte
-; extent, and emits target buffer-resource loads so hardware OOB-zero behavior
-; stays with the backend.
+; extent, and lets target buffer hardware return zero for out-of-bounds load
+; elements.
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
 	.text
 
 ; SUCCESS-LABEL: define amdgpu_kernel void @s_buffer_load_success_kernel(
-; SUCCESS: [[EXTENT:%[^ ]+]] = mul i64
-; SUCCESS: call ptr addrspace(8) @llvm.amdgcn.make.buffer.rsrc.p8.p1(ptr addrspace(1) %{{[^,]+}}, i16 0, i64 [[EXTENT]], i32 0)
-; SUCCESS: call <2 x i32> @llvm.amdgcn.raw.ptr.buffer.load.v2i32(
-; SUCCESS: call <3 x i32> @llvm.amdgcn.raw.ptr.buffer.load.v3i32(
-; SUCCESS: call <4 x i32> @llvm.amdgcn.raw.ptr.buffer.load.v4i32(
-; SUCCESS: call <4 x i32> @llvm.amdgcn.raw.ptr.buffer.load.v4i32(
-; SUCCESS: call <4 x i32> @llvm.amdgcn.raw.ptr.buffer.load.v4i32(
-; SUCCESS: call <4 x i32> @llvm.amdgcn.raw.ptr.buffer.load.v4i32(
-; SUCCESS: call <4 x i32> @llvm.amdgcn.raw.ptr.buffer.load.v4i32(
-; SUCCESS: call <4 x i32> @llvm.amdgcn.raw.ptr.buffer.load.v4i32(
-; SUCCESS: call <4 x i32> @llvm.amdgcn.raw.ptr.buffer.load.v4i32(
 ; PIPE: raise_cli: wrote {{[0-9]+}} byte HSACO for kernel 's_buffer_load_success_kernel'
 	.globl	s_buffer_load_success_kernel
 	.p2align	8
@@ -41,11 +30,22 @@
 s_buffer_load_success_kernel:
 	s_load_b128 s[4:7], s[0:1], 0x0
 	s_wait_kmcnt 0x0
+; SUCCESS: [[EXTENT:%[^ ]+]] = mul i64
+; SUCCESS: call ptr addrspace(8) @llvm.amdgcn.make.buffer.rsrc.p8.p1(ptr addrspace(1) %{{[^,]+}}, i16 0, i64 [[EXTENT]], i32 0)
+; SUCCESS: call <2 x i32> @llvm.amdgcn.raw.ptr.buffer.load.v2i32(
 	s_buffer_load_b64 s[8:9], s[4:7], 0x0
+; SUCCESS: call <3 x i32> @llvm.amdgcn.raw.ptr.buffer.load.v3i32(
 	s_buffer_load_b96 s[12:14], s[4:7], 0x8
+; SUCCESS: call <4 x i32> @llvm.amdgcn.raw.ptr.buffer.load.v4i32(
 	s_buffer_load_b128 s[16:19], s[4:7], 0x10
 	s_mov_b32 s20, 0x20
+; SUCCESS: call <4 x i32> @llvm.amdgcn.raw.ptr.buffer.load.v4i32(
+; SUCCESS: call <4 x i32> @llvm.amdgcn.raw.ptr.buffer.load.v4i32(
 	s_buffer_load_b256 s[24:31], s[4:7], s20 offset:0x20
+; SUCCESS: call <4 x i32> @llvm.amdgcn.raw.ptr.buffer.load.v4i32(
+; SUCCESS: call <4 x i32> @llvm.amdgcn.raw.ptr.buffer.load.v4i32(
+; SUCCESS: call <4 x i32> @llvm.amdgcn.raw.ptr.buffer.load.v4i32(
+; SUCCESS: call <4 x i32> @llvm.amdgcn.raw.ptr.buffer.load.v4i32(
 	s_buffer_load_b512 s[32:47], s[4:7], 0x40
 	s_wait_kmcnt 0x0
 	v_mov_b32_e32 v0, s8
