@@ -43,6 +43,7 @@ inline std::optional<int64_t> evalOperandAsConst(const llvm::MCInst &Inst,
   return std::nullopt;
 }
 
+// Read a named MC operand when it is an immediate or absolute expression.
 inline std::optional<int64_t> readNamedImmOperand(const llvm::MCInst &Inst,
                                                   llvm::AMDGPU::OpName Name) {
   int Idx = llvm::AMDGPU::getNamedOperandIdx(Inst.getOpcode(), Name);
@@ -223,6 +224,7 @@ struct DecodedInst {
   int64_t getImm(unsigned I) const { return Inst.getOperand(I).getImm(); }
 };
 
+// Convenience wrapper for callers that already carry a decoded instruction.
 inline std::optional<int64_t> readNamedImmOperand(const DecodedInst &Di,
                                                   llvm::AMDGPU::OpName Name) {
   return readNamedImmOperand(Di.Inst, Name);

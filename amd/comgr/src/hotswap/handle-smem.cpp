@@ -40,6 +40,7 @@ Value *addStaticSmemByteOffset64(RaiseContext &Ctx, const DecodedInst &Di,
   return Ctx.B.CreateAdd(Offset, Ctx.B.getInt64(*Di.StaticOffset), Name);
 }
 
+// Return the dword payload width for scalar buffer-resource loads.
 std::optional<unsigned> getScalarBufferLoadDwordCount(CanonicalOp Sop) {
   switch (Sop) {
   case CanonicalOp::S_BUFFER_LOAD_B32:
@@ -59,10 +60,12 @@ std::optional<unsigned> getScalarBufferLoadDwordCount(CanonicalOp Sop) {
   }
 }
 
+// Build descriptor arithmetic in a common 64-bit integer type.
 Value *zextToI64(RaiseContext &Ctx, Value *V, const Twine &Name = "") {
   return Ctx.B.CreateZExt(V, Ctx.I64Ty, Name);
 }
 
+// Sign-extend a low-bit address field after extracting it from a descriptor.
 Value *signExtendLowBitsI64(RaiseContext &Ctx, Value *V, unsigned Bits,
                             const Twine &Name) {
   assert(Bits > 0 && Bits < 64 &&
@@ -73,15 +76,18 @@ Value *signExtendLowBitsI64(RaiseContext &Ctx, Value *V, unsigned Bits,
   return Ctx.B.CreateAShr(Shifted, ConstantInt::get(Ctx.I64Ty, Shift), Name);
 }
 
+// Dword scalar buffer loads ignore the low two address bits.
 Value *alignDwordAddress64(RaiseContext &Ctx, Value *Addr, const Twine &Name) {
   return Ctx.B.CreateAnd(Addr, Ctx.B.getInt64(~uint64_t(3)), Name);
 }
 
+// Dword scalar buffer loads ignore the low two offset bits.
 Value *alignDwordOffset32(RaiseContext &Ctx, Value *Offset, const Twine &Name) {
   return Ctx.B.CreateAnd(Offset, ConstantInt::get(Ctx.I32Ty, ~uint32_t(3)),
                          Name);
 }
 
+// Emit a branch to llvm.trap when a dynamic translation contract is violated.
 void emitTrapUnless(RaiseContext &Ctx, Value *Condition,
                     const Twine &ReasonName) {
   Function *Trap =
@@ -100,6 +106,7 @@ void emitTrapUnless(RaiseContext &Ctx, Value *Condition,
   Ctx.B.SetInsertPoint(ContBB);
 }
 
+// Check that the source V# base fits in the target V# base field.
 void emitBufferBaseRepresentabilityGuard(RaiseContext &Ctx, Value *BaseAddr) {
   if (Ctx.TargetIsa.BufferResourceBaseBits >= Ctx.Isa.BufferResourceBaseBits)
     return;
@@ -121,11 +128,13 @@ void emitBufferBaseRepresentabilityGuard(RaiseContext &Ctx, Value *BaseAddr) {
   emitTrapUnless(Ctx, Representable, "sbuf_base_unrepresentable");
 }
 
+// Source V# fields after projecting them to the target raw-buffer contract.
 struct SourceScalarBufferResource {
   Value *BasePtr = nullptr;
   Value *ExtentBytes = nullptr;
 };
 
+// Decode the source V# fields that S_BUFFER_LOAD observes.
 SourceScalarBufferResource decodeSourceScalarBufferResource(RaiseContext &Ctx,
                                                             ParsedReg Base) {
   Value *Dw0 = Ctx.Regs.loadSGPR32(Ctx.B, Base.BaseIdx);
@@ -209,6 +218,7 @@ SourceScalarBufferResource decodeSourceScalarBufferResource(RaiseContext &Ctx,
           ExtentBytes};
 }
 
+// Rebuild a target buffer resource with the source scalar-buffer byte extent.
 Value *emitTargetBufferResource(RaiseContext &Ctx,
                                 const SourceScalarBufferResource &Resource) {
   Function *MakeRsrc = Intrinsic::getOrInsertDeclaration(

@@ -67,8 +67,7 @@ enum class CanonicalOp : uint16_t {
 
   // -- SMEM --
   S_LOAD_B32, S_LOAD_B64, S_LOAD_B96, S_LOAD_B128, S_LOAD_B256, S_LOAD_B512,
-  // Scalar buffer-resource loads. Unlike S_LOAD_*, the source `sbase` operand
-  // is a four-SGPR V# descriptor, not a raw 64-bit pointer.
+  // Scalar loads through a four-SGPR V# buffer resource.
   S_BUFFER_LOAD_B32, S_BUFFER_LOAD_B64, S_BUFFER_LOAD_B96,
   S_BUFFER_LOAD_B128, S_BUFFER_LOAD_B256, S_BUFFER_LOAD_B512,
   // gfx12+ scalar narrow loads: fetch 1 or 2 bytes from a uniform address and
