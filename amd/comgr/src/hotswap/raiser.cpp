@@ -64,6 +64,7 @@
 #include "llvm/Support/AMDHSAKernelDescriptor.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/Process.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
@@ -1044,7 +1045,10 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
   if (Stats)
     Stats->TotalCount = static_cast<int>(Insts.size());
 
-  {
+  // Source disassembly is only consumed by the `.dis` debug dump. Skip the
+  // string build on the production path; the pipeline only writes it when a
+  // persistent dump dir is set with HSA_HOTSWAP_DUMP_INPUT=1.
+  if (wantDumpInput()) {
     raw_string_ostream DisOs(Result.DisasmText);
     for (const auto &Di : Insts) {
       DisOs << format_hex_no_prefix(Di.Offset, 8) << ":  " << Di.FullText
@@ -1095,9 +1099,10 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
   {
     ObstructionReport Report =
         buildObstructionReport(Insts, Mc, Projection, EnableWritelaneRewrite);
-    for (const auto &S : Report.Sites)
-      if (S.Kind == ObstructionKind::WaveIdLiftScalarized)
-        ++ClassifierWaveIdLiftScalarizedSites;
+    ClassifierWaveIdLiftScalarizedSites =
+        static_cast<unsigned>(llvm::count_if(Report.Sites, [](const auto &S) {
+          return S.Kind == ObstructionKind::WaveIdLiftScalarized;
+        }));
     std::string Trace = renderObstructionTrace(
         Report, KernelName, SourceIsa,
         CompilationTargetIsa.empty() ? SourceIsa : CompilationTargetIsa,
@@ -2263,16 +2268,11 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
 
     if (PredReport.Refused) {
       auto HasMatrixOp = [&]() {
-        const auto First =
-            static_cast<uint16_t>(CanonicalOp::V_MFMA_F32_16x16x128_F8F6F4);
-        const auto Last =
-            static_cast<uint16_t>(CanonicalOp::V_WMMA_SCALE_F32_16x16x128_F8F6F4);
-        for (const DecodedInst &Inst : Insts) {
-          const auto Op = static_cast<uint16_t>(Inst.CanonOp);
-          if (Op >= First && Op <= Last)
-            return true;
-        }
-        return false;
+        return llvm::any_of(Insts, [](const DecodedInst &Inst) {
+          return isSemOpInRange(
+              Inst.CanonOp, CanonicalOp::V_MFMA_F32_16x16x128_F8F6F4,
+              CanonicalOp::V_WMMA_SCALE_F32_16x16x128_F8F6F4);
+        });
       };
       constexpr bool kEnableThreadLoopC5Retry = false;
       const bool CanRetryThreadLoop =
@@ -2330,11 +2330,6 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
   if (verifyModule(M, &VerifyOs)) {
     errs() << "transpiler: IR verification failed:\n" << VerifyErr << "\n";
     return RaiseFailure::irVerificationFailed(VerifyErr);
-  }
-
-  {
-    raw_string_ostream IrOs(Result.IrText);
-    M.print(IrOs, nullptr);
   }
 
   Result.UsesScratchPrivateSegment = Ctx.UsesScratchPrivateSegment;
