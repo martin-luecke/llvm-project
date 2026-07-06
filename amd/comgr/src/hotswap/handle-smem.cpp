@@ -524,23 +524,18 @@ HandlerResult handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
     Value *Rsrc = emitTargetBufferResource(Ctx, Resource);
     Value *Soffset = ConstantInt::get(Ctx.I32Ty, 0);
     Value *AuxFlags = ConstantInt::get(Ctx.I32Ty, 0);
-    // This is not a provenance proof about where the descriptor came from.
-    // S_BUFFER_LOAD treats the four source SGPRs as a V# payload regardless of
-    // origin. The proof is semantic: decode exactly the V# fields the source
-    // instruction observes, rebuild a target resource with equivalent base and
-    // byte extent, and preserve OOB-zero via target buffer hardware.
-    // This raw-buffer route is admitted only for the default cache policy; any
-    // explicit SMEM TH/SCOPE coherence contract is rejected above.
+    // S_BUFFER_LOAD reads through the V# value in sbase. Decode the source V#
+    // fields this instruction uses, then rebuild a target resource with the
+    // same base and byte extent so target buffer hardware keeps OOB loads zero.
+    // This path is limited to the default cache policy; explicit SMEM TH/SCOPE
+    // bits are rejected above.
     //
-    // Do not force the rebuilt resource through llvm.amdgcn.s.buffer.load here:
-    // under WaveNative cross-widening, modeled source SGPRs can differ between
-    // the two source-wave halves inside one target wave. The raw-pointer buffer
-    // intrinsic lets the backend waterfall non-uniform resource fields.
+    // Use raw-pointer buffer loads because WaveNative can carry different
+    // descriptor values for the two source-wave halves inside one target wave.
+    // The backend can waterfall those non-uniform resource fields.
     for (unsigned D = 0; D < LoadDwords;) {
-      // Raw-buffer loads are legal up to dwordx4. S_BUFFER_LOAD_B256/B512
-      // are scalar-cache widths, so split them into consecutive target buffer
-      // loads instead of emitting an unselectable <8 x i32>/<16 x i32>
-      // intrinsic call.
+      // Target raw-buffer loads select up to dwordx4, so split wider scalar
+      // buffer loads into consecutive chunks.
       unsigned ChunkDwords = std::min(4u, LoadDwords - D);
       Type *LoadTy = ChunkDwords == 1
                          ? Ctx.I32Ty
