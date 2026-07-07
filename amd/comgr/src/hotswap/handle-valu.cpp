@@ -2061,6 +2061,27 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Hr.Handled = true;
     return Hr;
   }
+  // VOP3-only true16 16-bit conditional select. Semantically identical to
+  // v_cndmask_b32 -- pick src1 or src0 per the per-lane wave-mask condition
+  // (src2) -- but on 16-bit halves: op_sel routes the src0/src1 halves and
+  // selects which dst half receives the result; the unselected dst half is
+  // preserved per the RDNA3+ true16 ISA. The condition read is shared with the
+  // b32 lift via raiseCndmaskWaveCondition. src2 (the mask) is not a true16
+  // data operand, so only src0/src1 participate in op_sel (NumSrcs == 2).
+  if (Sop == CanonicalOp::V_CNDMASK_B16) {
+    std::optional<True16OpSel> Sel =
+        readTrue16OpSel(Di, Op, 2, Hr, "v_cndmask_b16");
+    if (!Sel)
+      return Hr;
+    Value *LHS = extractU16Half(Ctx, Op.src(0), Sel->Src0Hi);
+    Value *RHS = extractU16Half(Ctx, Op.src(1), Sel->Src1Hi);
+    Value *Cond = raiseCndmaskWaveCondition(Ctx, Di, Op);
+    Value *Result = Ctx.B.CreateSelect(Cond, RHS, LHS, "cndmask_b16");
+    writeSelectedI16Bits(Ctx, Op.dst(), Result, Sel->DstHi,
+                         "cndmask_b16_merge_lo", "cndmask_b16_merge_hi");
+    Hr.Handled = true;
+    return Hr;
+  }
   if (Sop == CanonicalOp::V_MAD_U16) {
     StringRef OpName = "v_mad_u16";
     Expected<bool> Clamp = readVOP3Clamp(Di, OpName);
