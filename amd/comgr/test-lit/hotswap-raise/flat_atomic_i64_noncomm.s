@@ -5,10 +5,6 @@
 ; RUN: %raise_cli %t.hsaco --target-isa=gfx1250 \
 ; RUN:   --emit-ir=flat_atomic_i64_noncomm_kernel \
 ; RUN:   | %FileCheck %s --check-prefix=SAME
-;
-; 64-bit FLAT swap/cmpxchg are valid same-wave translations, but remain
-; non-commutative cross-wave hazards under the existing Class-3 obstruction
-; policy.
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
