@@ -2111,6 +2111,56 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Hr.Handled = true;
     return Hr;
   }
+  // VOP3 true16 16-bit two-source bitwise AND/OR/XOR with op_sel half select
+  // on src0/src1/dst (unselected dst half preserved, RDNA3+ true16 ISA). No
+  // clamp/neg semantics apply to integer bitwise ops.
+  if (Sop == CanonicalOp::V_AND_B16 || Sop == CanonicalOp::V_OR_B16 ||
+      Sop == CanonicalOp::V_XOR_B16) {
+    const char *OpName = Sop == CanonicalOp::V_AND_B16   ? "v_and_b16"
+                         : Sop == CanonicalOp::V_OR_B16  ? "v_or_b16"
+                                                         : "v_xor_b16";
+    std::optional<True16OpSel> Sel = readTrue16OpSel(Di, Op, 2, Hr, OpName);
+    if (!Sel)
+      return Hr;
+    Value *LHS = extractU16Half(Ctx, Op.src(0), Sel->Src0Hi);
+    Value *RHS = extractU16Half(Ctx, Op.src(1), Sel->Src1Hi);
+    Value *Result =
+        Sop == CanonicalOp::V_AND_B16  ? Ctx.B.CreateAnd(LHS, RHS, "and_b16")
+        : Sop == CanonicalOp::V_OR_B16 ? Ctx.B.CreateOr(LHS, RHS, "or_b16")
+                                       : Ctx.B.CreateXor(LHS, RHS, "xor_b16");
+    writeSelectedI16Bits(Ctx, Op.dst(), Result, Sel->DstHi,
+                         "logic_b16_merge_lo", "logic_b16_merge_hi");
+    Hr.Handled = true;
+    return Hr;
+  }
+  // VOP3 true16 16-bit bitwise NOT (single source). op_sel handling mirrors
+  // V_MOV_B16 (half carried by src0 OP_SEL_0 / DST_OP_SEL or the _LO16/_HI16
+  // subreg); readTrue16OpSel is two/three-source only, so read the bits here.
+  if (Sop == CanonicalOp::V_NOT_B16) {
+    unsigned Src0Mods = Op.srcMod(0);
+    constexpr unsigned AllowedSrc0Mods =
+        SISrcMods::OP_SEL_0 | SISrcMods::DST_OP_SEL;
+    if ((Src0Mods & ~AllowedSrc0Mods) != 0) {
+      Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+          Di, "VOP3",
+          "v_not_b16 has unsupported src0 modifiers; only op_sel/dst_op_sel "
+          "are modeled");
+      return Hr;
+    }
+    const MCRegisterInfo &MRI = *Ctx.Mc.RegInfo;
+    bool DstHi = (Src0Mods & SISrcMods::DST_OP_SEL) != 0;
+    if (Di.isReg(0) && AMDGPU::isHi16Reg(Di.getReg(0), MRI))
+      DstHi = true;
+    unsigned Src0Idx = Di.SrcMap[0];
+    bool Src0Hi = (Src0Mods & SISrcMods::OP_SEL_0) != 0;
+    if (Di.isReg(Src0Idx) && AMDGPU::isHi16Reg(Di.getReg(Src0Idx), MRI))
+      Src0Hi = true;
+    Value *Half = extractU16Half(Ctx, Op.src(0), Src0Hi);
+    writeSelectedI16Bits(Ctx, Op.dst(), Ctx.B.CreateNot(Half, "not_b16"), DstHi,
+                         "not_b16_merge");
+    Hr.Handled = true;
+    return Hr;
+  }
   if (Sop == CanonicalOp::V_MAD_U16) {
     StringRef OpName = "v_mad_u16";
     Expected<bool> Clamp = readVOP3Clamp(Di, OpName);
