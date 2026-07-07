@@ -86,7 +86,6 @@ sop2_wave_mask_scc_kernel:
 	s_branch .L_scc_or
 .L_scc_and_nonzero:
 	v_mov_b32_e32 v1, 1
-	; Fall through to keep all SCC cases in one lit kernel.
 .L_scc_or:
 	v_cmp_lt_u32_e64 s2, v0, 16
 	v_cmp_ne_u32_e64 s3, v0, 31
