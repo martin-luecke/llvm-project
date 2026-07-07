@@ -566,7 +566,6 @@ PipelineResult runPipeline(llvm::MemoryBufferRef CodeObjectData,
   auto LinkStart = timingStart(Options.CollectTimings);
   if (llvm::Error Err = linkObjects({ObjPath}, HsacoPath)) {
     Result.FailDetail = llvm::toString(std::move(Err));
-    llvm::errs() << "transpiler: " << Result.FailDetail << "\n";
     return finish();
   }
   Result.Timings.linkSeconds +=
@@ -678,7 +677,6 @@ PipelineResult runPipelineAllKernels(llvm::MemoryBufferRef CodeObjectData,
   auto LinkStart = timingStart(Options.CollectTimings);
   if (llvm::Error Err = linkObjects(ObjPaths, HsacoPath)) {
     Result.FailDetail = llvm::toString(std::move(Err));
-    llvm::errs() << "transpiler: " << Result.FailDetail << "\n";
     return finish();
   }
   Result.Timings.linkSeconds +=

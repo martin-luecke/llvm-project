@@ -75,7 +75,8 @@ std::optional<DeviceLibRef> findDeviceLibrary(llvm::StringRef Name) {
 llvm::Error linkDeviceLibrary(llvm::Module &M, DeviceLibRef Lib,
                               DeviceLibLinkState &State) {
   llvm::MemoryBufferRef Buf(Lib.Contents, Lib.Name);
-  auto ModOrErr = llvm::parseBitcodeFile(Buf, M.getContext());
+  llvm::Expected<std::unique_ptr<llvm::Module>> ModOrErr =
+      llvm::parseBitcodeFile(Buf, M.getContext());
   if (!ModOrErr) {
     return ModOrErr.takeError();
   }
