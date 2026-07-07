@@ -25,6 +25,25 @@
 // RUN:   | %FileCheck --check-prefix=TGTISA %s
 // RUN: %llvm-objdump --syms %t.gfx942.co \
 // RUN:   | %FileCheck --check-prefix=TGTSYM %s
+// RUN: env HSA_HOTSWAP_TRANSLATE_KERNEL=vecadd hotswap-transpile \
+// RUN:                   %S/vecadd_gfx950.co \
+// RUN:                   amdgcn-amd-amdhsa--gfx950 \
+// RUN:                   amdgcn-amd-amdhsa--gfx942 \
+// RUN:                   --output=%t.single.gfx942.co \
+// RUN:   | %FileCheck --check-prefix=SINGLE %s
+// RUN: %llvm-objdump --syms %t.single.gfx942.co \
+// RUN:   | %FileCheck --check-prefix=SINGLE-SYM %s
+// RUN: env HSA_HOTSWAP_TRANSLATE_KERNEL=definitely_not_vecadd \
+// RUN:     hotswap-transpile %S/vecadd_gfx950.co \
+// RUN:                   amdgcn-amd-amdhsa--gfx950 \
+// RUN:                   amdgcn-amd-amdhsa--gfx942 \
+// RUN:   | %FileCheck --check-prefix=SINGLE-MISSING %s
+// RUN: env HSA_HOTSWAP_TRANSLATE_KERNEL=vecadd hotswap-transpile \
+// RUN:                   %S/vecadd_gfx950.co \
+// RUN:                   amdgcn-amd-amdhsa--gfx950 \
+// RUN:                   amdgcn-amd-amdhsa--gfx942 \
+// RUN:                   --legacy-options-size \
+// RUN:   | %FileCheck --check-prefix=LEGACY-OPTIONS %s
 // RUN: rm -rf %t.cache
 // RUN: env HSA_HOTSWAP_CACHE_DIR=%t.cache hotswap-transpile \
 // RUN:                   %S/vecadd_gfx950.co \
@@ -64,6 +83,14 @@
 // TGTISA:     Flags: {{.*}}gfx942
 // TGTISA-NOT: gfx950
 // TGTSYM: vecadd
+// SINGLE-DAG: RESULT: SUCCESS bytes={{[1-9][0-9]*}}
+// SINGLE-DAG: kernel_name=vecadd
+// SINGLE-SYM: vecadd
+// SINGLE-MISSING: RESULT: ERROR
+// SINGLE-MISSING-DAG: success=0
+// SINGLE-MISSING-DAG: kernel_name=definitely_not_vecadd
+// LEGACY-OPTIONS-DAG: RESULT: SUCCESS bytes={{[1-9][0-9]*}}
+// LEGACY-OPTIONS-DAG: kernel_name= lifted=
 // CACHEMISS-DAG: cache_hit=0
 // CACHEMISS-DAG: cache_lookup=miss
 // CACHEMISS-DAG: cache_write=success

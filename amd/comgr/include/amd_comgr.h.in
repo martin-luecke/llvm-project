@@ -2912,9 +2912,11 @@ typedef enum amd_comgr_hotswap_transpile_option_flags_s {
 /**
  * @brief Options for @c amd_comgr_hotswap_transpile_with_options.
  *
- * The caller must set @p size to @c sizeof(amd_comgr_hotswap_transpile_options_t).
- * Pointers are borrowed only for the duration of the call. A NULL or empty
- * @p cache_directory disables cache lookup and writes.
+ * The caller should set @p size to
+ * @c sizeof(amd_comgr_hotswap_transpile_options_t). Pointers are borrowed only
+ * for the duration of the call. A NULL or empty @p cache_directory disables
+ * cache lookup and writes. Callers built against older headers may pass a
+ * smaller @p size ending at @p flags; fields beyond @p size are ignored.
  */
 typedef struct amd_comgr_hotswap_transpile_options_s {
   size_t size;
@@ -2922,6 +2924,12 @@ typedef struct amd_comgr_hotswap_transpile_options_s {
   const char *cache_skip_kernels;
   const char *hotswap_rules_path;
   uint64_t flags;
+  /**
+   * Optional exact metadata kernel name for lazy per-kernel translation. When
+   * set, COMGR translates only this kernel and returns the selected name in
+   * @c AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_KERNEL_NAME.
+   */
+  const char *kernel_name;
 } amd_comgr_hotswap_transpile_options_t;
 
 /**
@@ -2985,6 +2993,7 @@ typedef enum amd_comgr_hotswap_transpile_result_string_s {
    * best-effort diagnostics rather than semantic ABI.
    */
   AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_TIMING_JSON = 0x9,
+  AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_KERNEL_NAME = 0xa,
 } amd_comgr_hotswap_transpile_result_string_t;
 
 /**

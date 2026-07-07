@@ -227,20 +227,24 @@ KeyData buildKeyData(const TranslationCacheRequest &request,
   data.Timings.loadedImageIdentitySeconds =
       timingElapsed(CollectTimings, loadedImageIdentityStart);
   data.deviceLibrariesIdentity = deviceLibrariesIdentity();
-  auto kernelNamesStart = timingStart(CollectTimings);
-  llvm::Expected<llvm::SmallVector<std::string>> NamesOrErr =
-      listKernelNames(request.SourceObject);
-  data.Timings.kernelNamesSeconds =
-      timingElapsed(CollectTimings, kernelNamesStart);
-  if (!NamesOrErr) {
-    data.error = "failed to list kernels for translation cache key: " +
-                 llvm::toString(NamesOrErr.takeError());
-    return data;
-  }
-  data.kernelNames.assign(NamesOrErr->begin(), NamesOrErr->end());
-  if (data.kernelNames.empty()) {
-    data.error = "source code object has no kernel metadata entries";
-    return data;
+  if (!request.KernelName.empty()) {
+    data.kernelNames.push_back(request.KernelName);
+  } else {
+    auto kernelNamesStart = timingStart(CollectTimings);
+    llvm::Expected<llvm::SmallVector<std::string>> NamesOrErr =
+        listKernelNames(request.SourceObject);
+    data.Timings.kernelNamesSeconds =
+        timingElapsed(CollectTimings, kernelNamesStart);
+    if (!NamesOrErr) {
+      data.error = "failed to list kernels for translation cache key: " +
+                   llvm::toString(NamesOrErr.takeError());
+      return data;
+    }
+    data.kernelNames.assign(NamesOrErr->begin(), NamesOrErr->end());
+    if (data.kernelNames.empty()) {
+      data.error = "source code object has no kernel metadata entries";
+      return data;
+    }
   }
 
   auto materialBuildStart = timingStart(CollectTimings);
@@ -264,6 +268,8 @@ KeyData buildKeyData(const TranslationCacheRequest &request,
   appendKeyField(material, "enable_wave_native", request.EnableWaveNative);
   appendKeyField(material, "assume_hip_global_offset_zero",
                  request.AssumeHipGlobalOffsetZero);
+  if (!request.KernelName.empty())
+    appendKeyField(material, "kernel_name", request.KernelName);
   appendKeyField(material, "hotswap_build_identity", data.buildIdentity);
   appendKeyField(material, "device_libraries_identity",
                  data.deviceLibrariesIdentity);
@@ -396,6 +402,28 @@ bool requireEqualString(const llvm::json::Object &obj, llvm::StringRef field,
   return true;
 }
 
+bool validateKernelNameField(const llvm::json::Object &obj,
+                             llvm::StringRef expected,
+                             std::string &Reason) {
+  const llvm::json::Value *rawValue = obj.get("kernel_name");
+  if (!rawValue) {
+    if (expected.empty())
+      return true;
+    Reason = "metadata field 'kernel_name' missing";
+    return false;
+  }
+  auto value = rawValue->getAsString();
+  if (!value) {
+    Reason = "metadata field 'kernel_name' is not a string";
+    return false;
+  }
+  if (*value != expected) {
+    Reason = "metadata field 'kernel_name' mismatch";
+    return false;
+  }
+  return true;
+}
+
 bool requireEqualInt(const llvm::json::Object &obj, llvm::StringRef field,
                      int64_t expected, std::string &Reason) {
   auto value = requireInt(obj, field, Reason);
@@ -453,7 +481,7 @@ llvm::json::Object metadataObject(const TranslationCacheRequest &request,
                                   const KeyData &keyData,
                                   const PipelineResult &Result,
                                   llvm::StringRef objectSha256) {
-  return llvm::json::Object{
+  llvm::json::Object Obj{
       {"schema_version", kCacheSchemaVersion},
       {"key", keyData.key},
       {"source_object_sha256", keyData.sourceSha256},
@@ -490,6 +518,9 @@ llvm::json::Object metadataObject(const TranslationCacheRequest &request,
        static_cast<int64_t>(Result.TargetPrivateSegmentFixedSize)},
       {"target_enable_private_segment", Result.TargetEnablePrivateSegment},
   };
+  if (!request.KernelName.empty())
+    Obj["kernel_name"] = request.KernelName;
+  return Obj;
 }
 
 bool validateMetadata(const TranslationCacheRequest &request,
@@ -525,6 +556,7 @@ bool validateMetadata(const TranslationCacheRequest &request,
                           keyData.buildIdentity, Reason) ||
       !requireEqualString(obj, "device_libraries_identity",
                           keyData.deviceLibrariesIdentity, Reason) ||
+      !validateKernelNameField(obj, request.KernelName, Reason) ||
       !requireEqualInt(obj, "kernel_count",
                        static_cast<int64_t>(keyData.kernelNames.size()),
                        Reason) ||

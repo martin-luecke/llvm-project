@@ -277,6 +277,49 @@ TEST(TranslationCache, FirstRunMissWriteSecondRunHit) {
   EXPECT_EQ(Second.Result.TotalCount, Result.TotalCount);
 }
 
+TEST(TranslationCache, KernelNameParticipatesInCacheKey) {
+  TempDir Temp("hotswap_cache_test");
+  ASSERT_TRUE(Temp.Valid);
+  ScopedEnv CacheDir("HSA_HOTSWAP_CACHE_DIR", Temp.Path.str().str());
+  ScopedEnv NoDisable("HSA_HOTSWAP_CACHE_DISABLE", "0");
+  ScopedEnv NoReadonly("HSA_HOTSWAP_CACHE_READONLY", "0");
+
+  std::string Rules = Temp.file("rules.json");
+  writeTextFile(Rules, "{\"version\":1,\"rules\":[]}\n");
+  auto Source = fakeAmdgpuElf();
+  auto WholeObject = makeRequest(bufRef(Source), Rules);
+
+  auto WholeWrite =
+      COMGR::hotswap::writeTranslationCache(WholeObject, makeSuccessfulResult());
+  ASSERT_EQ(WholeWrite.Status,
+            COMGR::hotswap::TranslationCacheStatus::WriteSuccess)
+      << WholeWrite.Reason;
+
+  auto PerKernel = WholeObject;
+  PerKernel.KernelName = "cache_probe_kernel";
+  auto PerKernelLookup = COMGR::hotswap::lookupTranslationCache(PerKernel);
+  EXPECT_EQ(PerKernelLookup.Status,
+            COMGR::hotswap::TranslationCacheStatus::Miss);
+  EXPECT_NE(PerKernelLookup.key, WholeWrite.key);
+
+  auto PerKernelWrite = COMGR::hotswap::writeTranslationCache(
+      PerKernel, makeSuccessfulResult({0x7f, 'E', 'L', 'F', 4, 5, 6}));
+  ASSERT_EQ(PerKernelWrite.Status,
+            COMGR::hotswap::TranslationCacheStatus::WriteSuccess)
+      << PerKernelWrite.Reason;
+
+  auto OtherKernel = WholeObject;
+  OtherKernel.KernelName = "other_kernel";
+  auto OtherKernelLookup = COMGR::hotswap::lookupTranslationCache(OtherKernel);
+  EXPECT_EQ(OtherKernelLookup.Status,
+            COMGR::hotswap::TranslationCacheStatus::Miss);
+  EXPECT_NE(OtherKernelLookup.key, PerKernelWrite.key);
+
+  auto WholeObjectLookup = COMGR::hotswap::lookupTranslationCache(WholeObject);
+  EXPECT_EQ(WholeObjectLookup.Status,
+            COMGR::hotswap::TranslationCacheStatus::Hit);
+}
+
 TEST(TranslationCache, ChangedInputHashCausesMiss) {
   TempDir Temp("hotswap_cache_test");
   ASSERT_TRUE(Temp.Valid);
