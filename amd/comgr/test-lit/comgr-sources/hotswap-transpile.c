@@ -15,9 +15,9 @@
 // gated on the caller supplying a known-good HSACO; in that case it just
 // asserts that the call returns SUCCESS and emits a non-empty output.
 //
-// The hotswap pipeline shells out to llc and ld.lld at runtime, so end-to-end
-// success on a real HSACO requires an LLVM build tree on PATH. The lit test
-// only exercises the validation paths by default for that reason.
+// The hotswap pipeline uses in-process codegen/linking. The real-HSACO lit
+// path checks that the public API produces a target executable and structured
+// result metadata.
 //
 //===----------------------------------------------------------------------===//
 
@@ -25,6 +25,7 @@
 #include "common.h"
 
 #include <assert.h>
+#include <stddef.h>
 
 static const char *lookup_status_name(
     amd_comgr_hotswap_cache_lookup_status_t Status) {
@@ -122,6 +123,9 @@ static void print_result_if_present(amd_comgr_hotswap_transpile_result_t Result)
   printf(" target_gfx=");
   with_result_string(Result, AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_TARGET_GFX,
                      print_result_string, stdout);
+  printf(" kernel_name=");
+  with_result_string(Result, AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_KERNEL_NAME,
+                     print_result_string, stdout);
   printf(" lifted=%lld total=%lld cache_key=", (long long)Lifted,
          (long long)Total);
   with_result_string(Result, AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_CACHE_KEY,
@@ -146,13 +150,15 @@ int main(int argc, char *argv[]) {
 
   if (argc < 4)
     fail("usage: hotswap-transpile <elf_file> <source_isa> <target_isa> "
-         "[--zero-size|--wrong-kind] [--output=<path>]");
+         "[--zero-size|--wrong-kind|--legacy-options-size] "
+         "[--output=<path>]");
 
   const char *ElfFile = argv[1];
   const char *SourceISA = argv[2];
   const char *TargetISA = argv[3];
   int ZeroSize = 0;
   int WrongKind = 0;
+  int LegacyOptionsSize = 0;
   // Optional path to dump the transpiled bytes to. lit tests use this to
   // hand the output to llvm-readelf / llvm-objdump for ISA-level smoke
   // checks; the validation paths leave it NULL and only inspect stdout.
@@ -162,6 +168,8 @@ int main(int argc, char *argv[]) {
       ZeroSize = 1;
     else if (strcmp(argv[i], "--wrong-kind") == 0)
       WrongKind = 1;
+    else if (strcmp(argv[i], "--legacy-options-size") == 0)
+      LegacyOptionsSize = 1;
     else if (strncmp(argv[i], "--output=", 9) == 0)
       OutputPath = argv[i] + 9;
     else
@@ -189,6 +197,7 @@ int main(int argc, char *argv[]) {
   Options.cache_directory = getenv("HSA_HOTSWAP_CACHE_DIR");
   Options.cache_skip_kernels = getenv("HSA_HOTSWAP_CACHE_SKIP_KERNELS");
   Options.hotswap_rules_path = getenv("HSA_HOTSWAP_RULES");
+  Options.kernel_name = getenv("HSA_HOTSWAP_TRANSLATE_KERNEL");
   if (getenv("HSA_HOTSWAP_CACHE_DISABLE"))
     Options.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_CACHE_DISABLE;
   if (getenv("HSA_HOTSWAP_CACHE_READONLY"))
@@ -198,6 +207,9 @@ int main(int argc, char *argv[]) {
   if (getenv("HSA_HOTSWAP_ASSUME_HIP_GLOBAL_OFFSET_ZERO"))
     Options.flags |=
         AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_ASSUME_HIP_GLOBAL_OFFSET_ZERO;
+  if (LegacyOptionsSize)
+    Options.size = offsetof(amd_comgr_hotswap_transpile_options_t, flags) +
+                   sizeof(Options.flags);
 
   amd_comgr_status_t Status =
       amd_comgr_hotswap_transpile_with_options(
