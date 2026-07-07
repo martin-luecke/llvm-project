@@ -41,10 +41,8 @@ c2_permlane_swap_kernel:                ; @c2_permlane_swap_kernel
 	global_load_b32 v1, v0, s[0:1] scale_offset
 	global_load_b32 v2, v0, s[2:3] scale_offset
 	s_wait_loadcnt 0x0
-	;;#ASMSTART
 	v_permlane16_swap_b32 v1, v2
 	
-	;;#ASMEND
 	s_clause 0x1
 	global_store_b32 v0, v1, s[0:1] scale_offset
 	global_store_b32 v0, v2, s[2:3] scale_offset

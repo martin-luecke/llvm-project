@@ -17,9 +17,7 @@
 vopd_bitop2_bitop3_kernel:
 ; %bb.0:
 	v_mov_b32_e32 v3, 1
-	;;#ASMSTART
 	v_dual_lshlrev_b32 v1, 1, v0 :: v_dual_bitop2_b32 v2, v0, v3 bitop3:0x14
-	;;#ASMEND
 	global_store_dword v0, v2, s[0:1]
 	s_endpgm
 	.section	.rodata,"a",@progbits

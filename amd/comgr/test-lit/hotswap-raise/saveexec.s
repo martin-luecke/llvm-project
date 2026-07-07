@@ -24,14 +24,12 @@ saveexec_kernel:
 	v_mov_b32_e32 v1, 0xcc
 	s_waitcnt lgkmcnt(0)
 	v_lshl_add_u64 v[2:3], s[0:1], 0, v[2:3]
-	;;#ASMSTART
 	v_cmp_lt_u32_e64 s[4:5], v0, 16
 	s_and_saveexec_b64 s[6:7], s[4:5]
 	global_store_dword v[2:3], v1, off
 	s_waitcnt vmcnt(0)
 	s_mov_b64 exec, s[6:7]
 	
-	;;#ASMEND
 	s_endpgm
 	.section	.rodata,"a",@progbits
 	.p2align	6, 0x0

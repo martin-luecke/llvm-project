@@ -28,7 +28,6 @@ divergent_exec_kernel:
 	s_waitcnt lgkmcnt(0)
 	v_lshl_add_u64 v[4:5], s[0:1], 0, v[2:3]
 	v_mov_b32_e32 v2, 0xbb
-	;;#ASMSTART
 	global_store_dword v[4:5], v3, off
 	s_waitcnt vmcnt(0)
 	v_cmpx_lt_u32_e64 exec, v0, 16
@@ -42,7 +41,6 @@ divergent_exec_kernel:
 	s_waitcnt vmcnt(0)
 	s_mov_b64 exec, -1
 	
-	;;#ASMEND
 	s_endpgm
 	.section	.rodata,"a",@progbits
 	.p2align	6, 0x0

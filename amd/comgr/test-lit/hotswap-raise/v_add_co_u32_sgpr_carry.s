@@ -33,11 +33,9 @@ v_add_co_u32_sgpr_carry_kernel:         ; @v_add_co_u32_sgpr_carry_kernel
 	global_load_b32 v6, v2, s[6:7] scale_offset
 	global_load_b32 v7, v3, s[6:7] scale_offset
 	s_wait_loadcnt 0x0
-	;;#ASMSTART
 	v_add_co_u32 v2, s0, v4, v5
 	v_add_co_ci_u32_e64 v3, s0, v6, v7, s0
 	
-	;;#ASMEND
 	global_store_b64 v0, v[2:3], s[4:5] scale_offset
 	s_endpgm
 	.section	.rodata,"a",@progbits

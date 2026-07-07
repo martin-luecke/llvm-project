@@ -45,14 +45,10 @@ writelane_divergent_rewrite_kernel:     ; @writelane_divergent_rewrite_kernel
 	s_cmp_eq_u32 s5, 0
 	s_cselect_b32 s0, ttmp9, s1
 	v_mad_u32 v0, s0, s4, v0
-	;;#ASMSTART
 	s_bfe_u32 s0, ttmp8, 0x50019
 	
-	;;#ASMEND
-	;;#ASMSTART
 	v_writelane_b32 v1, s0, 0
 	
-	;;#ASMEND
 	v_xor_b32_e32 v1, s0, v1
 	global_store_b32 v0, v1, s[2:3] scale_offset
 	s_endpgm

@@ -27,11 +27,9 @@ ds_load_tr8_b64_kernel:
 	s_wait_dscnt 0x0
 	s_barrier_signal -1
 	s_barrier_wait -1
-	;;#ASMSTART
 	ds_load_tr_b64 v[2:3], v1
 	s_wait_dscnt 0
 	
-	;;#ASMEND
 	s_wait_kmcnt 0x0
 	global_store_b64 v0, v[2:3], s[0:1] scale_offset
 	s_endpgm

@@ -38,14 +38,12 @@ c4_lane_dep_cmpx_kernel:
 	s_delay_alu instid0(VALU_DEP_1)
 	v_lshl_add_u64 v[2:3], v[0:1], 2, s[0:1]
 	v_mov_b32_e32 v0, 1
-	;;#ASMSTART
 	v_mbcnt_lo_u32_b32 v10, -1, 0
 	v_cmpx_lt_u32_e64 v10, 16
 	global_store_b32 v[2:3], v0, off
 	s_wait_storecnt 0
 	s_mov_b32 exec_lo, -1
 	
-	;;#ASMEND
 	s_endpgm
 	.section	.rodata,"a",@progbits
 	.p2align	6, 0x0

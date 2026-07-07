@@ -37,10 +37,8 @@ flat_store_short_d16_hi_kernel:         ; @flat_store_short_d16_hi_kernel
 	v_dual_mov_b32 v2, s2 :: v_dual_ashrrev_i32 v1, 31, v0
 	s_delay_alu instid0(VALU_DEP_1)
 	v_lshl_add_u64 v[0:1], v[0:1], 1, s[0:1]
-	;;#ASMSTART
 	flat_store_short_d16_hi v[0:1], v2
 	
-	;;#ASMEND
 	s_endpgm
 	.section	.rodata,"a",@progbits
 	.p2align	6, 0x0

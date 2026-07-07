@@ -29,11 +29,9 @@ s_addk_i32_kernel:                      ; @s_addk_i32_kernel
 	s_add_co_i32 s3, s3, s2
 	s_cmp_eq_u32 s4, 0
 	s_cselect_b32 s2, ttmp9, s3
-	;;#ASMSTART
 	s_addk_co_i32 s2, 0x400
 	s_addk_co_i32 s2, 0xd000
 	
-	;;#ASMEND
 	v_add_nc_u32_e32 v1, s2, v0
 	s_wait_kmcnt 0x0
 	global_store_b32 v0, v1, s[0:1] scale_offset

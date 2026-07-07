@@ -22,7 +22,6 @@
 setpc_pattern_b_kernel:
 	s_setreg_imm32_b32 hwreg(HW_REG_WAVE_MODE, 25, 1), 1
 	s_load_b64 s[0:1], s[0:1], 0x0
-	;;#ASMSTART
 	s_get_pc_i64 s[8:9]
 	s_add_co_u32 s8, s8, 28
 	s_add_co_ci_u32 s9, s9, 0
@@ -35,7 +34,6 @@ setpc_pattern_b_kernel:
 	v_mov_b32 v1, 0xDEAD0001
 	s_set_pc_i64 s[8:9]
 	
-	;;#ASMEND
 	s_wait_kmcnt 0x0
 	global_store_b32 v0, v1, s[0:1] scale_offset
 	s_endpgm

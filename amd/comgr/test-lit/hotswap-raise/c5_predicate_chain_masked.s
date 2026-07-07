@@ -24,10 +24,8 @@ c5_predicate_chain_masked_kernel:       ; @c5_predicate_chain_masked_kernel
 	s_add_co_i32 s0, s0, 1
 	s_getreg_b32 s5, hwreg(HW_REG_IB_STS2, 6, 4)
 	s_mul_i32 s0, ttmp9, s0
-	;;#ASMSTART
 	v_and_b32_e64 v2, v0, 31
 	
-	;;#ASMEND
 	s_add_co_i32 s1, s1, s0
 	s_wait_kmcnt 0x0
 	s_and_b32 s4, s4, 0xffff
@@ -35,14 +33,10 @@ c5_predicate_chain_masked_kernel:       ; @c5_predicate_chain_masked_kernel
 	s_cselect_b32 s0, ttmp9, s1
 	s_delay_alu instid0(SALU_CYCLE_1)
 	v_mad_u32 v1, s0, s4, v0
-	;;#ASMSTART
 	v_cmp_lt_u32_e64 s0, v2, 16
 	
-	;;#ASMEND
-	;;#ASMSTART
 	v_cndmask_b32_e64 v0, -1, v0, s0
 	
-	;;#ASMEND
 	global_store_b32 v1, v0, s[2:3] scale_offset
 	s_endpgm
 	.section	.rodata,"a",@progbits

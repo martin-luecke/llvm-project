@@ -32,9 +32,7 @@ v_fma_mix_half_result_dpp16_kernel:
 	v_add_nc_u32_e64 v5, s0, 8
 	v_mov_b32_e32 v1, s0
 	v_mov_b32_e32 v2, s0
-	;;#ASMSTART
 	v_fma_mixlo_f16 v2, v1, v3, v5 op_sel:[0,1,0] op_sel_hi:[1,1,0] row_shr:1 row_mask:0xf bank_mask:0xf bound_ctrl:1
-	;;#ASMEND
 	global_store_b32 v0, v2, s[0:1] scale_offset
 	s_endpgm
 
@@ -48,9 +46,7 @@ v_fma_mix_half_result_dpp8_refuse_kernel:
 	v_add_nc_u32_e64 v5, s0, 8
 	v_mov_b32_e32 v1, s0
 	v_mov_b32_e32 v2, s0
-	;;#ASMSTART
 	v_fma_mixlo_f16 v2, v1, v3, v5 op_sel:[0,1,0] op_sel_hi:[1,1,0] dpp8:[0,1,2,3,4,5,6,7]
-	;;#ASMEND
 	global_store_b32 v0, v2, s[0:1] scale_offset
 	s_endpgm
 

@@ -28,9 +28,7 @@ v_fma_mixlo_bf16_kernel:
 	v_add_nc_u32_e64 v5, s0, 8
 	v_mov_b32_e32 v1, s0
 	v_mov_b32_e32 v2, s0
-	;;#ASMSTART
 	v_fma_mixlo_bf16 v2, v1, v3, v5 op_sel:[0,1,0] op_sel_hi:[1,1,0]
-	;;#ASMEND
 	global_store_b32 v0, v2, s[0:1] scale_offset
 	s_endpgm
 	.section	.rodata,"a",@progbits

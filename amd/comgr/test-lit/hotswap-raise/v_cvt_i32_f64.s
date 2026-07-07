@@ -25,15 +25,9 @@ v_cvt_i32_f64_kernel:
 	s_waitcnt lgkmcnt(0)
 	v_mov_b32_e32 v2, s2
 	v_mov_b32_e32 v3, s3
-	;;#ASMSTART
 	v_cvt_i32_f64 v0, v[2:3]
-	;;#ASMEND
-	;;#ASMSTART
 	v_cvt_i32_f64_e64 v6, -v[2:3]
-	;;#ASMEND
-	;;#ASMSTART
 	v_cvt_i32_f64_e64 v8, |v[2:3]|
-	;;#ASMEND
 	v_mov_b32_e32 v4, 0
 	global_store_dword v4, v0, s[0:1]
 	global_store_dword v4, v6, s[0:1]
@@ -47,9 +41,7 @@ v_cvt_u32_f64_kernel:
 	s_waitcnt lgkmcnt(0)
 	v_mov_b32_e32 v2, s2
 	v_mov_b32_e32 v3, s3
-	;;#ASMSTART
 	v_cvt_u32_f64 v0, v[2:3]
-	;;#ASMEND
 	v_mov_b32_e32 v4, 0
 	global_store_dword v4, v0, s[0:1]
 	s_endpgm

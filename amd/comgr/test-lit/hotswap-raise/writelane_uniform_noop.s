@@ -44,10 +44,8 @@ writelane_uniform_noop_kernel:          ; @writelane_uniform_noop_kernel
 	s_and_b32 s4, s4, 0xffff
 	s_cmp_eq_u32 s5, 0
 	s_cselect_b32 s0, ttmp9, s1
-	;;#ASMSTART
 	v_writelane_b32 v1, s0, 0
 	
-	;;#ASMEND
 	v_mad_u32 v0, s0, s4, v0
 	global_store_b32 v0, v1, s[2:3] scale_offset
 	s_endpgm

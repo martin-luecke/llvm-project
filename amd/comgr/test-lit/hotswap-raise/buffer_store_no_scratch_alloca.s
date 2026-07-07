@@ -27,11 +27,9 @@ buffer_store_dwordx4_kernel:
 	s_mov_b32 s3, 0x27000
 	s_mov_b32 s2, -1
 	s_wait_kmcnt 0x0
-	;;#ASMSTART
 	buffer_store_b128 v[2:5], v0, s[0:3], null offen scope:SCOPE_DEV
 	s_wait_storecnt 0
 	
-	;;#ASMEND
 	s_endpgm
 	.section	.rodata,"a",@progbits
 	.p2align	6, 0x0

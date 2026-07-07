@@ -38,10 +38,8 @@ v_pk_add_bf16_kernel:
 	s_wait_kmcnt 0x0
 	v_mov_b32_e32 v1, 0x3f803f80
 	v_mov_b32_e32 v2, 0x40004000
-	;;#ASMSTART
 	v_pk_add_bf16 v3, v1, v2
 	v_pk_add_bf16 v4, v1, v2 op_sel:[1,0] op_sel_hi:[0,1] neg_lo:[1,0] neg_hi:[0,1]
-	;;#ASMEND
 	global_store_b32 v0, v3, s[0:1] scale_offset
 	v_lshlrev_b32_e32 v6, 2, v0
 	global_store_b32 v6, v4, s[0:1] scale_offset

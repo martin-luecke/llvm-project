@@ -35,10 +35,8 @@ v_fma_mix_half_result_clamp_kernel:
 	v_mov_b32_e32 v1, s0
 	v_mov_b32_e32 v2, s0
 	v_mov_b32_e32 v4, s0
-	;;#ASMSTART
 	v_fma_mixlo_f16 v2, v1, v3, v5 op_sel:[0,1,0] op_sel_hi:[1,1,0] clamp
 	v_fma_mixhi_bf16 v4, v1, v3, v5 op_sel:[0,1,0] op_sel_hi:[1,1,0] clamp
-	;;#ASMEND
 	global_store_b32 v0, v2, s[0:1] scale_offset
 	global_store_b32 v0, v4, s[0:1] offset:4 scale_offset
 	s_endpgm

@@ -46,18 +46,12 @@ writelane_sgpr_forced_use_kernel:       ; @writelane_sgpr_forced_use_kernel
 	s_cmp_eq_u32 s5, 0
 	s_cselect_b32 s0, ttmp9, s1
 	v_mad_u32 v0, s0, s4, v0
-	;;#ASMSTART
 	s_bfe_u32 s0, ttmp8, 0x50019
 	
-	;;#ASMEND
-	;;#ASMSTART
 	v_writelane_b32 v1, s0, 0
 	
-	;;#ASMEND
-	;;#ASMSTART
 	v_readfirstlane_b32 s1, v1
 	
-	;;#ASMEND
 	s_xor_b32 s0, s1, s0
 	s_delay_alu instid0(SALU_CYCLE_1)
 	v_mov_b32_e32 v1, s0

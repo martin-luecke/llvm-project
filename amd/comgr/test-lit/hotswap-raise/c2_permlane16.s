@@ -33,11 +33,9 @@ c2_permlane16_kernel:
 	v_mad_u32 v2, s0, s4, v0
 	global_load_b32 v0, v2, s[2:3] scale_offset
 	s_wait_loadcnt 0x0
-	;;#ASMSTART
 	v_permlane16_b32  v0,  v0, 0x76543210, 0x76543210 op_sel:[1,0]
 	v_permlanex16_b32 v1, v0, 0x76543210, 0x76543210 op_sel:[1,0]
 	
-	;;#ASMEND
 	v_add_nc_u32_e32 v0, v0, v1
 	global_store_b32 v2, v0, s[2:3] scale_offset
 	s_endpgm

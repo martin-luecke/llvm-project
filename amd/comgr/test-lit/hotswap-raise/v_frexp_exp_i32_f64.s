@@ -19,9 +19,7 @@ v_frexp_exp_i32_f64_kernel:
 	v_mov_b32_e32 v2, s4
 	v_mov_b32_e32 v3, s5
 	v_mov_b32_e32 v1, 0
-	;;#ASMSTART
 	v_frexp_exp_i32_f64 v0, v[2:3]
-	;;#ASMEND
 	global_store_b32 v1, v0, s[2:3] scale_offset
 	s_endpgm
 	.section	.rodata,"a",@progbits

@@ -32,7 +32,6 @@ s_cmp_f_kernel:
 	s_cmp_eq_u32 s9, 0
 	s_cselect_b32 s0, ttmp9, s1
 	v_mad_u32 v0, s0, s8, v0
-	;;#ASMSTART
 	s_cmp_o_f32 s6, s2
 	s_cselect_b32 s0, 1, 0
 	s_cmp_u_f32 s6, s2
@@ -42,7 +41,6 @@ s_cmp_f_kernel:
 	s_cmp_u_f16 s6, s2
 	s_cselect_b32 s0, 1, 0
 
-	;;#ASMEND
 	v_mov_b32_e32 v1, s0
 	global_store_b32 v0, v1, s[4:5] scale_offset
 	s_endpgm

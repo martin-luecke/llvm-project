@@ -17,11 +17,9 @@
 	.type	unknown_exec_writer_kernel,@function
 unknown_exec_writer_kernel:
 	s_load_dwordx2 s[0:1], s[0:1], 0x0
-	;;#ASMSTART
 	s_flbit_i32_b32 exec_lo, 0x12345678
 	s_mov_b64 exec, -1
 	
-	;;#ASMEND
 	s_nop 0
 	v_lshlrev_b32_e32 v1, 2, v0
 	s_waitcnt lgkmcnt(0)

@@ -19,13 +19,11 @@ cross_wave_writer_kernel:               ; @cross_wave_writer_kernel
 	s_wait_kmcnt 0x0
 	s_delay_alu instid0(VALU_DEP_2)
 	v_add_nc_u64_e32 v[2:3], s[0:1], v[2:3]
-	;;#ASMSTART
 	v_cmpx_lt_u32_e64 v0, 64
 	global_store_b32 v[2:3], v1, off
 	s_wait_storecnt 0
 	s_mov_b32 exec_lo, -1
 	
-	;;#ASMEND
 	s_endpgm
 	.section	.rodata,"a",@progbits
 	.p2align	6, 0x0

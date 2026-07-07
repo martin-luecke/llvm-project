@@ -32,32 +32,24 @@ vopd_extra_subops_kernel:               ; @vopd_extra_subops_kernel
 	s_wait_kmcnt 0x0
 	global_load_b32 v8, v0, s[0:1] scale_offset
 	s_wait_loadcnt 0x0
-	;;#ASMSTART
 	v_dual_mov_b32 v2, 1.0 :: v_dual_ashrrev_i32 v3, 31, v8
-	;;#ASMEND
 	s_clause 0x1
 	global_load_b32 v5, v1, s[0:1] scale_offset
 	global_load_b32 v6, v4, s[0:1] scale_offset
 	s_wait_xcnt 0x1
 	v_dual_add_nc_u32 v1, 3, v0 :: v_dual_lshlrev_b32 v0, 5, v0
 	s_wait_loadcnt 0x0
-	;;#ASMSTART
 	v_dual_mov_b32 v5, v5 :: v_dual_max_i32 v4, 0, v6
-	;;#ASMEND
 	s_delay_alu instid0(VALU_DEP_1)
 	v_and_b32_e32 v1, 31, v1
-	;;#ASMSTART
 	v_dual_mov_b32 v6, ttmp9 :: v_dual_mov_b32 v7, s0
-	;;#ASMEND
 	global_load_b32 v1, v1, s[0:1] scale_offset
 	s_wait_loadcnt 0x0
-	;;#ASMSTART
 	v_cmp_eq_u32_e64 vcc_lo, v8, 0
 	v_dual_mov_b32 v8, vcc_lo :: v_dual_mov_b32 v9, v1
 	v_dual_add_nc_u32 v10, -8, v0 :: v_dual_mov_b32 v11, v0
 	v_dual_mov_b32 v10, v8 :: v_dual_fmamk_f32 v11, v8, 0xcf800000, v11
 	v_dual_mov_b32 v10, v8 :: v_dual_fmaak_f32 v11, v8, v11, 0x3f800000
-	;;#ASMEND
 	s_clause 0x1
 	global_store_b128 v0, v[2:5], s[2:3]
 	global_store_b128 v0, v[6:9], s[2:3] offset:16

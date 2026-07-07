@@ -43,10 +43,8 @@ v_add_nc_u16_kernel:
 	s_wait_loadcnt 0x0
 	v_lshrrev_b32_e32 v0, 16, v1
 	v_and_b32_e32 v1, 0xffff, v1
-	;;#ASMSTART
 	v_add_nc_u16 v0, v1, v0
 	
-	;;#ASMEND
 	global_store_b16 v2, v0, s[0:1] scale_offset
 	s_endpgm
 	.section	.rodata,"a",@progbits

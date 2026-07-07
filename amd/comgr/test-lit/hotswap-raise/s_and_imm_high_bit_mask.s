@@ -25,12 +25,10 @@ s_and_imm_high_bit_mask_kernel:         ; @s_and_imm_high_bit_mask_kernel
 	s_wait_kmcnt 0x0
 	global_load_b32 v1, v0, s[2:3] scale_offset
 	s_wait_loadcnt 0x0
-	;;#ASMSTART
 	v_cmp_ge_f32_e64 s2, |v1|, 0.5
 	s_and_b32 s2, s2, 0xFFFF0000
 	v_cndmask_b32_e64 v1, 0, 1, s2
 	
-	;;#ASMEND
 	global_store_b32 v0, v1, s[0:1] scale_offset
 	s_endpgm
 	.section	.rodata,"a",@progbits

@@ -24,11 +24,9 @@ buffer_atomic_cmpswap_b32_kernel:       ; @buffer_atomic_cmpswap_b32_kernel
 	v_mov_b64_e32 v[2:3], s[2:3]
 	s_mov_b32 s4, s0
 	s_mov_b32 s5, s1
-	;;#ASMSTART
 	buffer_atomic_cmpswap_b32 v[2:3], v1, s[4:7], null offen th:TH_ATOMIC_RETURN scope:SCOPE_DEV
 	s_wait_loadcnt 0
 	
-	;;#ASMEND
 	global_store_b32 v0, v2, s[0:1] scale_offset
 	s_endpgm
 	.section	.rodata,"a",@progbits

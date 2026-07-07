@@ -33,13 +33,11 @@ v_cmp_cndmask_sgpr_scalar_clobber_kernel: ; @v_cmp_cndmask_sgpr_scalar_clobber_k
 	s_wait_xcnt 0x0
 	s_mov_b32 s2, 0x5a5a5a5a
 	s_wait_loadcnt 0x0
-	;;#ASMSTART
 	v_cmp_ge_f32_e64 s4, |v1|, 0.5
 	s_mov_b32 s4, s2
 	v_mov_b32_e32 v5, s4
 	v_cndmask_b32_e64 v1, -1.0, 1.0, s4
 	
-	;;#ASMEND
 	global_store_b32 v0, v1, s[0:1] scale_offset
 	s_endpgm
 	.section	.rodata,"a",@progbits

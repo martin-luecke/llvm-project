@@ -26,7 +26,6 @@ smem_kernarg_const_delta_kernel:        ; @smem_kernarg_const_delta_kernel
 	s_load_b64 s[8:9], s[0:1], 0x10
 	s_wait_kmcnt 0x0
 	s_add_co_i32 s4, s5, s4
-	;;#ASMSTART
 	s_add_u32  s0, s0, 0x10
 	s_addc_u32 s1, s1, 0
 	s_load_b64 s[2:3], s[0:1], 0
@@ -34,7 +33,6 @@ smem_kernarg_const_delta_kernel:        ; @smem_kernarg_const_delta_kernel
 	s_mov_b32 s5, s2
 	s_mov_b32 s10, s3
 	
-	;;#ASMEND
 	s_add_co_i32 s0, s4, s6
 	v_dual_mov_b32 v0, s5 :: v_dual_lshlrev_b32 v3, 3, v0
 	s_add_co_i32 s0, s0, s7

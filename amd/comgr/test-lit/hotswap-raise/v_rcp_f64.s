@@ -31,10 +31,8 @@ v_rcp_f64_kernel:
 	v_mad_u32 v2, s0, s2, v0
 	global_load_b64 v[0:1], v2, s[6:7] scale_offset
 	s_wait_loadcnt 0x0
-	;;#ASMSTART
 	v_rcp_f64 v[0:1], v[0:1]
 	
-	;;#ASMEND
 	global_store_b64 v2, v[0:1], s[4:5] scale_offset
 	s_endpgm
 	.section	.rodata,"a",@progbits

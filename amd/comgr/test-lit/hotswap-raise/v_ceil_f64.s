@@ -20,15 +20,9 @@ v_ceil_f64_kernel:
 	s_waitcnt lgkmcnt(0)
 	v_mov_b32_e32 v2, s2
 	v_mov_b32_e32 v3, s3
-	;;#ASMSTART
 	v_ceil_f64 v[0:1], v[2:3]
-	;;#ASMEND
-	;;#ASMSTART
 	v_ceil_f64_e64 v[6:7], -v[2:3]
-	;;#ASMEND
-	;;#ASMSTART
 	v_ceil_f64_e64 v[8:9], |v[2:3]|
-	;;#ASMEND
 	v_mov_b32_e32 v4, 0
 	global_store_dwordx2 v4, v[0:1], s[0:1]
 	global_store_dwordx2 v4, v[6:7], s[0:1]

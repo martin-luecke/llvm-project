@@ -41,10 +41,8 @@ v_mad_nc_u64_u32_kernel:                ; @v_mad_nc_u64_u32_kernel
 	global_load_b32 v4, v2, s[8:9] scale_offset
 	global_load_b64 v[0:1], v2, s[10:11] scale_offset
 	s_wait_loadcnt 0x0
-	;;#ASMSTART
 	v_mad_nc_u64_u32 v[0:1], v3, v4, v[0:1]
 	
-	;;#ASMEND
 	global_store_b64 v2, v[0:1], s[4:5] scale_offset
 	s_endpgm
 	.section	.rodata,"a",@progbits

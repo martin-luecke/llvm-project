@@ -40,14 +40,10 @@ c1_wave_id_lift_scalarized_kernel:      ; @c1_wave_id_lift_scalarized_kernel
 	s_wait_xcnt 0x0
 	s_load_b32 s0, s[0:1], 0x2c
 	s_wait_xcnt 0x0
-	;;#ASMSTART
 	s_bfe_u32 s1, ttmp8, 0x50019
 	
-	;;#ASMEND
-	;;#ASMSTART
 	v_writelane_b32 v26, s1, 0
 	
-	;;#ASMEND
 	v_dual_mov_b32 v1, 0 :: v_dual_bitop2_b32 v26, s1, v26 bitop3:0x14
 	s_add_co_i32 s2, s2, 1
 	s_and_b32 s3, ttmp6, 15

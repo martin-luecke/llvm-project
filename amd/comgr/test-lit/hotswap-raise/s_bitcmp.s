@@ -49,27 +49,19 @@ s_bitcmp_kernel:
 	s_cmp_eq_u32 s12, 0
 	s_cselect_b32 s1, ttmp9, s1
 	s_mul_i32 s1, s1, s0
-	;;#ASMSTART
 	s_bitcmp0_b32 s6, s3
 	s_cselect_b32 s0, 1, 0
 	
-	;;#ASMEND
 	v_add_lshl_u32 v4, s1, v0, 2
-	;;#ASMSTART
 	s_bitcmp1_b32 s7, s3
 	s_cselect_b32 s1, 1, 0
 	
-	;;#ASMEND
-	;;#ASMSTART
 	s_bitcmp0_b64 s[8:9], s3
 	s_cselect_b32 s2, 1, 0
 	
-	;;#ASMEND
-	;;#ASMSTART
 	s_bitcmp1_b64 s[10:11], s3
 	s_cselect_b32 s3, 1, 0
 	
-	;;#ASMEND
 	v_dual_mov_b32 v1, s1 :: v_dual_mov_b32 v2, s2
 	v_dual_mov_b32 v0, s0 :: v_dual_ashrrev_i32 v5, 31, v4
 	v_mov_b32_e32 v3, s3

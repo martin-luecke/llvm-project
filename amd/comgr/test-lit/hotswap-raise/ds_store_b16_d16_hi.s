@@ -20,14 +20,10 @@ ds_store_b16_d16_hi_kernel:
 	v_cmp_eq_u32_e32 vcc_lo, 0, v0
 	s_wait_kmcnt 0x0
 	v_dual_mov_b32 v1, 0 :: v_dual_mov_b32 v2, s0
-	;;#ASMSTART
 	v_mov_b32 v0, v1
 	
-	;;#ASMEND
-	;;#ASMSTART
 	ds_store_b16_d16_hi v0, v2
 	
-	;;#ASMEND
 	s_and_saveexec_b32 s0, vcc_lo
 	s_endpgm
 	.section	.rodata,"a",@progbits

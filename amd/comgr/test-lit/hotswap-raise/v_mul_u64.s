@@ -36,10 +36,8 @@ v_mul_u64_kernel:
 	global_load_b64 v[0:1], v4, s[6:7] scale_offset
 	global_load_b64 v[2:3], v4, s[2:3] scale_offset
 	s_wait_loadcnt 0x0
-	;;#ASMSTART
 	v_mul_u64 v[0:1], v[0:1], v[2:3]
 	
-	;;#ASMEND
 	global_store_b64 v4, v[0:1], s[4:5] scale_offset
 	s_endpgm
 	.section	.rodata,"a",@progbits

@@ -22,9 +22,7 @@ s_cvt_f16_f32_kernel:
 	s_load_b32 s4, s[0:1], 0x8
 	s_wait_kmcnt 0x0
 	v_mov_b32_e32 v0, 0
-	;;#ASMSTART
 	s_cvt_f16_f32 s0, s4
-	;;#ASMEND
 	v_mov_b32_e32 v1, s0
 	global_store_b32 v0, v1, s[2:3] scale_offset
 	s_endpgm

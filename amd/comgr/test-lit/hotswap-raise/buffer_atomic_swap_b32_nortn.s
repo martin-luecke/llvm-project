@@ -21,11 +21,9 @@ buffer_atomic_swap_b32_nortn_kernel:    ; @buffer_atomic_swap_b32_nortn_kernel
 	s_wait_kmcnt 0x0
 	v_mov_b32_e32 v1, s2
 	s_mov_b32 s2, -1
-	;;#ASMSTART
 	buffer_atomic_swap_b32 v1, v0, s[0:3], null offen scope:SCOPE_DEV
 	s_wait_loadcnt 0
 	
-	;;#ASMEND
 	s_endpgm
 	.section	.rodata,"a",@progbits
 	.p2align	6, 0x0

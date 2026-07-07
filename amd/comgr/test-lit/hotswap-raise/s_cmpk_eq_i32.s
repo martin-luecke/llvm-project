@@ -17,11 +17,9 @@
 s_cmpk_eq_i32_kernel:                   ; @s_cmpk_eq_i32_kernel
 ; %bb.0:
 	s_load_dwordx2 s[0:1], s[0:1], 0x0
-	;;#ASMSTART
 	s_cmpk_eq_i32 s2, 0x400
 	s_cselect_b32 s2, 1, 0
 	
-	;;#ASMEND
 	v_lshlrev_b32_e32 v0, 2, v0
 	v_mov_b32_e32 v1, s2
 	s_waitcnt lgkmcnt(0)

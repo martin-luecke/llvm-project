@@ -21,11 +21,9 @@ s_load_b96_kernarg_kernel:
 	s_load_b128 s[4:7], s[0:1], 0x0
 	s_load_b64 s[2:3], s[0:1], 0x10
 	s_wait_xcnt 0x0
-	;;#ASMSTART
 	s_load_b96 s[0:2], s[0:1], 4
 	s_wait_kmcnt 0
 	
-	;;#ASMEND
 	v_dual_mov_b32 v7, 0 :: v_dual_mov_b32 v4, s0
 	v_dual_mov_b32 v5, s1 :: v_dual_mov_b32 v6, s8
 	s_wait_kmcnt 0x0

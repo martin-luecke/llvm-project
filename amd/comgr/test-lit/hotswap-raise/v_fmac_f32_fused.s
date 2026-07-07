@@ -19,9 +19,7 @@
 	.p2align	8
 	.type	v_fmac_f32_fused_kernel,@function
 v_fmac_f32_fused_kernel:
-	;;#ASMSTART
 	v_fmac_f32_e64 v3, v1, v2
-	;;#ASMEND
 	s_endpgm
 
 	.globl	v_fmac_f32_vopd_kernel
@@ -34,9 +32,7 @@ v_fmac_f32_vopd_kernel:
 	global_load_b32 v2, v0, s[0:1] offset:4
 	global_load_b32 v3, v0, s[0:1] offset:8
 	s_wait_loadcnt 0x0
-	;;#ASMSTART
 	v_dual_mov_b32 v4, v0 :: v_dual_fmac_f32 v3, v1, v2
-	;;#ASMEND
 	global_store_b32 v0, v3, s[2:3]
 	s_endpgm
 

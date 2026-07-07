@@ -20,11 +20,9 @@ v_cmp_class_f32_kernel:
 	s_wait_kmcnt 0x0
 	global_load_b32 v1, v0, s[2:3] scale_offset
 	s_wait_loadcnt 0x0
-	;;#ASMSTART
 	v_cmp_class_f32_e64 s4, v1, 0x200
 	s_mov_b32 s2, s4
 	
-	;;#ASMEND
 	v_mov_b32_e32 v1, s2
 	global_store_b32 v0, v1, s[0:1] scale_offset
 	s_endpgm

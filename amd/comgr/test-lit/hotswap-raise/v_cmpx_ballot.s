@@ -24,13 +24,11 @@ v_cmpx_ballot_kernel:                   ; @v_cmpx_ballot_kernel
 ; %bb.0:
 	s_load_b64 s[0:1], s[0:1], 0x0
 	v_mov_b32_e32 v1, 0xcc
-	;;#ASMSTART
 	v_cmpx_lt_u32_e64 v0, 64
 	v_mov_b32 v1, 0xAA
 	s_mov_b32 exec_lo, -1
 	v_cmp_lt_u32_e64 s4, v0, 96
 	
-	;;#ASMEND
 	s_wait_kmcnt 0x0
 	global_store_b32 v0, v1, s[0:1] scale_offset
 	s_endpgm

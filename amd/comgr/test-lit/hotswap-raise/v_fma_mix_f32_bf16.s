@@ -37,26 +37,16 @@ v_fma_mix_f32_bf16_kernel:              ; @v_fma_mix_f32_bf16_kernel
 	v_add_nc_u32_e64 v3, s0, 4
 	v_add_nc_u32_e64 v5, s0, 8
 	v_dual_mov_b32 v1, s0 :: v_dual_mov_b32 v6, s0
-	;;#ASMSTART
 	v_fma_mix_f32_bf16 v2, v1, v3, v5 op_sel:[0,1,0] op_sel_hi:[1,1,0]
 
-	;;#ASMEND
-	;;#ASMSTART
 	v_fma_mix_f32 v3, v6, v3, v5 op_sel:[0,1,0] op_sel_hi:[1,1,0]
 
-	;;#ASMEND
-	;;#ASMSTART
 	v_fma_mix_f32_bf16 v4, -v6, 1.0, v5 op_sel:[0,0,0] op_sel_hi:[1,1,0]
 
-	;;#ASMEND
-	;;#ASMSTART
 	v_fma_mix_f32_bf16 v5, v6, 1.0, v5 op_sel:[0,1,0] op_sel_hi:[1,1,0]
 
-	;;#ASMEND
-	;;#ASMSTART
 	v_fma_mix_f32_bf16 v6, v6, 1.0, |v5| op_sel:[0,0,0] op_sel_hi:[1,1,0]
 
-	;;#ASMEND
 	global_store_b128 v0, v[2:5], s[0:1] scale_offset
 	s_endpgm
 	.section	.rodata,"a",@progbits

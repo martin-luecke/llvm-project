@@ -40,14 +40,10 @@ c5_predicate_chain_phantom_lane_kernel: ; @c5_predicate_chain_phantom_lane_kerne
 	s_cmp_eq_u32 s5, 0
 	s_cselect_b32 s0, ttmp9, s1
 	v_mad_u32 v1, s0, s4, v0
-	;;#ASMSTART
 	v_cmp_lt_u32_e64 s0, v0, 16
 	
-	;;#ASMEND
-	;;#ASMSTART
 	v_cndmask_b32_e64 v0, -1, v0, s0
 	
-	;;#ASMEND
 	global_store_b32 v1, v0, s[2:3] scale_offset
 	s_endpgm
 	.section	.rodata,"a",@progbits

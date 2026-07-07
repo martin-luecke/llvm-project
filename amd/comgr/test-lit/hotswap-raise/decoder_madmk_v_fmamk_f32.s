@@ -34,10 +34,8 @@ decoder_madmk_v_fmamk_f32_kernel:
 	global_load_b32 v0, v2, s[6:7] scale_offset
 	global_load_b32 v1, v2, s[2:3] scale_offset
 	s_wait_loadcnt 0x0
-	;;#ASMSTART
 	v_fmamk_f32 v0, v0, 0x40490fdb, v1
 	
-	;;#ASMEND
 	global_store_b32 v2, v0, s[4:5] scale_offset
 	s_endpgm
 	.section	.rodata,"a",@progbits

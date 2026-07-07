@@ -17,11 +17,9 @@ s_load_u16_kernel:
 	s_setreg_imm32_b32 hwreg(HW_REG_WAVE_MODE, 25, 1), 1
 	s_load_b128 s[0:3], s[0:1], 0x0
 	s_wait_kmcnt 0x0
-	;;#ASMSTART
 	s_load_u16 s2, s[2:3], 0x0
 	s_wait_kmcnt 0
 	
-	;;#ASMEND
 	v_mov_b32_e32 v1, s2
 	global_store_b32 v0, v1, s[0:1] scale_offset
 	s_endpgm

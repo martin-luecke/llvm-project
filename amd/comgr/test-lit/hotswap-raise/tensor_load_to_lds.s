@@ -32,12 +32,10 @@
 tensor_load_to_lds_kernel:
 	s_setreg_imm32_b32 hwreg(HW_REG_WAVE_MODE, 25, 1), 1
 	s_load_b64 s[0:1], s[0:1], 0x0
-	;;#ASMSTART
 	.long 0xd0710001
 	.long 0x7c000000
 	.long 0x7c7c0428
 	
-	;;#ASMEND
 	s_wait_kmcnt 0x0
 	global_store_b32 v0, v0, s[0:1] scale_offset
 	s_endpgm

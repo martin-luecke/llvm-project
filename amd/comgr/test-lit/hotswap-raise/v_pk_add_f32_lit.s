@@ -16,10 +16,8 @@ v_pk_add_f32_lit_kernel:
 	s_load_b64 s[0:1], s[0:1], 0x0
 	s_wait_kmcnt 0x0
 	v_mov_b64_e32 v[2:3], s[0:1]
-	;;#ASMSTART
 	v_pk_add_f32 v[2:3], v[2:3], 1.0
 	
-	;;#ASMEND
 	global_store_b64 v0, v[2:3], s[0:1] scale_offset
 	s_endpgm
 	.section	.rodata,"a",@progbits

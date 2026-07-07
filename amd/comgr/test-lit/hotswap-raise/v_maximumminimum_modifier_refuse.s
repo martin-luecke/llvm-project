@@ -31,9 +31,7 @@ v_maximumminimum_f32_clamp_kernel:
 	v_mov_b32_e32 v0, s0
 	v_mov_b32_e32 v1, s1
 	v_mov_b32_e32 v2, s2
-	;;#ASMSTART
 	v_maximumminimum_f32 v0, v0, v1, v2 clamp
-	;;#ASMEND
 	s_endpgm
 
 	.globl	v_maximumminimum_f32_omod_kernel
@@ -46,9 +44,7 @@ v_maximumminimum_f32_omod_kernel:
 	v_mov_b32_e32 v0, s0
 	v_mov_b32_e32 v1, s1
 	v_mov_b32_e32 v2, s2
-	;;#ASMSTART
 	v_maximumminimum_f32 v0, v0, v1, v2 mul:2
-	;;#ASMEND
 	s_endpgm
 
 	.globl	v_maximum_f32_clamp_kernel
@@ -60,9 +56,7 @@ v_maximum_f32_clamp_kernel:
 	s_wait_kmcnt 0x0
 	v_mov_b32_e32 v0, s0
 	v_mov_b32_e32 v1, s1
-	;;#ASMSTART
 	v_maximum_f32 v0, v0, v1 clamp
-	;;#ASMEND
 	s_endpgm
 
 	.globl	v_maximum_f32_omod_kernel
@@ -74,9 +68,7 @@ v_maximum_f32_omod_kernel:
 	s_wait_kmcnt 0x0
 	v_mov_b32_e32 v0, s0
 	v_mov_b32_e32 v1, s1
-	;;#ASMSTART
 	v_maximum_f32 v0, v0, v1 mul:2
-	;;#ASMEND
 	s_endpgm
 
 	.globl	v_maximum3_f32_clamp_kernel
@@ -89,9 +81,7 @@ v_maximum3_f32_clamp_kernel:
 	v_mov_b32_e32 v0, s0
 	v_mov_b32_e32 v1, s1
 	v_mov_b32_e32 v2, s2
-	;;#ASMSTART
 	v_maximum3_f32 v0, v0, v1, v2 clamp
-	;;#ASMEND
 	s_endpgm
 
 	.globl	v_maximum3_f32_omod_kernel
@@ -104,9 +94,7 @@ v_maximum3_f32_omod_kernel:
 	v_mov_b32_e32 v0, s0
 	v_mov_b32_e32 v1, s1
 	v_mov_b32_e32 v2, s2
-	;;#ASMSTART
 	v_maximum3_f32 v0, v0, v1, v2 mul:2
-	;;#ASMEND
 	s_endpgm
 
 	.globl	v_maximumminimum_f16_clamp_kernel
@@ -119,9 +107,7 @@ v_maximumminimum_f16_clamp_kernel:
 	v_mov_b32_e32 v0, s0
 	v_mov_b32_e32 v1, s1
 	v_mov_b32_e32 v2, s2
-	;;#ASMSTART
 	v_maximumminimum_f16 v0, v0, v1, v2 clamp
-	;;#ASMEND
 	s_endpgm
 
 	.globl	v_maximumminimum_f16_omod_kernel
@@ -134,9 +120,7 @@ v_maximumminimum_f16_omod_kernel:
 	v_mov_b32_e32 v0, s0
 	v_mov_b32_e32 v1, s1
 	v_mov_b32_e32 v2, s2
-	;;#ASMSTART
 	v_maximumminimum_f16 v0, v0, v1, v2 mul:2
-	;;#ASMEND
 	s_endpgm
 
 	.section	.rodata,"a",@progbits

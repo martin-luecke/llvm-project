@@ -20,9 +20,7 @@ v_permlane32_swap_b32_kernel:           ; @v_permlane32_swap_b32_kernel
 	s_load_dwordx4 s[0:3], s[0:1], 0x0
 	v_add_u32_e32 v1, 0x3e8, v0
 	v_mov_b32_e32 v2, v0
-	;;#ASMSTART
 	v_permlane32_swap_b32 v2, v1
-	;;#ASMEND
 	v_lshlrev_b32_e32 v0, 2, v0
 	s_waitcnt lgkmcnt(0)
 	global_store_dword v0, v2, s[0:1]

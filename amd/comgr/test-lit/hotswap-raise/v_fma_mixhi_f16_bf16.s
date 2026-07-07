@@ -39,10 +39,8 @@ v_fma_mixhi_f16_bf16_kernel:
 	v_mov_b32_e32 v1, s0
 	v_mov_b32_e32 v2, s0
 	v_mov_b32_e32 v4, s0
-	;;#ASMSTART
 	v_fma_mixhi_f16 v2, v1, v3, v5 op_sel:[0,1,0] op_sel_hi:[1,1,0]
 	v_fma_mixhi_bf16 v4, v1, v3, v5 op_sel:[0,1,0] op_sel_hi:[1,1,0]
-	;;#ASMEND
 	global_store_b64 v0, v[2:3], s[0:1] scale_offset
 	global_store_b32 v0, v4, s[0:1] offset:8 scale_offset
 	s_endpgm

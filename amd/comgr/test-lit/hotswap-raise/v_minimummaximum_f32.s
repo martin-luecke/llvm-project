@@ -28,9 +28,7 @@ v_minimummaximum_f32_kernel:
 	v_mov_b32_e32 v1, s1
 	v_mov_b32_e32 v2, s2
 	v_mov_b32_e32 v3, 0
-	;;#ASMSTART
 	v_minimummaximum_f32 v0, v0, v1, v2
-	;;#ASMEND
 	global_store_b32 v3, v0, s[0:1]
 	s_endpgm
 	.section	.rodata,"a",@progbits

@@ -44,10 +44,8 @@ c2_dpp_quad_perm_kernel:                ; @c2_dpp_quad_perm_kernel
 	v_mad_u32 v0, s0, s4, v0
 	global_load_b32 v1, v0, s[2:3] scale_offset
 	s_wait_loadcnt 0x0
-	;;#ASMSTART
 	v_mov_b32_dpp v1, v1 quad_perm:[1,0,3,2] row_mask:0xf bank_mask:0xf bound_ctrl:1
 	
-	;;#ASMEND
 	global_store_b32 v0, v1, s[2:3] scale_offset
 	s_endpgm
 	.section	.rodata,"a",@progbits

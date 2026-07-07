@@ -25,18 +25,14 @@ ds_load_b96_kernel:
 	v_or_b32_e32 v3, 0xbb000000, v0
 	v_or_b32_e32 v4, 0xcc000000, v0
 	v_lshlrev_b32_e32 v0, 2, v1
-	;;#ASMSTART
 	ds_store_b96 v0, v[2:4]
 	s_wait_dscnt 0
 	
-	;;#ASMEND
 	s_barrier_signal -1
 	s_barrier_wait -1
-	;;#ASMSTART
 	ds_load_b96 v[2:4], v0
 	s_wait_dscnt 0
 	
-	;;#ASMEND
 	s_wait_kmcnt 0x0
 	global_store_b96 v0, v[2:4], s[0:1]
 	s_endpgm

@@ -40,7 +40,6 @@
 divergent_vgpr_kernel:
 	s_load_dwordx2 s[0:1], s[0:1], 0x0
 	v_mov_b32_e32 v1, 0xcc
-	;;#ASMSTART
 	v_cmpx_lt_u32_e64 exec, v0, 16
 	v_mov_b32 v1, 0xAA
 	s_mov_b64 exec, -1
@@ -50,7 +49,6 @@ divergent_vgpr_kernel:
 	v_mov_b32 v1, 0xBB
 	s_mov_b64 exec, -1
 	
-	;;#ASMEND
 	s_nop 0
 	v_lshlrev_b32_e32 v0, 2, v0
 	s_waitcnt lgkmcnt(0)

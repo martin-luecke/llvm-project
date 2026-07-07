@@ -31,10 +31,8 @@ s_sub_nc_u64_kernel:
 	s_cmp_eq_u32 s9, 0
 	s_cselect_b32 s0, ttmp9, s1
 	v_mad_u32 v2, s0, s8, v0
-	;;#ASMSTART
 	s_sub_nc_u64 s[0:1], s[6:7], s[2:3]
 	
-	;;#ASMEND
 	v_mov_b64_e32 v[0:1], s[0:1]
 	global_store_b64 v2, v[0:1], s[4:5] scale_offset
 	s_endpgm

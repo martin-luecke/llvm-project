@@ -28,7 +28,6 @@ s_lshr_b64_imm_kernel:
 	s_cmp_eq_u32 s3, 0
 	s_cselect_b32 s0, ttmp9, s1
 	v_mad_u32 v2, s0, s2, v0
-	;;#ASMSTART
 ; CHECK-NOT: lshr64 = lshr i32
 ; CHECK-NOT: urem
 ; CHECK: %lshr64 = lshr i64 %{{[^,]+}}, 16
@@ -39,7 +38,6 @@ s_lshr_b64_imm_kernel:
 	s_lshr_b64 s[0:1], s[6:7], 65
 ; CHECK: lshr i64 %{{[^,]+}}, 63
 	s_lshr_b64 s[0:1], s[6:7], 127
-	;;#ASMEND
 	v_mov_b64_e32 v[0:1], s[0:1]
 	global_store_b64 v2, v[0:1], s[4:5] scale_offset
 	s_endpgm

@@ -28,16 +28,12 @@ buffer_load_d16_u8_kernel:
 	s_wait_kmcnt 0x0
 	s_mov_b32 s4, s2
 	s_mov_b32 s5, s3
-	;;#ASMSTART
 	buffer_load_d16_u8 v2, v1, s[4:7], null offen scope:SCOPE_DEV
 	s_wait_loadcnt 0
 	
-	;;#ASMEND
-	;;#ASMSTART
 	buffer_load_d16_hi_u8 v3, v1, s[4:7], null offen scope:SCOPE_DEV
 	s_wait_loadcnt 0
 	
-	;;#ASMEND
 	global_store_b64 v0, v[2:3], s[0:1] scale_offset
 	s_endpgm
 	.section	.rodata,"a",@progbits

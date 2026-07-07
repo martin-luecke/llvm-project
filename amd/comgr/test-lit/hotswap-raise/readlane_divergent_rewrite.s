@@ -44,10 +44,8 @@ readlane_divergent_rewrite_kernel:      ; @readlane_divergent_rewrite_kernel
 	s_cselect_b32 s3, ttmp9, s4
 	s_delay_alu instid0(SALU_CYCLE_1)
 	v_mad_u32 v1, s3, s2, v0
-	;;#ASMSTART
 	v_readlane_b32 s2, v1, 0
 	
-	;;#ASMEND
 	v_mov_b32_e32 v0, s2
 	global_store_b32 v1, v0, s[0:1] scale_offset
 	s_endpgm

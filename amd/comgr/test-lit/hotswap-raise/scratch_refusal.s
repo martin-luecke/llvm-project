@@ -20,11 +20,9 @@ scratch_refusal_kernel:
 	s_setreg_imm32_b32 hwreg(HW_REG_WAVE_MODE, 25, 1), 1
 	s_load_b64 s[0:1], s[0:1], 0x0
 	v_mul_u32_u24_e32 v1, 3, v0
-	;;#ASMSTART
 	scratch_store_b32 off, v1, off offset:0
 	scratch_load_b32  v1, off, off offset:0
 	
-	;;#ASMEND
 	s_wait_kmcnt 0x0
 	global_store_b32 v0, v1, s[0:1] scale_offset
 	s_endpgm

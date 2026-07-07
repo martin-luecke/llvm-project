@@ -16,9 +16,7 @@
 s_bfe_i64_kernel:
 	s_load_dwordx2 s[0:1], s[0:1], 0x0
 	s_waitcnt lgkmcnt(0)
-	;;#ASMSTART
 	s_bfe_i64 s[2:3], s[0:1], 0x80008
-	;;#ASMEND
 	v_mov_b32_e32 v0, s2
 	v_mov_b32_e32 v1, s3
 	v_mov_b32_e32 v2, 0

@@ -23,9 +23,7 @@ v_cvt_f64_f32_kernel:
 	s_wait_kmcnt 0x0
 	v_mov_b32_e32 v0, s4
 	v_mov_b32_e32 v1, 0
-	;;#ASMSTART
 	v_cvt_f64_f32 v[2:3], v0
-	;;#ASMEND
 	global_store_b64 v1, v[2:3], s[2:3] scale_offset
 	s_endpgm
 	.section	.rodata,"a",@progbits

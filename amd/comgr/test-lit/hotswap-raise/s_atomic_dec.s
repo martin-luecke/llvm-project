@@ -24,11 +24,9 @@ s_atomic_dec_kernel:                    ; @s_atomic_dec_kernel
 	s_load_dwordx2 s[2:3], s[0:1], 0x10
 	v_mov_b32_e32 v0, 0
 	s_waitcnt lgkmcnt(0)
-	;;#ASMSTART
 	s_atomic_dec s6, s[4:5], s7
 	s_waitcnt lgkmcnt(0)
 	
-	;;#ASMEND
 	s_cmp_eq_u32 s6, 1
 	s_cselect_b64 s[0:1], -1, 0
 	v_cndmask_b32_e64 v1, 0, 1, s[0:1]

@@ -32,11 +32,9 @@ s_bitset0_b32_kernel:
 	s_cmp_eq_u32 s3, 0
 	s_cselect_b32 s0, ttmp9, s1
 	v_mad_u32 v0, s0, s2, v0
-	;;#ASMSTART
 	s_mov_b32 s0, 0xDEADBEEF
 	s_bitset0_b32 s0, s6
 	
-	;;#ASMEND
 	v_mov_b32_e32 v1, s0
 	global_store_b32 v0, v1, s[4:5] scale_offset
 	s_endpgm

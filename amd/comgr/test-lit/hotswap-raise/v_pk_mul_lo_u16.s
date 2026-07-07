@@ -22,9 +22,7 @@ v_pk_mul_lo_u16_kernel:
 	s_waitcnt lgkmcnt(0)
 	v_mov_b32_e32 v1, 0x00030002
 	v_mov_b32_e32 v2, 0x00050007
-	;;#ASMSTART
 	v_pk_mul_lo_u16 v3, v1, v2
-	;;#ASMEND
 	global_store_dword v0, v3, s[0:1]
 	s_endpgm
 	.section	.rodata,"a",@progbits

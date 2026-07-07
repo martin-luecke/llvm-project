@@ -19,10 +19,8 @@
 ; SHORT-NOT: 0xDEAD0001
 add_pc_i64_short_kernel:
 	s_load_b64 s[0:1], s[0:1], 0x0
-	;;#ASMSTART
 	s_add_pc_i64 8
 	v_mov_b32 v1, 0xDEAD0001
-	;;#ASMEND
 	s_wait_kmcnt 0x0
 	v_mov_b32 v1, 0xCAFE0002
 	global_store_b32 v0, v1, s[0:1] scale_offset
@@ -37,12 +35,10 @@ add_pc_i64_short_kernel:
 ; LONG: bb_0x90:
 add_pc_i64_long_kernel:
 	s_load_b64 s[0:1], s[0:1], 0x0
-	;;#ASMSTART
 	s_add_pc_i64 0x80
 	.rept 32
 	s_nop 0
 	.endr
-	;;#ASMEND
 	s_wait_kmcnt 0x0
 	v_mov_b32 v1, 0xCAFE0002
 	global_store_b32 v0, v1, s[0:1] scale_offset

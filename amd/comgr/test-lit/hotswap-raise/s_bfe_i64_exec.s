@@ -23,12 +23,10 @@ s_bfe_i64_exec_kernel:
 	v_mov_b32_e32 v1, 0xaa
 	s_waitcnt lgkmcnt(0)
 	v_lshl_add_u64 v[4:5], s[0:1], 0, v[2:3]
-	;;#ASMSTART
 	s_bfe_i64 exec, s[0:1], 0x10000
 	global_store_dword v[4:5], v1, off
 	s_waitcnt vmcnt(0)
 	s_mov_b64 exec, -1
-	;;#ASMEND
 	s_endpgm
 	.section	.rodata,"a",@progbits
 	.p2align	6, 0x0

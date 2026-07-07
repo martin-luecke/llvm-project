@@ -41,9 +41,7 @@ v_cvt_scalef32_pk8_fp8_f32_kernel:
 	v_mov_b32_e32 v9, 0
 	v_mov_b32_e32 v10, 0
 	v_mov_b32_e32 v11, 0
-	;;#ASMSTART
 	v_cvt_scalef32_pk8_fp8_f32 v[0:1], v[2:9], v10
-	;;#ASMEND
 	global_store_b64 v11, v[0:1], s[0:1]
 	s_endpgm
 	.section	.rodata,"a",@progbits

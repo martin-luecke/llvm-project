@@ -31,11 +31,9 @@ c2_ds_swizzle_kernel:
 	v_mad_u32 v1, s0, s4, v0
 	global_load_b32 v0, v1, s[2:3] scale_offset
 	s_wait_loadcnt 0x0
-	;;#ASMSTART
 	ds_swizzle_b32 v0, v0 offset:0x041f
 	s_wait_dscnt 0
 	
-	;;#ASMEND
 	global_store_b32 v1, v0, s[2:3] scale_offset
 	s_endpgm
 	.section	.rodata,"a",@progbits

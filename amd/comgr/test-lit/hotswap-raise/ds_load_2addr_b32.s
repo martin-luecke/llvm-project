@@ -25,16 +25,12 @@ ds_load_2addr_b32_kernel:
 	s_setreg_imm32_b32 hwreg(HW_REG_WAVE_MODE, 25, 1), 1
 	s_load_b64 s[0:1], s[0:1], 0x0
 	v_mov_b32_e32 v1, 0
-	;;#ASMSTART
 	ds_load_2addr_b32 v[2:3], v1 offset0:4 offset1:6
 	s_wait_dscnt 0
 	
-	;;#ASMEND
-	;;#ASMSTART
 	ds_load_2addr_stride64_b32 v[4:5], v1 offset0:2 offset1:3
 	s_wait_dscnt 0
 	
-	;;#ASMEND
 	s_wait_kmcnt 0x0
 	global_store_b128 v0, v[2:5], s[0:1] scale_offset
 	s_endpgm

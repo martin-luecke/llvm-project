@@ -32,12 +32,10 @@ v_dual_cndmask_b32_sgpr_cond_kernel:    ; @v_dual_cndmask_b32_sgpr_cond_kernel
 	global_load_b32 v6, v2, s[6:7] scale_offset
 	global_load_b32 v7, v3, s[6:7] scale_offset
 	s_wait_loadcnt 0x0
-	;;#ASMSTART
 	v_cmp_lt_u32_e64 s0, 8, v0
 	v_cmp_lt_u32_e32 vcc_lo, 3, v0
 	v_dual_cndmask_b32 v2, v4, v5, s0 :: v_dual_cndmask_b32 v3, v6, v7, vcc_lo
 	
-	;;#ASMEND
 	global_store_b64 v0, v[2:3], s[4:5] scale_offset
 	s_endpgm
 	.section	.rodata,"a",@progbits

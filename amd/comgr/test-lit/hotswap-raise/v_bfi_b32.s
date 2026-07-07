@@ -39,9 +39,7 @@ v_bfi_b32_kernel:                       ; @v_bfi_b32_kernel
 	v_lshl_add_u64 v[0:1], v[0:1], 2, s[2:3]
 	global_load_b96 v[0:2], v[0:1], off
 	s_wait_loadcnt 0x0
-	;;#ASMSTART
 	v_bfi_b32 v0, v0, v1, v2
-	;;#ASMEND
 	global_store_b32 v3, v0, s[0:1] scale_offset
 	s_endpgm
 	.section	.rodata,"a",@progbits

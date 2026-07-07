@@ -24,7 +24,6 @@
 setpc_swap_dispatch_set_kernel:
 	s_setreg_imm32_b32 hwreg(HW_REG_WAVE_MODE, 25, 1), 1
 	s_load_b64 s[0:1], s[0:1], 0x0
-	;;#ASMSTART
 	s_cmp_eq_u32 s2, s3
 	s_cbranch_scc1 4
 	s_get_pc_i64 s[10:11]
@@ -41,7 +40,6 @@ setpc_swap_dispatch_set_kernel:
 	v_mov_b32 v1, 0xBEEF0001
 	s_endpgm
 	
-	;;#ASMEND
 	s_wait_kmcnt 0x0
 	global_store_b32 v0, v1, s[0:1] scale_offset
 	s_endpgm
