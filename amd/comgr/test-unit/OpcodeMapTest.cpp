@@ -183,8 +183,8 @@ TEST(OpcodeMap, Gfx1250VectorF32F64RealOpcodesMapToCanonicalOps) {
 TEST(OpcodeMap, Gfx1250F64TransBothEncodingsMapToCanonicalOps) {
   ensureAMDGPURegistered();
 
-  COMGR::hotswap::MCState State;
-  llvm::cantFail(COMGR::hotswap::initMCState(State, "gfx1250"));
+  COMGR::hotswap::MCState State =
+      llvm::cantFail(COMGR::hotswap::initMCState("gfx1250"));
 
   COMGR::hotswap::OpcodeMap Map;
   Map.build(*State.InstrInfo);
