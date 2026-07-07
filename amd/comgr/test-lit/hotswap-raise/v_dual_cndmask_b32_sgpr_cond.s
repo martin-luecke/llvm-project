@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=v_dual_cndmask_b32_sgpr_cond_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; v_dual_cndmask_b32 SGPR/VCC-cond select lift.
 ; CHECK-LABEL: define amdgpu_kernel void @v_dual_cndmask_b32_sgpr_cond_kernel(
 ; CHECK: [[SGPR_CMP:%[[:alnum:]_.]+]] = icmp ult i32 8,
 ; CHECK: [[VCC_CMP:%[[:alnum:]_.]+]] = icmp ult i32 3,

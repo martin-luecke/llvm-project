@@ -4,6 +4,7 @@
 ; RUN:     --emit-ir=phantom_lane_modrep_fallback_kernel 2>&1 \
 ; RUN:   | %FileCheck %s
 
+; phantom-lane regime (workgroup < target wave width) falls back to modulo-replication.
 ; CHECK: phantom-lane regime
 ; CHECK-SAME: max_flat_workgroup_size=32
 ; CHECK-SAME: target wavefront width=64

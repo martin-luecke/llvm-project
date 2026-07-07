@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=v_fma_f16_basic_kernel,v_fma_f16_opsel_kernel,v_fma_f16_dsthi_kernel,v_fma_f16_neg_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; v_fma_f16 op_sel/dsthi/neg-abs packed half FMA lift.
 ; CHECK-LABEL: define amdgpu_kernel void @v_fma_f16_basic_kernel(
 ; CHECK-DAG: trunc i32 {{.*}} to i16
 ; CHECK-DAG: bitcast i16 {{.*}} to half

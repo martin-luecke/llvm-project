@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=source_hidden_sub_const_same_bb 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; Constant subtraction from the entry kernarg pointer stays an Entry+Const fact, remapped to target implicitarg.ptr offset 80.
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
 	.text

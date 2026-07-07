@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=vopd_same_opcode_dual_issue_kernel \
 ; RUN:   | %FileCheck %s
 
+; identical-opcode v_dual pairs lift as two scalar ops, not a <2 x> vector.
 ; CHECK-LABEL: define amdgpu_kernel void @vopd_same_opcode_dual_issue_kernel(
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"

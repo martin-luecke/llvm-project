@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_cmp_class_f32_kernel 2>/dev/null | %FileCheck %s
 
+; v_cmp_class_f32 class.f32+ballot lift.
 ; CHECK-LABEL: define amdgpu_kernel void @v_cmp_class_f32_kernel(
 ; CHECK: %vclass{{[0-9]*}} = call i1 @llvm.amdgcn.class.f32(float %{{[^,]+}}, i32 512)
 ; CHECK: %vcmp_ballot = call i64 @llvm.amdgcn.ballot.i64(i1 %vclass{{[0-9]*}})

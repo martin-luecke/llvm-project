@@ -2,6 +2,7 @@
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:     --emit-ir=saveexec_vcc_hi_kernel 2>&1 | %FileCheck %s
 
+; s_and_saveexec_b32 via vcc_hi round-trips wave32 exec mask as i32.
 ; CHECK-LABEL: define amdgpu_kernel void @saveexec_vcc_hi_kernel(
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"

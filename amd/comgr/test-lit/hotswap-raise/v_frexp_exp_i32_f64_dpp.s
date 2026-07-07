@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=v_frexp_exp_i32_f64_dpp_kernel 2>&1 \
 ; RUN:   | %FileCheck %s
 
+; v_frexp_exp_i32_f64_dpp mixed source/dest width refusal.
 ; CHECK: kernel 'v_frexp_exp_i32_f64_dpp_kernel' failed to raise:
 ; CHECK-SAME: v_frexp_exp_i32_f64
 ; CHECK-SAME: VOP1

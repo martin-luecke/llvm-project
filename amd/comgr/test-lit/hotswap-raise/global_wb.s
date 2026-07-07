@@ -20,6 +20,7 @@
 ; RUN:   && %not %raise_cli %t.se.hsaco --target-isa=gfx942 --emit-ir=global_wb_kernel 2>&1 \
 ; RUN:   | %FileCheck %s --check-prefix=REFUSE-SE
 
+; global_wb scope lowering: SCOPE_DEV/SYS -> fence + buffer_wbl2; SCOPE_SE refused.
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
 	.text

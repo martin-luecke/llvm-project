@@ -9,6 +9,7 @@
 ; RUN:   2>&1 \
 ; RUN:   | %FileCheck %s --check-prefix=SAME
 
+; Refuse DPP16 fetch-inactive (fi:1) form unmodeled by llvm.amdgcn.update.dpp.
 ; CROSS-DAG: kernel 'c2_dpp_fi_refuse_kernel'
 ; CROSS-DAG: DPP16 FI fetch-inactive form
 ; CROSS-DAG: llvm.amdgcn.update.dpp has no FI operand

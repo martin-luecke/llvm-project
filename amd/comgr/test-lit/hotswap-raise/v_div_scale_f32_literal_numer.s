@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=v_div_scale_f32_literal_numer_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; v_div_scale f32 literal-numerator lift.
 ; CHECK-LABEL: define amdgpu_kernel void @v_div_scale_f32_literal_numer_kernel(
 ; CHECK: call { float, i1 } @llvm.amdgcn.div.scale.f32(float 1.000000e+00, float %{{[^,]+}}, i1 false)
 ; CHECK: call { float, i1 } @llvm.amdgcn.div.scale.f32(float 1.000000e+00, float %{{[^,]+}}, i1 true)

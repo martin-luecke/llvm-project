@@ -5,6 +5,7 @@
 ; RUN:     2>/dev/null \
 ; RUN:   | %FileCheck %s --check-prefixes=CHECK,CROSS
 
+; v_prng_b32 intrinsic keep (same-target) vs xorshift lowering (cross-target).
 ; CHECK-LABEL: define amdgpu_kernel void @v_prng_b32_kernel(
 ; SAME: %prng_b32{{[0-9]*}} = call i32 @llvm.amdgcn.prng.b32(i32 %{{[^)]+}})
 ; SAME-NOT: select i1

@@ -2,6 +2,7 @@
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:        --emit-ir=setpc_terminal_fallthrough_kernel 2>&1 | %FileCheck %s
 
+; s_set_pc_i64 backward resolvable target folded to br with no unreachable.
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
 	.text

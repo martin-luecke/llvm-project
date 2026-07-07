@@ -9,6 +9,7 @@
 ; RUN:     --emit-ir=readlane_divergent_rewrite_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s --check-prefix=UNCHANGED
 
+; divergent readlane->ds.bpermute rewrite gated by writelane-rewrite flag.
 ; REWRITE-LABEL: define amdgpu_kernel void @readlane_divergent_rewrite_kernel(
 ; REWRITE: %cwd_lane_id_lo = call i32 @llvm.amdgcn.mbcnt.lo
 ; REWRITE: %cwd_lane_id = call i32 @llvm.amdgcn.mbcnt.hi

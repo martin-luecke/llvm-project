@@ -2,6 +2,8 @@
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:     --emit-ir=vcc_hi_scratch_kernel 2>/dev/null | %FileCheck %s
 
+; vcc_hi holds a plain i32 scratch value (no alloca) while vcc_lo drives cndmask (wave32 VCC_HI-as-regular-register).
+
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.text
 	.globl	vcc_hi_scratch_kernel

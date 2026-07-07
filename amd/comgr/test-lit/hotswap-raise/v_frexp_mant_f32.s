@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_frexp_mant_f32_kernel 2>/dev/null | %FileCheck %s
 
+; v_frexp_mant_f32 lift.
 ; CHECK-LABEL: define amdgpu_kernel void @v_frexp_mant_f32_kernel(
 ; CHECK: call float @llvm.amdgcn.frexp.mant.f32(float %{{.+}})
 ; CHECK-NOT: call { float, i32 } @llvm.frexp

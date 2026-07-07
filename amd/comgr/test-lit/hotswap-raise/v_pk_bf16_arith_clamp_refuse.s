@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %not %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_pk_bf16_add_clamp_refuse_kernel,v_pk_bf16_mul_clamp_refuse_kernel,v_pk_bf16_fma_clamp_refuse_kernel 2>&1 | %FileCheck %s
 
+; v_pk_add/mul/fma_bf16 clamp-bit refusal.
 ; CHECK: v_pk_add_bf16 has a nonzero clamp bit
 ; CHECK-SAME: overflow-mode semantics are not modelled
 ; CHECK: v_pk_mul_bf16 has a nonzero clamp bit

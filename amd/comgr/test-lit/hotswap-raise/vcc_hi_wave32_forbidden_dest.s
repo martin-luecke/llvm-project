@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %not %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=divscale_f32_vcc_hi,divscale_f32_exec_hi,divscale_f64_vcc_hi,divscale_f64_exec_hi 2>&1 | %FileCheck %s
 
+; v_div_scale_f32/f64 flag destination in wave32 vcc_hi/exec_hi scratch is refused.
 ; CHECK: kernel 'divscale_f32_vcc_hi'
 ; CHECK-SAME: v_div_scale_f32 [VALU]
 ; CHECK-SAME: v_div_scale flag destination is wave32 vcc_hi/exec_hi scratch

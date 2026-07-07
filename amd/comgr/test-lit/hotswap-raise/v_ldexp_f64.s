@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_ldexp_f64_kernel 2>/dev/null | %FileCheck %s
 
+; v_ldexp_f64 lift with neg/abs input modifiers.
 ; CHECK-LABEL: define amdgpu_kernel void @v_ldexp_f64_kernel(
 ; CHECK: [[ABS:%[a-zA-Z0-9_.]+]] = {{.*}}call {{.*}}double @llvm.fabs.f64(double {{.*}})
 ; CHECK: [[NEG:%[a-zA-Z0-9_.]+]] = fneg {{.*}}double [[ABS]]

@@ -13,6 +13,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx950 --emit-ir=wmma_scale_f32_16x16x128_f8f6f4_kernel | %FileCheck %s --check-prefix=IR_GFX950
 
+; Scaled f8f6f4 WMMA lowering across gfx942/gfx950/gfx1250 with gfx90a refusal.
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
 	.text

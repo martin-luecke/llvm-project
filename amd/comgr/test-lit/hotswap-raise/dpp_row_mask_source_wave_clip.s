@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=dpp_row_mask_source_wave_clip_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; Lower v_mov_b32_dpp row_shr with row_mask via bpermute plus row/bank clip gating to the source wave.
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.text
 	.globl	dpp_row_mask_source_wave_clip_kernel

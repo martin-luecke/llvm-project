@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=buffer_store_dwordx4_kernel 2>/dev/null | %FileCheck %s
 
+; Raw-buffer store v4i32 lift with no scratch-alloca fallback.
 ; CHECK-LABEL: define amdgpu_kernel void @buffer_store_dwordx4_kernel(
 ; CHECK: call void @llvm.amdgcn.raw.buffer.store.v4i32(
 ; CHECK-NOT: alloca {{.*}}addrspace(5)

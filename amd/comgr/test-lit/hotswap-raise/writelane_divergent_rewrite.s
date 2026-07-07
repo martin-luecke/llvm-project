@@ -9,6 +9,7 @@
 ; RUN:     --emit-ir=writelane_divergent_rewrite_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s --check-prefix=UNCHANGED
 
+; writelane divergent select rewrite (mbcnt lane id); left as writelane when disabled.
 ; REWRITE-LABEL: define amdgpu_kernel void @writelane_divergent_rewrite_kernel(
 ; REWRITE: %cwd_lane_id_lo = call i32 @llvm.amdgcn.mbcnt.lo
 ; REWRITE: %cwd_lane_id = call i32 @llvm.amdgcn.mbcnt.hi

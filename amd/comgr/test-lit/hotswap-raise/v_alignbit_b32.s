@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_alignbit_b32_kernel 2>/dev/null | %FileCheck %s
 
+; v_alignbit_b32 funnel-shift (fshr) lift.
 ; CHECK-LABEL: define amdgpu_kernel void @v_alignbit_b32_kernel(
 ; CHECK: %valign_shamt{{[0-9]*}} = and i32 %{{[^,]+}}, 31
 ; CHECK: %valignbit{{[0-9]*}} = call i32 @llvm.fshr.i32(i32 %{{[^,]+}}, i32 %{{[^,]+}}, i32 %valign_shamt{{[0-9]*}})

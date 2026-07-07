@@ -4,6 +4,7 @@
 ; RUN:     --emit-ir=global_store_byte_d16_hi_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; global_store_d16_hi_b8: D16-hi i8 store lowering (lshr 16 / trunc).
 ; CHECK-LABEL: define amdgpu_kernel void @global_store_byte_d16_hi_kernel(
 ; CHECK-DAG: %d16hi_shift = lshr i32 %{{.+}}, 16
 ; CHECK-DAG: %d16hi_trunc = trunc i32 %d16hi_shift to i8

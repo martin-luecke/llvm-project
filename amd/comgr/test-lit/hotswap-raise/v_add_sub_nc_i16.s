@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_add_sub_nc_i16_kernel 2>/dev/null | %FileCheck %s
 
+; v_add_nc_i16/v_sub_nc_i16 (incl. saturating sadd/ssub) lift.
 ; CHECK-LABEL: define amdgpu_kernel void @v_add_sub_nc_i16_kernel(
 ; CHECK: %vadd_nc_i16{{[0-9]*}} = add i16 %{{[^,]+}}, %{{[^ ]+}}
 ; CHECK: %vadd_i16_merge_lo{{[0-9]*}} = or {{(disjoint )?}}i32 %{{[^,]+}}, %{{[^ ]+}}

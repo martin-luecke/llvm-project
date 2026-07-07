@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=user_sgpr_count_32_gfx125_kernel 2>&1 \
 ; RUN:   | %FileCheck %s
 
+; gfx1250->gfx942 user-SGPR/kernarg-preload layout remap.
 ; CHECK-NOT: user-sgpr-layout-mismatch
 ; CHECK-LABEL: define amdgpu_kernel void @user_sgpr_count_32_gfx125_kernel(
 ; CHECK-SAME: ptr addrspace(4) byref([120 x i8]) align 16 %kargs

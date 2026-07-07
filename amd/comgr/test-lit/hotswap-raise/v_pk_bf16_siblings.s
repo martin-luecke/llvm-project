@@ -2,6 +2,7 @@
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_pk_bf16_siblings_kernel 2>/dev/null | %FileCheck %s --check-prefix=IR
 ; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --write-hsaco=%t.out --kernel=v_pk_bf16_siblings_kernel 2>&1 | %FileCheck %s --check-prefix=PIPE
 
+; v_pk_mul/min/max bf16 sibling lowerings.
 ; IR-LABEL: define amdgpu_kernel void @v_pk_bf16_siblings_kernel(
 ; IR: [[MUL_SRC:%[^ ]+]] = bitcast i32 {{[^ ]+}} to <2 x bfloat>
 ; IR-DAG: [[MUL_LO:%[^ ]+]] = extractelement <2 x bfloat> [[MUL_SRC]], i64 0

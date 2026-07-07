@@ -6,6 +6,7 @@
 ; RUN:     --emit-ir=v_fma_mix_half_result_dpp8_refuse_kernel 2>&1 \
 ; RUN:   | %FileCheck %s --check-prefix=DPP8
 
+; v_fma_mixlo_f16 DPP16 (bpermute) lift and DPP8 refusal.
 ; DPP16-LABEL: define amdgpu_kernel void @v_fma_mix_half_result_dpp16_kernel(
 ; DPP16-NOT: call i32 @llvm.amdgcn.update.dpp.i32(
 ; DPP16-DAG: %cwd_dpp_selector = shl i32 %cwd_dpp_src_abs, 2

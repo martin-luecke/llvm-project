@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=cross_wave_writer_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; Cross-wave write via v_cmpx warns but still lifts the kernel.
 ; CHECK-LABEL: define amdgpu_kernel void @cross_wave_writer_kernel(
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"

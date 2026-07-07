@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=v_fma_mix_f32_bf16_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; v_fma_mix_f32_bf16 mixed-precision FMA lift.
 ; CHECK-LABEL: define amdgpu_kernel void @v_fma_mix_f32_bf16_kernel(
 ; CHECK-DAG: trunc i32 %{{.*}} to i16
 ; CHECK-DAG: bitcast i16 %{{.*}} to bfloat

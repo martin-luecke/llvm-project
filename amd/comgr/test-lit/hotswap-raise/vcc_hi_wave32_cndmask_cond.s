@@ -2,6 +2,8 @@
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:     --emit-ir=vcc_hi_cndmask_cond_kernel | %FileCheck %s
 
+; vcc_hi as a regular SGPR drives v_cndmask lane-select via wave32 mask translation.
+
         .amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
         .amdhsa_code_object_version 6
         .text

@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx1250 --emit-ir=unreachable_fallthrough_after_branch 2>/dev/null | %FileCheck %s
 
+; Unreachable fall-through after an unconditional branch dropped by CFG terminator handling in the raiser.
 ; CHECK-LABEL: define amdgpu_kernel void @unreachable_fallthrough_after_branch(
 ; CHECK: br label %bb_0x8
 ; CHECK: bb_0x8:

@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=v_add_min_i32_kernel,v_add_min_i32_clamp_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; v_add_min_i32 sadd.sat+smin lift.
 ; CHECK-LABEL: define amdgpu_kernel void @v_add_min_i32_kernel(
 ; CHECK: %v_add_min_i32_sum{{[0-9]*}} = call i32 @llvm.sadd.sat.i32(i32 %{{[^,]+}}, i32 -1)
 ; CHECK: %v_add_min_i32{{[0-9]*}} = call i32 @llvm.smin.i32(i32 %v_add_min_i32_sum{{[0-9]*}}, i32 %{{[^)]+}})

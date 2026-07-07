@@ -4,6 +4,7 @@
 ; RUN:   2>&1 \
 ; RUN:   | %FileCheck %s
 
+; Refuse unsupported DPP row_ror.
 ; CHECK-DAG: function 'c2_dpp_row_ror_refuse_kernel'
 ; CHECK-DAG: unsupported row_ror:1
 ; CHECK-DAG: wave-size-translation.md

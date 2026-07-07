@@ -2,6 +2,7 @@
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_minimummaximum_f32_kernel 2>/dev/null | %FileCheck %s --check-prefix=IR
 ; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --write-hsaco=%t.out --kernel=v_minimummaximum_f32_kernel 2>&1 | %FileCheck %s --check-prefix=PIPE
 
+; v_minimummaximum_f32 fused IEEE min-then-max lift.
 ; IR-LABEL: define amdgpu_kernel void @v_minimummaximum_f32_kernel(
 ; IR-NOT: @llvm.maxnum
 ; IR-NOT: @llvm.minnum

@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=s_bcnt1_i32_b64_kernel 2>/dev/null | %FileCheck %s
 
+; s_bcnt1_i32_b64 population-count lift to llvm.ctpop.i64.
 ; CHECK-LABEL: define amdgpu_kernel void @s_bcnt1_i32_b64_kernel(
 ; CHECK: call i64 @llvm.ctpop.i64(i64 {{.*}})
 ; CHECK: declare {{.*}}i64 @llvm.ctpop.i64(i64)

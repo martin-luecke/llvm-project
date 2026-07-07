@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=setreg_mode_vgpr_msb_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; MODE DST_VGPR_MSB imm setreg resolves the writelane dst to v256.
 ; CHECK-LABEL: define amdgpu_kernel void @setreg_mode_vgpr_msb_kernel(
 ; CHECK: [[V256:%Vgpr256[._0-9]*]] = phi i32 [ %cwd_writelane_rewritten
 ; CHECK: [[V1:%Vgpr1[._0-9]*]] = phi i32 [ [[V256]]

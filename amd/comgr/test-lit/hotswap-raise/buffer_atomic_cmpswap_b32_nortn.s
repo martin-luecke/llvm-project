@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=buffer_atomic_cmpswap_b32_nortn_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; Raw-buffer atomic cmpswap b32 (no-return) lift.
 ; CHECK-LABEL: define amdgpu_kernel void @buffer_atomic_cmpswap_b32_nortn_kernel(
 ; CHECK: call i32 @llvm.amdgcn.raw.buffer.atomic.cmpswap
 ; CHECK-NOT: cmpxchg

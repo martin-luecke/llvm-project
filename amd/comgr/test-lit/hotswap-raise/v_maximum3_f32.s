@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_maximum3_f32_kernel 2>/dev/null | %FileCheck %s
 
+; v_maximum3_f32 3-input IEEE maximum lift.
 ; CHECK-LABEL: define amdgpu_kernel void @v_maximum3_f32_kernel(
 ; CHECK: call float @llvm.maximum.f32(float %{{[^,]+}}, float %{{[^)]+}})
 ; CHECK: %fmaximum3{{[0-9]*}} = call float @llvm.maximum.f32(float %{{[^,]+}}, float %{{[^)]+}})

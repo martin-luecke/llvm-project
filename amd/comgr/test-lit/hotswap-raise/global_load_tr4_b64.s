@@ -2,6 +2,7 @@
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:     --emit-ir=global_load_tr4_b64_kernel | %FileCheck %s
 
+; global_load_tr4_b64 transpose lift: ds.bpermute lane-shuffle emulation on gfx942.
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
 	.text

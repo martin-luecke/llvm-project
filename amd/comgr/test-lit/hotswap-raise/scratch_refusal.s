@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %not raise_cli %t.hsaco --target-isa=gfx1250 --emit-ir=scratch_refusal_kernel 2>&1 | %FileCheck %s --check-prefix=STDERR
 
+; FLAT scratch refused when private_segment_fixed_size=0.
 ; STDERR: transpiler: FLAT scratch refused: scratch_store_b32
 ; STDERR-SAME: private_segment_fixed_size=0
 ; STDERR-SAME: enable_private_segment=0

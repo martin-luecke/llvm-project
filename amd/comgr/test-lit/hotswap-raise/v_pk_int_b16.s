@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx1250 --emit-ir=v_pk_int_b16_kernel 2>/dev/null | %FileCheck %s
 
+; v_pk_lshlrev/add/ashrrev packed int b16 lift.
 ; CHECK-LABEL: define amdgpu_kernel void @v_pk_int_b16_kernel(
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6

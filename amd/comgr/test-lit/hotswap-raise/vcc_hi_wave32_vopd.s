@@ -2,6 +2,7 @@
 ; RUN: %raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:     --emit-ir=vcc_hi_vopd_kernel,exec_hi_vopd_cond_kernel | %FileCheck %s
 
+; vcc_hi as scratch/condition inside v_dual (VOPD) cndmask+mov under wave32 mask translation.
 ; CHECK-LABEL: define amdgpu_kernel void @vcc_hi_vopd_kernel(
 ; CHECK: %vcmp = icmp slt
 ; CHECK: %vopd_cndmask = select i1 %vcmp

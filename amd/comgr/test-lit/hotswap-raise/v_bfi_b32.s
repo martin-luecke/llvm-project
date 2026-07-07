@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_bfi_b32_kernel 2>/dev/null | %FileCheck %s
 
+; v_bfi_b32 bitfield-insert (and/or/xor) lift.
 ; CHECK-LABEL: define amdgpu_kernel void @v_bfi_b32_kernel(
 ; CHECK-DAG: %{{.+}} = xor i32 %{{.+}}, -1
 ; CHECK-DAG: %vbfi{{[0-9]*}} = or i32

@@ -17,6 +17,7 @@
 ; RUN:     --emit-ir=v_cvt_scale_pk8_bf16_fp4_kernel_sel2 2>&1 \
 ; RUN:   | %FileCheck --check-prefix=REFUSE-CROSS %s
 
+; v_cvt_scale_pk8_bf16_fp4 native passthrough vs cross-target mxfp4 dequant + scale_sel!=0 refusal.
 ; CHECK-LABEL: define amdgpu_kernel void @v_cvt_scale_pk8_bf16_fp4_kernel(
 ; CHECK: %cvt_scale_pk8_bf16_fp4 = call <8 x bfloat> @llvm.amdgcn.cvt.scale.pk8.bf16.fp4(i32 %{{.*}}, i32 %{{.*}}, i32 0)
 ; CHECK: bitcast <8 x bfloat> %cvt_scale_pk8_bf16_fp4 to i128

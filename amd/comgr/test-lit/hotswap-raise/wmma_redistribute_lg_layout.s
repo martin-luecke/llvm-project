@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=wmma_redistribute_lg_layout_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; wmma_f32_16x16x32_bf16 lane-group (lg) layout redistribution via ds.bpermute for wave translation.
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.text
 	.globl	wmma_redistribute_lg_layout_kernel

@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=buffer_atomic_swap_b32_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; Raw-buffer atomic swap b32 (return) lift.
 ; CHECK-LABEL: define amdgpu_kernel void @buffer_atomic_swap_b32_kernel(
 ; CHECK: call i32 @llvm.amdgcn.raw.buffer.atomic.swap
 ; CHECK-NOT: atomicrmw xchg

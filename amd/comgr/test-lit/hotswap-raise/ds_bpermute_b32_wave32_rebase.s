@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=ds_bpermute_b32_wave32_rebase_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; Rebase wave32 ds_bpermute_b32 source-lane addressing onto the target wave64 layout.
 ; CHECK-LABEL: define amdgpu_kernel void @ds_bpermute_b32_wave32_rebase_kernel(
 ; CHECK: %bperm_local_addr{{[0-9]*}} = and i32 %{{[^,]+}}, 127
 ; CHECK: %bperm_srcwave_lane_base{{[0-9]*}} = and i32 %{{[^,]+}}, -32

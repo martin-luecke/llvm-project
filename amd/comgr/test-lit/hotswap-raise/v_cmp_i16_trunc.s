@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=v_cmp_i16_trunc_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; v_cmp_lt_i16 signed i16 compare (trunc operands)+ballot lift.
 ; CHECK-LABEL: define amdgpu_kernel void @v_cmp_i16_trunc_kernel(
 ; CHECK: [[SRC:%[A-Za-z0-9_.]+]] = trunc i32 {{.*}} to i16
 ; CHECK: [[CMP:%[^ ]+]] = icmp slt i16 -1, [[SRC]]

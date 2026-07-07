@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=setreg_b32_mode_vgpr_msb_kernel 2>&1 \
 ; RUN:   | %FileCheck %s --check-prefix=STDERR
 
+; s_setreg_b32 writing a dynamic value into MODE VGPR_MSB refused.
 ; STDERR: transpiler: s_setreg_b32 writes MODE with field overlapping VGPR_MSB bits
 ; STDERR-SAME: [12:19]
 ; STDERR: raise_cli: kernel 'setreg_b32_mode_vgpr_msb_kernel' failed to raise

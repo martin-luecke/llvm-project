@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=s_sub_f32_kernel 2>/dev/null | %FileCheck %s
 
+; s_sub_f32 scalar float subtract lifted to fsub.
 ; CHECK-LABEL: define amdgpu_kernel void @s_sub_f32_kernel(
 ; CHECK-DAG: bitcast i32 %{{[^ ]+}} to float
 ; CHECK-DAG: bitcast i32 %{{[^ ]+}} to float

@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=v_fmac_f32_fused_kernel,v_fmac_f32_vopd_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; v_fmac_f32 fused-FMA lift.
 ; CHECK-LABEL: define amdgpu_kernel void @v_fmac_f32_fused_kernel(
 ; CHECK: %fmac = call float @llvm.fma.f32(float %{{.+}}, float %{{.+}}, float %{{.+}})
 ; CHECK-NOT: call {{.*}}@llvm.fmuladd.f32

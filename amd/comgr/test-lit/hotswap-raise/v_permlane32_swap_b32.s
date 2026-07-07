@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=v_permlane32_swap_b32_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; v_permlane32_swap_b32 cross-lane swap lift.
 ; CHECK-LABEL: define amdgpu_kernel void @v_permlane32_swap_b32_kernel(
 ; CHECK: %pls32_partner{{[0-9]*}} = xor i32 %{{[^,]+}}, 32
 ; CHECK: %pls32_addr{{[0-9]*}} = shl i32 %pls32_partner{{[0-9]*}}, 2

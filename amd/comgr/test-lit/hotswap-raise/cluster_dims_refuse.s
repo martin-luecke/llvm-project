@@ -2,6 +2,7 @@
 ; RUN:   && %not %raise_cli %t.hsaco --target-isa=gfx950 --emit-ir=cluster_dims_refuse_kernel 2>&1 \
 ; RUN:   | %FileCheck %s --check-prefix=ERR
 
+; Refuse source.cluster_dims requiring real TTMP6 cluster workgroup state.
 ; ERR: raise_cli: kernel 'cluster_dims_refuse_kernel' failed to raise: unsupported-source-cluster-dims: <source-cluster-dims> [unsupported-source-cluster-dims]
 ; ERR-SAME: .cluster_dims=[2,1,1] requires real TTMP6 cluster workgroup state
 

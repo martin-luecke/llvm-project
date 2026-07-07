@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=buffer_atomic_add_u32_kernel 2>/dev/null | %FileCheck %s
 
+; Raw-buffer atomic add u32 lift.
 ; CHECK-LABEL: define amdgpu_kernel void @buffer_atomic_add_u32_kernel(
 ; CHECK: call i32 @llvm.amdgcn.raw.buffer.atomic.add
 ; CHECK-NOT: atomicrmw add

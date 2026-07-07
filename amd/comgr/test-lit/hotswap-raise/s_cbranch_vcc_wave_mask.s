@@ -24,7 +24,7 @@
 	.amdhsa_code_object_version 6
 	.text
 
-; s_cbranch_vccz branches on the whole VCC wave mask (ballot), not the per-lane bit.
+; s_cbranch_vcc/vccnz wave-mask ballot branch lowering (vs per-lane SCC path).
 ; VCC-LABEL: define amdgpu_kernel void @s_cbranch_vcc_wave_mask_kernel(
 	.globl	s_cbranch_vcc_wave_mask_kernel
 	.p2align	8

@@ -2,6 +2,8 @@
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:     --emit-ir=vcmp_scratch_dst_kernel | %FileCheck %s
 
+; v_cmp into vcc_hi/exec_hi dest lifts via ballot mask + cndmask lane-select.
+
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
 	.text

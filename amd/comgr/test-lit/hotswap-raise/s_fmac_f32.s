@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=s_fmac_f32_kernel 2>/dev/null | %FileCheck %s
 
+; s_fmac_f32 scalar fused multiply-add lifted to llvm.fma.f32.
 ; CHECK-LABEL: define amdgpu_kernel void @s_fmac_f32_kernel(
 ; CHECK: call ptr addrspace(4) @llvm.amdgcn.kernarg.segment.ptr()
 ; CHECK: [[SRC0:%[^ ]+]] = bitcast i32 %{{[^ ]+}} to float

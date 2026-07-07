@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=v_fma_mix_half_result_clamp_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; v_fma_mixlo_f16/mixhi_bf16 half-result clamp output-modifier lift.
 ; CHECK-LABEL: define amdgpu_kernel void @v_fma_mix_half_result_clamp_kernel(
 ; CHECK: %fma_mixlo_f16 = call float @llvm.fma.f32(
 ; CHECK: %fma_mixlo_f16_round = fptrunc float %fma_mixlo_f16 to half

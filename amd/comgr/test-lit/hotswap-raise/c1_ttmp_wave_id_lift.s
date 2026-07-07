@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=c1_ttmp_wave_id_lift_kernel 2>/dev/null | %FileCheck %s --check-prefix=IR
 
+; Lift ttmp-based wave id to workitem.id-derived lane arithmetic.
 ; IR-LABEL: define amdgpu_kernel void @c1_ttmp_wave_id_lift_kernel(
 ; IR: call i32 @llvm.amdgcn.workitem.id.x()
 ; IR: lshr i32 {{.*}}, 5

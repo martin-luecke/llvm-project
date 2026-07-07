@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=setpc_pattern_b_kernel 2>/dev/null | %FileCheck %s
 
+; s_set_pc_i64 resolvable call/return pair folded to direct branches.
 ; CHECK-LABEL: define amdgpu_kernel void @setpc_pattern_b_kernel(
 ; CHECK: bb_0x0:
 ; CHECK: br label %bb_0x38

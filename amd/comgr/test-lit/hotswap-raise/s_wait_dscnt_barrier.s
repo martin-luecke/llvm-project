@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=s_wait_dscnt_barrier_kernel 2>/dev/null | %FileCheck %s
 
+; s_wait_dscnt + s_barrier_signal/wait lowered to s.waitcnt + s.barrier.
 ; CHECK-LABEL: define amdgpu_kernel void @s_wait_dscnt_barrier_kernel(
 ; CHECK: store <4 x i32> %{{[^,]+}}, ptr addrspace(3) %{{[^,]+}}
 ; CHECK: call void @llvm.amdgcn.s.waitcnt(i32 0)

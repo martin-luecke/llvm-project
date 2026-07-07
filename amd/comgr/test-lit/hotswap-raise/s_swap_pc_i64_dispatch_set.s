@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=setpc_swap_dispatch_set_kernel 2>/dev/null | %FileCheck %s
 
+; s_swap_pc_i64 enumerated dispatch-set call lowered to icmp/branch chain.
 ; CHECK-LABEL: define amdgpu_kernel void @setpc_swap_dispatch_set_kernel(
 ; CHECK-DAG: 68, %bb_0x18
 ; CHECK-DAG: 76, %bb_0x28

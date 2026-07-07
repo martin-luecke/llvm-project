@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_xor3_b32_kernel 2>/dev/null | %FileCheck %s
 
+; v_xor3_b32 lowered as chained i32 xors (no amdgcn.perm/bitop3) 3-input xor.
 ; CHECK-LABEL: define amdgpu_kernel void @v_xor3_b32_kernel(
 ; CHECK: xor i32 %{{[^,]+}}, %{{[^ ]+}}
 ; CHECK: xor i32 %{{[^,]+}}, %{{[^ ]+}}

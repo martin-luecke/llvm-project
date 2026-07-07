@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx942 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %raise_cli %t.hsaco --emit-ir 2>/dev/null | %FileCheck %s
 
+; v_ceil_f64 (with neg/abs mods) ceil.f64 lift.
 ; CHECK-LABEL: define amdgpu_kernel void @v_ceil_f64_kernel(
 ; CHECK: %ceil = call double @llvm.ceil.f64(double %{{[^,]+}})
 ; CHECK: %neg = fneg double %{{[^,]+}}

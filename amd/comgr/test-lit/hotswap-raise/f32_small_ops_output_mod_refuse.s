@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %not %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_rcp_iflag_f32_clamp_refuse_kernel,v_rcp_f32_omod_refuse_kernel,v_exp_f32_clamp_refuse_kernel,v_log_f32_omod_refuse_kernel,v_ldexp_f32_clamp_refuse_kernel,v_sqrt_f32_omod_refuse_kernel,v_rsq_f32_clamp_refuse_kernel,v_floor_f32_omod_refuse_kernel,v_ceil_f32_clamp_refuse_kernel,v_trunc_f32_omod_refuse_kernel,v_rndne_f32_clamp_refuse_kernel,v_fract_f32_omod_refuse_kernel 2>&1 | %FileCheck %s
 
+; Refuse f32 unary ops carrying non-default clamp/omod output modifiers.
 ; CHECK-DAG: kernel 'v_rcp_iflag_f32_clamp_refuse_kernel'
 ; CHECK-DAG: V_RCP_IFLAG_F32 with non-default clamp/omod is not yet lifted
 ; CHECK-DAG: output modifier semantics must not be silently dropped

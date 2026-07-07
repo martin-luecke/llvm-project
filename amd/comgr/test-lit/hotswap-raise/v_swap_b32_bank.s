@@ -2,6 +2,8 @@
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:     --emit-ir=v_swap_b32_bank_kernel 2>/dev/null | %FileCheck %s
 
+; v_swap_b32 under s_set_vgpr_msb bank select lowered with gfx125x high-VGPR (VGPR MSB) addressing.
+
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.text
 	.globl	v_swap_b32_bank_kernel

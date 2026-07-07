@@ -6,6 +6,7 @@
 ; RUN:   --emit-ir=kernarg_rebased_sload_b128 \
 ; RUN:   | %FileCheck %s --check-prefix=PERMISSIVE
 
+; rebased s_load_b128: strict refuses (Unknown-provenance CFG path), permissive lifts to an ordinary global load.
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 5
 	.text

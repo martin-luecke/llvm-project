@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=vector_add 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; hidden_group_size seeded from dispatch.ptr, not implicitarg.ptr.
 ; CHECK-LABEL: define amdgpu_kernel void @vector_add(
 ; CHECK: call ptr addrspace(4) @llvm.amdgcn.dispatch.ptr()
 ; CHECK: getelementptr inbounds i8, ptr addrspace(4) %{{[^,]+}}, i32 4

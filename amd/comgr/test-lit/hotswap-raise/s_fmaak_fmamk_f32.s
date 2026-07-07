@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=s_fmaak_fmamk_f32_kernel 2>/dev/null | %FileCheck %s
 
+; s_fmaak_f32/s_fmamk_f32 scalar fused multiply-add lift to llvm.fma.f32.
 ; CHECK-LABEL: define amdgpu_kernel void @s_fmaak_fmamk_f32_kernel(
 ; CHECK: [[FMAAK:%[^ ]+]] = call float @llvm.fma.f32(float %{{[^,]+}}, float %{{[^,]+}}, float 1.000000e+00)
 ; CHECK: bitcast float [[FMAAK]] to i32

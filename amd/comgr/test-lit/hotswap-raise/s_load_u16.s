@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx1250 --emit-ir=s_load_u16_kernel 2>/dev/null | %FileCheck %s
 
+; s_load_u16 zero-extended 16-bit scalar load.
 ; CHECK-LABEL: define amdgpu_kernel void @s_load_u16_kernel(
 ; CHECK:      %smem_load_h = load i16, ptr addrspace(1) %{{[^ ,]+}}, align 2
 ; CHECK-NEXT: %smem_load_zext = zext i16 %smem_load_h to i32

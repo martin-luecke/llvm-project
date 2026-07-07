@@ -6,6 +6,7 @@
 ; RUN:   --emit-ir=flat_atomic_i64_noncomm_kernel \
 ; RUN:   | %FileCheck %s --check-prefix=SAME
 
+; Refuse non-commutative flat_atomic_swap/cmpswap_b64 on cross-wave target (cross-wave-replica-race); same-target lifts to xchg/cmpxchg.
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
 	.text

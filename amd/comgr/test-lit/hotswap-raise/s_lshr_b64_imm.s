@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=s_lshr_b64_imm_kernel 2>/dev/null | %FileCheck %s
 
+; s_lshr_b64 immediate shift amount masked mod 64.
 ; CHECK-LABEL: define amdgpu_kernel void @s_lshr_b64_imm_kernel(
 ; CHECK-SAME: ptr addrspace(4) byref([272 x i8]) align 16 %kargs
 

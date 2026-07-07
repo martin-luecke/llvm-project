@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=buffer_load_d16_u8_kernel 2>/dev/null | %FileCheck %s
 
+; Buffer d16 lo/hi u8 load lift with 16-bit lane packing.
 ; CHECK-LABEL: define amdgpu_kernel void @buffer_load_d16_u8_kernel(
 ; CHECK-DAG: call i8 @llvm.amdgcn.raw.ptr.buffer.load.i8
 ; CHECK-DAG: call i8 @llvm.amdgcn.raw.ptr.buffer.load.i8

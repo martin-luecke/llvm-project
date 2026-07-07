@@ -4,6 +4,7 @@
 ; RUN:     --emit-ir=writelane_threadloop_barrier_refuse_kernel 2>&1 \
 ; RUN:   | %FileCheck %s --check-prefix=IR
 
+; writelane rewrite past s.barrier refuses thread-loop projection.
 ; IR-NOT: ThreadLoopProjection
 ; IR-LABEL: define amdgpu_kernel void @writelane_threadloop_barrier_refuse_kernel(
 ; IR: call void @llvm.amdgcn.s.barrier()

@@ -4,6 +4,7 @@
 ; RUN:     --emit-ir=v_cmp_cndmask_sgpr_scalar_clobber_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; v_cmp+v_cndmask SGPR-mask lane-extract fallback on scalar clobber (--disable-wave-native).
 ; CHECK-LABEL: define amdgpu_kernel void @v_cmp_cndmask_sgpr_scalar_clobber_kernel(
 ; CHECK: fcmp oge float %{{[^,]+}}, 5.000000e-01
 ; CHECK: %vcmp_ballot = call i64 @llvm.amdgcn.ballot.i64(i1 %{{[^)]+}})

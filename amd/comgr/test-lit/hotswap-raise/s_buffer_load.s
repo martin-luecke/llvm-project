@@ -12,6 +12,7 @@
 ; RUN:   --emit-ir=s_buffer_load_unrepresentable_base_kernel \
 ; RUN:   | %FileCheck %s --check-prefix=TRAP
 
+; s_buffer_load_b64/96/128 lift to buffer.rsrc + raw.ptr.buffer.load, with scope-refusal/trap paths.
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
 	.text

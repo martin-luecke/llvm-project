@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=s_cmp_eq_u64_kernel 2>/dev/null | %FileCheck %s
 
+; s_cmp_eq_u64 64-bit scalar compare lift.
 ; CHECK-LABEL: define amdgpu_kernel void @s_cmp_eq_u64_kernel(
 ; CHECK-SAME: ptr addrspace(4) byref([280 x i8]) align 16 %kargs
 ; CHECK: %scmp64 = icmp eq i64 %{{[^,]+}}, %{{[^,]+}}

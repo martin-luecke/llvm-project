@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx942 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %not raise_cli %t.hsaco --emit-ir=unknown_exec_writer_kernel 2>&1 | %FileCheck %s --check-prefix=STDERR
 
+; Refuse unmodeled EXEC-writer (s_flbit_i32_b32 into exec_lo) via the pre-translation abort gate.
 ; STDERR: transpiler: pre-translation abort:
 ; STDERR-SAME: 's_flbit_i32_b32'
 ; STDERR-SAME: writes EXEC

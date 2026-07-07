@@ -4,6 +4,7 @@
 ; RUN:     --emit-ir=wmma_f16_chain_kernel 2>&1 \
 ; RUN:   | %FileCheck %s
 
+; Phantom-lane wave-size regime chains f16 WMMA (mfma.f32.16x16x16f16) via wwm/bpermute.
 ; CHECK: phantom-lane regime
 ; CHECK-SAME: max_flat_workgroup_size=32
 ; CHECK-SAME: target wavefront width=64

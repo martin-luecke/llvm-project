@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=ds_load_b96_kernel 2>/dev/null | %FileCheck %s
 
+; Lift ds_store_b96/ds_load_b96 to <3 x i32> addrspace(3) store/load.
 ; CHECK-LABEL: define amdgpu_kernel void @ds_load_b96_kernel(
 ; CHECK: store <3 x i32> %{{[^,]+}}, ptr addrspace(3) %{{[^,]+}}
 ; CHECK: %ds_ld{{[0-9]*}} = load <3 x i32>, ptr addrspace(3) %{{[^,]+}}

@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=vopd_vgpr_msb_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; VOPD component operands use s_set_vgpr_msb high-VGPR addressing (gfx125x VGPR MSB).
 ; CHECK-LABEL: define amdgpu_kernel void @vopd_vgpr_msb_kernel(
 ; CHECK-NOT: shl i32 undef, 4
 ; CHECK: shl i32 %{{[^,]+}}, 4

@@ -5,6 +5,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %not raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_s_exp_f32_omod_kernel 2>&1 | %FileCheck %s --check-prefix=REFUSE-OMOD
 
+; scalar v_s_exp_f32 lifts to @llvm.amdgcn.exp2.f32; non-default clamp/omod refused.
 ; CHECK-LABEL: define amdgpu_kernel void @v_s_exp_f32_kernel(
 ; CHECK: call ptr addrspace(4) @llvm.amdgcn.kernarg.segment.ptr()
 ; CHECK: [[SRC:%[^ ]+]] = bitcast i32 %{{[^ ]+}} to float

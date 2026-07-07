@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=global_load_ushort_saddr_kernel 2>/dev/null | %FileCheck %s
 
+; global_load_u16 SADDR scale_offset: x2 scaled offset, i16 zext lift.
 ; CHECK-LABEL: define amdgpu_kernel void @global_load_ushort_saddr_kernel(
 ; CHECK:      %voff_sext = sext i32 %{{[^ ,]+}} to i64
 ; CHECK-NEXT: %scaled_voff = mul i64 %voff_sext, 2

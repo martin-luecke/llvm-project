@@ -3,6 +3,7 @@
 ; RUN:   --emit-ir=kernarg_memory_load_nonentry_successor_strict_mode \
 ; RUN:   | %FileCheck %s --check-prefix=STRICT
 
+; NonEntry kernarg provenance proven across a successor block: load lifts to ordinary global memory under strict mode.
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 5
 	.text

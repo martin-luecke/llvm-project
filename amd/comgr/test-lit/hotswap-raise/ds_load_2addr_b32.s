@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=ds_load_2addr_b32_kernel 2>/dev/null | %FileCheck %s
 
+; Lift ds_load_2addr_b32 and stride64 variant to two scalar i32 loads at computed offsets.
 ; CHECK-LABEL: define amdgpu_kernel void @ds_load_2addr_b32_kernel(
 ; CHECK-DAG: add i64 %{{.*}}, 16
 ; CHECK-DAG: add i64 %{{.*}}, 24

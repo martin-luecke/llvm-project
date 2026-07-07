@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=phantom_lane_workitem_clamp_kernel \
 ; RUN:   | %FileCheck %s
 
+; phantom-lane workitem.id clamp of inactive lanes to 0.
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
 	.text

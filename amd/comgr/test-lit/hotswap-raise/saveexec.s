@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx942 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --emit-ir=saveexec_kernel 2>/dev/null | %FileCheck %s
 
+; s_and_saveexec_b64 EXEC save + AND read-modify-write lowered to per-lane mask.
 ; CHECK-LABEL: define amdgpu_kernel void @saveexec_kernel(
 ; CHECK:       %vcmp = icmp ult i32 %tid, 16
 ; CHECK:       %new_exec = and i64 -1, %{{[^ ]+}}

@@ -3,6 +3,7 @@
 ; RUN: rm -rf %t.dump && HSA_HOTSWAP_DUMP_DIR=%t.dump raise_cli %t.hsaco --target-isa=gfx942 --write-hsaco=%t.out --kernel=scratch_private_segment_kernel 2>&1 | %FileCheck %s --check-prefix=PIPE
 ; RUN: %FileCheck %s --check-prefix=ASM < %t.dump/hotswap-*/scratch_private_segment_kernel.s
 
+; FLAT scratch_store/load lifted to a private-segment alloca (addrspace 5).
 ; IR: source_private_segment = alloca i8, i32 64, align 4, addrspace(5)
 ; IR: scratch_ptr
 ; IR: store i32 {{.*}}, ptr addrspace(5) {{.*}}, align 4

@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %not %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_maximumminimum_f32_clamp_kernel,v_maximumminimum_f32_omod_kernel,v_maximum_f32_clamp_kernel,v_maximum_f32_omod_kernel,v_maximum3_f32_clamp_kernel,v_maximum3_f32_omod_kernel,v_maximumminimum_f16_clamp_kernel,v_maximumminimum_f16_omod_kernel 2>&1 | %FileCheck %s
 
+; clamp/omod output-modifier refusal for maximum/minimum family.
 ; CHECK: failed to raise
 ; CHECK-SAME: v_maximumminimum_f32 has clamp=1
 ; CHECK: failed to raise

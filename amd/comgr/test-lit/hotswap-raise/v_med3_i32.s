@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_med3_i32_kernel 2>/dev/null | %FileCheck %s
 
+; v_med3_i32 3-input signed median lift.
 ; CHECK-LABEL: define amdgpu_kernel void @v_med3_i32_kernel(
 ; CHECK: %vmed3_lo{{[0-9]*}} = call i32 @llvm.smin.i32(i32 %{{[^,]+}}, i32 %{{[^)]+}})
 ; CHECK: %vmed3_hi{{[0-9]*}} = call i32 @llvm.smax.i32(i32 %{{[^,]+}}, i32 %{{[^)]+}})

@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=s_cmov_b32_kernel 2>/dev/null | %FileCheck %s
 
+; s_cmov_b32 SCC-conditional move lift to select.
 ; CHECK-LABEL: define amdgpu_kernel void @s_cmov_b32_kernel(
 ; CHECK: select i1 %{{[^,]+}}, i32 %{{[^,]+}}, i32 {{(-559038737|3735928559)}}
 

@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=s_mul_hi_i32_kernel 2>/dev/null | %FileCheck %s
 
+; s_mul_hi_i32 signed high multiply via i64 widen/mul/lshr/trunc.
 ; CHECK-LABEL: define amdgpu_kernel void @s_mul_hi_i32_kernel(
 ; CHECK-DAG: sext i32 %{{[^ ]+}} to i64
 ; CHECK-DAG: sext i32 %{{[^ ]+}} to i64

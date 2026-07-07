@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx942 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco
 ; RUN: %raise_cli %t.hsaco --emit-ir=v_cvt_i32_f64_kernel,v_cvt_u32_f64_kernel | %FileCheck %s
 
+; v_cvt_i32/u32_f64 (with neg/abs) fptosi/fptoui.sat lift.
 ; CHECK-LABEL: define amdgpu_kernel void @v_cvt_i32_f64_kernel(
 ; CHECK: %cvt_i32_f64 = call i32 @llvm.fptosi.sat.i32.f64(double %{{[^,]+}})
 ; CHECK: %neg = fneg double %{{[^,]+}}

@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=buffer_store_short_sentinel_srd_kernel,buffer_store_short_finite_srd_kernel,buffer_store_short_allones_srd_kernel,buffer_store_short_ambiguous_srd_kernel 2>/dev/null | %FileCheck %s
 
+; Buffer store b16 SRD stride/num-records word reconstruction.
 ; CHECK-LABEL: define amdgpu_kernel void @buffer_store_short_sentinel_srd_kernel(
 ; CHECK: icmp eq i32 {{.*}}16777215
 ; CHECK: select i1 {{.*}}, i32 2147483646, i32 16777215

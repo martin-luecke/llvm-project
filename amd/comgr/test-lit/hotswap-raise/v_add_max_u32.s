@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_add_max_u32_kernel,v_add_max_u32_clamp_kernel 2>/dev/null | %FileCheck %s
 
+; v_add_max_u32 uadd.sat+umax lift.
 ; CHECK-LABEL: define amdgpu_kernel void @v_add_max_u32_kernel(
 ; CHECK: %v_add_max_u32_sum{{[0-9]*}} = call i32 @llvm.uadd.sat.i32(i32 %{{[^,]+}}, i32 -1)
 ; CHECK: %v_add_max_u32{{[0-9]*}} = call i32 @llvm.umax.i32(i32 %v_add_max_u32_sum{{[0-9]*}}, i32 %{{[^)]+}})

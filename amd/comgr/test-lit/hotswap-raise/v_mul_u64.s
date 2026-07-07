@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_mul_u64_kernel 2>/dev/null | %FileCheck %s
 
+; v_mul_u64 64-bit integer multiply lift.
 ; CHECK-LABEL: define amdgpu_kernel void @v_mul_u64_kernel(
 ; CHECK: mul {{.*}}i64 %{{[^,]+}}, %{{[^,]+}}
 ; CHECK-NOT: @llvm.umul.with.overflow

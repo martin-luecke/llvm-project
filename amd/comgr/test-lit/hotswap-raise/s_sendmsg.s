@@ -4,6 +4,7 @@
 ; RUN: %raise_cli %t.hsaco --target-isa=gfx1250 --emit-ir=sendmsg_dealloc_passthrough_kernel 2>/dev/null | %FileCheck %s --check-prefix=PASSTHROUGH
 ; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=sendmsg_dealloc_drop_kernel 2>/dev/null | %FileCheck %s --check-prefix=DROP
 
+; s_sendmsg interrupt lift, dealloc passthrough/drop, and gs_alloc_req [SOPP] refusal.
 ; INTERRUPT-LABEL: define amdgpu_kernel void @sendmsg_interrupt_kernel(
 ; INTERRUPT: call void @llvm.amdgcn.s.sendmsg(i32 1, i32 66)
 

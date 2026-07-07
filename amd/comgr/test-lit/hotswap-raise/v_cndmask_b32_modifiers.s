@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=v_cndmask_b32_modifiers_kernel \
 ; RUN:   | %FileCheck %s
 
+; v_cndmask_b32 with neg/abs src modifiers -> select lift.
 ; CHECK-LABEL: define amdgpu_kernel void @v_cndmask_b32_modifiers_kernel(
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"

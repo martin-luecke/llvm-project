@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=vopd_extra_subops_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; extra VOPD component subops (ashr/cndmask/smax/add/fmamk/fmaak) lift per-component.
 ; CHECK-LABEL: define amdgpu_kernel void @vopd_extra_subops_kernel(
 ; CHECK: %vopd_ashr = ashr i32 %{{[^,]+}}, 31
 ; CHECK: phi i32 [ 1065353216,

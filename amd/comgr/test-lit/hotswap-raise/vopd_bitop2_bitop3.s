@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=vopd_bitop2_bitop3_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; v_dual_bitop2 with a bitop3 truth-table lifts to the encoded boolean op (xor here).
 ; CHECK-LABEL: define amdgpu_kernel void @vopd_bitop2_bitop3_kernel(
 ; CHECK: xor i32 %tid, -1
 ; CHECK: xor i32 1, -1

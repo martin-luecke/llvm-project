@@ -3,6 +3,7 @@
 ; RUN:     --target-isa=gfx942 --emit-ir=narrow_implicitarg_unmatched 2>&1 \
 ; RUN:   | %FileCheck %s
 
+; strict-mode refusal when narrowed implicit-arg offsets hit the target hidden-arg block.
 ; CHECK: implicit-arg offsets are being applied to the target runtime hidden-arg block
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"

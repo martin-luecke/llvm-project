@@ -2,6 +2,7 @@
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:     --emit-ir=exec_hi_cndmask_kernel | %FileCheck %s
 
+; Wave32 exec_hi is a plain scalar (no ExecHiScratch alloca); v_cndmask reads it as the lane mask (wave-size translation).
         .amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
         .amdhsa_code_object_version 6
         .text

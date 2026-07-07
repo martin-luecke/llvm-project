@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_mov_b16_lo_lo_kernel,v_mov_b16_hi_lo_kernel,v_mov_b16_lo_hi_kernel,v_mov_b16_hi_hi_kernel 2>/dev/null | %FileCheck %s
 
+; v_mov_b16 true16 lo/hi half mov lift (handle-valu-f16-utils).
 ; CHECK-LABEL: define amdgpu_kernel void @v_mov_b16_lo_lo_kernel(
 ; CHECK: trunc i32 {{.*}} to i16
 ; CHECK: zext i16 {{.*}} to i32

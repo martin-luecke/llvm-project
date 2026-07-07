@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=smem_kernarg_const_delta_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; SMEM kernarg load at a constant delta tracked via Entry+Const provenance.
 ; CHECK-LABEL: define amdgpu_kernel void @smem_kernarg_const_delta_kernel(
 ; CHECK-SAME: ptr addrspace(4) byref([24 x i8]) align 16 %kargs
 ; CHECK: call ptr addrspace(4) @llvm.amdgcn.kernarg.segment.ptr()

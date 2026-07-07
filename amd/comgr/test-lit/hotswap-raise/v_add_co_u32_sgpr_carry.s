@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=v_add_co_u32_sgpr_carry_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; v_add_co_u32 SGPR carry-out via uadd.with.overflow+ballot.
 ; CHECK-LABEL: define amdgpu_kernel void @v_add_co_u32_sgpr_carry_kernel(
 ; CHECK: [[ADD1:%[[:alnum:]_.]+]] = call { i32, i1 } @llvm.uadd.with.overflow.i32
 ; CHECK: [[CARRY1:%[[:alnum:]_.]+]] = extractvalue { i32, i1 } [[ADD1]], 1

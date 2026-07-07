@@ -9,6 +9,7 @@
 ; RUN:     --emit-ir=writelane_uniform_noop_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s --check-prefix=UNCHANGED
 
+; writelane uniform no-op elision; left as writelane when disabled.
 ; REWRITE-LABEL: define amdgpu_kernel void @writelane_uniform_noop_kernel(
 ; REWRITE: %cwd_lane_id_lo = call i32 @llvm.amdgcn.mbcnt.lo
 ; REWRITE: %cwd_lane_id = call i32 @llvm.amdgcn.mbcnt.hi

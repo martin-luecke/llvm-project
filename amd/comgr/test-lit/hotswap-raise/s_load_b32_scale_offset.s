@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=s_load_b32_scale_offset_kernel 2>/dev/null | %FileCheck %s
 
+; s_load_b32 scale_offset scaled-offset GEP lowering.
 ; CHECK-LABEL: define amdgpu_kernel void @s_load_b32_scale_offset_kernel(
 ; CHECK: call ptr addrspace(4) @llvm.amdgcn.kernarg.segment.ptr()
 ; CHECK: %smem_roff = zext i32 %{{[^ ,]+}} to i64

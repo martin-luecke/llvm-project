@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=mbcnt_lo_source_wave_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; v_mbcnt_lo wave-size translation to ctpop over source-wave lane mask.
 ; CHECK-LABEL: define amdgpu_kernel void @mbcnt_lo_source_wave_kernel(
 ; CHECK: %mbcnt_source_lane{{[0-9]*}} = and i32 %{{[^,]+}}, 31
 ; CHECK: %mbcnt_below_mask{{[0-9]*}} = sub i32 %mbcnt_lane_bit{{[0-9]*}}, 1

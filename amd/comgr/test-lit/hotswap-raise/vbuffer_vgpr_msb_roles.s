@@ -3,6 +3,8 @@
 ; RUN:     --emit-ir=vbuffer_vgpr_msb_roles_kernel \
 ; RUN:   | %FileCheck %s
 
+; s_set_vgpr_msb selects the high-VGPR bank per operand role for the vbuffer store.
+
     .amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
     .amdhsa_code_object_version 6
     .text

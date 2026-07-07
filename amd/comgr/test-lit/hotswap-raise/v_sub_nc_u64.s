@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_sub_nc_u64_kernel 2>/dev/null | %FileCheck %s
 
+; v_sub_nc_u64 lowered as plain i64 sub (no usub.with.overflow, no i32 split) subtract.
 ; CHECK-LABEL: define amdgpu_kernel void @v_sub_nc_u64_kernel(
 ; CHECK: sub {{.*}}i64 %{{[^,]+}}, %{{[^,]+}}
 ; CHECK-NOT: @llvm.usub.with.overflow

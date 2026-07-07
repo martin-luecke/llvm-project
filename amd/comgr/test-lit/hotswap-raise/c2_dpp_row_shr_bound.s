@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=c2_dpp_row_shr_bound_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; Lower DPP row_shr with in-row bounds masking to ds_bpermute.
 ; CHECK-LABEL: define amdgpu_kernel void @c2_dpp_row_shr_bound_kernel(
 ; CHECK-NOT: call i32 @llvm.amdgcn.update.dpp.i32(
 ; CHECK-DAG: %cwd_dpp_within_row = and i32 %{{.+}}, 15

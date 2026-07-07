@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco
 ; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=global_load_negative_offset_kernel,global_store_negative_offset_kernel,flat_load_saddr_negative_offset_kernel 2>/dev/null | %FileCheck %s
 
+; global/flat load+store negative immediate offset: signed i64 GEP, no wraparound.
 ; CHECK-LABEL: define amdgpu_kernel void @global_load_negative_offset_kernel
 ; CHECK: getelementptr i8, ptr addrspace(1) %{{.*}}, i64 -19200
 ; CHECK-NOT: getelementptr i8, ptr addrspace(1) %{{.*}}, i64 16758016

@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=c2_ds_swizzle_kernel 2>/dev/null | %FileCheck %s
 
+; Lift ds_swizzle_b32 to llvm.amdgcn.ds.swizzle.
 ; CHECK-LABEL: define amdgpu_kernel void @c2_ds_swizzle_kernel(
 ; CHECK:      call i32 @llvm.amdgcn.ds.swizzle(i32 %{{.*}}, i32 1055)
 ; CHECK:      declare {{.*}}i32 @llvm.amdgcn.ds.swizzle(i32, i32 immarg{{.*}})

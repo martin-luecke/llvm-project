@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=c2_permlane_swap_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; Lower v_permlane16_swap_b32 to paired ds_bpermute lane swap.
 ; CHECK-LABEL: define amdgpu_kernel void @c2_permlane_swap_kernel(
 ; CHECK: %pls16_partner{{[0-9]*}} = xor i32 %{{[^,]+}}, 16
 ; CHECK: %pls16_addr{{[0-9]*}} = shl i32 %pls16_partner{{[0-9]*}}, 2

@@ -4,6 +4,7 @@
 ; RUN:     --emit-ir=wmma_phantom_lane_refuse_kernel 2>&1 \
 ; RUN:   | %FileCheck %s
 
+; Phantom-lane WMMA regime refuses and falls back to modulo-replication.
 ; CHECK: phantom-lane regime
 ; CHECK-SAME: max_flat_workgroup_size=32
 ; CHECK-SAME: target wavefront width=64

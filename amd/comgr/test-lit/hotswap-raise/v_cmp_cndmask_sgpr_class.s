@@ -4,6 +4,7 @@
 ; RUN:     --emit-ir=v_cmp_cndmask_sgpr_class_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; fused v_cmp_class+v_cndmask SGPR-condition rewrite.
 ; CHECK-LABEL: define amdgpu_kernel void @v_cmp_cndmask_sgpr_class_kernel(
 ; CHECK: [[CMP:%vclass[0-9]*]] = call i1 @llvm.amdgcn.class.f32(float %{{[^,]+}}, i32 512)
 ; CHECK: %vcmp_ballot = call i64 @llvm.amdgcn.ballot.i64(i1 [[CMP]])

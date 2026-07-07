@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=mbcnt_hi_source_wave_kernel 2>&1 \
 ; RUN:   | %FileCheck %s
 
+; v_mbcnt_lo/hi source-wave translation: wave32 v_mbcnt_hi is a pass-through.
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
 	.text

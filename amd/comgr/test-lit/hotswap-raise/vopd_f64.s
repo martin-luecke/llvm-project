@@ -2,6 +2,7 @@
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx1250 --emit-ir=vopd_f64_kernel 2>/dev/null | %FileCheck %s
 ; RUN: raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=vopd_f64_kernel 2>/dev/null | %FileCheck %s --check-prefix=CROSS
 
+; f64 v_dual fma/mul/add/max/min components lift (same-target gfx1250 and cross-target gfx942).
 ; CHECK-LABEL: define amdgpu_kernel void @vopd_f64_kernel(
 ; CHECK: %vopd_neg = fneg double
 ; CHECK: %vopd_fma_f64 = call double @llvm.fma.f64(double %{{[^,]+}}, double %{{[^,]+}}, double %{{[^)]+}})

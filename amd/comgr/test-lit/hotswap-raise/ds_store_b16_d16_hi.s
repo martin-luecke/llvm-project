@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=ds_store_b16_d16_hi_kernel 2>/dev/null | %FileCheck %s
 
+; Lift ds_store_b16_d16_hi to a high-half i16 store (shr 16 + trunc) on addrspace(3).
 ; CHECK-LABEL: define amdgpu_kernel void @ds_store_b16_d16_hi_kernel(
 ; CHECK: %ds_st_hi16_shr = lshr i32 %{{[^,]+}}, 16
 ; CHECK: %ds_st_d16_hi = trunc i32 %ds_st_hi16_shr to i16

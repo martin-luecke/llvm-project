@@ -4,6 +4,7 @@
 ; RUN:     --emit-ir=s_and_imm_high_bit_mask_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; s_and_b32 high-bit wave-mask lowering under --disable-wave-native.
 ; CHECK-LABEL: define amdgpu_kernel void @s_and_imm_high_bit_mask_kernel(
 ; CHECK: %vcmpf = fcmp oge float %{{[^,]+}}, 5.000000e-01
 ; CHECK: %mask_at_lane = lshr i64 -281470681808896, %mask_lane_idx

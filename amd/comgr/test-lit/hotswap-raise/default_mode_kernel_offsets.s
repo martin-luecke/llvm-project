@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --isa=gfx1250 --target-isa=gfx1250 2>/dev/null | %FileCheck %s
 
+; Default-mode kernels raise across multiple entries with correct per-kernel code offsets.
 ; CHECK: OK default_mode_offset_first (1/1)
 ; CHECK: OK default_mode_offset_second (2/2)
 

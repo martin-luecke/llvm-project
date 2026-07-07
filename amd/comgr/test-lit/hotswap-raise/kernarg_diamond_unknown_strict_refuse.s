@@ -4,6 +4,7 @@
 ; RUN:     --emit-ir=kernarg_diamond_unknown_strict_refuse 2>&1 \
 ; RUN:   | %FileCheck %s
 
+; strict-mode refusal: diamond CFG merge yields Unknown kernarg-ptr provenance at the hidden-arg load.
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
 	.text

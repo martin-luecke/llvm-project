@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=s_cmpk_eq_i32_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; s_cmpk_eq_i32 scalar compare-with-immediate lift.
 ; CHECK-LABEL: define amdgpu_kernel void @s_cmpk_eq_i32_kernel(
 ; CHECK: %scmpk = icmp eq i32 %{{[^,]+}}, 1024
 ; CHECK: %csel = select i1 %scmpk, i32 1, i32 0

@@ -2,6 +2,7 @@
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=sapc_block_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; s_add_pc_i64 as a block terminator resolved to a direct branch.
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
 	.text

@@ -2,6 +2,7 @@
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx950 --emit-ir=ttmp6_cluster_workgroup_id_init_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; ttmp6 cluster/workgroup-id register seeding.
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
 	.text

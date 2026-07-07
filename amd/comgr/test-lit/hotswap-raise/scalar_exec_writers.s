@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx942 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --emit-ir=divergent_exec_kernel 2>/dev/null | %FileCheck %s
 
+; v_cmpx/s_and_b64 exec scalar EXEC-writers projected to wave-native masks/.
 ; CHECK-LABEL: define amdgpu_kernel void @divergent_exec_kernel(
 ; CHECK:       lshr i64 -1, %{{[^ ]+}}
 ; CHECK:       store i32 {{.*}}, ptr addrspace(1) %{{[^ ]+}}, align 4

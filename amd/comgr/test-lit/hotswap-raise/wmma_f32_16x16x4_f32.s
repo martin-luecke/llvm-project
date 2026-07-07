@@ -4,6 +4,7 @@
 ; RUN:     --emit-ir=wmma_f32_16x16x4_f32_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; wmma_f32_16x16x4_f32 matrix-multiply lift to paired mfma.f32.16x16x4f32.
 ; CHECK-LABEL: define amdgpu_kernel void @wmma_f32_16x16x4_f32_kernel(
 ; CHECK: call i1 @llvm.amdgcn.init.whole.wave()
 ; CHECK: %mfma = call <4 x float> @llvm.amdgcn.mfma.f32.16x16x4f32(float %{{[^,]+}}, float %{{[^,]+}}, <4 x float> %{{[^,]+}}, i32 0, i32 0, i32 0)

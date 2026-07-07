@@ -2,6 +2,7 @@
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:     --emit-ir=permlane16_swap_bank_kernel 2>/dev/null | %FileCheck %s
 
+; v_permlane16_swap_b32 partner-swap lowering to ds.bpermute.
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.text
 	.globl	permlane16_swap_bank_kernel

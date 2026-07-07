@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=v_cmp_cndmask_sgpr_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; fused v_cmp+v_cndmask SGPR-condition rewrite (select on cmp, no lane-mask extract).
 ; CHECK-LABEL: define amdgpu_kernel void @v_cmp_cndmask_sgpr_kernel(
 ; CHECK: [[CMP:%vcmpf[0-9]*]] = fcmp oge float %{{[^,]+}}, 5.000000e-01
 ; CHECK: %vcmp_ballot = call i64 @llvm.amdgcn.ballot.i64(i1 [[CMP]])

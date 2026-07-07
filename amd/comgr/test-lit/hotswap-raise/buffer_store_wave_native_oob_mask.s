@@ -6,6 +6,7 @@
 ; RUN:   --emit-ir=buffer_store_wave_native_oob_mask_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s --check-prefix=MR
 
+; Buffer store OOB-lane masking under wave-native vs modulo-replication.
 ; WN-LABEL: define amdgpu_kernel void @buffer_store_wave_native_oob_mask_kernel(
 ; WN: call i1 @llvm.amdgcn.init.whole.wave()
 ; WN: call void @llvm.amdgcn.raw.buffer.store.i32(

@@ -2,6 +2,7 @@
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_maxmin_num_f32_kernel 2>/dev/null | %FileCheck %s --check-prefix=IR
 ; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --write-hsaco=%t.out --kernel=v_maxmin_num_f32_kernel 2>&1 | %FileCheck %s --check-prefix=PIPE
 
+; v_maxmin_num_f32 fused maxnum-then-minnum lift.
 ; IR-LABEL: define amdgpu_kernel void @v_maxmin_num_f32_kernel(
 ; IR: [[INNER:%[^ ]+]] = call float @llvm.maximumnum.f32(float %{{[^,]+}}, float %{{[^)]+}})
 ; IR: [[OUT:%[^ ]+]] = call float @llvm.minimumnum.f32(float [[INNER]], float %{{[^)]+}})

@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=decoder_madmk_v_fmamk_f32_kernel 2>/dev/null | %FileCheck %s
 
+; Decode v_fmamk_f32 (inline 32-bit literal operand) and lift to llvm.fma.f32.
 ; CHECK-LABEL: define amdgpu_kernel void @decoder_madmk_v_fmamk_f32_kernel(
 ; CHECK: call {{.*}}float @llvm.fma.f32(float {{.*}}, float {{f?0x40490FDB|f?0x400921FB60000000|3\.14159[0-9]+}}, float {{.*}})
 ; CHECK: declare {{.*}}float @llvm.fma.f32(float, float, float)

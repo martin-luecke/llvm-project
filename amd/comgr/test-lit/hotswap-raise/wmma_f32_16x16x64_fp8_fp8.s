@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --enable-wave-native --emit-ir=wmma_f32_16x16x64_fp8_fp8_kernel 2>/dev/null | %FileCheck %s
 
+; wmma_f32_16x16x64_fp8_fp8 lift to paired mfma.f32.16x16x32.fp8.fp8, gfx942 FNUZ.
 ; CHECK-LABEL: define amdgpu_kernel void @wmma_f32_16x16x64_fp8_fp8_kernel(
 ; CHECK: call i1 @llvm.amdgcn.init.whole.wave()
 ; CHECK: %{{.*}} = bitcast <2 x i32> %{{.*}} to i64

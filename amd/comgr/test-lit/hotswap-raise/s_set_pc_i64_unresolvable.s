@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %not raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=setpc_unresolvable_kernel 2>&1 | %FileCheck %s --check-prefix=STDERR
 
+; s_set_pc_i64 unresolvable target refused with [SOP1] diagnostic.
 ; STDERR: raise_cli: kernel 'setpc_unresolvable_kernel' failed to raise:
 ; STDERR-SAME: s_set_pc_i64
 ; STDERR-SAME: [SOP1]

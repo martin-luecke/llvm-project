@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=v_mad_nc_i64_i32_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; v_mad_nc_i64_i32 signed 64-bit multiply-add lift.
 ; CHECK-LABEL: define amdgpu_kernel void @v_mad_nc_i64_i32_kernel(
 ; CHECK: sext i32 %{{[^ ]+}} to i64
 ; CHECK: sext i32 %{{[^ ]+}} to i64

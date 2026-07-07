@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=s_bitset0_b32_kernel 2>/dev/null | %FileCheck %s
 
+; s_bitset0_b32 clear-bit lift (and of inverted shifted mask).
 ; CHECK-LABEL: define amdgpu_kernel void @s_bitset0_b32_kernel(
 ; CHECK-DAG: {{(-559038737|3735928559)}}
 ; CHECK-DAG: %bitset0 = and i32

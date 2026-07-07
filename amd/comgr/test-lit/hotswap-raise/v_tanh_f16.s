@@ -6,6 +6,7 @@
 ; RUN: raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_tanh_f16_dpp_kernel 2>&1 | %FileCheck %s --check-prefix=DPP
 ; RUN: %not %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_tanh_f16_omod_refuse_kernel 2>&1 | %FileCheck %s --check-prefix=MOD
 
+; v_tanh_f16 cross-target expands via ocml (native amdgcn.tanh.f16 same-target); hi/mods/dpp lanes handled, clamp/omod refused.
 ; IR-LABEL: define amdgpu_kernel void @v_tanh_f16_kernel(
 ; IR-NOT: call {{.*}}@__ocml_tanh_f16
 ; IR: tanh_f16_merge_lo

@@ -3,6 +3,7 @@
 ; RUN: raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=add_pc_i64_long_kernel 2>/dev/null | %FileCheck %s --check-prefix=LONG
 ; RUN: raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=add_pc_i64_lit64_kernel | %FileCheck %s --check-prefix=LIT64
 
+; s_add_pc_i64 static PC-relative branch resolution.
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
 	.text

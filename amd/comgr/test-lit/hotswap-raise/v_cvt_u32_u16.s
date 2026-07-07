@@ -4,6 +4,7 @@
 ; RUN:   | %FileCheck %s
 ; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --write-hsaco=%t.out --kernel=v_cvt_u32_u16_lo_kernel 2>&1 | %FileCheck %s --check-prefix=PIPE
 
+; v_cvt_u32_u16 lo/hi zext-i16 lift.
 ; CHECK-LABEL: define amdgpu_kernel void @v_cvt_u32_u16_lo_kernel(
 ; CHECK: trunc i32 {{.*}} to i16
 ; CHECK: %cvt_u32_u16{{.*}} = zext i16 {{.*}} to i32

@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_min3_u32_kernel 2>/dev/null | %FileCheck %s
 
+; v_min3_u32 3-input unsigned min lift.
 ; CHECK-LABEL: define amdgpu_kernel void @v_min3_u32_kernel(
 ; CHECK: %vmin3_lo{{[0-9]*}} = call i32 @llvm.umin.i32(i32 %{{[^,]+}}, i32 %{{[^)]+}})
 ; CHECK: %vmin3{{[0-9]*}} = call i32 @llvm.umin.i32(i32 %vmin3_lo{{[0-9]*}}, i32 %{{[^)]+}})

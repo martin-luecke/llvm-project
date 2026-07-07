@@ -2,6 +2,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=tensor_load_to_lds_kernel 2>&1 | %FileCheck %s --check-prefix=IR-XT
 
+; Tensor load-to-LDS TDM descriptor lift.
 ; IR-XT: @llvm.compiler.used
 ; IR-XT-SAME: @hotswap_tdm_load_to_lds
 ; IR-XT-LABEL: define amdgpu_kernel void @tensor_load_to_lds_kernel

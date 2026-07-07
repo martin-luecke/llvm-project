@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=smem_modified_kernarg_pair_base_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; Modified kernarg-pointer pair base still resolves to kernarg.segment.ptr loads.
 ; CHECK-LABEL: define amdgpu_kernel void @smem_modified_kernarg_pair_base_kernel(
 ; CHECK-SAME: ptr addrspace(4) byref([16 x i8]) align 16 %kargs
 ; CHECK: call ptr addrspace(4) @llvm.amdgcn.kernarg.segment.ptr()

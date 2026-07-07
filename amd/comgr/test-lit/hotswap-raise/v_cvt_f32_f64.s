@@ -2,6 +2,7 @@
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_cvt_f32_f64_kernel 2>/dev/null | %FileCheck %s --check-prefix=IR
 ; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --write-hsaco=%t.out --kernel=v_cvt_f32_f64_kernel 2>&1 | %FileCheck %s --check-prefix=PIPE
 
+; v_cvt_f32_f64 fptrunc double->float lift.
 ; IR-LABEL: define amdgpu_kernel void @v_cvt_f32_f64_kernel(
 ; IR: [[SRC:%[^ ]+]] = bitcast i64 {{%[^ ]+}} to double
 ; IR-NEXT: [[F32:%[^ ]+]] = fptrunc double [[SRC]] to float

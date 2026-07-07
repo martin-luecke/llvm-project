@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=s_bitcmp_kernel 2>/dev/null | %FileCheck %s
 
+; s_bitcmp0/1_b32/b64 bit-test lift.
 ; CHECK-LABEL: define amdgpu_kernel void @s_bitcmp_kernel(
 ; CHECK: %bitcmp_shamt = and i32 %{{[^,]+}}, 31
 ; CHECK-NEXT: %bitcmp_bit = shl i32 1, %bitcmp_shamt

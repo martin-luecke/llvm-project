@@ -2,6 +2,8 @@
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:     --emit-ir=vcc_hi_carryin_kernel | %FileCheck %s
 
+; vcc_hi as a regular SGPR feeds carry-in to v_add_co_ci_u32 via wave32->wave64 mask translation.
+
         .amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
         .amdhsa_code_object_version 6
         .text

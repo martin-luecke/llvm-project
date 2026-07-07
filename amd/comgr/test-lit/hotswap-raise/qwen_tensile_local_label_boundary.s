@@ -2,6 +2,7 @@
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=qwen_tensile_local_label_boundary_kernel 2>&1 \
 ; RUN:   | %FileCheck %s
 
+; local-label boundary decoding stops the lift at the next kernel, excluding its CAS.
 ; CHECK-LABEL: define amdgpu_kernel void @qwen_tensile_local_label_boundary_kernel
 ; CHECK: store
 ; CHECK-NOT: NonCommutativeAtomic

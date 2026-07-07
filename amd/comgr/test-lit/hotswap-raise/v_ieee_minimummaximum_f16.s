@@ -2,6 +2,7 @@
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_ieee_minimummaximum_f16_kernel 2>/dev/null | %FileCheck %s --check-prefix=IR
 ; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --write-hsaco=%t.out --kernel=v_ieee_minimummaximum_f16_kernel 2>&1 | %FileCheck %s --check-prefix=PIPE
 
+; v_minimummaximum_f16 IEEE min/max (and minmax_num) lift.
 ; IR-LABEL: define amdgpu_kernel void @v_ieee_minimummaximum_f16_kernel(
 ; IR-NOT: @llvm.maxnum.f16
 ; IR-NOT: @llvm.minnum.f16

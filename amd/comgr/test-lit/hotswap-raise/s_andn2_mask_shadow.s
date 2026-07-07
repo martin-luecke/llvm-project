@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=s_andn2_mask_shadow_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; s_andn2/orn2/nand/nor/xnor wave-mask boolean lowering.
 ; CHECK-LABEL: define amdgpu_kernel void @s_andn2_mask_shadow_kernel(
 ; CHECK: %wave_mask_andn2 = and i1
 ; CHECK: %cndmask = select i1 %wave_mask_andn2, i32 1, i32 0

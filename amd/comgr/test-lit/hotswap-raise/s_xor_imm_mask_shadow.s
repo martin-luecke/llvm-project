@@ -4,6 +4,7 @@
 ; RUN:     --emit-ir=s_xor_imm_mask_shadow_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; s_xor_b32 by -1 mask lowered to i1 predicate inversion (lane-mask shadow).
 ; CHECK-LABEL: define amdgpu_kernel void @s_xor_imm_mask_shadow_kernel(
 ; CHECK: [[CMP:%[[:alnum:]_.]+]] = fcmp oge float %{{[^,]+}}, 5.000000e-01
 ; CHECK: [[IMM_MASK:%[[:alnum:]_.]+]] = icmp ne i64 %mask_lane_bit, 0

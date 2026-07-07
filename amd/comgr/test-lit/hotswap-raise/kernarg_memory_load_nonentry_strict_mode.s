@@ -3,6 +3,7 @@
 ; RUN:   --emit-ir=kernarg_memory_load_nonentry_strict_mode \
 ; RUN:   | %FileCheck %s --check-prefix=STRICT
 
+; NonEntry kernarg provenance: s_load_b128 nv rebases the pair, so the follow-up load lifts to ordinary global memory under strict mode.
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 5
 	.text

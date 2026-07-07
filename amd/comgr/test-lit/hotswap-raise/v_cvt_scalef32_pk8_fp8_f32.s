@@ -7,6 +7,7 @@
 ; RUN:     --emit-ir=v_cvt_scalef32_pk8_fp8_f32_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s --check-prefix=CROSS
 
+; v_cvt_scalef32_pk8_fp8_f32 native passthrough vs cross-target cvt.pk.fp8 decomposition.
 ; NATIVE-LABEL: define amdgpu_kernel void @v_cvt_scalef32_pk8_fp8_f32_kernel(
 ; NATIVE: %cvt_scalef32_pk8_fp8{{[0-9]*}} = call <2 x i32> @llvm.amdgcn.cvt.scalef32.pk8.fp8.f32(<8 x float> %{{.*}}, float %{{.*}})
 ; NATIVE-NOT: call {{.*}}@llvm.amdgcn.cvt.pk.fp8.f32

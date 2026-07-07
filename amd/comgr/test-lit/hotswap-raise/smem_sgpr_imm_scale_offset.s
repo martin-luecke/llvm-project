@@ -2,6 +2,7 @@
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx950 --emit-ir=smem_sgpr_imm_scale_offset_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; SMEM SGPR+imm offset with scale_offset lowered to a scaled GEP.
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
 	.text

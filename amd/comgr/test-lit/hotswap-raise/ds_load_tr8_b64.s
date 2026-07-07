@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=ds_load_tr8_b64_kernel 2>/dev/null | %FileCheck %s
 
+; Emulate ds_load_tr_b64 transpose via mbcnt/ds.bpermute lane gather plus per-byte loads.
 ; CHECK-LABEL: define amdgpu_kernel void @ds_load_tr8_b64_kernel(
 ; CHECK: %lane_lo{{[0-9]*}} = call i32 @llvm.amdgcn.mbcnt.lo(i32 -1, i32 0)
 ; CHECK: %lane_id{{[0-9]*}} = call i32 @llvm.amdgcn.mbcnt.hi(i32 -1, i32 %lane_lo{{[0-9]*}})

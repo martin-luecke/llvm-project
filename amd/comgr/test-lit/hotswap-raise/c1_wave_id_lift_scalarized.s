@@ -9,6 +9,7 @@
 ; RUN:     --emit-ir=c1_wave_id_lift_scalarized_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s --check-prefix=REWRITTEN
 
+; Refuse vs rewrite scalarized wave-id v_writelane lane leak.
 ; REFUSE: transpiler: pre-translation abort:
 ; REFUSE-SAME: cross-wave-lane-id-leak
 ; REFUSE-SAME: v_writelane_b32

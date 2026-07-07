@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=global_load_saddr_nonkernarg_after_merge_kernel 2>/dev/null | %FileCheck %s
 
+; global_load_b32 SADDR from non-kernarg (merged) base: saddr_vaddr synthesis.
 ; CHECK-LABEL: define amdgpu_kernel void @global_load_saddr_nonkernarg_after_merge_kernel(
 ; CHECK: saddr_vaddr
 ; CHECK: load float, ptr addrspace(1)

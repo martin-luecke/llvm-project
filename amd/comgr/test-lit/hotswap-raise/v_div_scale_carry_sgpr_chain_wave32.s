@@ -2,6 +2,7 @@
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:     --emit-ir=div_carry_sgpr_chain_kernel 2>/dev/null | %FileCheck %s
 
+; v_div_scale_f32 carry-out threaded via vcc to v_div_fmas_f32.
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.text
 	.globl	div_carry_sgpr_chain_kernel

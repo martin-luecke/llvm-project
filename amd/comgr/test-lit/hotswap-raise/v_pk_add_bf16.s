@@ -2,6 +2,7 @@
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_pk_add_bf16_kernel 2>/dev/null | %FileCheck %s --check-prefix=IR
 ; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --write-hsaco=%t.out --kernel=v_pk_add_bf16_kernel 2>&1 | %FileCheck %s --check-prefix=PIPE
 
+; v_pk_add_bf16 packed bf16 add lift.
 ; IR-LABEL: define amdgpu_kernel void @v_pk_add_bf16_kernel(
 ; IR: [[SRC0:%[^ ]+]] = bitcast i32 {{[^ ]+}} to <2 x bfloat>
 ; IR-DAG: [[SRC0_LO:%[^ ]+]] = extractelement <2 x bfloat> [[SRC0]], i64 0

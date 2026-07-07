@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=v_div_scale_f32_carry_out_i1_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; v_div_scale f32 carry-out i1 threaded into div_fmas.
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
 	.text

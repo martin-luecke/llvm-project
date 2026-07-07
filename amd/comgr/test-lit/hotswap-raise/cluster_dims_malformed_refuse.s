@@ -2,6 +2,7 @@
 ; RUN:   && %not %raise_cli %t.hsaco --target-isa=gfx950 --emit-ir=cluster_dims_overflow_refuse_kernel,cluster_dims_negative_refuse_kernel 2>&1 \
 ; RUN:   | %FileCheck %s
 
+; Refuse malformed.cluster_dims metadata (overflow/negative).
 ; CHECK-DAG: raise_cli: kernel 'cluster_dims_overflow_refuse_kernel' metadata: hotswap: extractKernelMeta: kernel 'cluster_dims_overflow_refuse_kernel' has malformed .cluster_dims metadata
 ; CHECK-DAG: raise_cli: kernel 'cluster_dims_negative_refuse_kernel' metadata: hotswap: extractKernelMeta: kernel 'cluster_dims_negative_refuse_kernel' has malformed .cluster_dims metadata
 

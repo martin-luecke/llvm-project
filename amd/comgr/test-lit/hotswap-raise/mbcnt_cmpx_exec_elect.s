@@ -7,6 +7,7 @@
 ; RUN:     --emit-ir=mbcnt_cmpx_exec_elect_kernel 2>&1 \
 ; RUN:   | %FileCheck %s --check-prefix=MODREP
 
+; mbcnt-fed V_CMPX EXEC projection: wave-native lifts the source-wave mask, disable-wave-native refuses.
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
 	.text

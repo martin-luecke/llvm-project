@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=c4_mbcnt_unrelated_exec_kernel 2>&1 \
 ; RUN:   | %FileCheck %s
 
+; Accept mbcnt/ds_bpermute whose exec use is unrelated (no Class 4 cross-wave-lane-predicated-exec refusal); src-wave rebase.
 ; CHECK-NOT: cross-wave-lane-predicated-exec
 ; CHECK-LABEL: define amdgpu_kernel void @c4_mbcnt_unrelated_exec_kernel(
 ; CHECK: %bperm_srcwave_addr{{[0-9]*}} = or i32 %bperm_local_addr{{[0-9]*}}, %bperm_srcwave_byte_base{{[0-9]*}}

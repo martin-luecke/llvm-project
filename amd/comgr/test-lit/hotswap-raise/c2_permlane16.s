@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=c2_permlane16_kernel 2>/dev/null | %FileCheck %s
 
+; Emulate v_permlane16/permlanex16 via ds_bpermute.
 ; CHECK-LABEL: define amdgpu_kernel void @c2_permlane16_kernel(
 ; CHECK:      %{{permlane16_emu[0-9]*}} = call i32 @llvm.amdgcn.ds.bpermute(
 ; CHECK:      xor i32 %{{[^,]+}}, 16

@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=smem_dispatch_ptr_base_kernel \
 ; RUN:   | %FileCheck %s
 
+; Dispatch-ptr SGPR seeding for scalar loads through s[0:1].
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
 	.text

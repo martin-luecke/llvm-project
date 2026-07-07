@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=global_load_dword_kernarg_saddr_kernel 2>/dev/null | %FileCheck %s
 
+; global_load_b32 with kernarg-segment SADDR + kernarg provenance.
 ; CHECK-LABEL: define amdgpu_kernel void @global_load_dword_kernarg_saddr_kernel(ptr addrspace(4) byref([24 x i8]) align 16 %kargs)
 ; CHECK: %kernarg_ptr = call ptr addrspace(4) @llvm.amdgcn.kernarg.segment.ptr()
 ; CHECK: ptrtoint ptr addrspace(4) %kernarg_ptr to i64

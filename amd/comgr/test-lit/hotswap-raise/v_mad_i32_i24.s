@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx1250 --emit-ir=v_mad_i32_i24_kernel,v_mad_i32_i24_clamp_kernel,v_mad_u32_u24_clamp_kernel 2>/dev/null | %FileCheck %s
 
+; v_mad_i32_i24/u32_u24 (+clamp) 24-bit multiply-add lift.
 ; CHECK-LABEL: define amdgpu_kernel void @v_mad_i32_i24_kernel(
 ; CHECK: shl i32 %{{[^,]+}}, 8
 ; CHECK: ashr i32 %{{[^,]+}}, 8

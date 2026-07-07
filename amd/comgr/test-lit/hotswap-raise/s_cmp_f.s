@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=s_cmp_f_kernel 2>/dev/null | %FileCheck %s
 
+; s_cmp_o/u_f32/f16 scalar ordered/unordered float compare lift.
 ; CHECK-LABEL: define amdgpu_kernel void @s_cmp_f_kernel(
 ; CHECK-DAG: fcmp ord float %{{[^,]+}}, %{{[^,]+}}
 ; CHECK-DAG: fcmp uno float %{{[^,]+}}, %{{[^,]+}}

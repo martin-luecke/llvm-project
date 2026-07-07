@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %not raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=global_prefetch_b8_kernel 2>&1 | %FileCheck %s --check-prefix=STDERR
 
+; global_prefetch_b8: gfx1250 global.prefetch lift; refused with no gfx942 equivalent.
 ; STDERR: transpiler: FLAT: global_prefetch_b8
 ; STDERR-SAME: gfx1250 VMEM-prefetch unit
 ; STDERR-SAME: amdgcn.global.prefetch

@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_pk_add_f32_lit_kernel 2>/dev/null | %FileCheck %s
 
+; v_pk_add_f32 packed f32 add with inline literal lift.
 ; CHECK-LABEL: define amdgpu_kernel void @v_pk_add_f32_lit_kernel(
 ; CHECK: %pk_add = fadd {{(reassoc |nnan |ninf |nsz |arcp |contract |afn |fast )*}}<2 x float> %{{[0-9a-zA-Z_.]+}}, splat (float 1.000000e+00)
 ; CHECK-NOT: unsupportedOpcode

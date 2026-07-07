@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=workitem_id_y_kernel \
 ; RUN:   | %FileCheck %s
 
+; Packed workitem.id.y source-register seeding (workitem.id.x|y<<10 recovery).
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
 	.text

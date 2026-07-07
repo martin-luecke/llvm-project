@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=smem_modified_kernarg_pair_alias_kernel 2>&1 \
 ; RUN:   | %FileCheck %s
 
+; Aliased/copied kernarg-pointer pair still resolves to a kernarg.segment.ptr load.
 ; CHECK-LABEL: define amdgpu_kernel void @smem_modified_kernarg_pair_alias_kernel(
 ; CHECK-SAME: ptr addrspace(4) byref([4 x i8]) align 16 %kargs
 ; CHECK: call ptr addrspace(4) @llvm.amdgcn.kernarg.segment.ptr()

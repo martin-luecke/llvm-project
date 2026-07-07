@@ -3,6 +3,8 @@
 ; RUN:     --emit-ir=wmma_f32_16x16x32_f16_lg_layout_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; v_wmma_f32_16x16x32_f16 -> mfma.16x16x16f16 with ds.bpermute lane-group layout, wave-native.
+
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.text
 	.globl	wmma_f32_16x16x32_f16_lg_layout_kernel

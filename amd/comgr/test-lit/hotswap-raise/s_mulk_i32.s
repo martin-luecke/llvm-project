@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=s_mulk_i32_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; s_mulk_i32 scalar multiply by sign-extended literal.
 ; CHECK-LABEL: define amdgpu_kernel void @s_mulk_i32_kernel(
 ; CHECK: %mulk = mul i32 %{{[^,]+}}, 291
 ; CHECK-NOT: %mulk = mul i32 %{{[^,]+}}, %{{[^,]+}}

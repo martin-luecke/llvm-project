@@ -4,6 +4,7 @@
 ; RUN:     --emit-ir=hidden_global_offset_b128_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; hidden_global_offset zeroed via --assume-hip-global-offset-zero under HSA_HOTSWAP_STRICT; no implicitarg.ptr.
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
 	.text

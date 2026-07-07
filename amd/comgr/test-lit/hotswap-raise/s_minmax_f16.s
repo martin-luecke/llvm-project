@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=s_minmax_f16_kernel 2>/dev/null | %FileCheck %s
 
+; s_maximum_f16/s_minimum_f16 IEEE min/max lifted to llvm.maximum/minimum.f16.
 ; CHECK-LABEL: define amdgpu_kernel void @s_minmax_f16_kernel(
 ; CHECK: call half @llvm.maximum.f16(half %{{.+}}, half %{{.+}})
 ; CHECK: call half @llvm.minimum.f16(half %{{.+}}, half %{{.+}})

@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx942 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --emit-ir=divergent_vgpr_kernel 2>/dev/null | %FileCheck %s
 
+; Lift divergent v_cmpx/exec-masked VGPR writes to per-lane predicated control flow.
 ; CHECK-LABEL: define amdgpu_kernel void @divergent_vgpr_kernel(
 ; CHECK:       %[[LANE_LO:[^ ]+]] = call i32 @llvm.amdgcn.mbcnt.lo(i32 -1, i32 0)
 ; CHECK-NEXT:  %[[LANE_ID:[^ ]+]] = call i32 @llvm.amdgcn.mbcnt.hi(i32 -1, i32 %[[LANE_LO]])

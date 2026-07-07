@@ -2,6 +2,7 @@
 ; RUN:   && %not %raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:     --emit-ir=vcc_hi_carryout_kernel 2>&1 | %FileCheck %s
 
+; v_add_co_u32 carry-out into wave32 vcc_hi scratch is refused.
 ; CHECK: kernel 'vcc_hi_carryout_kernel'
 ; CHECK-SAME: carry-out destination is wave32 vcc_hi/exec_hi scratch
 

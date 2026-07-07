@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=s_wait_storecnt_kernel 2>/dev/null | %FileCheck %s
 
+; s_wait_storecnt store-count wait lowered to s.waitcnt.
 ; CHECK-LABEL: define amdgpu_kernel void @s_wait_storecnt_kernel(
 ; CHECK: store i32 {{.*}}, ptr addrspace(1) %{{[^,]+}}
 ; CHECK: call void @llvm.amdgcn.s.waitcnt(i32 0)

@@ -2,6 +2,7 @@
 ; RUN: %raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:     --emit-ir=saveexec_not1_kernel | %FileCheck %s
 
+; s_and_not1/or_not1_saveexec_b32 EXEC save + ANDN2/ORN2 read-modify-write.
         .amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
         .amdhsa_code_object_version 6
         .text

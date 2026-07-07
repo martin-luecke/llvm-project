@@ -2,6 +2,7 @@
 ; RUN:   && %not raise_cli %t.hsaco --target-isa=gfx942 --disable-wave-native \
 ; RUN:     --emit-ir=c4_lane_dep_cmpx_kernel 2>&1 | %FileCheck %s --check-prefix=STDERR
 
+; Refuse cross-wave lane-predicated v_cmpx derived from lane id.
 ; STDERR: transpiler: pre-translation abort:
 ; STDERR-SAME: cross-wave-lane-predicated-exec
 ; STDERR-SAME: v_cmpx

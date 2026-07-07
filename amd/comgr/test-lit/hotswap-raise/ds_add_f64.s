@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx942 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %raise_cli %t.hsaco --emit-ir 2>/dev/null | %FileCheck %s
 
+; Lift ds_add_f64/ds_add_rtn_f64 to double atomicrmw fadd on addrspace(3).
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx942"
 	.amdhsa_code_object_version 6
 	.text

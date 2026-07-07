@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_fmamk_fmaak_f64_kernel 2>/dev/null | %FileCheck %s
 
+; v_fmamk_f64/fmaak_f64 literal-operand FMA lift.
 ; CHECK-LABEL: define amdgpu_kernel void @v_fmamk_fmaak_f64_kernel(
 ; CHECK: call {{.*}}double @llvm.fma.f64(double {{.*}}, double {{f?0x400921FB54442D18}}, double {{.*}})
 ; CHECK: call {{.*}}double @llvm.fma.f64(double {{.*}}, double {{.*}}, double {{f?0x4005BF0A8B145769}})

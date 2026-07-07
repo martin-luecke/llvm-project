@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=s_load_b96_kernarg_kernel 2>/dev/null | %FileCheck %s
 
+; s_load_b96 triple-dword scalar kernarg load.
 ; CHECK-LABEL: define amdgpu_kernel void @s_load_b96_kernarg_kernel(
 ; CHECK-SAME: ptr addrspace(4) byref([24 x i8]) align 16 %kargs
 ; CHECK: call ptr addrspace(4) @llvm.amdgcn.kernarg.segment.ptr()

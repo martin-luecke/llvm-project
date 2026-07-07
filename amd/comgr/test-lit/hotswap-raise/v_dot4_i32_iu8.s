@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx1250 --emit-ir=v_dot4_i32_iu8_signed_kernel,v_dot4_i32_iu8_unsigned_kernel,v_dot4_i32_iu8_clamp_kernel 2>/dev/null | %FileCheck %s
 
+; v_dot4_i32_iu8 signed/unsigned/clamp dot-product lift.
 ; CHECK-LABEL: define amdgpu_kernel void @v_dot4_i32_iu8_signed_kernel(
 ; CHECK: sext i8 %{{[^ ]+}} to i64
 ; CHECK: %dot4_mul{{[0-9]*}} = mul i64

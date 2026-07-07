@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=s_minmax_num_f32_kernel 2>/dev/null | %FileCheck %s
 
+; s_max_num_f32/s_min_num_f32 lifted to llvm.maximumnum/minimumnum.f32.
 ; CHECK-LABEL: define amdgpu_kernel void @s_minmax_num_f32_kernel(
 ; CHECK: %s_fmax_num{{[0-9]*}} = call float @llvm.maximumnum.f32(float %{{[^,]+}}, float %{{[^)]+}})
 ; CHECK: %s_fmin_num{{[0-9]*}} = call float @llvm.minimumnum.f32(float %{{[^,]+}}, float %{{[^)]+}})

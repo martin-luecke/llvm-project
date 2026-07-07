@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=kernarg_register_offset_strict_refuse 2>&1 \
 ; RUN:   | %FileCheck %s
 
+; strict-mode refusal: dynamic (register) kernarg offset may reach the source implicit-arg range.
 ; CHECK: dynamic source kernarg offsets may reach the source implicit-arg range
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"

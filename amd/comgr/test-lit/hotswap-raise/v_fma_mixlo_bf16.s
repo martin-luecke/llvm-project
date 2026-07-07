@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=v_fma_mixlo_bf16_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; v_fma_mixlo_bf16 low-half packed FMA-mix lift.
 ; CHECK-LABEL: define amdgpu_kernel void @v_fma_mixlo_bf16_kernel(
 ; CHECK-DAG: %mixlo_cvt_bf16 = fpext bfloat %{{.*}} to float
 ; CHECK-DAG: lshr i32 %{{.*}}, 16

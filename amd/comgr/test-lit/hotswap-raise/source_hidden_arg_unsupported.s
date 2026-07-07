@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=unsupported_hidden_printf 2>&1 \
 ; RUN:   | %FileCheck %s
 
+; Unsupported source hidden-argument kind refused during kernarg-provenance remap.
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1200"
 	.amdhsa_code_object_version 6
 	.text

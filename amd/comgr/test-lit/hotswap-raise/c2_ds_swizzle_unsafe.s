@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %not raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=c2_ds_swizzle_unsafe_kernel 2>&1 | %FileCheck %s --check-prefix=STDERR
 
+; Refuse ds_swizzle with reserved top-nibble encoding.
 ; STDERR: transpiler: pre-translation abort:
 ; STDERR-SAME: cross-wave-shuffle-rewrite-pending
 ; STDERR-SAME: ds_swizzle

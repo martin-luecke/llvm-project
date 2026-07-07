@@ -2,6 +2,7 @@
 ; RUN:   && %raise_cli %t.hsaco --emit-ir=s_bfe_i64_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; s_bfe_i64 signed bitfield-extract (shl/ashr) lift.
 ; CHECK-LABEL: define amdgpu_kernel void @s_bfe_i64_kernel(
 ; CHECK-DAG: [[SHL:%[^ ,]+]] = shl i64 %{{[^,]+}}, 48
 ; CHECK-DAG: %sbfe_i64 = ashr i64 [[SHL]], 56

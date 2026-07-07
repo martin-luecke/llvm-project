@@ -2,6 +2,7 @@
 ; RUN:   && %raise_cli %t.hsaco --emit-ir=s_bfe_i64_exec_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; s_bfe_i64 writing exec drives per-lane predication.
 ; CHECK-LABEL: define amdgpu_kernel void @s_bfe_i64_exec_kernel(
 ; CHECK: %sbfe_i64 = ashr i64 %{{[^,]+}}, 63
 ; CHECK: [[BFE_SEL:%[0-9]+]] = select i1 {{.*}}, i64 0, i64 %{{[^ ]+}}

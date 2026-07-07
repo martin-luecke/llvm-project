@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=s_addk_i32_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; s_addk_co_i32 scalar add-with-signed-immediate (with overflow) lift.
 ; CHECK-LABEL: define amdgpu_kernel void @s_addk_i32_kernel(
 ; CHECK: %addk = add i32 %{{[^,]+}}, 1024
 ; CHECK: call { i32, i1 } @llvm.sadd.with.overflow.i32(i32 %{{[^,]+}}, i32 1024)

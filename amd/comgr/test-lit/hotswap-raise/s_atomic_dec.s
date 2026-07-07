@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx950 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=s_atomic_dec_kernel 2>/dev/null | %FileCheck %s
 
+; s_atomic_dec scalar atomic lowered to atomicrmw udec_wrap.
 ; CHECK-LABEL: define amdgpu_kernel void @s_atomic_dec_kernel(
 ; CHECK: atomicrmw udec_wrap ptr addrspace(1) {{.*}} monotonic, align 4
 ; CHECK-NOT: atomicrmw sub

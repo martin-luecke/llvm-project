@@ -9,6 +9,7 @@
 ; RUN:     --emit-ir=writelane_sgpr_forced_use_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s --check-prefix=UNCHANGED
 
+; writelane sgpr-source forced-use rewrite (bpermute readfirstlane), no thread-loop projection.
 ; REWRITE-NOT: ThreadLoopProjection
 ; REWRITE-LABEL: define amdgpu_kernel void @writelane_sgpr_forced_use_kernel(
 ; REWRITE: cwd_writelane_rewritten = select i1

@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=v_rndne_f32_dpp_propagator_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; v_rndne_f32 with DPP selector propagated to ds.bpermute.
 ; CHECK-LABEL: define amdgpu_kernel void @v_rndne_f32_dpp_propagator_kernel(
 ; CHECK-NOT: call i32 @llvm.amdgcn.update.dpp.i32(
 ; CHECK-DAG: %cwd_dpp_bperm = call i32 @llvm.amdgcn.ds.bpermute(i32 %cwd_dpp_selector, i32 %{{[^,]+}})

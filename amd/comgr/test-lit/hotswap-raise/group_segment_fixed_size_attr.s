@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=group_segment_fixed_size_attr_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s --check-prefix=IR
 
+; group_segment_fixed_size -> "amdgpu-lds-size" attr; ds_store/ds_load.
 ; IR-LABEL: define amdgpu_kernel void @group_segment_fixed_size_attr_kernel(
 ; IR-DAG: store {{.*}}, ptr addrspace(3)
 ; IR-DAG: load {{.*}}, ptr addrspace(3)

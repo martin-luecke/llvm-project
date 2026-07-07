@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=ttmp7_wg_id_y_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s --check-prefix=IR
 
+; ttmp7 workgroup-id y/z register seeding.
 ; IR-LABEL: define amdgpu_kernel void @ttmp7_wg_id_y_kernel(
 ; IR-DAG: [[WG_Y:%ttmp7_wg_id_y[a-zA-Z0-9_.]*]] = call i32 @llvm.amdgcn.workgroup.id.y()
 ; IR-DAG: [[WG_Z:%ttmp7_wg_id_z[a-zA-Z0-9_.]*]] = call i32 @llvm.amdgcn.workgroup.id.z()

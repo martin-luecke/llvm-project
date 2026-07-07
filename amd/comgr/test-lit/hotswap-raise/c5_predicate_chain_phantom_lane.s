@@ -4,6 +4,7 @@
 ; RUN:     --emit-ir=c5_predicate_chain_phantom_lane_kernel 2>&1 \
 ; RUN:   | %FileCheck %s
 
+; Phantom-lane regime (max_flat_workgroup_size < target wave width) falls back to modulo-replication.
 ; CHECK: phantom-lane regime
 ; CHECK-SAME: max_flat_workgroup_size=32
 ; CHECK-SAME: target wavefront width=64

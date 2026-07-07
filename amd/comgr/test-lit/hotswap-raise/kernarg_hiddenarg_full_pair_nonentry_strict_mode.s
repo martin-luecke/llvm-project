@@ -4,6 +4,7 @@
 ; RUN:   --emit-ir=kernarg_hiddenarg_full_pair_same_block,kernarg_hiddenarg_full_pair_successor \
 ; RUN:   | %FileCheck %s
 
+; NonEntry kernarg provenance: s_load rebases the whole pair, lifting hidden-arg loads to ordinary global memory (same-block + successor).
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
 	.text

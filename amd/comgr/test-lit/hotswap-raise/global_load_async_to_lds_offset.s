@@ -3,6 +3,7 @@
 ; RUN:     --target-isa=gfx942 --emit-ir=global_load_async_to_lds_offset_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s --check-prefix=IR
 
+; global_load_async_to_lds_b32 offset form: offset applied to both global and LDS GEPs.
 ; IR: %lds_ptr{{[0-9]*}} = inttoptr i32 {{.*}} to ptr addrspace(3)
 ; IR: %voff_zext{{[0-9]*}} = zext i32 {{.*}} to i64
 ; IR: %scaled_voff{{[0-9]*}} = mul i64 %voff_zext{{[0-9]*}}, 4

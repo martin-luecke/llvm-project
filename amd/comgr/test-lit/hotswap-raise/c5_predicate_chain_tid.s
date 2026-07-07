@@ -8,6 +8,7 @@
 ; RUN:     --emit-ir=c5_predicate_chain_tid_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s --check-prefix=IR_WN
 
+; Refuse Class 5 workitem-id predicate chain without wave-native; wave-native lifts it.
 ; STDERR: transpiler: pre-translation abort:
 ; STDERR-SAME: cross-wave-predicate-chain
 ; STDERR-SAME: workitem.id.x-predicate-chain-classifier

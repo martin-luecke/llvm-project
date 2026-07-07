@@ -3,6 +3,7 @@
 ; RUN:     --emit-ir=c5_predicate_chain_masked_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s --check-prefix=IR
 
+; Accept masked workitem-id predicate chain (and 31 confines it within a wave).
 ; IR-LABEL: define amdgpu_kernel void @c5_predicate_chain_masked_kernel(
 ; IR: call i32 @llvm.amdgcn.workitem.id.x()
 ; IR: and i32 {{.*}}, 31

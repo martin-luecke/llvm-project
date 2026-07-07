@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx942 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_pk_mul_lo_u16_kernel 2>/dev/null | %FileCheck %s
 
+; v_pk_mul_lo_u16 packed u16 multiply lift.
 ; CHECK-LABEL: define amdgpu_kernel void @v_pk_mul_lo_u16_kernel(
 ; CHECK: %pk_mul_lo_u16{{[0-9]*}} = mul <2 x i16> %{{[^,]+}}, %{{[^)]+}}
 ; CHECK: %pk_i16_pack{{[0-9]*}} = bitcast <2 x i16> %pk_mul_lo_u16{{[0-9]*}} to i32

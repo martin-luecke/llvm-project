@@ -4,6 +4,7 @@
 ; RUN:     --emit-ir=v_cmpx_ballot_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; v_cmpx wave-mask ballot + exec update (--enable-wave-native).
 ; CHECK-LABEL: define amdgpu_kernel void @v_cmpx_ballot_kernel(
 ; CHECK:      %[[CMPX_CMP:[^ ]+]] = icmp ult i32 %{{[^ ,]+}}, 64
 ; CHECK-NEXT: %cmpx_ballot = call i64 @llvm.amdgcn.ballot.i64(i1 %[[CMPX_CMP]])

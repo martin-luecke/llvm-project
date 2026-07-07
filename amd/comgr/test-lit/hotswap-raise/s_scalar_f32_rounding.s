@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=s_scalar_f32_rounding_kernel 2>/dev/null | %FileCheck %s
 
+; s_ceil/floor/trunc/rndne_f32 scalar rounding lifted to llvm rounding intrinsics.
 ; CHECK-LABEL: define amdgpu_kernel void @s_scalar_f32_rounding_kernel(
 ; CHECK-DAG: call float @llvm.ceil.f32(float {{.*}})
 ; CHECK-DAG: call float @llvm.floor.f32(float {{.*}})

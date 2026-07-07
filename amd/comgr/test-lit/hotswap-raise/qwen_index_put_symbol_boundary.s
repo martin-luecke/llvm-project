@@ -2,6 +2,7 @@
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=qwen_index_put_boundary_kernel 2>&1 \
 ; RUN:   | %FileCheck %s
 
+; kernel symbol-boundary decoding keeps the lift from bleeding into the next kernel's CAS.
 ; CHECK-LABEL: define amdgpu_kernel void @qwen_index_put_boundary_kernel
 ; CHECK-NOT: NonCommutativeAtomic
 ; CHECK-NOT: global_atomic_cmpswap

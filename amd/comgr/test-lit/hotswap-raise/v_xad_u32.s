@@ -1,6 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_xad_u32_kernel 2>/dev/null | %FileCheck %s
 
+; v_xad_u32 lowered as xor then add (dst = (src0 ^ src1) + src2), not xor3/or3.
 ; CHECK-LABEL: define amdgpu_kernel void @v_xad_u32_kernel(
 ; CHECK: %{{[^ ]+}} = xor i32 %{{[^,]+}}, %{{[^ ]+}}
 ; CHECK: %vxad{{[0-9]*}} = add i32 %{{[^,]+}}, %{{[^ ]+}}

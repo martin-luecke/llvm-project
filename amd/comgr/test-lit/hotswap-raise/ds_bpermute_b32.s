@@ -2,6 +2,7 @@
 ; RUN:   && raise_cli %t.hsaco --emit-ir=ds_bpermute_b32_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s
 
+; Lift ds_bpermute_b32 to llvm.amdgcn.ds.bpermute.
 ; CHECK-LABEL: define amdgpu_kernel void @ds_bpermute_b32_kernel(
 ; CHECK:      %bperm = call i32 @llvm.amdgcn.ds.bpermute(i32 %{{[^,]+}}, i32 %{{[^,]+}})
 ; CHECK: declare {{.*}}i32 @llvm.amdgcn.ds.bpermute(i32, i32)
