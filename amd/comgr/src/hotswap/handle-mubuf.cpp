@@ -90,6 +90,35 @@ HandlerResult handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
     };
 
     if (isLoad) {
+      // EXEC-gate the memory access itself, not just the VGPR write-back.
+      //
+      // This mirrors the GLOBAL_LOAD fix in `handle-flat.cpp` (2026-04-22):
+      // the asymmetric handling where loads fired on *every* target lane --
+      // including WaveNative "phantom" lanes whose source-wave had no
+      // workitem at this position -- faults at runtime when a phantom lane's
+      // per-lane offset VGPR holds `undef` / a stale reused-VGPR value
+      // (e.g. a softmax reduction float) that, combined with the
+      // NUM_RECORDS remap (0x00ffffff -> 0x7ffffffe in `mubuf-addr.cpp`),
+      // lands *in bounds* on the target and dereferences a wild address ->
+      // TCP VM page fault (rocm-systems#148, the Gemma `_fwd_kernel`
+      // prefill-attention K/V-cache load). On real wave32 hardware EXEC
+      // masks the load so inactive lanes never compute an address; the
+      // WaveNative model must reproduce that with an explicit diamond.
+      //
+      // Why this is safe (and why it differs from the store path below,
+      // which deliberately stays full-wave under WaveNative): a masked-out
+      // lane's *loaded* value is discarded, so skipping the load for
+      // inactive lanes can never drop a needed result. A masked *store*,
+      // by contrast, encodes its per-lane predicate in an OOB voffset and
+      // needs full-wave issue + hardware OOB suppression, so double-gating
+      // it could drop a valid lane (`get_num_kv_splits_triton`). Loads have
+      // no such contract -- gating them is always correct.
+      //
+      // Use the low-level `Ctx.Regs.write*` inside the body (not
+      // `Ctx.writeReg*`, which would wrap the write in a second nested
+      // `emitUnderExec` -- harmless but redundant IR), matching
+      // `handle-flat.cpp`.
+      auto EmitLoad = [&] {
       if (isSubDword) {
         // Load the sub-dword datum and zero/sign-extend to i32. For
         // plain ushort/sbyte/etc. (`d16Half == 0`) we then write the
@@ -109,7 +138,7 @@ HandlerResult handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
         if (d16Half == 0) {
           Value *Ext = isBufSigned ? Ctx.B.CreateSExt(Loaded, Ctx.I32Ty)
                                    : Ctx.B.CreateZExt(Loaded, Ctx.I32Ty);
-          Ctx.writeReg32(Vdata, Ext);
+          Ctx.Regs.writeReg32(Ctx.B, Vdata, Ext);
         } else {
           // Partial-write: extend to i16 (sign for `_SBYTE_D16*`,
           // zero for `_UBYTE_D16*` / `_SHORT_D16*`), zext to i32 so
@@ -136,7 +165,7 @@ HandlerResult handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
                 Ctx.B.CreateShl(Ext32, ConstantInt::get(Ctx.I32Ty, 16));
             Merged = Ctx.B.CreateOr(PriorLo, Shifted, "d16_hi_merge");
           }
-          Ctx.writeReg32(Vdata, Merged);
+          Ctx.Regs.writeReg32(Ctx.B, Vdata, Merged);
         }
       } else if (dwords == 1) {
         Value *Loaded = nullptr;
@@ -150,7 +179,7 @@ HandlerResult handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
           Loaded = Ctx.B.CreateCall(BufLd,
               {Srd, Voffset, Soffset, AuxFlags}, "buf_ld");
         }
-        Ctx.writeReg32(Vdata, Loaded);
+        Ctx.Regs.writeReg32(Ctx.B, Vdata, Loaded);
       } else {
         auto *VecTy = FixedVectorType::get(Ctx.I32Ty, dwords);
         Value *Loaded = nullptr;
@@ -164,8 +193,10 @@ HandlerResult handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
           Loaded = Ctx.B.CreateCall(BufLd,
               {Srd, Voffset, Soffset, AuxFlags}, "buf_ld");
         }
-        Ctx.writeRegVec(Vdata, Loaded);
+        Ctx.Regs.writeRegVec(Ctx.B, Vdata, Loaded);
       }
+      };
+      Ctx.emitUnderExec(EmitLoad);
       Hr.Handled = true;
     return Hr;
     }
