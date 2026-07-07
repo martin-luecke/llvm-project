@@ -96,10 +96,9 @@ bool readCvt16HalfSelect(RaiseContext &Ctx, const DecodedInst &Di,
       (Sel.SrcMods & (SISrcMods::NEG | SISrcMods::ABS)) != 0) {
     Hr.Failure = RaiseFailure::unsupportedInstructionForm(
         Di, "VOP1",
-        (Twine(OpName) +
-         " has unsupported integer source modifiers; only op_sel/dst_op_sel "
-         "half selection is modeled")
-            .str());
+        OpName +
+            " has unsupported integer source modifiers; only op_sel/dst_op_sel "
+            "half selection is modeled");
     return false;
   }
 
@@ -118,7 +117,7 @@ Value *readSelectedI16(RaiseContext &Ctx, OpResolver &Op,
                        const Cvt16HalfSelect &Sel, StringRef Name) {
   Value *Raw = Op.src(0);
   if (Sel.SrcHi)
-    Raw = Ctx.B.CreateLShr(Raw, 16, (Name + "_src_hi").str());
+    Raw = Ctx.B.CreateLShr(Raw, 16, Name + "_src_hi");
   return Ctx.B.CreateTrunc(Raw, Type::getInt16Ty(Ctx.C));
 }
 
@@ -130,9 +129,9 @@ Value *readSelectedF16(RaiseContext &Ctx, OpResolver &Op,
   Value *V = Ctx.B.CreateBitCast(Bits, Ctx.F16Ty);
   if ((Sel.SrcMods & SISrcMods::ABS) != 0)
     V = Ctx.B.CreateUnaryIntrinsic(Intrinsic::fabs, V, nullptr,
-                                   (Name + "_abs").str());
+                                   Name + "_abs");
   if ((Sel.SrcMods & SISrcMods::NEG) != 0)
-    V = Ctx.B.CreateFNeg(V, (Name + "_neg").str());
+    V = Ctx.B.CreateFNeg(V, Name + "_neg");
   return V;
 }
 
@@ -200,7 +199,7 @@ HandlerResult handleValuSmallOps(RaiseContext &Ctx, const DecodedInst &Di,
   case CanonicalOp::V_CVT_F16_I16: {
     // True16 conversion: select one i16 source half, convert with the requested
     // signedness, then merge the f16 result into the selected destination half.
-    const bool IsSigned = Di.CanonOp == CanonicalOp::V_CVT_F16_I16;
+    bool IsSigned = Di.CanonOp == CanonicalOp::V_CVT_F16_I16;
     StringRef OpName = IsSigned ? "v_cvt_f16_i16" : "v_cvt_f16_u16";
     if (!requireDefaultOutputModsIfPresent(Di, Hr))
       return Hr;
@@ -224,7 +223,7 @@ HandlerResult handleValuSmallOps(RaiseContext &Ctx, const DecodedInst &Di,
   case CanonicalOp::V_CVT_I16_F16: {
     // Hardware saturates f16-to-i16 conversions; plain fptoui/fptosi would be
     // poison for out-of-range inputs.
-    const bool IsSigned = Di.CanonOp == CanonicalOp::V_CVT_I16_F16;
+    bool IsSigned = Di.CanonOp == CanonicalOp::V_CVT_I16_F16;
     StringRef OpName = IsSigned ? "v_cvt_i16_f16" : "v_cvt_u16_f16";
     if (!requireDefaultOutputModsIfPresent(Di, Hr))
       return Hr;
