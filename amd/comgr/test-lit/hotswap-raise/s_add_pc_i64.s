@@ -47,8 +47,7 @@ add_pc_i64_long_kernel:
 	.p2align	8
 	.type	add_pc_i64_lit64_kernel,@function
 ; LIT64-LABEL: define amdgpu_kernel void @add_pc_i64_lit64_kernel(
-; lit64 form is 12 bytes total (4-byte SOP1 header + 8-byte literal).
-; target = 0x08 (site) + 0x0c (size) + 8 (imm) = 0x1c
+; s_add_pc_i64 lit64: PC advance sized from the 12-byte lit64 encoding.
 ; LIT64: br label %bb_0x1C
 ; LIT64-NOT: indirectbr
 ; LIT64-NOT: unreachable

@@ -24,9 +24,7 @@
 	.amdhsa_code_object_version 6
 	.text
 
-; s_cbranch_vccz is a scalar branch on whether the whole VCC wave mask is
-; zero. It must not branch on the current lane's i1 VCC bit.
-;
+; s_cbranch_vccz branches on the whole VCC wave mask (ballot), not the per-lane bit.
 ; VCC-LABEL: define amdgpu_kernel void @s_cbranch_vcc_wave_mask_kernel(
 	.globl	s_cbranch_vcc_wave_mask_kernel
 	.p2align	8
@@ -46,8 +44,7 @@ s_cbranch_vcc_wave_mask_kernel:
 	global_store_b32 v0, v1, s[0:1] scale_offset
 	s_endpgm
 
-; s_cbranch_vccnz is the nonzero form of the same full-wave VCC test.
-;
+; s_cbranch_vccnz: nonzero form of the full-wave VCC test.
 ; VCCNZ-LABEL: define amdgpu_kernel void @s_cbranch_vccnz_wave_mask_kernel(
 	.globl	s_cbranch_vccnz_wave_mask_kernel
 	.p2align	8
@@ -68,10 +65,7 @@ s_cbranch_vccnz_wave_mask_kernel:
 	global_store_b32 v0, v1, s[0:1] scale_offset
 	s_endpgm
 
-; These scalar ops combine values that came from vector compares. For
-; and/or/xor/andn2, the result is still a lane mask, so SCC must be computed
-; from whether any lane in the full mask is set.
-;
+; SOP2 and/or/xor/andn2 on lane masks: SCC from whether any lane in the mask is set.
 ; SCC-LABEL: define amdgpu_kernel void @sop2_wave_mask_scc_kernel(
 	.globl	sop2_wave_mask_scc_kernel
 	.p2align	8
@@ -188,9 +182,7 @@ sop2_wave_mask_scc_kernel:
 	global_store_b32 v0, v1, s[0:1] scale_offset
 	s_endpgm
 
-; EXEC destinations still propagate the wave mask and derive SCC from the
-; resulting full-wave ballot.
-;
+; SOP2 writes to EXEC propagate the wave mask and derive SCC from the ballot.
 ; EXEC-LABEL: define amdgpu_kernel void @sop2_wave_mask_exec_scc_kernel(
 	.globl	sop2_wave_mask_exec_scc_kernel
 	.p2align	8
@@ -213,9 +205,7 @@ sop2_wave_mask_exec_scc_kernel:
 	global_store_b32 v0, v1, s[0:1] scale_offset
 	s_endpgm
 
-; Complementing ops can set scalar register bits outside the lane mask. Keep SCC
-; based on the scalar result, while still tracking the lane mask for later users.
-;
+; Complementing SOP2 ops derive SCC from the full scalar result while still tracking the lane mask.
 ; SCALAR-LABEL: define amdgpu_kernel void @sop2_wave_mask_scalar_scc_kernel(
 	.globl	sop2_wave_mask_scalar_scc_kernel
 	.p2align	8
