@@ -50,6 +50,8 @@ namespace {
 
 using TimingClock = std::chrono::steady_clock;
 
+constexpr unsigned HotswapComgrOptLevel = 2;
+
 double secondsBetween(TimingClock::time_point start, TimingClock::time_point end) {
   return std::chrono::duration<double>(end - start).count();
 }
@@ -530,6 +532,7 @@ amd_comgr_status_t AMD_COMGR_API amd_comgr_hotswap_transpile_with_options(
   CacheRequest.CacheReadonly =
       hasFlag(options, AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_CACHE_READONLY);
   CacheRequest.CollectTimings = CollectTimings;
+  CacheRequest.OptLevel = HotswapComgrOptLevel;
 
   std::string SkippedKernel;
   if (!CacheRequest.KernelName.empty()) {
