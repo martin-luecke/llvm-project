@@ -1,0 +1,17 @@
+name: HotSwap Nightly (mainline)
+
+# Runs the full HotSwap CI pipeline (build -> lit -> gated E2E -> consolidated
+# summary) nightly against the CURRENT mainline (default-branch HEAD), by calling
+# the reusable hotswap-pr-ci.yml. Identical jobs to a PR run, just scheduled.
+
+on:
+  schedule:
+    - cron: "17 8 * * *"   # 08:17 UTC nightly (off the :00 mark to avoid scheduler contention)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pipeline:
+    uses: ./.github/workflows/hotswap-pr-ci.yml

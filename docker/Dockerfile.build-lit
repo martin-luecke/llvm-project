@@ -1,0 +1,78 @@
+# syntax=docker/dockerfile:1
+#
+# Dockerfile.build-lit
+# ---------------------
+# PR build + lit-test image for the HotSwap transpiler.
+#
+# Purpose: pull an arbitrary martin-luecke/llvm-project PR, rebuild LLVM +
+# libamd_comgr.so incrementally, and run the comgr / LLVM lit suites to gate
+# the PR. This image is the STABLE build pipeline -- it deliberately does NOT
+# carry the model runtime (torch venv, model scaffolding), so changes to the
+# model runner cannot break the build/lit gate.
+#
+# It is built FROM the slimmed base image, which already provides:
+#   - Ubuntu 24.04 + ROCm 7.1.1 (/opt/rocm-7.1.1)
+#   - host build toolchain: clang-18 (/usr/bin/clang++), ld.lld, cmake, ccache
+#   - system ninja (/usr/bin/ninja) -- drives the prebuilt tree fine
+#   - the full llvm-project source + CMake-configured build tree at
+#     /workspace/llvm-acc (COMGR_ENABLE_HOTSWAP_TRANSPILE=ON), plus the git
+#     metadata needed to regenerate VCSRevision.h
+#   - /workspace/rebuild-comgr.sh
+#
+# What this layer does:
+#   - drops the model-only content (venvs, model scaffolding, scratch dumps)
+#   - pre-builds the LLVM test utilities (FileCheck/not/count) that the base
+#     image was missing, so `ninja check-comgr` works out of the box
+#   - ensures the transpiler .so is debug-stripped (small) but functional
+#
+ARG BASE=registry-sc-harbor.amd.com/hotswap-ci/hotswap-pr10-gfx950-lean:latest
+FROM ${BASE}
+
+# Use the system ninja (the /opt/venv one is removed below).
+ENV PATH=/opt/rocm/llvm/bin:/opt/rocm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ENV LD_LIBRARY_PATH=/opt/rocm/lib
+
+# 1) Pre-build the LLVM test utilities required by the lit suites and make sure
+#    the transpiler is (re)built + debug-stripped. Repoint llvm-lit at the
+#    system python so the lit gate does NOT depend on the model venv (which is
+#    removed below) -- lit only needs the stdlib. Do it all in one layer.
+RUN set -eux; \
+    export PATH=/opt/rocm/llvm/bin:$PATH; \
+    /usr/bin/ninja -C /workspace/llvm-acc/build FileCheck not count; \
+    /usr/bin/ninja -C /workspace/llvm-acc/build amd_comgr; \
+    /opt/rocm/llvm/bin/llvm-strip --strip-debug \
+        /workspace/llvm-acc/build/lib/libamd_comgr.so.3.3.0; \
+    sed -i '1s|^#!.*python.*|#!/usr/bin/python3|' \
+        /workspace/llvm-acc/build/bin/llvm-lit; \
+    head -1 /workspace/llvm-acc/build/bin/llvm-lit; \
+    ls -la /workspace/llvm-acc/build/bin/FileCheck \
+           /workspace/llvm-acc/build/lib/libamd_comgr.so.3.3.0
+
+# 2) Remove everything the BUILD/LIT pipeline does not need. The model runtime
+#    (torch venv + SGLang venv + model scaffolding) lives only in the model-run
+#    image, so removing it here guarantees model-side edits can never affect
+#    the build gate.
+RUN set -eux; \
+    rm -rf /workspace/venv \
+           /opt/venv \
+           /workspace/rocm-hotswap-testing \
+           /workspace/sglang \
+           /workspace/data; \
+    # scratch / debug dumps that ship in the base
+    rm -rf /tmp/* /var/tmp/* 2>/dev/null || true; \
+    # caches (repopulate on demand; not needed for build/lit)
+    rm -rf /root/.cache /home/*/.cache /home/*/.triton /home/*/.aiter \
+           /root/.triton /root/.aiter 2>/dev/null || true; \
+    # loose prebuilt wheels at / (already installed / not needed here)
+    rm -f /*.whl 2>/dev/null || true; \
+    find / -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
+
+WORKDIR /workspace/llvm-acc/build
+
+# Sanity: the two commands this image exists to run.
+#   Rebuild comgr from a PR checkout:
+#     /workspace/rebuild-comgr.sh /path/to/llvm-project
+#   Run the comgr lit gate:
+#     ninja -C /workspace/llvm-acc/build check-comgr
+LABEL org.hotswap.role="build-lit"
+CMD ["sleep", "infinity"]

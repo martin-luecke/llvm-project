@@ -1,0 +1,243 @@
+name: HotSwap PR CI
+
+# Single gated PR pipeline for the HotSwap transpiler.
+#
+#   build_lit  -> rebuilds libamd_comgr.so from THIS PR's llvm-project checkout
+#                 inside the gfx950 build-lit image, runs the check-comgr lit
+#                 gate (test-content failures are NON-fatal; only build/infra
+#                 failures fail the job), uploads the built comgr as the
+#                 libamd_comgr-<run_id> artifact, and emits a run manifest
+#                 (versions under test).
+#
+#   E2E lanes  -> SGLang gfx950, SGLang gfx942, Pytorch gfx950. Each lane's model
+#                 jobs declare `needs: build_lit`, so they are SKIPPED (not run)
+#                 whenever build_lit fails. Each downloads the PR-built comgr
+#                 artifact and mounts it over the runner image's comgr, so the
+#                 E2E runs exercise the PR's transpiler (the gfx942 lane on
+#                 shark300 consumes the comgr built on mi350 via the artifact).
+#
+#   summary    -> downloads every per-model result + the manifest and renders ONE
+#                 consolidated table to the run summary.
+#
+# Runner images carry the arch-native sgl_kernel / pytorch stack + the llvm-acc
+# build tree the transpiler needs at runtime. gfx950 SGLang and gfx950 Pytorch
+# use distinct images. Scratch/persist use the runner-managed RUNNER_TEMP (no
+# fixed host path). See the Confluence page "Hotswap CI Overview/Usage/Status".
+
+on:
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+concurrency:
+  group: hotswap-pr-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  BUILD_LIT_IMAGE: registry-sc-harbor.amd.com/hotswap-ci/build-lit:latest
+  SGLANG_GFX950_IMAGE: registry-sc-harbor.amd.com/hotswap-ci/gfx950-sglang:latest
+  PYTORCH_GFX950_IMAGE: registry-sc-harbor.amd.com/hotswap-ci/gfx950-pytorch:latest
+  GFX942_IMAGE: registry-sc-harbor.amd.com/hotswap-ci/gfx942-sglang:latest
+  ARTIFACT_NAME: libamd_comgr-${{ github.run_id }}
+
+jobs:
+  build_lit:
+    name: build + lit
+    runs-on: [self-hosted, linux, rocm, docker, gfx950]
+    steps:
+      - uses: actions/checkout@v7          # full checkout: need amd/comgr + amd/device-libs sources
+      - name: Rebuild comgr from PR + check-comgr lit gate
+        shell: bash --noprofile --norc {0}
+        env:
+          PR_SRC: ${{ github.workspace }}
+          COMGR_OUT: ${{ runner.temp }}/pr-comgr
+        run: bash "$GITHUB_WORKSPACE/.github/workflows/scripts/run-build-lit.sh"
+      - name: Stage comgr + lit summary for artifact
+        shell: bash --noprofile --norc {0}
+        env:
+          COMGR_OUT: ${{ runner.temp }}/pr-comgr
+        run: |
+          set -uo pipefail
+          mkdir -p "$RUNNER_TEMP/artifact"
+          cp -a "$COMGR_OUT/libamd_comgr.so.3.3.0" "$RUNNER_TEMP/artifact/" 2>/dev/null || true
+          cp -a "$COMGR_OUT/lit-summary.txt"        "$RUNNER_TEMP/artifact/" 2>/dev/null || true
+      - name: Upload PR-built comgr artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: |
+            ${{ runner.temp }}/artifact/libamd_comgr.so.3.3.0
+            ${{ runner.temp }}/artifact/lit-summary.txt
+          if-no-files-found: error
+          retention-days: 14
+      - name: Emit run manifest (versions under test)
+        shell: bash --noprofile --norc {0}
+        env:
+          PR_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PR_REF: ${{ github.head_ref || github.ref_name }}
+          MODEL_IMAGE: ${{ env.SGLANG_GFX950_IMAGE }}
+          OUT: ${{ runner.temp }}/manifest/manifest.json
+        run: bash "$GITHUB_WORKSPACE/.github/workflows/scripts/emit-manifest.sh"
+      - name: Upload run manifest
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: result-manifest
+          path: ${{ runner.temp }}/manifest/manifest.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  sglang_gfx950:
+    name: SGLang E2E gfx950 / ${{ matrix.name }}
+    needs: build_lit
+    runs-on: [self-hosted, linux, rocm, docker, gfx950]
+    env:
+      IMAGE: registry-sc-harbor.amd.com/hotswap-ci/gfx950-sglang:latest
+      WEIGHTS_HOST: /mnt/gfx_apps/models
+      GPU: "7"
+      TARGET_GFX: gfx950
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: qwen3_0_6b,   profile: qwen3_0_6b,   subpath: Qwen/Qwen3-0.6B }
+          - { name: qwen3_5_4b,   profile: qwen3_5_4b,   subpath: Qwen/Qwen3.5-4B }
+          - { name: llama_3_1_8b, profile: llama,        subpath: meta-llama/Llama-3.1-8B-Instruct }
+          - { name: gemma3_4b_it, profile: gemma3_4b_it, subpath: google/gemma-3-4b-it }
+          - { name: qwen2_5_7b,  profile: custom, subpath: Qwen/Qwen2.5-7B-Instruct,    prompts: /workspace/rocm-hotswap-testing/data/sglang/qwen3_5_4b/prompts/smoke.json }
+          - { name: qwen1_5_moe, profile: custom, subpath: Qwen/Qwen1.5-MoE-A2.7B-Chat, prompts: /workspace/rocm-hotswap-testing/data/sglang/qwen3_5_4b/prompts/smoke.json }
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github
+          clean: false
+      - name: Download PR-built comgr
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ runner.temp }}/pr-comgr
+      - name: Run ${{ matrix.name }}
+        shell: bash --noprofile --norc {0}
+        env:
+          PR_COMGR: ${{ runner.temp }}/pr-comgr/libamd_comgr.so.3.3.0
+          SCRATCH_BASE: ${{ runner.temp }}/scratch
+          LANE: SGLang E2E gfx950
+          RESULT_JSON: ${{ runner.temp }}/model-result.json
+        run: bash "$GITHUB_WORKSPACE/.github/workflows/scripts/run-sglang-model.sh" "${{ matrix.name }}" "${{ matrix.profile }}" "${{ matrix.subpath }}" "${{ matrix.prompts }}"
+      - name: Upload per-model result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: result-sglang-gfx950-${{ matrix.name }}
+          path: ${{ runner.temp }}/model-result.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  sglang_gfx942:
+    name: SGLang E2E gfx942 / ${{ matrix.name }}
+    needs: build_lit
+    runs-on: [self-hosted, linux, rocm, docker, gfx942]
+    env:
+      IMAGE: registry-sc-harbor.amd.com/hotswap-ci/gfx942-sglang:latest
+      WEIGHTS_HOST: /home/nisenthi/hotswap-data
+      GPU: "7"
+      TARGET_GFX: gfx942
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: qwen3_0_6b,   profile: qwen3_0_6b,   subpath: Qwen3-0.6B }
+          - { name: qwen3_5_4b,   profile: qwen3_5_4b,   subpath: Qwen3.5-4B }
+          - { name: gemma3_4b_it, profile: gemma3_4b_it, subpath: gemma-3-4b-it }
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github
+          clean: false
+      - name: Download PR-built comgr
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ runner.temp }}/pr-comgr
+      - name: Run ${{ matrix.name }}
+        shell: bash --noprofile --norc {0}
+        env:
+          PR_COMGR: ${{ runner.temp }}/pr-comgr/libamd_comgr.so.3.3.0
+          SCRATCH_BASE: ${{ runner.temp }}/scratch
+          LANE: SGLang E2E gfx942
+          RESULT_JSON: ${{ runner.temp }}/model-result.json
+        run: bash "$GITHUB_WORKSPACE/.github/workflows/scripts/run-sglang-model.sh" "${{ matrix.name }}" "${{ matrix.profile }}" "${{ matrix.subpath }}" "${{ matrix.prompts }}"
+      - name: Upload per-model result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: result-sglang-gfx942-${{ matrix.name }}
+          path: ${{ runner.temp }}/model-result.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  pytorch_gfx950:
+    name: Pytorch E2E gfx950 / ${{ matrix.name }}
+    needs: build_lit
+    runs-on: [self-hosted, linux, rocm, docker, gfx950]
+    env:
+      IMAGE: registry-sc-harbor.amd.com/hotswap-ci/gfx950-pytorch:latest
+      WEIGHTS_HOST: /mnt/gfx_apps/models
+      GPU: "7"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: whisper_small,  subpath: openai/whisper-small }
+          - { name: flux_1_dev,     subpath: black-forest-labs/FLUX.1-dev }
+          - { name: flux_1_schnell, subpath: black-forest-labs/FLUX.1-schnell }
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github
+          clean: false
+      - name: Download PR-built comgr
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ runner.temp }}/pr-comgr
+      - name: Run ${{ matrix.name }}
+        shell: bash --noprofile --norc {0}
+        env:
+          PR_COMGR: ${{ runner.temp }}/pr-comgr/libamd_comgr.so.3.3.0
+          SCRATCH_BASE: ${{ runner.temp }}/scratch
+          LANE: Pytorch E2E gfx950
+          RESULT_JSON: ${{ runner.temp }}/model-result.json
+        run: bash "$GITHUB_WORKSPACE/.github/workflows/scripts/run-pytorch-model.sh" "${{ matrix.name }}" "${{ matrix.subpath }}"
+      - name: Upload per-model result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: result-pytorch-gfx950-${{ matrix.name }}
+          path: ${{ runner.temp }}/model-result.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  summary:
+    name: Consolidated summary
+    needs: [build_lit, sglang_gfx950, sglang_gfx942, pytorch_gfx950]
+    if: always()
+    runs-on: [self-hosted, linux, rocm, docker, gfx942]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github
+          clean: false
+      - name: Collect per-model results + manifest
+        uses: actions/download-artifact@v8
+        with:
+          pattern: result-*
+          path: ${{ runner.temp }}/results
+      - name: Render consolidated summary
+        shell: bash --noprofile --norc {0}
+        run: |
+          mkdir -p "$RUNNER_TEMP/results"
+          python3 "$GITHUB_WORKSPACE/.github/workflows/scripts/render-summary.py" "$RUNNER_TEMP/results"
