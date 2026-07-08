@@ -81,13 +81,11 @@ enum class HwregWrite {
   // faithfully reproduce.  Kept for `Drop`-but-louder opcodes we
   // don't want to land as pure `Drop` yet.
   WarnDrop,
-  // Faithfully re-emit the write via `@llvm.amdgcn.s.setreg` with
-  // the exact same simm16 + value.  The backend lowers this 1:1 to
-  // `s_setreg_imm32_b32 <same simm16>, <same value>` on the target.
-  // Correct when (a) the bit position is architecturally stable
-  // across source and target ISAs, and (b) the bit's effect on
-  // compute is cross-architecturally equivalent (not a "rounding-
-  // mode-on-gfx1250 / clamp-on-gfx942" kind of repurpose).
+  // Faithfully re-emit the write via `@llvm.amdgcn.s.setreg` after
+  // field-specific source/target checks. The backend lowers this 1:1 to
+  // `s_setreg_imm32_b32 <simm16>, <value>` on the target, so preserving a
+  // write is correct only when the selected field has matching meaning on the
+  // target.
   //
   // Why faithful lift is preferred over `WarnDrop` even when the
   // specific bit Triton writes is observationally harmless on
@@ -104,22 +102,17 @@ enum class HwregWrite {
   //     (the common case for bits 0..22 -- standard FP round /
   //     denormal / IEEE, unchanged since gfx8), `Preserve` produces
   //     byte-exact behaviour versus dropping.
-  //   * If the bit is gfx-generation-specific (bit 23 FP16_OVFL, bit 25
-  //     REPLAY_MODE, and other high MODE fields), `Preserve` writes to the
-  //     bit position; the target hardware's interpretation is
-  //     authoritative.  If a kernel later surfaces as WRONG
-  //     because of a bit-23+ repurpose, that is a NEW data point
-  //     that justifies per-bit gating rather than reverting to a
-  //     silent drop.
+  //   * If the field is source-generation-specific, the handler below must
+  //     consume it explicitly or refuse it before reaching the intrinsic. In
+  //     particular, gfx1250's WAVE_MODE replay prologue has no gfx9 target
+  //     counterpart and must not be retargeted into gfx950 HW_REG_MODE bit 25.
   //
   // Not a fix for any currently-known miscompile.  The
   // `topk_forward_bf16` silent miscompile flagged in commit
-  // `7507185094` WAS empirically checked under `Preserve`: output
-  // unchanged (gfx942's MODE.REPLAY_MODE write is a no-op for Triton's softmax
-  // path at this shape; the bug is elsewhere -- see the
-  // `topk_forward_bisect_*` recipes landed alongside this change
-  // for the ongoing triage).  `Preserve` is a principled-improvement
-  // change, independent of that triage.
+  // `7507185094` WAS empirically checked under `Preserve`: output unchanged
+  // for the already-proven stable MODE fields. Source-generation-specific
+  // fields stay gated at the use site rather than being treated as generic
+  // target MODE writes.
   Preserve,
   // Refuse to lower.  Used for writes we cannot faithfully
   // reproduce (FLAT aperture bases, trap handler, XNACK retry) or
@@ -421,6 +414,18 @@ HandlerResult handleSOPK(RaiseContext &Ctx, const DecodedInst &Di,
         }
         int64_t ImmVal = Di.getImm(0);
         ValArg = ConstantInt::get(Ctx.I32Ty, ImmVal);
+
+        if (Ctx.Isa.HasGfx125UserSgprCountField &&
+            !Ctx.TargetIsa.HasGfx125UserSgprCountField &&
+            amdgpu::isModeReplayMultiGroupWrite(HwregId, Simm16, ImmVal)) {
+          // gfx1250 emits this WAVE_MODE write as a prologue hint selecting
+          // multi-group replay before memory operations. gfx9 targets have no
+          // WAVE_MODE register, and preserving the same HWREG selector would
+          // lower to a target MODE bit write instead. Consume the source-only
+          // setup rather than retargeting it to unrelated target state.
+          Hr.Handled = true;
+          return Hr;
+        }
 
         // On gfx1250 (1024-addressable-VGPRs targets), any
         // S_SETREG_IMM32_B32 targeting HW_REG_MODE writes the VGPR

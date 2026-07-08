@@ -952,10 +952,11 @@ void SIFrameLowering::emitEntryFunctionPrologue(MachineFunction &MF,
                                          ScratchRsrcReg, ScratchWaveOffsetReg);
   }
 
-  if (ST.hasWaitXcnt()) {
-    // Set REPLAY_MODE (bit 25) in MODE register to enable multi-group XNACK
-    // replay. This aligns hardware behavior with the compiler's s_wait_xcnt
-    // insertion logic, which assumes multi-group mode by default.
+  if (ST.hasWaitXcnt() && ST.hasGFX1250Insts()) {
+    // Set REPLAY_MODE (bit 25) in WAVE_MODE to enable multi-group XNACK
+    // replay. `hasWaitXcnt` is also true on gfx950, but gfx9 targets do not
+    // expose gfx12's WAVE_MODE register. Emitting the same selector there would
+    // encode an unrelated MODE write and can illegal-instruction at dispatch.
     unsigned RegEncoding =
         AMDGPU::Hwreg::HwregEncoding::encode(AMDGPU::Hwreg::ID_MODE, 25, 1);
     BuildMI(MBB, I, DL, TII->get(AMDGPU::S_SETREG_IMM32_B32))
