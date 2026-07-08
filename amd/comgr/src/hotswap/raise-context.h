@@ -10,7 +10,6 @@
 #define HOTSWAP_TRANSPILER_RAISE_CONTEXT_H
 
 #include "decoded-inst.h"
-#include "hotswap/error-collector.h"
 #include "isa-profile.h"
 #include "kernarg-layout.h"
 #include "mc-state.h"
@@ -32,6 +31,7 @@
 #include <cassert>
 #include <map>
 #include <optional>
+#include <utility>
 
 namespace COMGR::hotswap {
 
@@ -629,16 +629,10 @@ struct RaiseContext {
   // Value* -- so they record the failure here and the per-instruction
   // dispatch loop in `raiser.cpp` checks it after each handler returns
   // and aborts the kernel raise. Set via `recordReadFailure`.
-  // ErrorCollector (not a plain llvm::Error) because RaiseContext is an
-  // aggregate: its destructor consumes any undrained failure, so it is safe to
-  // drop on early-return paths where the dispatch loop never runs.
-  ErrorCollector PendingFailure;
 
   // Record an operand-read failure so the dispatch loop can promote it to
   // a structured kernel-raise failure at the next instruction boundary.
-  void recordReadFailure(llvm::Error Err) {
-    PendingFailure.addError(std::move(Err));
-  }
+  llvm::function_ref<void(llvm::Error Err)> recordReadFailure;
 };
 
 // Return value from every format handler, carried inside an

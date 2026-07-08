@@ -1685,6 +1685,17 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
     Ctx.SgprWaveMaskValidShadow.push_back(ValidA);
   }
 
+  llvm::Error RaiseReadFailure = llvm::Error::success();
+  auto ReadFailureHandler = [&](llvm::Error Err) {
+    if (RaiseReadFailure) {
+      RaiseReadFailure =
+          llvm::joinErrors(std::move(RaiseReadFailure), std::move(Err));
+    } else {
+      RaiseReadFailure = std::move(Err);
+    }
+  };
+  Ctx.recordReadFailure = ReadFailureHandler;
+
   // Wire the reg-file's EXEC-write invalidation hook to ctx's lane_active
   // memo. This catches every EXEC mutation -- ctx.storeExec, the various
   // ctx.writeReg*(EXEC, …) wrappers, *and* the handful of handlers that
@@ -1750,9 +1761,12 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
     B.CreateRetVoid();
   }
 
-  int RaisedCount = 0;
-  Error RaiseFailures = llvm::Error::success();
+  if (RaiseReadFailure) {
+    assert(false && "Unexpected read failures before raise loop");
+  }
 
+  llvm::Error RaiseFailures = llvm::Error::success();
+  int RaisedCount = 0;
   for (size_t InstIdx = 0; InstIdx < Insts.size(); ++InstIdx) {
     const DecodedInst &Di = Insts[InstIdx];
 
@@ -1817,69 +1831,92 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
     // `default: break;` semantics are preserved: anything without a matching
     // bit falls through with `hr.Handled == false` and hits the unsupported-
     // instruction error path below.
-    const uint64_t KValu =
-        SIInstrFlags::DPP | SIInstrFlags::SDWA | SIInstrFlags::VOP1 |
-        SIInstrFlags::VOP2 | SIInstrFlags::VOP3 | SIInstrFlags::VOPC |
-        SIInstrFlags::VOP3P;
-    const uint64_t Flags = Di.TsFlags;
-    const unsigned Opc = Di.Inst.getOpcode();
 
-    std::optional<HandlerResult> MaybeHr;
+    llvm::Expected<HandlerResult> HrOrErr =
+        [&]() -> llvm::Expected<HandlerResult> {
+      const uint64_t KValu = SIInstrFlags::DPP | SIInstrFlags::SDWA |
+                             SIInstrFlags::VOP1 | SIInstrFlags::VOP2 |
+                             SIInstrFlags::VOP3 | SIInstrFlags::VOPC |
+                             SIInstrFlags::VOP3P;
+      const uint64_t Flags = Di.TsFlags;
+      const unsigned Opc = Di.Inst.getOpcode();
 
-    auto DeferError = [&](llvm::Expected<HandlerResult> HrOrErr) {
-      if (llvm::Error Err = Ctx.PendingFailure.makeError()) {
-        RaiseFailures =
-            llvm::joinErrors(std::move(RaiseFailures), std::move(Err));
+      if (AMDGPU::isVOPD(Opc))
+        return handleVOPD(Ctx, Di, Op);
+      else if (Flags & SIInstrFlags::IsMAI)
+        return handleMFMA(Ctx, Di, Op);
+      else if (Flags & KValu)
+        return handleVALU(Ctx, Di, Op);
+      else if (Flags & SIInstrFlags::SOPP)
+        return handleSOPP(Ctx, Di, Op);
+      else if (Flags & SIInstrFlags::SOPC)
+        return handleSOPC(Ctx, Di, Op);
+      else if (Flags & SIInstrFlags::SOP1)
+        return handleSOP1(Ctx, Di, Op);
+      else if (Flags & SIInstrFlags::SOP2)
+        return handleSOP2(Ctx, Di, Op);
+      else if (Flags & SIInstrFlags::SOPK)
+        return handleSOPK(Ctx, Di, Op);
+      else if (Flags & SIInstrFlags::SMRD)
+        return handleSMEM(Ctx, Di, Op);
+      else if (Flags & SIInstrFlags::FLAT)
+        return handleFLAT(Ctx, Di, Op);
+      else if (Flags & SIInstrFlags::MUBUF)
+        return handleMUBUF(Ctx, Di, Op);
+      else if (Flags & SIInstrFlags::DS)
+        return handleDS(Ctx, Di, Op);
+      // VIMAGE TENSOR pseudo-instructions (`tensor_load_to_lds_d{2,4}`,
+      // `tensor_store_from_lds_d{2,4}`, MIMGInstructions.td:2049-2113).
+      // The pseudo extends `InstSI` directly and only sets `let VALU =
+      // 1` and `let TENSOR_CNT = 1` (NOT `let VIMAGE = 1`), so the
+      // `SIInstrFlags::VIMAGE` bit stays 0 on these. Dispatch on
+      // `TENSOR_CNT` instead -- the only other carrier of that bit is
+      // `s_wait_tensorcnt` (SOPP), which is already claimed by the
+      // SOPP arm above and never reaches this fallthrough. Routed
+      // late because TENSOR ops are exclusive to the gfx1250
+      // (`isGFX125xOnly`) generation and the handler's only contract
+      // today is a cross-target loud refusal; the same gating applies
+      // when the same-target intrinsic-emit path lands.
+      else if (Flags & SIInstrFlags::TENSOR_CNT)
+        return handleVIMAGE(Ctx, Di, Op);
+
+      std::string Format = formatName(Di.TsFlags, Opc);
+      return RaiseFailure::unsupportedInstructionForm(Di, Format);
+    }();
+
+    if (RaiseReadFailure || !HrOrErr) {
+      if (RaiseFailures && RaiseReadFailure) {
+        RaiseFailures = llvm::joinErrors(std::move(RaiseFailures),
+                                         std::move(RaiseReadFailure));
+        RaiseReadFailure = llvm::Error::success();
+      } else if (RaiseReadFailure) {
+        RaiseFailures = std::move(RaiseReadFailure);
+        RaiseReadFailure = llvm::Error::success();
       }
-      if (!HrOrErr) {
+
+      if (RaiseFailures && !HrOrErr) {
         RaiseFailures =
             llvm::joinErrors(std::move(RaiseFailures), HrOrErr.takeError());
-        return;
+      } else if (!HrOrErr) {
+        RaiseFailures = HrOrErr.takeError();
       }
-      MaybeHr = *HrOrErr;
-    };
+      continue;
+    }
 
-    if (AMDGPU::isVOPD(Opc))
-      DeferError(handleVOPD(Ctx, Di, Op));
-    else if (Flags & SIInstrFlags::IsMAI)
-      DeferError(handleMFMA(Ctx, Di, Op));
-    else if (Flags & KValu)
-      DeferError(handleVALU(Ctx, Di, Op));
-    else if (Flags & SIInstrFlags::SOPP)
-      DeferError(handleSOPP(Ctx, Di, Op));
-    else if (Flags & SIInstrFlags::SOPC)
-      DeferError(handleSOPC(Ctx, Di, Op));
-    else if (Flags & SIInstrFlags::SOP1)
-      DeferError(handleSOP1(Ctx, Di, Op));
-    else if (Flags & SIInstrFlags::SOP2)
-      DeferError(handleSOP2(Ctx, Di, Op));
-    else if (Flags & SIInstrFlags::SOPK)
-      DeferError(handleSOPK(Ctx, Di, Op));
-    else if (Flags & SIInstrFlags::SMRD)
-      DeferError(handleSMEM(Ctx, Di, Op));
-    else if (Flags & SIInstrFlags::FLAT)
-      DeferError(handleFLAT(Ctx, Di, Op));
-    else if (Flags & SIInstrFlags::MUBUF)
-      DeferError(handleMUBUF(Ctx, Di, Op));
-    else if (Flags & SIInstrFlags::DS)
-      DeferError(handleDS(Ctx, Di, Op));
-    // VIMAGE TENSOR pseudo-instructions (`tensor_load_to_lds_d{2,4}`,
-    // `tensor_store_from_lds_d{2,4}`, MIMGInstructions.td:2049-2113).
-    // The pseudo extends `InstSI` directly and only sets `let VALU =
-    // 1` and `let TENSOR_CNT = 1` (NOT `let VIMAGE = 1`), so the
-    // `SIInstrFlags::VIMAGE` bit stays 0 on these. Dispatch on
-    // `TENSOR_CNT` instead -- the only other carrier of that bit is
-    // `s_wait_tensorcnt` (SOPP), which is already claimed by the
-    // SOPP arm above and never reaches this fallthrough. Routed
-    // late because TENSOR ops are exclusive to the gfx1250
-    // (`isGFX125xOnly`) generation and the handler's only contract
-    // today is a cross-target loud refusal; the same gating applies
-    // when the same-target intrinsic-emit path lands.
-    else if (Flags & SIInstrFlags::TENSOR_CNT)
-      DeferError(handleVIMAGE(Ctx, Di, Op));
+    HandlerResult Hr = *HrOrErr;
 
-    if (MaybeHr && MaybeHr->Handled) {
-      HandlerResult &Hr = *MaybeHr;
+    // A handler recognised the instruction but refused it
+    if (!Hr.Handled) {
+      std::string Format = formatName(Di.TsFlags, Di.Inst.getOpcode());
+      errs() << "transpiler: Unsupported instruction: " << Di.Mnemonic
+             << " (raw: " << Di.RawMnemonic << ")" << " [format=" << Format
+             << "]" << " at offset 0x" << format_hex(Di.Offset, 1) << "\n";
+      RaiseFailures =
+          llvm::joinErrors(std::move(RaiseFailures),
+                           RaiseFailure::unsupportedOpcode(Di, Format));
+      continue;
+    }
+
       if (Di.DefsScc && !Hr.SccHandled && Hr.SccResult) {
         Value *Zero = Constant::getNullValue(Hr.SccResult->getType());
         Ctx.Regs.storeSCC(Ctx.B, Ctx.B.CreateICmpNE(Hr.SccResult, Zero));
@@ -1936,18 +1973,10 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
 
       RaisedCount++;
       continue;
-    }
+  }
 
-    // A handler recognised the instruction but refused it: its structured
-    // failure was already joined into `RaiseFailures` by `DeferError`. If no
-    // handler produced an error and none claimed the instruction, promote to
-    // `UnsupportedOpcode` and bucket by format.
-    std::string Format = formatName(Di.TsFlags, Di.Inst.getOpcode());
-    errs() << "transpiler: Unsupported instruction: " << Di.Mnemonic
-           << " (raw: " << Di.RawMnemonic << ")" << " [format=" << Format << "]"
-           << " at offset 0x" << format_hex(Di.Offset, 1) << "\n";
-    RaiseFailures = llvm::joinErrors(
-        std::move(RaiseFailures), RaiseFailure::unsupportedOpcode(Di, Format));
+  if (RaiseReadFailure) {
+    assert(false && "unhandled read failure after raise loop");
   }
 
   // Ensure all BBs have terminators. An empty kernel (no decoded
@@ -1969,8 +1998,9 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
   Result.LiftedCount = RaisedCount;
 
   // If any instructions failed to raise, skip Phases 6-7.
-  if (RaiseFailures)
+  if (RaiseFailures) {
     return RaiseFailures;
+  }
 
   // ==== Phase 6: Promote allocas to SSA ====
   {
