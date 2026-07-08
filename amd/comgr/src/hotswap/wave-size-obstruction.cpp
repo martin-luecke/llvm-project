@@ -578,6 +578,10 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
                                           const MCState &Mc,
                                           const WaveProjection &Projection,
                                           bool EnableWritelaneRewrite) {
+  // No obstruction in this report consults the flag anymore (the
+  // WaveIdLiftScalarized site below refuses unconditionally); kept in the
+  // signature because callers pass the pipeline flag.
+  (void)EnableWritelaneRewrite;
   ObstructionReport Report;
   const ISAProfile &Src = Projection.sourceIsa();
   const ISAProfile &Tgt = Projection.targetIsa();
@@ -1101,24 +1105,16 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
       ObstructionSite Site;
       Site.Inst = Di;
       Site.Kind = ObstructionKind::WaveIdLiftScalarized;
-      // When `enableWritelaneRewrite` is on, the site has an
-      // implemented rewrite (the post-mem2reg pass in
-      // `rewrite_cross_lane_divergent.{hpp,cpp}` replaces the
-      // collapsing cross-lane primitive with a per-source-wave
-      // `select` / `ds.bpermute`). Tag it accordingly so the
-      // pre-translation abort below does NOT fire -- the rewrite
-      // discharges the obstruction during Phase 6.5 of raiser.cpp.
-      // Paired with a post-raise safety net in raiser.cpp that
-      // verifies the rewrite pass actually rewrote at least one
-      // site (guards against an oracle false-negative disagreeing
-      // with this syntactic co-occurrence classifier).
-      if (EnableWritelaneRewrite) {
-        Site.Rewrite = RewriteId::PostRaiseCrossLaneRewrite;
-        Site.RewriteImplemented = true;
-      } else {
-        Site.Rewrite = RewriteId::None;
-        Site.RewriteImplemented = false;
-      }
+      // Refuse regardless of the writelane-rewrite flag. The rewrite
+      // (rewrite_cross_lane_divergent.cpp) replaces the cross-lane primitive
+      // but does not preserve the per-source-wave wave_id-derived tile-column
+      // base fed into the writelane value, so the two source waves' column
+      // bases collapse to one uniform under wave32->wave64 and one wave's
+      // output tile is stored at the other's base. It therefore does not
+      // discharge this obstruction; refusing avoids a silent wrong-address
+      // store (rocm-systems#151).
+      Site.Rewrite = RewriteId::None;
+      Site.RewriteImplemented = false;
       Site.Detail =
           "kernel also contains the canonical `s_bfe_u32 sDST, ttmp8, "
           "0x50019` wave_id lift and v_wmma_* -- the lift's per-lane "

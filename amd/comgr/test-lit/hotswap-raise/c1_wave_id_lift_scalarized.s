@@ -4,12 +4,17 @@
 ; RUN:     --emit-ir=c1_wave_id_lift_scalarized_kernel 2>&1 \
 ; RUN:   | %FileCheck %s --check-prefix=REFUSE
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 \
+; RUN:   && %not raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:     --enable-writelane-rewrite \
-; RUN:     --emit-ir=c1_wave_id_lift_scalarized_kernel 2>/dev/null \
-; RUN:   | %FileCheck %s --check-prefix=REWRITTEN
+; RUN:     --emit-ir=c1_wave_id_lift_scalarized_kernel 2>&1 \
+; RUN:   | %FileCheck %s --check-prefix=REFUSE
 
-; Refuse vs rewrite scalarized wave-id v_writelane lane leak.
+; rocm-systems#151: the WaveIdLiftScalarized shape must REFUSE under BOTH flag
+; states. The post-raise writelane/readlane rewrite does NOT preserve the
+; per-source-wave wave_id-derived tile-column base, so it does not discharge
+; this obstruction -- it silently miscompiled the gemma prefill _fwd_kernel
+; attention output to ~1e38 on the even columns of one 16-wide head_dim tile.
+; refuse-don't-miscompile until a correct re-diverging rewrite lands.
 ; REFUSE: transpiler: pre-translation abort:
 ; REFUSE-SAME: cross-wave-lane-id-leak
 ; REFUSE-SAME: v_writelane_b32
@@ -21,12 +26,6 @@
 ; REFUSE: outcome: (c) refuse
 ; REFUSE: raise_cli: kernel 'c1_wave_id_lift_scalarized_kernel' failed to raise:
 ; REFUSE-SAME: v_writelane_b32
-; REWRITTEN-LABEL: define amdgpu_kernel void @c1_wave_id_lift_scalarized_kernel(
-; REWRITTEN: %cwd_lane_id_lo = call i32 @llvm.amdgcn.mbcnt.lo
-; REWRITTEN: %cwd_lane_id = call i32 @llvm.amdgcn.mbcnt.hi
-; REWRITTEN: %cwd_wl_mask = icmp eq
-; REWRITTEN: %cwd_writelane_rewritten = select i1
-; REWRITTEN-NOT: call i32 @llvm.amdgcn.writelane
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
