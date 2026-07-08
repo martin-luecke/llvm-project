@@ -1,0 +1,36 @@
+# Regression test for getSIProgramInfo in AMDGPUAsmPrinter.cpp: the emitted
+# .amdhsa_user_sgpr_count must be at least the count implied by the enabled
+# user-SGPR fields, otherwise the AMDGPU assembler rejects the object with
+# "amdgpu_user_sgpr_count smaller than implied by enabled user SGPRs".
+#
+# The count is emitted from the add-driven SIMachineFunctionInfo::getNumUserSGPRs
+# (bumped only when an argumentInfo field carries a register), while the enable
+# bits in kernel_code_properties come from GCNUserSGPRUsageInfo, populated from
+# the function attributes. This kernel has default attributes that enable
+# dispatch_ptr + queue_ptr + kernarg_segment_ptr + dispatch_id (implied count 8),
+# but an empty argumentInfo, so the add-driven count is 0. getSIProgramInfo emits
+# max(add-driven, implied), so the count is 8 and the object assembles.
+
+# RUN: llc -mtriple=amdgcn-amd-amdhsa -mcpu=gfx1250 -start-after=finalize-isel %s -o - | FileCheck %s
+# RUN: llc -mtriple=amdgcn-amd-amdhsa -mcpu=gfx1250 -start-after=finalize-isel %s -o - | \
+# RUN:   llvm-mc -triple=amdgcn-amd-amdhsa -mcpu=gfx1250 -filetype=obj -o /dev/null
+
+# CHECK: .amdhsa_user_sgpr_count 8
+# CHECK: .amdhsa_user_sgpr_dispatch_ptr 1
+# CHECK: .amdhsa_user_sgpr_queue_ptr 1
+# CHECK: .amdhsa_user_sgpr_kernarg_segment_ptr 1
+# CHECK: .amdhsa_user_sgpr_dispatch_id 1
+
+--- |
+  define amdgpu_kernel void @undercount(ptr addrspace(1) %p) {
+    ret void
+  }
+...
+---
+name:            undercount
+machineFunctionInfo:
+  isEntryFunction: true
+body:             |
+  bb.0:
+    S_ENDPGM 0
+...

@@ -1425,7 +1425,14 @@ void AMDGPUAsmPrinter::getSIProgramInfo(SIProgramInfo &ProgInfo,
                              MCConstantExpr::create(0, Ctx), Ctx),
       ProgInfo.DynamicCallStack, Ctx);
 
-  ProgInfo.UserSGPR = MFI->getNumUserSGPRs();
+  // getNumUserSGPRs() is add-driven, but the enable bits in
+  // kernel_code_properties come from GCNUserSGPRUsageInfo (set from attributes).
+  // If a field is enabled without its allocator running, the emitted count can
+  // fall below the count the assembler re-derives from the enabled fields,
+  // which then rejects the object. Emit the max so it is always >= implied
+  // while preserving the preload padding only the add-driven count tracks.
+  ProgInfo.UserSGPR = std::max(MFI->getNumUserSGPRs(),
+                               MFI->getUserSGPRInfo().getNumUsedUserSGPRs());
   // For AMDHSA, TRAP_HANDLER must be zero, as it is populated by the CP.
   ProgInfo.TrapHandlerEnable = STM.isAmdHsaOS() ? 0 : STM.hasTrapHandler();
   ProgInfo.TGIdXEnable = MFI->hasWorkGroupIDX();
