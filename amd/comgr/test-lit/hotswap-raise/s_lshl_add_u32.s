@@ -1,6 +1,6 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 \
-; RUN:     --emit-ir=s_lshl_add_u32_kernel 2>/dev/null \
+; RUN:     --emit-ir=s_lshl_add_u32_kernel \
 ; RUN:   | %FileCheck %s
 ;
 ; Lift fixture for the `s_lshl{1,2,3,4}_add_u32` family: `D.u = (S0.u << N)
@@ -17,28 +17,7 @@
 ; consumes SCC after `s_lshl*_add_u32` could branch incorrectly.
 ;
 ; The fix computes the shift-add once in i64, truncates for the destination,
-; and sets SCC from `wide > 0xFFFFFFFF` (i.e. bits [63:32] nonzero). The
-; `s_cselect_b32` below is the SCC consumer that makes the semantics
-; observable.
-;
-; CHECK-LABEL: define amdgpu_kernel void @s_lshl_add_u32_kernel(
-
-; Positive: the shift-add is materialised in i64 and SCC is the carry-out
-; comparison against 0xFFFFFFFF (= 4294967295), NOT a nonzero-test of the
-; truncated i32 result.
-; CHECK: %lshl1add_wide = add i64 %{{[^,]+}}, %{{[^,]+}}
-; CHECK: %lshl1add = trunc i64 %lshl1add_wide to i32
-; CHECK: %lshl1add_scc = icmp ugt i64 %lshl1add_wide, 4294967295
-
-; The SCC consumer (`s_cselect_b32`) reads the carry bit we just stored.
-; CHECK: %csel = select i1 %{{[^,]+}}
-
-; NEGATIVE assertions.
-
-; (a) The pre-fix shape derived SCC by testing the truncated i32 result for
-; nonzero. Forbid an `icmp ne i32 %lshl1add, 0`-style SCC derivation on the
-; destination value.
-; CHECK-NOT: icmp ne i32 %lshl1add, 0
+; and sets SCC from `wide > 0xFFFFFFFF` (i.e. bits [63:32] nonzero).
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
@@ -46,12 +25,25 @@
 	.globl	s_lshl_add_u32_kernel
 	.p2align	8
 	.type	s_lshl_add_u32_kernel,@function
+; CHECK-LABEL: define amdgpu_kernel void @s_lshl_add_u32_kernel(
 s_lshl_add_u32_kernel:                  ; @s_lshl_add_u32_kernel
 ; %bb.0:
 	s_load_b64 s[0:1], s[0:1], 0x0
 	s_bfe_u32 s2, ttmp6, 0x4000c
 	s_and_b32 s3, ttmp6, 15
+
+; The shift-add is materialised in i64 and SCC is the carry-out comparison
+; against 0xFFFFFFFF (= 4294967295), NOT a nonzero-test of the truncated i32
+; result. The negative guards the pre-fix shape that derived SCC from the
+; truncated destination value.
+; CHECK: %lshl1add_wide = add i64 %{{[^,]+}}, %{{[^,]+}}
+; CHECK: %lshl1add = trunc i64 %lshl1add_wide to i32
+; CHECK: %lshl1add_scc = icmp ugt i64 %lshl1add_wide, 4294967295
+; CHECK-NOT: icmp ne i32 %lshl1add, 0
 	s_lshl1_add_u32 s2, s2, s3
+
+; The SCC consumer reads the carry bit we just stored.
+; CHECK: %csel = select i1 %{{[^,]+}}
 	s_cselect_b32 s2, s2, ttmp9
 	v_add_nc_u32_e32 v1, s2, v0
 	s_wait_kmcnt 0x0
