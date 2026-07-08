@@ -12,10 +12,11 @@
 ; CHECK-LABEL: define amdgpu_kernel void @v_trig_preop_f64_kernel(
 v_trig_preop_f64_kernel:
         v_mov_b32 v2, 7
-; CHECK: call double @llvm.amdgcn.trig.preop.f64(double %{{.+}}, i32 7)
+; CHECK: %[[SEGSEL:Vgpr[0-9.]+]] = phi i32 [ 7, {{.*}} ], [ 0, {{.*}} ]
+; CHECK: call double @llvm.amdgcn.trig.preop.f64(double %{{.+}}, i32 %[[SEGSEL]])
         v_trig_preop_f64 v[0:1], v[0:1], v2
 ; CHECK: [[NEG:%[^ ]+]] = fneg double %{{.+}}
-; CHECK: call double @llvm.amdgcn.trig.preop.f64(double [[NEG]], i32 7)
+; CHECK: call double @llvm.amdgcn.trig.preop.f64(double [[NEG]], i32 %[[SEGSEL]])
         v_trig_preop_f64 v[4:5], -v[0:1], v2
         s_endpgm
         .section        .rodata,"a",@progbits

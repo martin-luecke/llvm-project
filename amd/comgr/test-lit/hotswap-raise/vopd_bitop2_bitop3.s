@@ -5,8 +5,9 @@
 
 ; v_dual_bitop2 with a bitop3 truth-table lifts to the encoded boolean op (xor here).
 ; CHECK-LABEL: define amdgpu_kernel void @vopd_bitop2_bitop3_kernel(
+; CHECK: %[[V1:Vgpr[0-9.]+]] = phi i32 [ 1, {{.*}} ], [ 0, {{.*}} ]
 ; CHECK: xor i32 %tid, -1
-; CHECK: xor i32 1, -1
+; CHECK: xor i32 %[[V1]], -1
 ; CHECK-NOT: %vopd_and = and i32
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"

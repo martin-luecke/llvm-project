@@ -7,8 +7,9 @@
 ; CHECK: %v_add_max_u32{{[0-9]*}} = call i32 @llvm.umax.i32(i32 %v_add_max_u32_sum{{[0-9]*}}, i32 %{{[^)]+}})
 ; CHECK-NOT: call {{.*}}@llvm.amdgcn.add.max.u32
 ; CHECK-LABEL: define amdgpu_kernel void @v_add_max_u32_clamp_kernel(
+; CHECK: %[[CLAMP:Vgpr[0-9]+[0-9.]*]] = phi i32 [ 3, {{.*}} ], [ 0, {{.*}} ]
 ; CHECK: %v_add_max_u32_sum{{[0-9]*}} = call i32 @llvm.uadd.sat.i32(i32 {{[^,]+}}, i32 {{[^,]+}})
-; CHECK: %v_add_max_u32{{[0-9]*}} = call i32 @llvm.umax.i32(i32 %v_add_max_u32_sum{{[0-9]*}}, i32 3)
+; CHECK: %v_add_max_u32{{[0-9]*}} = call i32 @llvm.umax.i32(i32 %v_add_max_u32_sum{{[0-9]*}}, i32 %[[CLAMP]])
 ; CHECK-NOT: call {{.*}}@llvm.amdgcn.add.max.u32
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"

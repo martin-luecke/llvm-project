@@ -11,13 +11,17 @@
 ; CHECK-NEXT:  %[[EXEC_BIT:[^ ]+]] = and i64 %[[AT_LANE]], 1
 ; CHECK-NEXT:  %[[ACTIVE:[^ ]+]] = icmp ne i64 %[[EXEC_BIT]], 0
 ; CHECK-NEXT:  br i1 %[[ACTIVE]], label %[[DO:[^ ,]+]], label %[[SKIP:[^ ,]+]]
+; The entry-seeded register file keeps the first divergent write as an
+; explicit phi ([ 204, do ], [ 0, entry ]) instead of folding the skip edge
+; through undef; later phis then reference that value rather than the constant.
+; CHECK:       %[[V0:[^ ]+]] = phi i32 [ 204, %[[DO]] ], [ 0, {{[^ ,]+}} ]
 ; CHECK:       %{{[^ ]+}} = icmp ult i32 %tid, 16
 ; CHECK:       %cmpx_exec = and i64 -1, %{{[^ ]+}}
 ; CHECK:       %[[AT_LANE2:[^ ]+]] = lshr i64 %cmpx_exec, %{{[^ ]+}}
 ; CHECK-NEXT:  %[[EXEC_BIT2:[^ ]+]] = and i64 %[[AT_LANE2]], 1
 ; CHECK-NEXT:  %[[ACTIVE2:[^ ]+]] = icmp ne i64 %[[EXEC_BIT2]], 0
 ; CHECK-NEXT:  br i1 %[[ACTIVE2]], label %[[DO2:[^ ,]+]], label %[[SKIP2:[^ ,]+]]
-; CHECK:       {{%[^ ]+}} = phi i32 [ 170, %[[DO2]] ], [ 204, %[[SKIP]] ]
+; CHECK:       {{%[^ ]+}} = phi i32 [ 170, %[[DO2]] ], [ %[[V0]], %[[SKIP]] ]
 ; CHECK:       %and64 = and i64 %{{[^ ]+}}, %{{[^ ]+}}
 ; CHECK:       %[[WAVE_MASK_AND64:[^ ]+]] = and i1 %{{[^ ]+}}, %{{[^ ]+}}
 ; CHECK-NEXT:  %[[WAVE_MASK_EXEC:[^ ]+]] = call i64 @llvm.amdgcn.ballot.i64(i1 %[[WAVE_MASK_AND64]])

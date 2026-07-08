@@ -6,7 +6,8 @@
 ; CHECK-LABEL: define amdgpu_kernel void @vcc_hi_vopd_kernel(
 ; CHECK: %vcmp = icmp slt
 ; CHECK: %vopd_cndmask = select i1 %vcmp
-; CHECK: store i32 42, ptr addrspace(3)
+; CHECK: %[[V42:Vgpr[0-9.]+]] = phi i32 [ 42, {{.*}} ], [ 0, {{.*}} ]
+; CHECK: store i32 %[[V42]], ptr addrspace(3)
 ; CHECK-LABEL: define amdgpu_kernel void @exec_hi_vopd_cond_kernel(
 ; CHECK: %vcmp = icmp slt
 ; CHECK: %[[LANEBIT:wn_mask_lane_i1[0-9]*]] = icmp ne i64 %{{.*}}, 0

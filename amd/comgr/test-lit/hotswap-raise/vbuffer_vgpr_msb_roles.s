@@ -20,7 +20,8 @@ vbuffer_vgpr_msb_roles_kernel:
     s_set_vgpr_msb 0x3
 ; CHECK-LABEL: define amdgpu_kernel void @vbuffer_vgpr_msb_roles_kernel(
 ; CHECK-NOT: add i32 0, 11
-; CHECK: [[VOFF:%[0-9]+]] = add i32 0, 42
+; CHECK: %[[V42:Vgpr[0-9.]+]] = phi i32 [ 42, {{.*}} ], [ 0, {{.*}} ]
+; CHECK: [[VOFF:%[0-9]+]] = add i32 0, %[[V42]]
 ; CHECK: call void @llvm.amdgcn.raw.buffer.store.i32(i32 %{{[^,]+}}, <4 x i32> %{{[^,]+}}, i32 [[VOFF]], i32 0, i32 0)
     buffer_store_dword v0, v200, s[0:3], null offen
     s_set_vgpr_msb 0

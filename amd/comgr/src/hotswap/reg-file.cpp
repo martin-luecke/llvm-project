@@ -84,23 +84,44 @@ void AllocaRegFile::init(IRBuilder<> &B, Type *I32Ty, Type *I1Ty,
   // read `hasAGPR` from.
   ExecTy = Proj.execStorageTy();
 
+  // Every general register-file slot is zero-initialised in the entry block,
+  // for the same reason the condition scalars below are: SSA promotion
+  // (PromoteMemToReg) turns a read-before-write of a bare alloca into
+  // `undef`/poison, which is UB and materialises as whatever the register
+  // allocator happens to leave in the physical register. That value is
+  // allocation-dependent, so the same lifted IR silently computes different
+  // results on two backends that allocate differently (e.g. gfx942 vs gfx950,
+  // where gfx950's `v_bitop3` fusion perturbs allocation): a stale
+  // softmax-reduction value can be read back where a byte offset is expected,
+  // corrupting a global address with no fault at the IR level. Seeding a
+  // dominating store makes every read deterministic (the source ABI stores
+  // real inputs over these seeds afterwards, and mem2reg + DCE drop seeds for
+  // slots that are always written before read, so this is free at runtime).
+  Value *const RegZero = ConstantInt::get(I32Ty, 0);
+
   const unsigned NSgpr = MRI.getRegClass(AMDGPU::SGPR_32RegClassID).getNumRegs();
   Sgpr.assign(NSgpr, nullptr);
-  for (unsigned I = 0; I < NSgpr; ++I)
+  for (unsigned I = 0; I < NSgpr; ++I) {
     Sgpr[I] = B.CreateAlloca(I32Ty, nullptr, "Sgpr" + std::to_string(I));
+    B.CreateStore(RegZero, Sgpr[I]);
+  }
 
   // VGPR storage is explicitly oversized relative to TableGen's VGPR_32
   // class (see `KVGPRCap` docs in reg-file.h). AGPR storage mirrors
   // the VGPR size because AGPRs share the same index space under MFMA
   // encoding conventions.
   Vgpr.assign(KVGPRCap, nullptr);
-  for (unsigned I = 0; I < KVGPRCap; ++I)
+  for (unsigned I = 0; I < KVGPRCap; ++I) {
     Vgpr[I] = B.CreateAlloca(I32Ty, nullptr, "Vgpr" + std::to_string(I));
+    B.CreateStore(RegZero, Vgpr[I]);
+  }
 
   if (Isa.HasAgpr) {
     Agpr.assign(KVGPRCap, nullptr);
-    for (unsigned I = 0; I < KVGPRCap; ++I)
+    for (unsigned I = 0; I < KVGPRCap; ++I) {
       Agpr[I] = B.CreateAlloca(I32Ty, nullptr, "Agpr" + std::to_string(I));
+      B.CreateStore(RegZero, Agpr[I]);
+    }
   }
 
   // Condition-carrying scalar registers are initialised to zero so that a
