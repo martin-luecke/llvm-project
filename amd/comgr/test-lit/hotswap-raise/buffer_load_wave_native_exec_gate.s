@@ -1,17 +1,12 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --enable-wave-native \
 ; RUN:     --emit-ir=buffer_load_wave_native_exec_gate_kernel 2>/dev/null \
-; RUN:   | %FileCheck %s --check-prefix=WN
+; RUN:   | %FileCheck %s --check-prefixes=WN,COM
 ; RUN: raise_cli %t.hsaco --target-isa=gfx942 --disable-wave-native \
 ; RUN:   --emit-ir=buffer_load_wave_native_exec_gate_kernel 2>/dev/null \
-; RUN:   | %FileCheck %s --check-prefix=MR
+; RUN:   | %FileCheck %s --check-prefixes=MR,COM
 ;
-; MUBUF load EXEC-gating under wave-native vs modulo-replication
-; (rocm-systems#148, companion to buffer_store_wave_native_oob_mask.s).
-; Both projections must gate the load: it goes inside an `emitUnderExec`
-; diamond and its result is merged by a phi yielding the loaded value on
-; active lanes and `undef` on skipped/phantom lanes. Guards the load path
-; of `handleMUBUF` in handle-mubuf.cpp.
+; MUBUF load EXEC-gating under WaveNative and modulo-replication (rocm-systems#148).
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
@@ -32,11 +27,8 @@ buffer_load_wave_native_exec_gate_kernel:
 	s_mov_b32 s2, 4
 	s_mov_b32 s3, 0x27000
 	s_wait_kmcnt 0x0
-	; Load emitted inside the diamond, result merged by the phi.
-	; WN: [[LD:%.+]] = call i32 @llvm.amdgcn.raw.ptr.buffer.load.i32(
-	; WN: = phi i32 [ [[LD]], %spe_do{{.+}} ], [ undef, %spe_skip{{.+}} ]
-	; MR: [[LD:%.+]] = call i32 @llvm.amdgcn.raw.ptr.buffer.load.i32(
-	; MR: = phi i32 [ [[LD]], %spe_do{{.+}} ], [ undef, %spe_skip{{.+}} ]
+	; COM: [[LD:%.+]] = call i32 @llvm.amdgcn.raw.ptr.buffer.load.i32(
+	; COM: = phi i32 [ [[LD]], %spe_do{{.+}} ], [ undef, %spe_skip{{.+}} ]
 	buffer_load_dword v4, v1, s[0:3], null offen
 	s_wait_loadcnt 0
 	buffer_store_dword v4, v1, s[0:3], null offen
