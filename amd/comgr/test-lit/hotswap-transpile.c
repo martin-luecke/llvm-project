@@ -42,8 +42,8 @@
 // RUN:                   %S/vecadd_gfx950.co \
 // RUN:                   amdgcn-amd-amdhsa--gfx950 \
 // RUN:                   amdgcn-amd-amdhsa--gfx942 \
-// RUN:                   --legacy-options-size \
-// RUN:   | %FileCheck --check-prefix=LEGACY-OPTIONS %s
+// RUN:                   --options-size-through-flags \
+// RUN:   | %FileCheck --check-prefix=OPTIONS-SIZE-FLAGS %s
 // RUN: rm -rf %t.cache
 // RUN: env HSA_HOTSWAP_CACHE_DIR=%t.cache hotswap-transpile \
 // RUN:                   %S/vecadd_gfx950.co \
@@ -89,8 +89,8 @@
 // SINGLE-MISSING: RESULT: ERROR
 // SINGLE-MISSING-DAG: success=0
 // SINGLE-MISSING-DAG: kernel_name=definitely_not_vecadd
-// LEGACY-OPTIONS-DAG: RESULT: SUCCESS bytes={{[1-9][0-9]*}}
-// LEGACY-OPTIONS-DAG: kernel_name= lifted=
+// OPTIONS-SIZE-FLAGS-DAG: RESULT: SUCCESS bytes={{[1-9][0-9]*}}
+// OPTIONS-SIZE-FLAGS-DAG: kernel_name= lifted=
 // CACHEMISS-DAG: cache_hit=0
 // CACHEMISS-DAG: cache_lookup=miss
 // CACHEMISS-DAG: cache_write=success

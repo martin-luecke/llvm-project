@@ -558,9 +558,8 @@ amd_comgr_status_t AMD_COMGR_API amd_comgr_hotswap_transpile_with_options(
     }
   }
 
-  // Preserve the all-kernels merge path by default. Lazy runtime callers can
-  // name one metadata kernel to run the single-kernel pipeline without
-  // translating or stubbing unrelated kernels.
+  // A named-kernel request is independent of other metadata kernels in the
+  // object; an unnamed request translates and relinks the complete code object.
   if (!CacheHit) {
     COMGR::hotswap::ScopedStrictMode StrictMode(CacheRequest.StrictMode);
     COMGR::hotswap::PipelineOptions PipelineOptions;

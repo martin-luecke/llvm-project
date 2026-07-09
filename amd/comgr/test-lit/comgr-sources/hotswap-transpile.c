@@ -150,7 +150,7 @@ int main(int argc, char *argv[]) {
 
   if (argc < 4)
     fail("usage: hotswap-transpile <elf_file> <source_isa> <target_isa> "
-         "[--zero-size|--wrong-kind|--legacy-options-size] "
+         "[--zero-size|--wrong-kind|--options-size-through-flags] "
          "[--output=<path>]");
 
   const char *ElfFile = argv[1];
@@ -158,7 +158,7 @@ int main(int argc, char *argv[]) {
   const char *TargetISA = argv[3];
   int ZeroSize = 0;
   int WrongKind = 0;
-  int LegacyOptionsSize = 0;
+  int OptionsSizeThroughFlags = 0;
   // Optional path to dump the transpiled bytes to. lit tests use this to
   // hand the output to llvm-readelf / llvm-objdump for ISA-level smoke
   // checks; the validation paths leave it NULL and only inspect stdout.
@@ -168,8 +168,8 @@ int main(int argc, char *argv[]) {
       ZeroSize = 1;
     else if (strcmp(argv[i], "--wrong-kind") == 0)
       WrongKind = 1;
-    else if (strcmp(argv[i], "--legacy-options-size") == 0)
-      LegacyOptionsSize = 1;
+    else if (strcmp(argv[i], "--options-size-through-flags") == 0)
+      OptionsSizeThroughFlags = 1;
     else if (strncmp(argv[i], "--output=", 9) == 0)
       OutputPath = argv[i] + 9;
     else
@@ -207,7 +207,7 @@ int main(int argc, char *argv[]) {
   if (getenv("HSA_HOTSWAP_ASSUME_HIP_GLOBAL_OFFSET_ZERO"))
     Options.flags |=
         AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_ASSUME_HIP_GLOBAL_OFFSET_ZERO;
-  if (LegacyOptionsSize)
+  if (OptionsSizeThroughFlags)
     Options.size = offsetof(amd_comgr_hotswap_transpile_options_t, flags) +
                    sizeof(Options.flags);
 
