@@ -2062,12 +2062,11 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
   // VOP3-only true16 16-bit conditional select. Semantically identical to
-  // v_cndmask_b32 -- pick src1 or src0 per the per-lane wave-mask condition
-  // (src2) -- but on 16-bit halves: op_sel routes the src0/src1 halves and
-  // selects which dst half receives the result; the unselected dst half is
-  // preserved per the RDNA3+ true16 ISA. The condition read is shared with the
-  // b32 lift via raiseCndmaskWaveCondition. src2 (the mask) is not a true16
-  // data operand, so only src0/src1 participate in op_sel (NumSrcs == 2).
+  // v_cndmask_b32 but on 16-bit halves: op_sel routes the src0/src1 halves and
+  // selects which dst half receives the result; the other dst half is preserved
+  // (RDNA3+ true16). src2 is the wave-mask condition (not a data operand), so
+  // only src0/src1 participate in op_sel (NumSrcs == 2). FP modifiers (NEG,
+  // ABS) on src0/src1 are not currently modeled; readTrue16OpSel rejects them.
   if (Sop == CanonicalOp::V_CNDMASK_B16) {
     std::optional<True16OpSel> Sel =
         readTrue16OpSel(Di, Op, 2, Hr, "v_cndmask_b16");
