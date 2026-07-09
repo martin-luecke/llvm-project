@@ -198,6 +198,15 @@ int main(int argc, char *argv[]) {
   Options.cache_skip_kernels = getenv("HSA_HOTSWAP_CACHE_SKIP_KERNELS");
   Options.hotswap_rules_path = getenv("HSA_HOTSWAP_RULES");
   Options.kernel_name = getenv("HSA_HOTSWAP_TRANSLATE_KERNEL");
+  const char *OptLevel = getenv("HSA_HOTSWAP_OPT_LEVEL");
+  if (OptLevel) {
+    char *End = NULL;
+    unsigned long Value = strtoul(OptLevel, &End, 10);
+    if (End == OptLevel || *End != '\0' || Value > 3)
+      fail("invalid HSA_HOTSWAP_OPT_LEVEL: %s", OptLevel);
+    Options.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_USE_OPT_LEVEL;
+    Options.opt_level = (uint32_t)Value;
+  }
   if (getenv("HSA_HOTSWAP_CACHE_DISABLE"))
     Options.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_CACHE_DISABLE;
   if (getenv("HSA_HOTSWAP_CACHE_READONLY"))

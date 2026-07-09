@@ -2907,6 +2907,10 @@ typedef enum amd_comgr_hotswap_transpile_option_flags_s {
    * objects so unsupported global-offset uses refuse instead of being guessed.
    */
   AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_ASSUME_HIP_GLOBAL_OFFSET_ZERO = 1u << 3,
+  /**
+   * Read @p opt_level from @c amd_comgr_hotswap_transpile_options_t.
+   */
+  AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_USE_OPT_LEVEL = 1u << 4,
 } amd_comgr_hotswap_transpile_option_flags_t;
 
 /**
@@ -2930,6 +2934,13 @@ typedef struct amd_comgr_hotswap_transpile_options_s {
    * @c AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_KERNEL_NAME.
    */
   const char *kernel_name;
+  /**
+   * Optional optimization level, 0 through 3, for the in-process optimization
+   * and AMDGPU codegen stages. Used only when
+   * @c AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_USE_OPT_LEVEL is set; otherwise the
+   * COMGR HotSwap default is O2.
+   */
+  uint32_t opt_level;
 } amd_comgr_hotswap_transpile_options_t;
 
 /**

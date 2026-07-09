@@ -72,6 +72,24 @@
 // RUN: %FileCheck --check-prefix=HIPKEYBASE %s < %t.hip.out
 // RUN: sed -n 's/.*cache_key=\([0-9a-f][0-9a-f]*\).*/\1/p' %t.hip.out > %t.hip.key
 // RUN: ! cmp -s %t.nohip.key %t.hip.key
+// RUN: rm -rf %t.opt-cache
+// RUN: env HSA_HOTSWAP_CACHE_DIR=%t.opt-cache hotswap-transpile \
+// RUN:                   %S/vecadd_gfx950.co \
+// RUN:                   amdgcn-amd-amdhsa--gfx950 \
+// RUN:                   amdgcn-amd-amdhsa--gfx942 \
+// RUN:   > %t.default-opt.out
+// RUN: %FileCheck --check-prefix=OPTKEYBASE %s < %t.default-opt.out
+// RUN: sed -n 's/.*cache_key=\([0-9a-f][0-9a-f]*\).*/\1/p' \
+// RUN:   %t.default-opt.out > %t.default-opt.key
+// RUN: env HSA_HOTSWAP_CACHE_DIR=%t.opt-cache HSA_HOTSWAP_OPT_LEVEL=0 \
+// RUN:     hotswap-transpile %S/vecadd_gfx950.co \
+// RUN:                   amdgcn-amd-amdhsa--gfx950 \
+// RUN:                   amdgcn-amd-amdhsa--gfx942 \
+// RUN:   > %t.o0.out
+// RUN: %FileCheck --check-prefix=OPTKEYBASE %s < %t.o0.out
+// RUN: sed -n 's/.*cache_key=\([0-9a-f][0-9a-f]*\).*/\1/p' \
+// RUN:   %t.o0.out > %t.o0.key
+// RUN: ! cmp -s %t.default-opt.key %t.o0.key
 
 // NULL: NULL_ARGS: INVALID_ARGUMENT
 // BADISA: RESULT: INVALID_ARGUMENT
@@ -101,3 +119,7 @@
 // HIPKEYBASE-DAG: cache_hit=0
 // HIPKEYBASE-DAG: cache_lookup=miss
 // HIPKEYBASE-DAG: cache_write=success
+// OPTKEYBASE-DAG: RESULT: SUCCESS bytes={{[1-9][0-9]*}}
+// OPTKEYBASE-DAG: cache_hit=0
+// OPTKEYBASE-DAG: cache_lookup=miss
+// OPTKEYBASE-DAG: cache_write=success

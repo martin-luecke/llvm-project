@@ -50,7 +50,8 @@ namespace {
 
 using TimingClock = std::chrono::steady_clock;
 
-constexpr unsigned HotswapComgrOptLevel = 2;
+constexpr unsigned DefaultHotswapComgrOptLevel = 2;
+constexpr unsigned MaxHotswapComgrOptLevel = 3;
 
 double secondsBetween(TimingClock::time_point start, TimingClock::time_point end) {
   return std::chrono::duration<double>(end - start).count();
@@ -321,6 +322,21 @@ const char *getKernelNameOption(
   return options->kernel_name;
 }
 
+bool getOptLevelOption(const amd_comgr_hotswap_transpile_options_t *options,
+                       unsigned &optLevel) {
+  optLevel = DefaultHotswapComgrOptLevel;
+  if (!hasFlag(options, AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_USE_OPT_LEVEL))
+    return true;
+  constexpr size_t OptLevelEnd =
+      offsetof(amd_comgr_hotswap_transpile_options_t, opt_level) +
+      sizeof(uint32_t);
+  if (!options || options->size < OptLevelEnd ||
+      options->opt_level > MaxHotswapComgrOptLevel)
+    return false;
+  optLevel = options->opt_level;
+  return true;
+}
+
 std::string pipelineFailReason(const COMGR::hotswap::PipelineResult &pipeline) {
   if (!pipeline.FailReason.empty())
     return pipeline.FailReason;
@@ -448,6 +464,9 @@ amd_comgr_status_t AMD_COMGR_API amd_comgr_hotswap_transpile_with_options(
       sizeof(uint64_t);
   if (options && options->size < MinOptionsSize)
     return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
+  unsigned OptLevel = DefaultHotswapComgrOptLevel;
+  if (!getOptLevelOption(options, OptLevel))
+    return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
 
   // Validate both ISA names through the same parser the byte-level
   // `amd_comgr_hotswap_rewrite` uses, so the public contract is identical:
@@ -491,7 +510,7 @@ amd_comgr_status_t AMD_COMGR_API amd_comgr_hotswap_transpile_with_options(
   CacheRequest.CacheReadonly =
       hasFlag(options, AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_CACHE_READONLY);
   CacheRequest.CollectTimings = CollectTimings;
-  CacheRequest.OptLevel = HotswapComgrOptLevel;
+  CacheRequest.OptLevel = OptLevel;
 
   std::string SkippedKernel;
   if (!CacheRequest.KernelName.empty()) {
