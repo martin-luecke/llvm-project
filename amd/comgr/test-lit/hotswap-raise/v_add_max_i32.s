@@ -9,8 +9,12 @@
 ; CHECK: %v_add_max_i32{{[0-9]*}} = call i32 @llvm.smax.i32(i32 %v_add_max_i32_sum{{[0-9]*}}, i32 %{{[^)]+}})
 ; CHECK-NOT: call {{.*}}@llvm.amdgcn.add.max.i32
 ; CHECK-LABEL: define amdgpu_kernel void @v_add_max_i32_clamp_kernel(
+; The clamp bound (3) is written under SPE predication, so the entry-seeded
+; register file keeps it as an explicit phi ([ 3, do ], [ 0, skip ]) rather
+; than folding to the constant on a formerly-undef skip edge.
+; CHECK: %[[CLAMP:Vgpr[0-9]+[0-9.]*]] = phi i32 [ 3, {{.*}} ], [ 0, {{.*}} ]
 ; CHECK: %v_add_max_i32_sum{{[0-9]*}} = call i32 @llvm.sadd.sat.i32(i32 {{[^,]+}}, i32 {{[^,]+}})
-; CHECK: %v_add_max_i32{{[0-9]*}} = call i32 @llvm.smax.i32(i32 %v_add_max_i32_sum{{[0-9]*}}, i32 3)
+; CHECK: %v_add_max_i32{{[0-9]*}} = call i32 @llvm.smax.i32(i32 %v_add_max_i32_sum{{[0-9]*}}, i32 %[[CLAMP]])
 ; CHECK-NOT: call {{.*}}@llvm.amdgcn.add.max.i32
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"

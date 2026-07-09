@@ -19,7 +19,8 @@ vcc_hi_scratch_kernel:
 	; CHECK: select i1 %[[VCMP]]
 	v_mov_b32 v2, vcc_hi
 	ds_store_b32 v3, v2
-	; CHECK: store i32 42, ptr addrspace(3)
+	; CHECK: %[[V42:Vgpr[0-9.]+]] = phi i32 [ 42, {{.*}} ], [ 0, {{.*}} ]
+	; CHECK: store i32 %[[V42]], ptr addrspace(3)
 	ds_store_b32 v6, v5
 	s_endpgm
 	.section	.rodata,"a",@progbits

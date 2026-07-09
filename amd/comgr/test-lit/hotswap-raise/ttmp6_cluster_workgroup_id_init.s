@@ -19,7 +19,8 @@ ttmp6_cluster_workgroup_id_init_kernel:
 	s_bfe_u32 s3, ttmp6, 0x4000c
 	s_wait_loadcnt 0x0
 	v_mov_b32_e32 v1, s2
-; CHECK: store i32 [[CLUSTER_WG_X]],
+; CHECK: %[[WGV:Vgpr[0-9.]+]] = phi i32 [ [[CLUSTER_WG_X]], {{.*}} ], [ 0, {{.*}} ]
+; CHECK: store i32 %[[WGV]],
 	global_store_b32 v0, v1, s[0:1] scale_offset
 	v_mov_b32_e32 v1, s3
 	global_store_b32 v0, v1, s[0:1] scale_offset

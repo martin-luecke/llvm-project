@@ -20,7 +20,8 @@ phantom_lane_workitem_clamp_kernel:
 ; CHECK: %tid_phantom_clamp = select i1 %tid_is_real_lane, i32 %tid, i32 0
 	v_lshlrev_b32 v1, 2, v0
 ; CHECK: %vlshl = shl i32 %tid_phantom_clamp, 2
-; CHECK: %[[VOFF:[A-Za-z0-9._]+]] = sext i32 %vlshl to i64
+; CHECK: %[[VLSHL:Vgpr[0-9.]+]] = phi i32 [ %vlshl, {{.*}} ], [ 0, {{.*}} ]
+; CHECK: %[[VOFF:[A-Za-z0-9._]+]] = sext i32 %[[VLSHL]] to i64
 ; CHECK: %[[VADDR:[A-Za-z0-9._]+]] = add i64 %{{[A-Za-z0-9._]+}}, %[[VOFF]]
 ; CHECK: %[[PTR:[0-9]+]] = inttoptr i64 %[[VADDR]] to ptr addrspace(1)
 ; CHECK: store i32 %tid_phantom_clamp, ptr addrspace(1) %[[PTR]]

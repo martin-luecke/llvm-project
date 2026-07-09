@@ -19,7 +19,8 @@ exec_hi_cndmask_kernel:
 ; CHECK: %cndmask = select i1 %[[LANEBIT]], i32 {{.*}}, i32 %tid
 ; CHECK-NOT: %cndmask = select i1 %vcmp
         v_cndmask_b32 v5, v0, v1, exec_hi
-; CHECK: store i32 42, ptr addrspace(3)
+; CHECK: %[[V42:Vgpr[0-9.]+]] = phi i32 [ 42, {{.*}} ], [ 0, {{.*}} ]
+; CHECK: store i32 %[[V42]], ptr addrspace(3)
         v_mov_b32 v2, exec_hi
         ds_store_b32 v3, v2
         ds_store_b32 v6, v5

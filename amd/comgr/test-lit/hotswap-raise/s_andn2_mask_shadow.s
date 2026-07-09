@@ -6,17 +6,17 @@
 ; s_andn2/orn2/nand/nor/xnor wave-mask boolean lowering.
 ; CHECK-LABEL: define amdgpu_kernel void @s_andn2_mask_shadow_kernel(
 ; CHECK: %wave_mask_andn2 = and i1
-; CHECK: %cndmask = select i1 %wave_mask_andn2, i32 1, i32 0
+; CHECK: %cndmask = select i1 %wave_mask_andn2, i32 %{{[^,]+}}, i32 0
 ; CHECK: %wave_mask_orn2 = or i1
-; CHECK: %cndmask{{[0-9]*}} = select i1 %wave_mask_orn2, i32 1, i32 0
+; CHECK: %cndmask{{[0-9]*}} = select i1 %wave_mask_orn2, i32 %{{[^,]+}}, i32 0
 ; CHECK: %wave_mask_nand = xor i1
-; CHECK: %cndmask{{[0-9]*}} = select i1 %wave_mask_nand, i32 1, i32 0
+; CHECK: %cndmask{{[0-9]*}} = select i1 %wave_mask_nand, i32 %{{[^,]+}}, i32 0
 ; CHECK: %wave_mask_nor = xor i1
-; CHECK: %cndmask{{[0-9]*}} = select i1 %wave_mask_nor, i32 1, i32 0
+; CHECK: %cndmask{{[0-9]*}} = select i1 %wave_mask_nor, i32 %{{[^,]+}}, i32 0
 ; CHECK: %wave_mask_xnor = xor i1
-; CHECK: %cndmask{{[0-9]*}} = select i1 %wave_mask_xnor, i32 1, i32 0
+; CHECK: %cndmask{{[0-9]*}} = select i1 %wave_mask_xnor, i32 %{{[^,]+}}, i32 0
 ; CHECK: [[ALIAS:%wave_mask_andn2[0-9]*]] = and i1
-; CHECK: %cndmask{{[0-9]*}} = select i1 [[ALIAS]], i32 1, i32 0
+; CHECK: %cndmask{{[0-9]*}} = select i1 [[ALIAS]], i32 %{{[^,]+}}, i32 0
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6

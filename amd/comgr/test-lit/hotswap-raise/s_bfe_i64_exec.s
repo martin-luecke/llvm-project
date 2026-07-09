@@ -9,7 +9,7 @@
 ; CHECK: %spe_exec_at_lane{{[0-9]*}} = lshr i64 [[BFE_SEL]], %spe_lane_mod{{[0-9]*}}
 ; CHECK: br i1 %spe_lane_active{{[0-9]*}}, label %[[DO:[^ ,]+]], label %{{[^ ,]+}}
 ; CHECK: [[DO]]:
-; CHECK-NEXT: store i32 170, ptr addrspace(1) %{{[^ ]+}}, align 4
+; CHECK-NEXT: store i32 %{{[^,]+}}, ptr addrspace(1) %{{[^ ]+}}, align 4
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx942"
 	.amdhsa_code_object_version 6
