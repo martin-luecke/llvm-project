@@ -312,14 +312,18 @@ bool hasFlag(const amd_comgr_hotswap_transpile_options_t *options,
   return options->flags & static_cast<uint64_t>(flag);
 }
 
-const char *getKernelNameOption(
-    const amd_comgr_hotswap_transpile_options_t *options) {
+bool getKernelNameOption(const amd_comgr_hotswap_transpile_options_t *options,
+                         const char *&kernelName) {
+  kernelName = nullptr;
+  if (!hasFlag(options, AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_USE_KERNEL_NAME))
+    return true;
   constexpr size_t KernelNameEnd =
       offsetof(amd_comgr_hotswap_transpile_options_t, kernel_name) +
       sizeof(const char *);
   if (!options || options->size < KernelNameEnd)
-    return nullptr;
-  return options->kernel_name;
+    return false;
+  kernelName = options->kernel_name;
+  return true;
 }
 
 bool getOptLevelOption(const amd_comgr_hotswap_transpile_options_t *options,
@@ -467,6 +471,9 @@ amd_comgr_status_t AMD_COMGR_API amd_comgr_hotswap_transpile_with_options(
   unsigned OptLevel = DefaultHotswapComgrOptLevel;
   if (!getOptLevelOption(options, OptLevel))
     return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
+  const char *KernelName = nullptr;
+  if (!getKernelNameOption(options, KernelName))
+    return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
 
   // Validate both ISA names through the same parser the byte-level
   // `amd_comgr_hotswap_rewrite` uses, so the public contract is identical:
@@ -496,7 +503,6 @@ amd_comgr_status_t AMD_COMGR_API amd_comgr_hotswap_transpile_with_options(
       options && options->cache_directory ? options->cache_directory : "";
   CacheRequest.CacheSkipKernels =
       options && options->cache_skip_kernels ? options->cache_skip_kernels : "";
-  const char *KernelName = getKernelNameOption(options);
   CacheRequest.KernelName = KernelName ? KernelName : "";
   CacheRequest.StrictMode =
       hasFlag(options, AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_STRICT);

@@ -150,7 +150,8 @@ int main(int argc, char *argv[]) {
 
   if (argc < 4)
     fail("usage: hotswap-transpile <elf_file> <source_isa> <target_isa> "
-         "[--zero-size|--wrong-kind|--truncate-options-at-flags] "
+         "[--zero-size|--wrong-kind|--omit-kernel-name-flag|"
+         "--truncate-options-at-flags] "
          "[--output=<path>]");
 
   const char *ElfFile = argv[1];
@@ -158,6 +159,7 @@ int main(int argc, char *argv[]) {
   const char *TargetISA = argv[3];
   int ZeroSize = 0;
   int WrongKind = 0;
+  int OmitKernelNameFlag = 0;
   int TruncateOptionsAtFlags = 0;
   // Optional path to dump the transpiled bytes to. lit tests use this to
   // hand the output to llvm-readelf / llvm-objdump for ISA-level smoke
@@ -168,6 +170,8 @@ int main(int argc, char *argv[]) {
       ZeroSize = 1;
     else if (strcmp(argv[i], "--wrong-kind") == 0)
       WrongKind = 1;
+    else if (strcmp(argv[i], "--omit-kernel-name-flag") == 0)
+      OmitKernelNameFlag = 1;
     else if (strcmp(argv[i], "--truncate-options-at-flags") == 0)
       TruncateOptionsAtFlags = 1;
     else if (strncmp(argv[i], "--output=", 9) == 0)
@@ -198,13 +202,16 @@ int main(int argc, char *argv[]) {
   Options.cache_skip_kernels = getenv("HSA_HOTSWAP_CACHE_SKIP_KERNELS");
   Options.hotswap_rules_path = getenv("HSA_HOTSWAP_RULES");
   Options.kernel_name = getenv("HSA_HOTSWAP_TRANSLATE_KERNEL");
+  if (Options.kernel_name && !OmitKernelNameFlag && !TruncateOptionsAtFlags)
+    Options.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_USE_KERNEL_NAME;
   const char *OptLevel = getenv("HSA_HOTSWAP_OPT_LEVEL");
   if (OptLevel) {
     char *End = NULL;
     unsigned long Value = strtoul(OptLevel, &End, 10);
     if (End == OptLevel || *End != '\0' || Value > 3)
       fail("invalid HSA_HOTSWAP_OPT_LEVEL: %s", OptLevel);
-    Options.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_USE_OPT_LEVEL;
+    if (!TruncateOptionsAtFlags)
+      Options.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_USE_OPT_LEVEL;
     Options.opt_level = (uint32_t)Value;
   }
   if (getenv("HSA_HOTSWAP_CACHE_DISABLE"))

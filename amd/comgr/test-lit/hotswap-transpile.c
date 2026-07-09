@@ -38,6 +38,12 @@
 // RUN:                   amdgcn-amd-amdhsa--gfx950 \
 // RUN:                   amdgcn-amd-amdhsa--gfx942 \
 // RUN:   | %FileCheck --check-prefix=SINGLE-MISSING %s
+// RUN: env HSA_HOTSWAP_TRANSLATE_KERNEL=definitely_not_vecadd \
+// RUN:     hotswap-transpile %S/vecadd_gfx950.co \
+// RUN:                   amdgcn-amd-amdhsa--gfx950 \
+// RUN:                   amdgcn-amd-amdhsa--gfx942 \
+// RUN:                   --omit-kernel-name-flag \
+// RUN:   | %FileCheck --check-prefix=KERNEL-NAME-NO-FLAG %s
 // RUN: env HSA_HOTSWAP_TRANSLATE_KERNEL=vecadd hotswap-transpile \
 // RUN:                   %S/vecadd_gfx950.co \
 // RUN:                   amdgcn-amd-amdhsa--gfx950 \
@@ -107,6 +113,8 @@
 // SINGLE-MISSING: RESULT: ERROR
 // SINGLE-MISSING-DAG: success=0
 // SINGLE-MISSING-DAG: kernel_name=definitely_not_vecadd
+// KERNEL-NAME-NO-FLAG-DAG: RESULT: SUCCESS bytes={{[1-9][0-9]*}}
+// KERNEL-NAME-NO-FLAG-DAG: kernel_name= lifted=
 // TRUNCATED-OPTIONS-DAG: RESULT: SUCCESS bytes={{[1-9][0-9]*}}
 // TRUNCATED-OPTIONS-DAG: kernel_name= lifted=
 // CACHEMISS-DAG: cache_hit=0

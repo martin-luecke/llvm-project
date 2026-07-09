@@ -2911,6 +2911,10 @@ typedef enum amd_comgr_hotswap_transpile_option_flags_s {
    * Read @p opt_level from @c amd_comgr_hotswap_transpile_options_t.
    */
   AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_USE_OPT_LEVEL = 1u << 4,
+  /**
+   * Read @p kernel_name from @c amd_comgr_hotswap_transpile_options_t.
+   */
+  AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_USE_KERNEL_NAME = 1u << 5,
 } amd_comgr_hotswap_transpile_option_flags_t;
 
 /**
@@ -2929,9 +2933,10 @@ typedef struct amd_comgr_hotswap_transpile_options_s {
   const char *hotswap_rules_path;
   uint64_t flags;
   /**
-   * Optional exact metadata kernel name for lazy per-kernel translation. When
-   * set, COMGR translates only this kernel and returns the selected name in
-   * @c AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_KERNEL_NAME.
+   * Optional exact metadata kernel name for lazy per-kernel translation. Used
+   * only when @c AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_USE_KERNEL_NAME is set.
+   * When used, COMGR translates only this kernel and returns the selected name
+   * in @c AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_KERNEL_NAME.
    */
   const char *kernel_name;
   /**
