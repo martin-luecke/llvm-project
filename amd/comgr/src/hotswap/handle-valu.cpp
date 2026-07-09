@@ -2064,19 +2064,53 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
   // VOP3-only true16 16-bit conditional select. Semantically identical to
   // v_cndmask_b32 but on 16-bit halves: op_sel routes the src0/src1 halves and
   // selects which dst half receives the result; the other dst half is preserved
-  // (RDNA3+ true16). src2 is the wave-mask condition (not a data operand), so
-  // only src0/src1 participate in op_sel (NumSrcs == 2). FP modifiers (NEG,
-  // ABS) on src0/src1 are not currently modeled; readTrue16OpSel rejects them.
+  // (RDNA3+ true16). src2 is the wave-mask condition (not a data operand) and
+  // carries no modifiers. NEG/ABS on src0/src1 are FP16 modifiers: they are
+  // applied as FP16 operations before the select (bitcast → fabs/fneg → bitcast).
   if (Sop == CanonicalOp::V_CNDMASK_B16) {
-    std::optional<True16OpSel> Sel =
-        readTrue16OpSel(Di, Op, 2, Hr, "v_cndmask_b16");
-    if (!Sel)
+    if (Op.nSrcs() < 2) {
+      Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+          Di, "VOP3",
+          "v_cndmask_b16 has too few source operands; expected src0/src1");
       return Hr;
-    Value *LHS = extractU16Half(Ctx, Op.src(0), Sel->Src0Hi);
-    Value *RHS = extractU16Half(Ctx, Op.src(1), Sel->Src1Hi);
+    }
+    unsigned Src0Mods = Op.srcMod(0);
+    unsigned Src1Mods = Op.srcMod(1);
+    constexpr unsigned AllowedSrc0Mods = SISrcMods::OP_SEL_0 |
+                                         SISrcMods::DST_OP_SEL |
+                                         SISrcMods::NEG | SISrcMods::ABS;
+    constexpr unsigned AllowedSrc1Mods =
+        SISrcMods::OP_SEL_0 | SISrcMods::NEG | SISrcMods::ABS;
+    if ((Src0Mods & ~AllowedSrc0Mods) != 0 ||
+        (Src1Mods & ~AllowedSrc1Mods) != 0) {
+      Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+          Di, "VOP3",
+          "v_cndmask_b16 has unsupported modifiers; only op_sel, neg, abs "
+          "are modeled");
+      return Hr;
+    }
+    bool Src0Hi = (Src0Mods & SISrcMods::OP_SEL_0) != 0;
+    bool Src1Hi = (Src1Mods & SISrcMods::OP_SEL_0) != 0;
+    bool DstHi = (Src0Mods & SISrcMods::DST_OP_SEL) != 0;
+    Type *I16Ty = Type::getInt16Ty(Ctx.C);
+    auto applyFpMods = [&](Value *V, unsigned Mods, const char *AbsName,
+                           const char *NegName) -> Value * {
+      if (!(Mods & (SISrcMods::ABS | SISrcMods::NEG)))
+        return V;
+      V = Ctx.B.CreateBitCast(V, Ctx.F16Ty);
+      if (Mods & SISrcMods::ABS)
+        V = Ctx.B.CreateUnaryIntrinsic(Intrinsic::fabs, V, nullptr, AbsName);
+      if (Mods & SISrcMods::NEG)
+        V = Ctx.B.CreateFNeg(V, NegName);
+      return Ctx.B.CreateBitCast(V, I16Ty);
+    };
+    Value *LHS = extractU16Half(Ctx, Op.src(0), Src0Hi);
+    Value *RHS = extractU16Half(Ctx, Op.src(1), Src1Hi);
+    LHS = applyFpMods(LHS, Src0Mods, "abs_b16_src0", "neg_b16_src0");
+    RHS = applyFpMods(RHS, Src1Mods, "abs_b16_src1", "neg_b16_src1");
     Value *Cond = raiseCndmaskWaveCondition(Ctx, Di, Op);
     Value *Result = Ctx.B.CreateSelect(Cond, RHS, LHS, "cndmask_b16");
-    writeSelectedI16Bits(Ctx, Op.dst(), Result, Sel->DstHi,
+    writeSelectedI16Bits(Ctx, Op.dst(), Result, DstHi,
                          "cndmask_b16_merge_lo", "cndmask_b16_merge_hi");
     Hr.Handled = true;
     return Hr;
