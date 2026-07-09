@@ -1,36 +1,14 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_and_b16_kernel | %FileCheck %s --check-prefix=AND
-; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_or_b16_kernel  | %FileCheck %s --check-prefix=OR
-; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_xor_b16_kernel | %FileCheck %s --check-prefix=XOR
-; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=v_not_b16_kernel | %FileCheck %s --check-prefix=NOT
-;
+; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 \
+; RUN:     --emit-ir=v_and_b16_kernel,v_or_b16_kernel,v_xor_b16_kernel,v_not_b16_kernel \
+; RUN:     2>/dev/null | %FileCheck %s
+
 ; Lift test for gfx1250 true16 16-bit bitwise ops. AND/OR/XOR are two-source
 ; with op_sel half select on src0/src1/dst; NOT is single-source. Each op works
 ; on the selected 16-bit half and merges back into the selected dst half,
 ; preserving the other half (RDNA3+ true16). This fixture pins the lo/lo shape.
 
-; AND-LABEL: define amdgpu_kernel void @v_and_b16_kernel(
-; AND: trunc i32 {{.+}} to i16
-; AND: trunc i32 {{.+}} to i16
-; AND: [[AND:%.+]] = and i16
-; AND: zext i16 [[AND]] to i32
-; AND: or i32
-
-; OR-LABEL: define amdgpu_kernel void @v_or_b16_kernel(
-; OR: [[OR:%.+]] = or i16
-; OR: zext i16 [[OR]] to i32
-; OR: or i32
-
-; XOR-LABEL: define amdgpu_kernel void @v_xor_b16_kernel(
-; XOR: [[XOR:%.+]] = xor i16
-; XOR: zext i16 [[XOR]] to i32
-; XOR: or i32
-
-; NOT-LABEL: define amdgpu_kernel void @v_not_b16_kernel(
-; NOT: trunc i32 {{.+}} to i16
-; NOT: [[NOT:%.+]] = xor i16 {{.+}}, -1
-; NOT: zext i16 [[NOT]] to i32
-; NOT: or i32
+; CHECK-LABEL: define amdgpu_kernel void @v_and_b16_kernel(
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
@@ -39,27 +17,53 @@
 	.p2align	8
 	.type	v_and_b16_kernel,@function
 v_and_b16_kernel:
+	; CHECK: trunc i32 {{.+}} to i16
+	; CHECK: trunc i32 {{.+}} to i16
+	; CHECK: %and_b16 = and i16
+	; CHECK: zext i16 %and_b16 to i32
+	; CHECK: and i32 {{.+}}, -65536
+	; CHECK: %logic_b16_merge_lo = or i32
 	v_and_b16 v0.l, v1.l, v2.l
 	s_endpgm
 
+; CHECK-LABEL: define amdgpu_kernel void @v_or_b16_kernel(
 	.globl	v_or_b16_kernel
 	.p2align	8
 	.type	v_or_b16_kernel,@function
 v_or_b16_kernel:
+	; CHECK: trunc i32 {{.+}} to i16
+	; CHECK: trunc i32 {{.+}} to i16
+	; CHECK: %or_b16 = or i16
+	; CHECK: zext i16 %or_b16 to i32
+	; CHECK: and i32 {{.+}}, -65536
+	; CHECK: %logic_b16_merge_lo = or i32
 	v_or_b16 v0.l, v1.l, v2.l
 	s_endpgm
 
+; CHECK-LABEL: define amdgpu_kernel void @v_xor_b16_kernel(
 	.globl	v_xor_b16_kernel
 	.p2align	8
 	.type	v_xor_b16_kernel,@function
 v_xor_b16_kernel:
+	; CHECK: trunc i32 {{.+}} to i16
+	; CHECK: trunc i32 {{.+}} to i16
+	; CHECK: %xor_b16 = xor i16
+	; CHECK: zext i16 %xor_b16 to i32
+	; CHECK: and i32 {{.+}}, -65536
+	; CHECK: %logic_b16_merge_lo = or i32
 	v_xor_b16 v0.l, v1.l, v2.l
 	s_endpgm
 
+; CHECK-LABEL: define amdgpu_kernel void @v_not_b16_kernel(
 	.globl	v_not_b16_kernel
 	.p2align	8
 	.type	v_not_b16_kernel,@function
 v_not_b16_kernel:
+	; CHECK: trunc i32 {{.+}} to i16
+	; CHECK: %not_b16 = xor i16 {{.+}}, -1
+	; CHECK: zext i16 %not_b16 to i32
+	; CHECK: and i32 {{.+}}, -65536
+	; CHECK: %not_b16_merge = or i32
 	v_not_b16 v0.l, v1.l
 	s_endpgm
 

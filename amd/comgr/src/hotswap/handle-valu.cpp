@@ -99,16 +99,18 @@ struct True16OpSel {
 
 Expected<True16OpSel> readTrue16OpSel(const DecodedInst &Di, OpResolver &Op,
                                       unsigned NumSrcs, StringRef OpName) {
-  assert(NumSrcs == 2 || NumSrcs == 3);
+  assert(NumSrcs >= 1 && NumSrcs <= 3);
   if (Op.nSrcs() < NumSrcs) {
-    const char *ExpectedSrcs = NumSrcs == 2 ? "src0/src1" : "src0/src1/src2";
+    const char *ExpectedSrcs = NumSrcs == 1   ? "src0"
+                               : NumSrcs == 2 ? "src0/src1"
+                                              : "src0/src1/src2";
     return RaiseFailure::unsupportedInstructionForm(
         Di, "VOP3",
         OpName + " has too few source operands; expected " + ExpectedSrcs);
   }
 
   unsigned Src0Mods = Op.srcMod(0);
-  unsigned Src1Mods = Op.srcMod(1);
+  unsigned Src1Mods = NumSrcs >= 2 ? Op.srcMod(1) : 0;
   unsigned Src2Mods = NumSrcs == 3 ? Op.srcMod(2) : 0;
   constexpr unsigned AllowedSrc0Mods =
       SISrcMods::OP_SEL_0 | SISrcMods::DST_OP_SEL;
@@ -2119,9 +2121,9 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     const char *OpName = Sop == CanonicalOp::V_AND_B16   ? "v_and_b16"
                          : Sop == CanonicalOp::V_OR_B16  ? "v_or_b16"
                                                          : "v_xor_b16";
-    std::optional<True16OpSel> Sel = readTrue16OpSel(Di, Op, 2, Hr, OpName);
+    Expected<True16OpSel> Sel = readTrue16OpSel(Di, Op, 2, OpName);
     if (!Sel)
-      return Hr;
+      return Sel.takeError();
     Value *LHS = extractU16Half(Ctx, Op.src(0), Sel->Src0Hi);
     Value *RHS = extractU16Half(Ctx, Op.src(1), Sel->Src1Hi);
     Value *Result =
@@ -2134,30 +2136,21 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
   // VOP3 true16 16-bit bitwise NOT (single source). op_sel handling mirrors
-  // V_MOV_B16 (half carried by src0 OP_SEL_0 / DST_OP_SEL or the _LO16/_HI16
-  // subreg); readTrue16OpSel is two/three-source only, so read the bits here.
+  // V_MOV_B16: the half is carried by src0 OP_SEL_0 / DST_OP_SEL or the
+  // _LO16/_HI16 subreg notation; isHi16Reg overrides the modifier bits.
   if (Sop == CanonicalOp::V_NOT_B16) {
-    unsigned Src0Mods = Op.srcMod(0);
-    constexpr unsigned AllowedSrc0Mods =
-        SISrcMods::OP_SEL_0 | SISrcMods::DST_OP_SEL;
-    if ((Src0Mods & ~AllowedSrc0Mods) != 0) {
-      Hr.Failure = RaiseFailure::unsupportedInstructionForm(
-          Di, "VOP3",
-          "v_not_b16 has unsupported src0 modifiers; only op_sel/dst_op_sel "
-          "are modeled");
-      return Hr;
-    }
+    Expected<True16OpSel> Sel = readTrue16OpSel(Di, Op, 1, "v_not_b16");
+    if (!Sel)
+      return Sel.takeError();
     const MCRegisterInfo &MRI = *Ctx.Mc.RegInfo;
-    bool DstHi = (Src0Mods & SISrcMods::DST_OP_SEL) != 0;
     if (Di.isReg(0) && AMDGPU::isHi16Reg(Di.getReg(0), MRI))
-      DstHi = true;
+      Sel->DstHi = true;
     unsigned Src0Idx = Di.SrcMap[0];
-    bool Src0Hi = (Src0Mods & SISrcMods::OP_SEL_0) != 0;
     if (Di.isReg(Src0Idx) && AMDGPU::isHi16Reg(Di.getReg(Src0Idx), MRI))
-      Src0Hi = true;
-    Value *Half = extractU16Half(Ctx, Op.src(0), Src0Hi);
-    writeSelectedI16Bits(Ctx, Op.dst(), Ctx.B.CreateNot(Half, "not_b16"), DstHi,
-                         "not_b16_merge");
+      Sel->Src0Hi = true;
+    Value *Half = extractU16Half(Ctx, Op.src(0), Sel->Src0Hi);
+    writeSelectedI16Bits(Ctx, Op.dst(), Ctx.B.CreateNot(Half, "not_b16"),
+                         Sel->DstHi, "not_b16_merge");
     Hr.Handled = true;
     return Hr;
   }
