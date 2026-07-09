@@ -1,10 +1,10 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --enable-wave-native \
 ; RUN:     --emit-ir=buffer_load_wave_native_exec_gate_kernel 2>/dev/null \
-; RUN:   | %FileCheck %s --check-prefixes=WN,COM
+; RUN:   | %FileCheck %s --check-prefixes=WN,BOTH
 ; RUN: raise_cli %t.hsaco --target-isa=gfx942 --disable-wave-native \
 ; RUN:   --emit-ir=buffer_load_wave_native_exec_gate_kernel 2>/dev/null \
-; RUN:   | %FileCheck %s --check-prefixes=MR,COM
+; RUN:   | %FileCheck %s --check-prefixes=MR,BOTH
 ;
 ; MUBUF load EXEC-gating under WaveNative and modulo-replication (rocm-systems#148).
 
@@ -27,8 +27,8 @@ buffer_load_wave_native_exec_gate_kernel:
 	s_mov_b32 s2, 4
 	s_mov_b32 s3, 0x27000
 	s_wait_kmcnt 0x0
-	; COM: [[LD:%.+]] = call i32 @llvm.amdgcn.raw.ptr.buffer.load.i32(
-	; COM: = phi i32 [ [[LD]], %spe_do{{.+}} ], [ undef, %spe_skip{{.+}} ]
+	; BOTH: [[LD:%.+]] = call i32 @llvm.amdgcn.raw.ptr.buffer.load.i32(
+	; BOTH: = phi i32 [ [[LD]], %spe_do{{.+}} ], [ undef, %spe_skip{{.+}} ]
 	buffer_load_dword v4, v1, s[0:3], null offen
 	s_wait_loadcnt 0
 	buffer_store_dword v4, v1, s[0:3], null offen
