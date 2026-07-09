@@ -918,26 +918,20 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
       Meta.MaxFlatWorkgroupSize > 0 &&
       static_cast<unsigned>(Meta.MaxFlatWorkgroupSize) < TargetIsa.WaveSize;
   const bool UseThreadLoop = ForceThreadLoopProjection;
-  const bool UseWaveNative = !UseThreadLoop && EnableWaveNative &&
-                             Isa.isWave32() && !TargetIsa.isWave32() &&
-                             !PhantomLaneRegime;
+  // HUNYUAN: WaveNative-vs-MODREP choice for a multi-warp workgroup depends on
+  // whether the kernel contains WMMA, so eligibility is computed here but the
+  // projection is CONSTRUCTED AFTER decode (below). WaveNative packs two source
+  // wave32 warps into one target wave64, which breaks kernels that derive a
+  // subgroup id from `tid >> log2(W_src)` (ttmp8[29:25]) and use it in address
+  // arithmetic -> out-of-bounds addresses (silent miscompile -> GPU memory
+  // fault). MODREP preserves the source wave32 layout and is correct for those
+  // kernels. WaveNative is only *required* for WMMA->MFMA layout transposes
+  // that need all 64 target lanes simultaneously, so restrict it to kernels
+  // that actually contain WMMA.
+  const bool WaveNativeEligible = !UseThreadLoop && EnableWaveNative &&
+                                  Isa.isWave32() && !TargetIsa.isWave32() &&
+                                  !PhantomLaneRegime;
   std::unique_ptr<WaveProjection> ProjectionPtr;
-  if (UseThreadLoop) {
-    ProjectionPtr =
-        std::make_unique<ThreadLoopProjection>(Isa, TargetIsa, I32Ty, I64Ty);
-    errs() << "transpiler: kernel '" << KernelName
-           << "' selected ThreadLoopProjection (analysis-triggered "
-              "cross-widen route; writelane/readlane rewrite may be "
-              "disabled by the retry caller)\n";
-  } else if (UseWaveNative) {
-    ProjectionPtr =
-        std::make_unique<WaveNativeProjection>(Isa, TargetIsa, I32Ty, I64Ty);
-  } else {
-    ProjectionPtr = std::make_unique<ModuloReplicationProjection>(
-        Isa, TargetIsa, I32Ty, I64Ty);
-  }
-  ProjectionPtr->setMaxFlatWorkgroupSize(Meta.MaxFlatWorkgroupSize);
-  WaveProjection &Projection = *ProjectionPtr;
 
   if (!UseThreadLoop && EnableWaveNative && PhantomLaneRegime &&
       Isa.isWave32() && !TargetIsa.isWave32()) {
@@ -995,6 +989,53 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
     return DecodedOrErr.takeError();
   DecodeResult Decoded = std::move(*DecodedOrErr);
   auto &Insts = Decoded.Insts;
+
+  // HUNYUAN: projection selection deferred from above so we can inspect the
+  // decoded stream. WaveNative only for WMMA kernels; everything else uses
+  // MODREP. See the WaveNativeEligible comment above for the rationale.
+  bool HasWMMA = false;
+  for (const DecodedInst &Di : Insts) {
+    switch (Di.CanonOp) {
+    case CanonicalOp::V_WMMA_F32_16x16x32_F16:
+    case CanonicalOp::V_WMMA_F32_16x16x32_BF16:
+    case CanonicalOp::V_WMMA_F32_16x16x4_F32:
+    case CanonicalOp::V_WMMA_F32_16x16x64_FP8_FP8:
+    case CanonicalOp::V_WMMA_F32_16x16x64_FP8_BF8:
+    case CanonicalOp::V_WMMA_F32_16x16x64_BF8_FP8:
+    case CanonicalOp::V_WMMA_F32_16x16x64_BF8_BF8:
+    case CanonicalOp::V_WMMA_I32_16x16x64_IU8:
+    case CanonicalOp::V_WMMA_SCALE_F32_16x16x128_F8F6F4:
+      HasWMMA = true;
+      break;
+    default:
+      break;
+    }
+    if (HasWMMA)
+      break;
+  }
+  const bool UseWaveNative = WaveNativeEligible && HasWMMA;
+  if (UseThreadLoop) {
+    ProjectionPtr = std::make_unique<ThreadLoopProjection>(
+        Isa, TargetIsa, I32Ty, I64Ty);
+    errs() << "transpiler: kernel '" << KernelName
+           << "' selected ThreadLoopProjection (analysis-triggered "
+              "cross-widen route; writelane/readlane rewrite may be "
+              "disabled by the retry caller)\n";
+  } else if (UseWaveNative) {
+    ProjectionPtr = std::make_unique<WaveNativeProjection>(Isa, TargetIsa,
+                                                             I32Ty, I64Ty);
+  } else {
+    ProjectionPtr = std::make_unique<ModuloReplicationProjection>(
+        Isa, TargetIsa, I32Ty, I64Ty);
+    if (WaveNativeEligible && !HasWMMA)
+      errs() << "transpiler: kernel '" << KernelName
+             << "' is a cross-widen candidate but contains no WMMA; using "
+                "ModuloReplicationProjection (WaveNative packing would break "
+                "tid>>log2(W_src) subgroup-id addressing on multi-warp "
+                "workgroups). See raiser.cpp projection-selection comment.\n";
+  }
+  ProjectionPtr->setMaxFlatWorkgroupSize(Meta.MaxFlatWorkgroupSize);
+  WaveProjection &Projection = *ProjectionPtr;
   auto &BlockStarts = Decoded.BlockStarts;
 
   // ==== Phase 1.1: s_set_pc_i64 analysis ====
@@ -2391,25 +2432,44 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
         }
         return false;
       };
-      constexpr bool kEnableThreadLoopC5Retry = false;
+      // HUNYUAN: C5 predicate-chain refusal -> retry under ThreadLoopProjection.
+      // TLP iterates the kernel body once per source wave with a synthetic
+      // per-iteration source tid, so a workitem.id.x-derived predicate that
+      // would diverge across MODREP replicas / WaveNative packing is evaluated
+      // correctly per source wave. Eligible for ANY cross-widen C5 refusal
+      // (multiplicative wave ratio) -- e.g. HunyuanVideo RoPE's
+      // `icmp ult tid-derived, W_s-1` needs per-source-wave iteration -- not
+      // just the WaveNative-equality sub-case. Matrix ops still route to
+      // WaveNative; TLP is refused for LDS/barrier kernels below.
+      constexpr bool kEnableThreadLoopC5Retry = true;
       const bool CanRetryThreadLoop =
-          kEnableThreadLoopC5Retry && PredReport.WaveNativeEqualityRefusal &&
-          !ForceThreadLoopProjection && TargetIsa.WaveSize > Isa.WaveSize &&
+          kEnableThreadLoopC5Retry &&
+          PredReport.Refused && !ForceThreadLoopProjection &&
+          TargetIsa.WaveSize > Isa.WaveSize &&
           (TargetIsa.WaveSize % Isa.WaveSize) == 0 && !HasMatrixOp();
       if (CanRetryThreadLoop) {
-        errs() << "transpiler: post-raise fallback: retrying kernel '"
-               << KernelName
-               << "' under ThreadLoopProjection after WaveNative C5 equality "
-                  "refusal (analysis-triggered, no user opt-in)\n";
-        errs() << "transpiler: thread-loop fallback trigger: "
-               << PredReport.RefusalDetail << "\n";
-        return raiseToIRImpl(TextBytes, SourceIsa, KernelName, Meta,
-                             KernelOffset, KernelSize, CompilationTargetIsa,
-                             /*enableWritelaneRewrite=*/false,
-                             /*enableWaveNative=*/false,
-                             /*forceThreadLoopProjection=*/true,
-                             /*suppressC5ForThreadLoopRoute=*/true,
-                             AssumeHipGlobalOffsetZero, FunctionExtents, Stats);
+        std::string ThreadLoopUnsupportedDetail;
+        if (threadLoopUnsupportedWorkgroupMemoryOrBarrier(
+                Insts, ThreadLoopUnsupportedDetail)) {
+          errs() << "transpiler: thread-loop C5 fallback not eligible for "
+                    "kernel '"
+                 << KernelName << "': " << ThreadLoopUnsupportedDetail
+                 << "; keeping principled C5 refusal\n";
+        } else {
+          errs() << "transpiler: post-raise fallback: retrying kernel '"
+                 << KernelName
+                 << "' under ThreadLoopProjection after C5 predicate-chain "
+                    "refusal (analysis-triggered, no user opt-in)\n";
+          errs() << "transpiler: thread-loop fallback trigger: "
+                 << PredReport.RefusalDetail << "\n";
+          return raiseToIRImpl(TextBytes, SourceIsa, KernelName, Meta,
+                               KernelOffset, KernelSize, CompilationTargetIsa,
+                               /*enableWritelaneRewrite=*/false,
+                               /*enableWaveNative=*/false,
+                               /*forceThreadLoopProjection=*/true,
+                               /*suppressC5ForThreadLoopRoute=*/true,
+                               AssumeHipGlobalOffsetZero, FunctionExtents, Stats);
+        }
       }
       errs() << "transpiler: pre-translation abort: "
              << reasonString(RaiseFailureReason::CrossWavePredicateChain)
