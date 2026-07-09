@@ -308,33 +308,7 @@ bool hasFlag(const amd_comgr_hotswap_transpile_options_t *options,
       sizeof(uint64_t);
   if (!options || options->size < FlagsEnd)
     return false;
-
-  uint64_t Flags = options->flags;
-
-  // The local lazy-runtime artifact used for validation was built while the
-  // private options layout had one ignored pointer-sized field before `flags`.
-  // Decode that oversized layout when the public-layout `kernel_name` slot
-  // contains the small integer flag bits rather than a process pointer.
-  constexpr size_t LegacyFlagsOffset =
-      offsetof(amd_comgr_hotswap_transpile_options_t, kernel_name);
-  constexpr size_t LegacyKernelNameOffset =
-      LegacyFlagsOffset + sizeof(uint64_t);
-  constexpr size_t LegacyKernelNameEnd =
-      LegacyKernelNameOffset + sizeof(const char *);
-  if (options->size >= LegacyKernelNameEnd) {
-    const char *MaybeFlagsAsPointer = options->kernel_name;
-    const char *LegacyKernelName = nullptr;
-    std::memcpy(&LegacyKernelName,
-                reinterpret_cast<const char *>(options) + LegacyKernelNameOffset,
-                sizeof(LegacyKernelName));
-    if (LegacyKernelName && MaybeFlagsAsPointer &&
-        reinterpret_cast<uintptr_t>(MaybeFlagsAsPointer) < 4096) {
-      std::memcpy(&Flags,
-                  reinterpret_cast<const char *>(options) + LegacyFlagsOffset,
-                  sizeof(Flags));
-    }
-  }
-  return Flags & static_cast<uint64_t>(flag);
+  return options->flags & static_cast<uint64_t>(flag);
 }
 
 const char *getKernelNameOption(
@@ -344,21 +318,6 @@ const char *getKernelNameOption(
       sizeof(const char *);
   if (!options || options->size < KernelNameEnd)
     return nullptr;
-  constexpr size_t LegacyFlagsOffset =
-      offsetof(amd_comgr_hotswap_transpile_options_t, kernel_name);
-  constexpr size_t LegacyKernelNameOffset =
-      LegacyFlagsOffset + sizeof(uint64_t);
-  constexpr size_t LegacyKernelNameEnd =
-      LegacyKernelNameOffset + sizeof(const char *);
-  if (options->size >= LegacyKernelNameEnd && options->kernel_name &&
-      reinterpret_cast<uintptr_t>(options->kernel_name) < 4096) {
-    const char *LegacyKernelName = nullptr;
-    std::memcpy(&LegacyKernelName,
-                reinterpret_cast<const char *>(options) + LegacyKernelNameOffset,
-                sizeof(LegacyKernelName));
-    if (LegacyKernelName)
-      return LegacyKernelName;
-  }
   return options->kernel_name;
 }
 
