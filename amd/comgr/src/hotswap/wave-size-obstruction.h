@@ -202,10 +202,10 @@ enum class RewriteId : uint8_t {
   P5_DppModifier,           // llvm.amdgcn.update.dpp lift.
   P6_DsSwizzle,             // llvm.amdgcn.ds.swizzle lift.
   LaneOpBoundsValidator,    // raise-time operand-range check for readlane/writelane.
-  SaveExecLaneRelative, // saveexec mask is source-wave-relative via
+  SaveExecLaneRelative,    // saveexec mask is source-wave-relative via
                            // the mbcnt lift (mbcnt_hi pass-through +
                            // mbcnt_lo mod W_s); MODREP replicate handles it.
-  AtomicOneReplica,     // store-only (non-returning) vector atomic:
+  AtomicOneReplica,        // store-only (non-returning) vector atomic:
                            // under MODREP the source wave is projected
                            // onto two wave32 replicas, so lanes i and
                            // i+W_s would double-issue against the same
