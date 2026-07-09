@@ -54,21 +54,11 @@
 // to exercise cross-wave paths from a single CO (e.g. a gfx1250 CO
 // compiled for a wave64 target).
 //
-// --enable-writelane-rewrite / --disable-writelane-rewrite. Default
-// **on** (post-Triton-corpus graduation; see raiser.hpp for the full
-// rationale).  Controls the post-raise rewrite of cross-widen-divergent
-// `v_writelane_b32` / `v_readlane_b32` sites into per-source-wave
-// `select` / `ds_bpermute` primitives — see
+// The post-raise rewrite of cross-widen-divergent `v_writelane_b32` /
+// `v_readlane_b32` sites into per-source-wave `select` / `ds_bpermute`
+// primitives runs unconditionally as a general cross-lane pass -- see
 // `rewrite_cross_lane_divergent.{hpp,cpp}` and
 // hotswap/docs/wave-size-translation.md §5.6.3.
-//
-// `--enable-writelane-rewrite` is accepted for backward compatibility
-// (the canonical flag name used by existing lit fixtures) and is a
-// no-op since the default is already on; `--disable-writelane-rewrite`
-// forces the pre-rewrite path and is used by the `REFUSE` / `UNCHANGED`
-// sibling RUN lines in the writelane/readlane regression fixtures to
-// pin the pre-rewrite contract.  Later-wins between the two flags is
-// by command-line order (last occurrence decides).
 //
 // --enable-wave-native / --disable-wave-native. Default **on** as
 // of the WaveNative graduation. Selects `WaveNativeProjection`
@@ -226,14 +216,6 @@ cl::opt<std::string>
 cl::opt<std::string> KernelOpt("kernel", cl::value_desc("name"),
                                cl::desc("Kernel selected by --write-hsaco."));
 
-cl::opt<bool> EnableWritelaneRewriteOpt(
-    "enable-writelane-rewrite",
-    cl::desc("Enable the cross-widen-divergent writelane/readlane rewrite "
-             "(default on; later-wins with --disable-writelane-rewrite)."));
-cl::opt<bool> DisableWritelaneRewriteOpt(
-    "disable-writelane-rewrite",
-    cl::desc("Pin the pre-rewrite REFUSE / UNCHANGED path."));
-
 cl::opt<bool> EnableWaveNativeOpt(
     "enable-wave-native",
     cl::desc("Select WaveNativeProjection for wave32->wave64 cross-widening "
@@ -345,11 +327,9 @@ int main(int argc, char **argv) {
   std::string emitIrKernel = EmitIrOpt;
   std::string writeHsacoPath = WriteHsacoOpt;
   std::string writeHsacoKernel = KernelOpt;
-  // Both toggles default on (Triton-corpus / WaveNative graduations; see this
-  // file's top-of-file comment and raiser.hpp). The --disable- forms pin the
-  // pre-rewrite / MODREP paths for the lit fixtures.
-  bool EnableWritelaneRewrite = resolveToggle(
-      true, EnableWritelaneRewriteOpt, DisableWritelaneRewriteOpt);
+  // The toggle defaults on (WaveNative graduation; see this file's
+  // top-of-file comment and raiser.hpp). The --disable- form pins the
+  // MODREP path for the lit fixtures.
   bool EnableWaveNative =
       resolveToggle(true, EnableWaveNativeOpt, DisableWaveNativeOpt);
 
@@ -462,7 +442,7 @@ int main(int argc, char **argv) {
       uint64_t kernelSize = kernelExtentOrErr->Size;
       llvm::Expected<COMGR::hotswap::RaiseResult> RaisedOrErr =
           COMGR::hotswap::raiseToIR(text.Bytes, isa, Target, meta, kernelOffset,
-                                    kernelSize, targetIsa, EnableWritelaneRewrite,
+                                    kernelSize, targetIsa,
                                     EnableWaveNative, AssumeHipGlobalOffsetZeroOpt);
       if (!RaisedOrErr) {
         // Contract: raiseToIR only populates RaiseResult::IrText on the
@@ -524,7 +504,6 @@ int main(int argc, char **argv) {
     }
     std::string effectiveTargetIsa = targetIsa.empty() ? isa : targetIsa;
     COMGR::hotswap::PipelineOptions pipelineOptions;
-    pipelineOptions.EnableWritelaneRewrite = EnableWritelaneRewrite;
     pipelineOptions.EnableWaveNative = EnableWaveNative;
     pipelineOptions.AssumeHipGlobalOffsetZero = AssumeHipGlobalOffsetZeroOpt;
     pipelineOptions.OptLevel = std::min<unsigned>(OptLevel, 3);
@@ -629,7 +608,7 @@ int main(int argc, char **argv) {
       llvm::Expected<COMGR::hotswap::RaiseResult> RaisedOrErr =
           COMGR::hotswap::raiseToIR(text.Bytes, isa, kName, meta, kernelOffset,
                                     kernelSize, targetIsa,
-                                    EnableWritelaneRewrite, EnableWaveNative,
+                                    EnableWaveNative,
                                     AssumeHipGlobalOffsetZeroOpt);
       if (RaisedOrErr) {
         COMGR::hotswap::RaiseResult Raised = std::move(*RaisedOrErr);

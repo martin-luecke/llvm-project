@@ -227,7 +227,6 @@ COMGR::hotswap::TranslationCacheRequest makeRequest(
   Request.CacheDirectory = llvm::sys::path::parent_path(RulesPath).str();
   Request.CacheDisabled = false;
   Request.OrigMach = 0x49;
-  Request.EnableWritelaneRewrite = true;
   Request.EnableWaveNative = true;
   Request.StrictMode = true;
   return Request;

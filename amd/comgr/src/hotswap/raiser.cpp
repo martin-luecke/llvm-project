@@ -753,7 +753,7 @@ static Expected<RaiseResult>
 raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
               llvm::StringRef KernelName, const KernelMeta &Meta,
               uint64_t KernelOffset, uint64_t KernelSize,
-              llvm::StringRef CompilationTargetIsa, bool EnableWritelaneRewrite,
+              llvm::StringRef CompilationTargetIsa,
               bool EnableWaveNative, bool ForceThreadLoopProjection,
               bool SuppressC5ForThreadLoopRoute,
               bool AssumeHipGlobalOffsetZero) {
@@ -1093,7 +1093,7 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
   unsigned ClassifierWaveIdLiftScalarizedSites = 0;
   {
     ObstructionReport Report =
-        buildObstructionReport(Insts, Mc, Projection, EnableWritelaneRewrite);
+        buildObstructionReport(Insts, Mc, Projection);
     for (const auto &S : Report.Sites)
       if (S.Kind == ObstructionKind::WaveIdLiftScalarized)
         ++ClassifierWaveIdLiftScalarizedSites;
@@ -2043,11 +2043,9 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
 
   // ==== Phase 6.5: Cross-widen writelane/readlane rewrite ====
   //
-  // Opt-in symmetric rewrite of `v_writelane_b32` / `v_readlane_b32`
-  // sites under cross-widening. Disabled by default; the caller
-  // (raise_cli's `--enable-writelane-rewrite`, PipelineConfig's
-  // `enableWritelaneRewrite`) must ask for it explicitly. See
-  // `rewrite_cross_lane_divergent.{hpp,cpp}` and
+  // Symmetric rewrite of `v_writelane_b32` / `v_readlane_b32` sites
+  // under cross-widening. Runs unconditionally for every wave32->wave64
+  // kernel. See `rewrite_cross_lane_divergent.{hpp,cpp}` and
   // wave-size-translation.md §5.6.3 for the principled derivation,
   // and hotswap/docs/learnings.md for the asymmetric-rewrite bug
   // that motivated the symmetry-plus-use-chain design.
@@ -2071,7 +2069,7 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
   // rewriting the ds_bpermute output into an SGPR-forced consumer
   // would re-introduce `v_readfirstlane_b32` at the SGPR boundary and
   // recreate the source-wave collapse the rewrite exists to avoid.
-  if (EnableWritelaneRewrite) {
+  {
     // `tm.get()` threaded through so `rewriteCrossLaneDivergent` can
     // build a `UniformityAnalysis` against the compilation target
     // for the §5.6.3 "UA-backed readfirstlane allow-gate" classifier
@@ -2106,7 +2104,6 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
                << RewriteReport.SgprForcedDetail << "\n";
         return raiseToIRImpl(TextBytes, SourceIsa, KernelName, Meta,
                              KernelOffset, KernelSize, CompilationTargetIsa,
-                             /*enableWritelaneRewrite=*/false,
                              /*enableWaveNative=*/false,
                              /*forceThreadLoopProjection=*/true,
                              /*suppressC5ForThreadLoopRoute=*/true,
@@ -2287,7 +2284,6 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
                << PredReport.RefusalDetail << "\n";
         return raiseToIRImpl(TextBytes, SourceIsa, KernelName, Meta,
                              KernelOffset, KernelSize, CompilationTargetIsa,
-                             /*enableWritelaneRewrite=*/false,
                              /*enableWaveNative=*/false,
                              /*forceThreadLoopProjection=*/true,
                              /*suppressC5ForThreadLoopRoute=*/true,
@@ -2343,23 +2339,23 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
 llvm::Expected<RaiseResult>
 raiseToIR(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
           llvm::StringRef KernelName, const KernelMeta &Meta,
-          llvm::StringRef CompilationTargetIsa, bool EnableWritelaneRewrite,
+          llvm::StringRef CompilationTargetIsa,
           bool EnableWaveNative) {
   return raiseToIR(TextBytes, SourceIsa, KernelName, Meta,
                    /*KernelOffset=*/0,
                    /*KernelSize=*/0, CompilationTargetIsa,
-                   EnableWritelaneRewrite, EnableWaveNative);
+                   EnableWaveNative);
 }
 
 llvm::Expected<RaiseResult>
 raiseToIR(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
           llvm::StringRef KernelName, const KernelMeta &Meta,
           uint64_t KernelOffset, uint64_t KernelSize,
-          llvm::StringRef CompilationTargetIsa, bool EnableWritelaneRewrite,
+          llvm::StringRef CompilationTargetIsa,
           bool EnableWaveNative, bool AssumeHipGlobalOffsetZero) {
   return raiseToIRImpl(
       TextBytes, SourceIsa, KernelName, Meta, KernelOffset, KernelSize,
-      CompilationTargetIsa, EnableWritelaneRewrite, EnableWaveNative,
+      CompilationTargetIsa, EnableWaveNative,
       /*forceThreadLoopProjection=*/false,
       /*suppressC5ForThreadLoopRoute=*/false, AssumeHipGlobalOffsetZero);
 }

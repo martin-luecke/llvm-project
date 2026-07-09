@@ -54,7 +54,6 @@ struct TranslationCacheRequest {
   std::string CacheSkipKernels;
   int OrigMach = -1;
   unsigned OptLevel = 0;
-  bool EnableWritelaneRewrite = true;
   bool EnableWaveNative = true;
   bool AssumeHipGlobalOffsetZero = false;
   bool StrictMode = false;

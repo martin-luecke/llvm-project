@@ -1,17 +1,11 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %not raise_cli %t.hsaco --target-isa=gfx942 \
-; RUN:     --disable-writelane-rewrite \
-; RUN:     --emit-ir=c1_wave_id_lift_scalarized_kernel 2>&1 \
-; RUN:   | %FileCheck %s --check-prefix=REFUSE
-; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && %not raise_cli %t.hsaco --target-isa=gfx942 \
-; RUN:     --enable-writelane-rewrite \
 ; RUN:     --emit-ir=c1_wave_id_lift_scalarized_kernel 2>&1 \
 ; RUN:   | %FileCheck %s --check-prefix=REFUSE
 
-; rocm-systems#151: the WaveIdLiftScalarized shape must REFUSE under BOTH flag
-; states. The post-raise writelane/readlane rewrite does NOT preserve the
-; per-source-wave wave_id-derived tile-column base, so it does not discharge
+; rocm-systems#151: the WaveIdLiftScalarized shape must REFUSE
+; unconditionally. The post-raise writelane/readlane rewrite does NOT preserve
+; the per-source-wave wave_id-derived tile-column base, so it does not discharge
 ; this obstruction -- it silently miscompiled the gemma prefill _fwd_kernel
 ; attention output to ~1e38 on the even columns of one 16-wide head_dim tile.
 ; refuse-don't-miscompile until a correct re-diverging rewrite lands.

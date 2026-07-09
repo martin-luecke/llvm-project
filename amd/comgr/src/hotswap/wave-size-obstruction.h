@@ -204,11 +204,8 @@ enum class RewriteId : uint8_t {
   LaneOpBoundsValidator,    // raise-time operand-range check for readlane/writelane.
   PostRaiseCrossLaneRewrite,// post-mem2reg rewrite of cross-widen-divergent
                             // writelane/readlane sites into select / ds.bpermute
-                            // (rewrite_cross_lane_divergent.{hpp,cpp}, flagged on
-                            // via `--enable-writelane-rewrite`). Tags the
-                            // WaveIdLiftScalarized site as "implemented rewrite
-                            // available" instead of "refuse outright" so the
-                            // classifier lets the kernel through to Phase 6.5.
+                            // (rewrite_cross_lane_divergent.{hpp,cpp}). Runs
+                            // unconditionally as a general cross-lane pass.
   WaveNativeMbcntCmpx,      // source-wave mbcnt -> target-width V_CMPX EXEC.
 };
 
@@ -286,18 +283,14 @@ struct ObstructionReport {
 // phase before any LLVM module construction.
 // ----------------------------------------------------------------------------
 
-// `enableWritelaneRewrite` opts the classifier into treating the
-// `WaveIdLiftScalarized` three-way co-occurrence as a site with an
-// *implemented* post-raise rewrite (RewriteId::PostRaiseCrossLaneRewrite),
-// not an unrewritable refusal. Default **true** as of the Triton-
-// corpus graduation (see raiser.h for the full rationale); callers
-// that want to pin the pre-rewrite REFUSE contract (lit fixtures for
-// the `c1_wave_id_lift_scalarized` REFUSE sibling, etc.) pass `false`
-// explicitly. See wave-size-translation.md §5.6.3.
+// The `WaveIdLiftScalarized` three-way co-occurrence is always tagged
+// as an unrewritable refusal (RewriteId::None): the post-raise
+// cross-lane rewrite does not preserve the per-source-wave wave_id
+// base, so it cannot discharge this obstruction. See
+// wave-size-translation.md §5.6.3.
 ObstructionReport buildObstructionReport(llvm::ArrayRef<DecodedInst> Insts,
                                           const MCState &Mc,
-                                          const WaveProjection &Projection,
-                                          bool EnableWritelaneRewrite = true);
+                                          const WaveProjection &Projection);
 
 // ----------------------------------------------------------------------------
 // Render the report into a human-readable trace. Intended for

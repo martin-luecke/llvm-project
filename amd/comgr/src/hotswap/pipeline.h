@@ -25,7 +25,6 @@ struct PipelineTimings {
 };
 
 struct PipelineOptions {
-  bool EnableWritelaneRewrite = true;
   bool EnableWaveNative = true;
   bool CollectTimings = false;
   // Optimization level (0-3) for the in-process opt + llc codegen stages.
@@ -78,7 +77,7 @@ struct PipelineResult {
 /// -> bool` is a *standard* pointer-to-bool conversion that outranks
 /// the user-defined `const char * -> std::string` conversion needed
 /// for the 4-string cross-arch overload).  The 4th literal was then
-/// bound to `EnableWritelaneRewrite` as `true` and `KernelName`
+/// bound to a trailing `bool` option as `true` and `KernelName`
 /// silently became `"gfx942"`, which downstream surfaced as
 /// `UserSgprLayout::fromKernelMeta: kernel 'gfx942' has no parsed
 /// kernel descriptor` -- an easy-to-miss silent miscompile of the
@@ -100,9 +99,9 @@ PipelineResult runPipeline(llvm::MemoryBufferRef CodeObjectData,
 /// raised and compiled. On raise failure, the `fail*` fields carry the
 /// structured `RaiseFailure` details for proof logs and corpus summaries.
 ///
-/// `EnableWritelaneRewrite` / `EnableWaveNative` plumb through to the
-/// per-kernel `raiseToIR` calls; see `raiser.hpp` for the contract and
-/// the in-tree-debug-only caveat.
+/// `EnableWaveNative` plumbs through to the per-kernel `raiseToIR`
+/// calls; see `raiser.hpp` for the contract and the
+/// in-tree-debug-only caveat.
 PipelineResult runPipelineAllKernels(llvm::MemoryBufferRef CodeObjectData,
                                      llvm::StringRef SourceISA,
                                      llvm::StringRef TargetISA,

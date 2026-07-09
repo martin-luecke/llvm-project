@@ -535,8 +535,6 @@ amd_comgr_status_t AMD_COMGR_API amd_comgr_hotswap_transpile_with_options(
   if (!CacheHit) {
     COMGR::hotswap::ScopedStrictMode StrictMode(CacheRequest.StrictMode);
     COMGR::hotswap::PipelineOptions PipelineOptions;
-    PipelineOptions.EnableWritelaneRewrite =
-        CacheRequest.EnableWritelaneRewrite;
     PipelineOptions.EnableWaveNative = CacheRequest.EnableWaveNative;
     PipelineOptions.CollectTimings = CollectTimings;
     PipelineOptions.AssumeHipGlobalOffsetZero =

@@ -324,8 +324,8 @@ static bool raiseAndCompileKernel(
 
   llvm::Expected<RaiseResult> RaisedOrErr =
       raiseToIR(Text.Bytes, SourceISA, KernelName, Meta, KernelOffset,
-                KernelSize, TargetISA, Options.EnableWritelaneRewrite,
-                Options.EnableWaveNative, Options.AssumeHipGlobalOffsetZero);
+                KernelSize, TargetISA, Options.EnableWaveNative,
+                Options.AssumeHipGlobalOffsetZero);
   if (!RaisedOrErr) {
     llvm::errs() << "transpiler: Raising '" << KernelName
                  << "' to LLVM IR failed";

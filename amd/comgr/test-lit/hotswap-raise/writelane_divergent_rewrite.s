@@ -1,26 +1,15 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 \
-; RUN:     --enable-writelane-rewrite \
 ; RUN:     --emit-ir=writelane_divergent_rewrite_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s --check-prefix=REWRITE
-; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 \
-; RUN:     --disable-writelane-rewrite \
-; RUN:     --emit-ir=writelane_divergent_rewrite_kernel 2>/dev/null \
-; RUN:   | %FileCheck %s --check-prefix=UNCHANGED
 
-; writelane divergent select rewrite (mbcnt lane id); left as writelane when disabled.
+; writelane divergent select rewrite (mbcnt lane id).
 ; REWRITE-LABEL: define amdgpu_kernel void @writelane_divergent_rewrite_kernel(
 ; REWRITE: %cwd_lane_id_lo = call i32 @llvm.amdgcn.mbcnt.lo
 ; REWRITE: %cwd_lane_id = call i32 @llvm.amdgcn.mbcnt.hi
 ; REWRITE: %cwd_wl_mask = icmp eq
 ; REWRITE: %cwd_writelane_rewritten = select i1
 ; REWRITE-NOT: cwd_readlane_rewritten
-
-; UNCHANGED-LABEL: define amdgpu_kernel void @writelane_divergent_rewrite_kernel(
-; UNCHANGED: call i32 @llvm.amdgcn.writelane
-; UNCHANGED-NOT: cwd_lane_id_lo
-; UNCHANGED-NOT: cwd_writelane_rewritten
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6

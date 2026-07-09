@@ -576,12 +576,7 @@ bool isCanonicalWaveIdBfe(const DecodedInst &Di,
 
 ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
                                           const MCState &Mc,
-                                          const WaveProjection &Projection,
-                                          bool EnableWritelaneRewrite) {
-  // No obstruction in this report consults the flag anymore (the
-  // WaveIdLiftScalarized site below refuses unconditionally); kept in the
-  // signature because callers pass the pipeline flag.
-  (void)EnableWritelaneRewrite;
+                                          const WaveProjection &Projection) {
   ObstructionReport Report;
   const ISAProfile &Src = Projection.sourceIsa();
   const ISAProfile &Tgt = Projection.targetIsa();
@@ -1105,7 +1100,7 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
       ObstructionSite Site;
       Site.Inst = Di;
       Site.Kind = ObstructionKind::WaveIdLiftScalarized;
-      // Refuse regardless of the writelane-rewrite flag. The rewrite
+      // Refuse unconditionally. The rewrite
       // (rewrite_cross_lane_divergent.cpp) replaces the cross-lane primitive
       // but does not preserve the per-source-wave wave_id-derived tile-column
       // base fed into the writelane value, so the two source waves' column

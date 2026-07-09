@@ -8,6 +8,21 @@ Append-only. Newest on top.
 
 ---
 
+## 2026-07-07 -- EnableWritelaneRewrite flag removed (rewrite is now unconditional)
+
+The `EnableWritelaneRewrite` option (PipelineOptions, raiseToIR params,
+translation-cache key material, raise_cli `--enable-writelane-rewrite` /
+`--disable-writelane-rewrite`) is gone end-to-end. The Phase 6.5
+`rewriteCrossLaneDivergent` pass now runs unconditionally as a general
+cross-lane pass -- there is no "pre-rewrite" arm to pin anymore. The
+`WaveIdLiftScalarized` refusal (rocm-systems#151) is independent of the
+former flag: the rewrite replaces the cross-lane primitive but does not
+preserve the per-source-wave `wave_id`-derived tile-column base, so that
+shape refuses regardless. Cache schema bumped to v5 (dropped the
+`enable_writelane_rewrite` key field).
+
+---
+
 ## 2026-04-23 -- V_CMP wave-mask shadow propagation through scalar ops (closes canary_tl_sort_fp32_n4)
 
 `canary_tl_sort_fp32_n4` graduates from WRONG 775/2048 to

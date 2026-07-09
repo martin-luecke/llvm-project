@@ -1,6 +1,5 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 \
-; RUN:     --enable-writelane-rewrite \
 ; RUN:     --emit-ir=writelane_threadloop_barrier_refuse_kernel 2>&1 \
 ; RUN:   | %FileCheck %s --check-prefix=IR
 

@@ -127,7 +127,6 @@ TEST(RaiserScaffolding,
                                 /*KernelOffset=*/0,
                                 /*KernelSize=*/0,
                                 /*CompilationTargetIsa=*/"gfx942",
-                                /*EnableWritelaneRewrite=*/true,
                                 /*EnableWaveNative=*/true,
                                 /*AssumeHipGlobalOffsetZero=*/false);
 
@@ -162,7 +161,6 @@ TEST(RaiserScaffolding, PreloadedUnmatchedImplicitOffsetRefusesInStrictMode) {
                                 /*KernelOffset=*/0,
                                 /*KernelSize=*/0,
                                 /*CompilationTargetIsa=*/"gfx942",
-                                /*EnableWritelaneRewrite=*/true,
                                 /*EnableWaveNative=*/true,
                                 /*AssumeHipGlobalOffsetZero=*/false);
 

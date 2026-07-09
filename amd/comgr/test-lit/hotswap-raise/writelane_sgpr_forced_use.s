@@ -1,13 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 \
-; RUN:     --enable-writelane-rewrite \
 ; RUN:     --emit-ir=writelane_sgpr_forced_use_kernel 2>&1 \
 ; RUN:   | %FileCheck %s --check-prefix=REWRITE
-; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 \
-; RUN:     --disable-writelane-rewrite \
-; RUN:     --emit-ir=writelane_sgpr_forced_use_kernel 2>/dev/null \
-; RUN:   | %FileCheck %s --check-prefix=UNCHANGED
 
 ; writelane sgpr-source forced-use rewrite (bpermute readfirstlane), no thread-loop projection.
 ; REWRITE-NOT: ThreadLoopProjection
@@ -16,12 +10,6 @@
 ; REWRITE: readfirstlane_srcwave = call i32 @llvm.amdgcn.ds.bpermute
 ; REWRITE-NOT: call i32 @llvm.amdgcn.writelane
 ; REWRITE-NOT: call i32 @llvm.amdgcn.readfirstlane
-
-; UNCHANGED-LABEL: define amdgpu_kernel void @writelane_sgpr_forced_use_kernel(
-; UNCHANGED: call i32 @llvm.amdgcn.writelane
-; UNCHANGED: readfirstlane_srcwave = call i32 @llvm.amdgcn.ds.bpermute
-; UNCHANGED-NOT: cwd_lane_id_lo
-; UNCHANGED-NOT: cwd_writelane_rewritten
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6

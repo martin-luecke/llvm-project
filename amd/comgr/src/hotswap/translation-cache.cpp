@@ -43,7 +43,8 @@ double timingElapsed(bool CollectTimings, TimingClock::time_point start) {
   return CollectTimings ? secondsBetween(start, TimingClock::now()) : 0.0;
 }
 
-constexpr int kCacheSchemaVersion = 4;
+// v5: dropped the `enable_writelane_rewrite` key field (flag removed).
+constexpr int kCacheSchemaVersion = 5;
 
 struct FileIdentity {
   std::string path;
@@ -259,8 +260,6 @@ KeyData buildKeyData(const TranslationCacheRequest &request,
   appendKeyField(material, "rules_path", request.HotswapRulesPath);
   appendKeyField(material, "rules_sha256", data.rulesSha256);
   appendKeyField(material, "strict", request.StrictMode);
-  appendKeyField(material, "enable_writelane_rewrite",
-                 request.EnableWritelaneRewrite);
   appendKeyField(material, "enable_wave_native", request.EnableWaveNative);
   appendKeyField(material, "assume_hip_global_offset_zero",
                  request.AssumeHipGlobalOffsetZero);
@@ -469,7 +468,6 @@ llvm::json::Object metadataObject(const TranslationCacheRequest &request,
       {"hotswap_rules_path", request.HotswapRulesPath},
       {"hotswap_rules_sha256", keyData.rulesSha256},
       {"strict_mode", request.StrictMode},
-      {"enable_writelane_rewrite", request.EnableWritelaneRewrite},
       {"enable_wave_native", request.EnableWaveNative},
       {"assume_hip_global_offset_zero", request.AssumeHipGlobalOffsetZero},
       {"hotswap_build_identity", keyData.buildIdentity},
@@ -515,8 +513,6 @@ bool validateMetadata(const TranslationCacheRequest &request,
       !requireEqualString(obj, "hotswap_rules_sha256", keyData.rulesSha256,
                           Reason) ||
       !requireEqualBool(obj, "strict_mode", request.StrictMode, Reason) ||
-      !requireEqualBool(obj, "enable_writelane_rewrite",
-                        request.EnableWritelaneRewrite, Reason) ||
       !requireEqualBool(obj, "enable_wave_native", request.EnableWaveNative,
                         Reason) ||
       !requireEqualBool(obj, "assume_hip_global_offset_zero",
