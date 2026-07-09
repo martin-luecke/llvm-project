@@ -439,4 +439,81 @@ findKernelSymbolExtent(llvm::MemoryBufferRef ElfData,
   return Extent;
 }
 
+llvm::Expected<llvm::SmallVector<KernelSymbolExtent>>
+listTextFunctionExtents(llvm::MemoryBufferRef ElfData) {
+  llvm::Expected<std::unique_ptr<llvm::object::ObjectFile>> ObjOrErr =
+      llvm::object::ObjectFile::createELFObjectFile(ElfData);
+  if (!ObjOrErr)
+    return ObjOrErr.takeError();
+
+  uint64_t TextBase = UINT64_MAX;
+  uint64_t TextEnd = 0;
+  std::optional<llvm::object::SectionRef> TextSec;
+  for (const llvm::object::SectionRef &Sec : (*ObjOrErr)->sections()) {
+    llvm::Expected<llvm::StringRef> NameOrErr = Sec.getName();
+    if (!NameOrErr)
+      return NameOrErr.takeError();
+    if (*NameOrErr != ".text")
+      continue;
+    TextSec = Sec;
+    TextBase = Sec.getAddress();
+    TextEnd = TextBase + Sec.getSize();
+    break;
+  }
+  if (TextBase == UINT64_MAX)
+    return makeHotswapError("listTextFunctionExtents: .text section not found");
+
+  // Collect every function symbol's address in .text, then convert to
+  // text-relative extents. Zero-sized symbols are bounded by the next symbol
+  // address (or .text end) so an outlined helper without a recorded size still
+  // gets a usable extent.
+  llvm::SmallVector<std::pair<uint64_t, uint64_t>> AddrSize; // (address, size)
+  for (const llvm::object::SymbolRef &Sym : (*ObjOrErr)->symbols()) {
+    llvm::Expected<llvm::object::SymbolRef::Type> TypeOrErr = Sym.getType();
+    if (!TypeOrErr)
+      return TypeOrErr.takeError();
+    if (*TypeOrErr != llvm::object::SymbolRef::ST_Function)
+      continue;
+    llvm::Expected<llvm::object::section_iterator> SecItOrErr = Sym.getSection();
+    if (!SecItOrErr)
+      return SecItOrErr.takeError();
+    if (*SecItOrErr == (*ObjOrErr)->section_end() || **SecItOrErr != *TextSec)
+      continue;
+    llvm::Expected<uint64_t> AddrOrErr = Sym.getAddress();
+    if (!AddrOrErr)
+      return AddrOrErr.takeError();
+    if (*AddrOrErr < TextBase || *AddrOrErr >= TextEnd)
+      continue;
+    uint64_t Size = llvm::object::ELFSymbolRef(Sym).getSize();
+    AddrSize.push_back({*AddrOrErr, Size});
+  }
+
+  llvm::sort(AddrSize, [](const std::pair<uint64_t, uint64_t> &A,
+                          const std::pair<uint64_t, uint64_t> &B) {
+    return A.first < B.first;
+  });
+
+  llvm::SmallVector<KernelSymbolExtent> Extents;
+  Extents.reserve(AddrSize.size());
+  for (size_t I = 0; I < AddrSize.size(); ++I) {
+    uint64_t Addr = AddrSize[I].first;
+    uint64_t Size = AddrSize[I].second;
+    if (Size == 0) {
+      uint64_t NextAddr = TextEnd;
+      for (size_t J = I + 1; J < AddrSize.size(); ++J) {
+        if (AddrSize[J].first > Addr) {
+          NextAddr = AddrSize[J].first;
+          break;
+        }
+      }
+      Size = NextAddr - Addr;
+    }
+    KernelSymbolExtent Extent;
+    Extent.Offset = Addr - TextBase;
+    Extent.Size = Size;
+    Extents.push_back(Extent);
+  }
+  return Extents;
+}
+
 } // namespace COMGR::hotswap
