@@ -14,6 +14,7 @@
 #include "Utils/AMDGPUBaseInfo.h" // AMDGPU::getNamedOperandIdx, AMDGPU::OpName
 #include "SIDefines.h"            // SISrcMods::NEG
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -48,6 +49,14 @@ struct PackedSrcOptions {
 StringRef diagnosticMnemonic(const DecodedInst &Di) {
   return Di.Mnemonic.empty() ? StringRef(canonicalOpName(Di.CanonOp))
                              : StringRef(Di.Mnemonic);
+}
+
+unsigned wmmaFmtSuffixToDwords(StringRef Tag) {
+  return StringSwitch<unsigned>(Tag)
+      .Case("f8", 16)
+      .Case("f6", 12)
+      .Case("f4", 8)
+      .Default(0);
 }
 
 Error readSourceMods(const DecodedInst &Di, OpResolver &Op, unsigned NumSrcs,
@@ -1149,12 +1158,6 @@ Expected<HandlerResult> handleValuVoP3P(RaiseContext &Ctx,
   //   * Otherwise: refuse.
   case CanonicalOp::V_WMMA_SCALE_F32_16x16x128_F8F6F4: {
     // Per-matrix dword count from the MC pseudo's fA_fB suffix.
-    auto FmtSuffixToDwords = [](StringRef Tag) -> unsigned {
-      if (Tag == "f8") return 16;
-      if (Tag == "f6") return 12;
-      if (Tag == "f4") return 8;
-      return 0;
-    };
     StringRef PseudoName = Ctx.Mc.InstrInfo->getName(Di.Inst.getOpcode());
     StringRef Body = PseudoName;
     Body.consume_front("V_WMMA_SCALE_F32_16X16X128_F8F6F4_");
@@ -1165,9 +1168,8 @@ Expected<HandlerResult> handleValuVoP3P(RaiseContext &Ctx,
           Di, "VOP3P",
           "v_wmma_scale_f32_16x16x128_f8f6f4: cannot parse fA_fB suffix from "
           "MC pseudo name");
-
-    unsigned ADwords = FmtSuffixToDwords(Parts[0]);
-    unsigned BDwords = FmtSuffixToDwords(Parts[1]);
+    unsigned ADwords = wmmaFmtSuffixToDwords(Parts[0]);
+    unsigned BDwords = wmmaFmtSuffixToDwords(Parts[1]);
     if (ADwords == 0 || BDwords == 0)
       return RaiseFailure::unsupportedInstructionForm(
           Di, "VOP3P",
