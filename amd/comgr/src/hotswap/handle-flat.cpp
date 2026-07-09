@@ -1842,13 +1842,12 @@ HandlerResult handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
         Value *Prev = Ctx.B.CreateAtomicRMW(AtomicOp, Addr, Data, MaybeAlign(),
                                             AtomicOrdering::Monotonic);
         if (Di.NumDefs > 0) {
-          if (Use64) {
-            if (IsFp) Prev = Ctx.B.CreateBitCast(Prev, Ctx.I64Ty);
+          // writeReg32/64 bitcast fp results to i32/i64 internally
+          // (storeVGPR32/64), so no manual cast is needed here.
+          if (Use64)
             Ctx.Regs.writeReg64(Ctx.B, Op.dst(), Prev);
-          } else {
-            if (IsFp) Prev = Ctx.B.CreateBitCast(Prev, Ctx.I32Ty);
+          else
             Ctx.Regs.writeReg32(Ctx.B, Op.dst(), Prev);
-          }
         }
       });
     };
