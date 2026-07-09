@@ -1,12 +1,18 @@
 // RUN: not llvm-mc --amdhsa-code-object-version=4 -triple amdgcn-amd-amdhsa -mcpu=gfx90a %s -filetype=null 2>&1 | FileCheck -check-prefix=ERR %s
 
+// An explicit .amdhsa_user_sgpr_count below the count implied by the enabled
+// user SGPRs is clamped up to the implied value and diagnosed as a warning
+// rather than a hard error, so the object still assembles. Guards
+// ParseDirectiveAMDHSAKernel in AMDGPUAsmParser.cpp. The kernarg preload case
+// below still hard-errors, so the run as a whole still exits non-zero.
+
 .amdhsa_kernel implied_count_too_low_0
   .amdhsa_user_sgpr_count 0
   .amdhsa_user_sgpr_queue_ptr 1
   .amdhsa_accum_offset 4
   .amdhsa_next_free_vgpr 32
   .amdhsa_next_free_sgpr 32
-// ERR: :[[@LINE+1]]:19: error: amdgpu_user_sgpr_count smaller than implied by enabled user SGPRs
+// ERR: :[[@LINE+1]]:19: warning: amdgpu_user_sgpr_count smaller than implied by enabled user SGPRs; using the implied count
 .end_amdhsa_kernel
 
 .amdhsa_kernel implied_count_too_low_1
@@ -15,7 +21,7 @@
   .amdhsa_accum_offset 4
   .amdhsa_next_free_vgpr 32
   .amdhsa_next_free_sgpr 32
-// ERR: :[[@LINE+1]]:19: error: amdgpu_user_sgpr_count smaller than implied by enabled user SGPRs
+// ERR: :[[@LINE+1]]:19: warning: amdgpu_user_sgpr_count smaller than implied by enabled user SGPRs; using the implied count
 .end_amdhsa_kernel
 
 .amdhsa_kernel implied_count_too_low_2
@@ -25,7 +31,7 @@
   .amdhsa_accum_offset 4
   .amdhsa_next_free_vgpr 32
   .amdhsa_next_free_sgpr 32
-// ERR: :[[@LINE+1]]:19: error: amdgpu_user_sgpr_count smaller than implied by enabled user SGPRs
+// ERR: :[[@LINE+1]]:19: warning: amdgpu_user_sgpr_count smaller than implied by enabled user SGPRs; using the implied count
 .end_amdhsa_kernel
 
 .amdhsa_kernel preload_out_of_bounds_0
