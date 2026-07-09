@@ -1,10 +1,10 @@
 ; RUN: %llvm_mc -mcpu=gfx1030 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --enable-wave-native \
 ; RUN:     --emit-ir=buffer_load_lds_wave_native_exec_gate_kernel 2>/dev/null \
-; RUN:   | %FileCheck %s --check-prefix=WN
+; RUN:   | %FileCheck %s --check-prefix=WN --check-prefix=CHECK
 ; RUN: raise_cli %t.hsaco --target-isa=gfx942 --disable-wave-native \
 ; RUN:   --emit-ir=buffer_load_lds_wave_native_exec_gate_kernel 2>/dev/null \
-; RUN:   | %FileCheck %s --check-prefix=MR
+; RUN:   | %FileCheck %s --check-prefix=MR --check-prefix=CHECK
 ;
 ; MUBUF buffer-load-to-LDS EXEC-gating (rocm-systems#148, companion to
 ; buffer_load_wave_native_exec_gate.s). The buffer load feeding the LDS
@@ -28,12 +28,9 @@ buffer_load_lds_wave_native_exec_gate_kernel:
 	s_mov_b32 s3, 0x31014000
 	s_waitcnt lgkmcnt(0)
 	; The load and its LDS store both land inside one diamond.
-	; WN: spe_do{{.+}}:
-	; WN: [[LD:%.+]] = call i32 @llvm.amdgcn.raw.buffer.load.i32(
-	; WN: store i32 [[LD]], ptr addrspace(3)
-	; MR: spe_do{{.+}}:
-	; MR: [[LD:%.+]] = call i32 @llvm.amdgcn.raw.buffer.load.i32(
-	; MR: store i32 [[LD]], ptr addrspace(3)
+	; CHECK: spe_do{{.+}}:
+	; CHECK: [[LD:%.+]] = call i32 @llvm.amdgcn.raw.buffer.load.i32(
+	; CHECK: store i32 [[LD]], ptr addrspace(3)
 	buffer_load_dword v1, s[0:3], 0 offen lds
 	s_waitcnt vmcnt(0)
 	s_endpgm
