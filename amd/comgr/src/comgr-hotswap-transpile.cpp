@@ -317,8 +317,8 @@ struct ResolvedHotswapOptions {
 
 bool hasFlag(uint64_t flags, uint64_t flag) { return flags & flag; }
 
-bool hasLegacyFlag(const amd_comgr_hotswap_transpile_options_t *options,
-                   amd_comgr_hotswap_transpile_option_flags_t flag) {
+bool hasOptionsFlag(const amd_comgr_hotswap_transpile_options_t *options,
+                    amd_comgr_hotswap_transpile_option_flags_t flag) {
   return options && hasFlag(options->flags, static_cast<uint64_t>(flag));
 }
 
@@ -349,7 +349,7 @@ getOptLevelOption(const amd_comgr_hotswap_transpile_options_v2_t *options) {
   return options->opt_level;
 }
 
-llvm::Expected<ResolvedHotswapOptions> resolveLegacyOptions(
+llvm::Expected<ResolvedHotswapOptions> resolveOptions(
     const amd_comgr_hotswap_transpile_options_t *options) {
   ResolvedHotswapOptions Resolved;
   if (!options) {
@@ -357,18 +357,18 @@ llvm::Expected<ResolvedHotswapOptions> resolveLegacyOptions(
     return Resolved;
   }
   if (options->size != sizeof(amd_comgr_hotswap_transpile_options_t))
-    return llvm::createStringError("hotswap legacy options size is invalid");
+    return llvm::createStringError("hotswap options size is invalid");
 
   Resolved.CacheDirectory = options->cache_directory;
   Resolved.CacheSkipKernels = options->cache_skip_kernels;
   Resolved.HotswapRulesPath = options->hotswap_rules_path;
-  Resolved.CacheDisable = hasLegacyFlag(
+  Resolved.CacheDisable = hasOptionsFlag(
       options, AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_CACHE_DISABLE);
-  Resolved.CacheReadonly = hasLegacyFlag(
+  Resolved.CacheReadonly = hasOptionsFlag(
       options, AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_CACHE_READONLY);
   Resolved.StrictMode =
-      hasLegacyFlag(options, AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_STRICT);
-  Resolved.AssumeHipGlobalOffsetZero = hasLegacyFlag(
+      hasOptionsFlag(options, AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_STRICT);
+  Resolved.AssumeHipGlobalOffsetZero = hasOptionsFlag(
       options,
       AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_ASSUME_HIP_GLOBAL_OFFSET_ZERO);
   return Resolved;
@@ -753,7 +753,7 @@ amd_comgr_status_t AMD_COMGR_API amd_comgr_hotswap_transpile_with_options(
     amd_comgr_data_t *output,
     amd_comgr_hotswap_transpile_result_t *result) {
   llvm::Expected<ResolvedHotswapOptions> Resolved =
-      resolveLegacyOptions(options);
+      resolveOptions(options);
   if (!Resolved)
     return invalidOptions(Resolved.takeError(),
                           "amd_comgr_hotswap_transpile_with_options");

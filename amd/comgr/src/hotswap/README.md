@@ -142,8 +142,8 @@ object, and returns typed result metadata. COMGR owns cache lookup and writes,
 but cache root, readonly/disabled policy, skip list, rules path, strict mode,
 selected kernel, and opt level are explicit request fields passed by the caller;
 cache corruption and write failures are hard errors rather than silent misses.
-The legacy options API remains available for existing callers and maps to the
-same implementation without per-kernel or opt-level request fields.
+The options API maps to the same implementation without per-kernel or opt-level
+request fields.
 
 ## Validation
 

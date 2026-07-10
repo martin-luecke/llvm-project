@@ -150,7 +150,7 @@ int main(int argc, char *argv[]) {
 
   if (argc < 4)
     fail("usage: hotswap-transpile <elf_file> <source_isa> <target_isa> "
-         "[--zero-size|--wrong-kind|--legacy-options|"
+         "[--zero-size|--wrong-kind|--use-options-api|"
          "--bad-request-version] "
          "[--output=<path>]");
 
@@ -159,7 +159,7 @@ int main(int argc, char *argv[]) {
   const char *TargetISA = argv[3];
   int ZeroSize = 0;
   int WrongKind = 0;
-  int LegacyOptions = 0;
+  int UseOptionsApi = 0;
   int BadRequestVersion = 0;
   // Optional path to dump the transpiled bytes to. lit tests use this to
   // hand the output to llvm-readelf / llvm-objdump for ISA-level smoke
@@ -170,8 +170,8 @@ int main(int argc, char *argv[]) {
       ZeroSize = 1;
     else if (strcmp(argv[i], "--wrong-kind") == 0)
       WrongKind = 1;
-    else if (strcmp(argv[i], "--legacy-options") == 0)
-      LegacyOptions = 1;
+    else if (strcmp(argv[i], "--use-options-api") == 0)
+      UseOptionsApi = 1;
     else if (strcmp(argv[i], "--bad-request-version") == 0)
       BadRequestVersion = 1;
     else if (strncmp(argv[i], "--output=", 9) == 0)
@@ -223,7 +223,7 @@ int main(int argc, char *argv[]) {
   amd_comgr_data_t OutputData = {0};
   amd_comgr_hotswap_transpile_result_t ResultData = {0};
   amd_comgr_status_t Status;
-  if (LegacyOptions) {
+  if (UseOptionsApi) {
     amd_comgr_hotswap_transpile_options_t Options;
     memset(&Options, 0, sizeof(Options));
     Options.size = sizeof(Options);

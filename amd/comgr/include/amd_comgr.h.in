@@ -2910,13 +2910,12 @@ typedef enum amd_comgr_hotswap_transpile_option_flags_s {
 } amd_comgr_hotswap_transpile_option_flags_t;
 
 /**
- * @brief Legacy options for @c amd_comgr_hotswap_transpile_with_options.
+ * @brief Options for @c amd_comgr_hotswap_transpile_with_options.
  *
  * The caller must set @p size to
  * @c sizeof(amd_comgr_hotswap_transpile_options_t). Pointers are borrowed only
  * for the duration of the call. A NULL or empty @p cache_directory disables
- * cache lookup and writes. This legacy options layout is intentionally not
- * extended; new options are passed through
+ * cache lookup and writes. Additional request layouts are passed through
  * @c amd_comgr_hotswap_transpile_with_request.
  */
 typedef struct amd_comgr_hotswap_transpile_options_s {
@@ -2928,11 +2927,12 @@ typedef struct amd_comgr_hotswap_transpile_options_s {
 } amd_comgr_hotswap_transpile_options_t;
 
 /**
- * @brief Version selector for @c amd_comgr_hotswap_transpile_request_t.
+ * @brief Request layout selector for @c amd_comgr_hotswap_transpile_request_t.
  */
 typedef enum amd_comgr_hotswap_transpile_request_version_s {
   /**
-   * @p payload points to @c amd_comgr_hotswap_transpile_options_v2_t.
+   * First versioned request layout. @p payload points to
+   * @c amd_comgr_hotswap_transpile_options_v2_t.
    */
   AMD_COMGR_HOTSWAP_TRANSPILE_REQUEST_VERSION_2 = 2,
 } amd_comgr_hotswap_transpile_request_version_t;
@@ -3002,10 +3002,8 @@ typedef struct amd_comgr_hotswap_transpile_options_v2_s {
  * @brief Versioned request packet for
  * @c amd_comgr_hotswap_transpile_with_request.
  *
- * The packet keeps future option layouts explicit: COMGR reads only this stable
- * wrapper, dispatches on @p version, then interprets @p payload as the struct
- * documented by that version. This avoids treating older, smaller option
- * objects as prefixes of newer structs.
+ * COMGR reads this stable wrapper first, dispatches on @p version, then
+ * interprets @p payload as the struct documented by that version.
  */
 typedef struct amd_comgr_hotswap_transpile_request_s {
   uint32_t version;
@@ -3077,17 +3075,16 @@ typedef enum amd_comgr_hotswap_transpile_result_string_s {
 } amd_comgr_hotswap_transpile_result_string_t;
 
 /**
- * @brief Transpile a code object using legacy explicit options and return
- * structured result metadata.
+ * @brief Transpile a code object using explicit options and return structured
+ * result metadata.
  *
  * The translation cache is owned by COMGR's hotswap compiler implementation,
- * but cache policy is explicit in @p options. This compatibility entry point
- * accepts the original options layout and does not provide per-kernel or
- * opt-level options; use @c amd_comgr_hotswap_transpile_with_request for new
- * request fields. On HotSwap pipeline failure, cache corruption, or cache write
- * failure, this function returns @c AMD_COMGR_STATUS_ERROR and may still return
- * @p result containing @c success=false plus failure detail. The caller owns
- * and must destroy any non-zero returned result handle.
+ * but cache policy is explicit in @p options. Per-kernel and opt-level
+ * controls are available through @c amd_comgr_hotswap_transpile_with_request.
+ * On HotSwap pipeline failure, cache corruption, or cache write failure, this
+ * function returns @c AMD_COMGR_STATUS_ERROR and may still return @p result
+ * containing @c success=false plus failure detail. The caller owns and must
+ * destroy any non-zero returned result handle.
  *
  * @param[in] input A data object of kind @p AMD_COMGR_DATA_KIND_EXECUTABLE
  *   containing the input ELF code object bytes.
@@ -3112,7 +3109,7 @@ typedef enum amd_comgr_hotswap_transpile_result_string_s {
  *   data object, is not of kind @p AMD_COMGR_DATA_KIND_EXECUTABLE, does not
  *   contain data bytes, @p output is NULL, or @p source_isa_name /
  *   @p target_isa_name is NULL or malformed, or @p options has an invalid
- *   legacy @p size.
+ *   @p size.
  * @retval ::AMD_COMGR_STATUS_ERROR_OUT_OF_RESOURCES Unable to allocate a
  *   returned data object.
  */
