@@ -12,6 +12,9 @@
 // RUN:                   amdgcn-amd-amdhsa--gfx942 --wrong-kind \
 // RUN:   | %FileCheck --check-prefix=WRONGKIND %s
 // RUN: hotswap-transpile %t.elf amdgcn-amd-amdhsa--gfx1250 \
+// RUN:                   amdgcn-amd-amdhsa--gfx942 --bad-request-version \
+// RUN:   | %FileCheck --check-prefix=BADREQUEST %s
+// RUN: hotswap-transpile %t.elf amdgcn-amd-amdhsa--gfx1250 \
 // RUN:                   amdgcn-amd-amdhsa--gfx942 \
 // RUN:   | %FileCheck --check-prefix=NOKERNELS %s
 // RUN: hotswap-transpile %S/vecadd_gfx950.co \
@@ -42,14 +45,8 @@
 // RUN:     hotswap-transpile %S/vecadd_gfx950.co \
 // RUN:                   amdgcn-amd-amdhsa--gfx950 \
 // RUN:                   amdgcn-amd-amdhsa--gfx942 \
-// RUN:                   --omit-kernel-name-flag \
-// RUN:   | %FileCheck --check-prefix=KERNEL-NAME-NO-FLAG %s
-// RUN: env HSA_HOTSWAP_TRANSLATE_KERNEL=vecadd hotswap-transpile \
-// RUN:                   %S/vecadd_gfx950.co \
-// RUN:                   amdgcn-amd-amdhsa--gfx950 \
-// RUN:                   amdgcn-amd-amdhsa--gfx942 \
-// RUN:                   --truncate-options-at-flags \
-// RUN:   | %FileCheck --check-prefix=TRUNCATED-OPTIONS %s
+// RUN:                   --legacy-options \
+// RUN:   | %FileCheck --check-prefix=LEGACY-OPTIONS %s
 // RUN: rm -rf %t.cache
 // RUN: env HSA_HOTSWAP_CACHE_DIR=%t.cache hotswap-transpile \
 // RUN:                   %S/vecadd_gfx950.co \
@@ -101,6 +98,7 @@
 // BADISA: RESULT: INVALID_ARGUMENT
 // ZEROSIZE: RESULT: INVALID_ARGUMENT
 // WRONGKIND: RESULT: INVALID_ARGUMENT
+// BADREQUEST: RESULT: INVALID_ARGUMENT
 // NOKERNELS: RESULT: ERROR
 // VECADD: RESULT: SUCCESS bytes={{[1-9][0-9]*}}
 // SRCISA: Flags: {{.*}}gfx950
@@ -113,10 +111,8 @@
 // SINGLE-MISSING: RESULT: ERROR
 // SINGLE-MISSING-DAG: success=0
 // SINGLE-MISSING-DAG: kernel_name=definitely_not_vecadd
-// KERNEL-NAME-NO-FLAG-DAG: RESULT: SUCCESS bytes={{[1-9][0-9]*}}
-// KERNEL-NAME-NO-FLAG-DAG: kernel_name= lifted=
-// TRUNCATED-OPTIONS-DAG: RESULT: SUCCESS bytes={{[1-9][0-9]*}}
-// TRUNCATED-OPTIONS-DAG: kernel_name= lifted=
+// LEGACY-OPTIONS-DAG: RESULT: SUCCESS bytes={{[1-9][0-9]*}}
+// LEGACY-OPTIONS-DAG: kernel_name= lifted=
 // CACHEMISS-DAG: cache_hit=0
 // CACHEMISS-DAG: cache_lookup=miss
 // CACHEMISS-DAG: cache_write=success

@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// Driver for amd_comgr_hotswap_transpile_with_options, the hotswap-backed
+// Driver for amd_comgr_hotswap_transpile_with_request, the hotswap-backed
 // entry point that reports typed cache/proof metadata.
 //
 // Mirrors the call/return shape of hotswap-rewrite.c for the validation
@@ -150,8 +150,8 @@ int main(int argc, char *argv[]) {
 
   if (argc < 4)
     fail("usage: hotswap-transpile <elf_file> <source_isa> <target_isa> "
-         "[--zero-size|--wrong-kind|--omit-kernel-name-flag|"
-         "--truncate-options-at-flags] "
+         "[--zero-size|--wrong-kind|--legacy-options|"
+         "--bad-request-version] "
          "[--output=<path>]");
 
   const char *ElfFile = argv[1];
@@ -159,8 +159,8 @@ int main(int argc, char *argv[]) {
   const char *TargetISA = argv[3];
   int ZeroSize = 0;
   int WrongKind = 0;
-  int OmitKernelNameFlag = 0;
-  int TruncateOptionsAtFlags = 0;
+  int LegacyOptions = 0;
+  int BadRequestVersion = 0;
   // Optional path to dump the transpiled bytes to. lit tests use this to
   // hand the output to llvm-readelf / llvm-objdump for ISA-level smoke
   // checks; the validation paths leave it NULL and only inspect stdout.
@@ -170,10 +170,10 @@ int main(int argc, char *argv[]) {
       ZeroSize = 1;
     else if (strcmp(argv[i], "--wrong-kind") == 0)
       WrongKind = 1;
-    else if (strcmp(argv[i], "--omit-kernel-name-flag") == 0)
-      OmitKernelNameFlag = 1;
-    else if (strcmp(argv[i], "--truncate-options-at-flags") == 0)
-      TruncateOptionsAtFlags = 1;
+    else if (strcmp(argv[i], "--legacy-options") == 0)
+      LegacyOptions = 1;
+    else if (strcmp(argv[i], "--bad-request-version") == 0)
+      BadRequestVersion = 1;
     else if (strncmp(argv[i], "--output=", 9) == 0)
       OutputPath = argv[i] + 9;
     else
@@ -185,7 +185,7 @@ int main(int argc, char *argv[]) {
 
   amd_comgr_data_t InputData;
   // --wrong-kind: feed BC instead of EXECUTABLE. Exercises the data-kind
-  // gate in amd_comgr_hotswap_transpile_with_options, which mirrors the gate
+  // gate in amd_comgr_hotswap_transpile_with_request, which mirrors the gate
   // in the byte-level rewriter.
   amd_comgr_data_kind_t Kind =
       WrongKind ? AMD_COMGR_DATA_KIND_BC : AMD_COMGR_DATA_KIND_EXECUTABLE;
@@ -193,46 +193,65 @@ int main(int argc, char *argv[]) {
   if (!ZeroSize)
     amd_comgr_(set_data(InputData, ElfSize, ElfBuf));
 
-  amd_comgr_data_t OutputData = {0};
-  amd_comgr_hotswap_transpile_result_t ResultData = {0};
-  amd_comgr_hotswap_transpile_options_t Options;
-  memset(&Options, 0, sizeof(Options));
-  Options.size = sizeof(Options);
-  Options.cache_directory = getenv("HSA_HOTSWAP_CACHE_DIR");
-  Options.cache_skip_kernels = getenv("HSA_HOTSWAP_CACHE_SKIP_KERNELS");
-  Options.hotswap_rules_path = getenv("HSA_HOTSWAP_RULES");
-  Options.kernel_name = getenv("HSA_HOTSWAP_TRANSLATE_KERNEL");
-  if (Options.kernel_name && !OmitKernelNameFlag && !TruncateOptionsAtFlags)
-    Options.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_USE_KERNEL_NAME;
+  amd_comgr_hotswap_transpile_options_v2_t OptionsV2;
+  memset(&OptionsV2, 0, sizeof(OptionsV2));
+  OptionsV2.cache_directory = getenv("HSA_HOTSWAP_CACHE_DIR");
+  OptionsV2.cache_skip_kernels = getenv("HSA_HOTSWAP_CACHE_SKIP_KERNELS");
+  OptionsV2.hotswap_rules_path = getenv("HSA_HOTSWAP_RULES");
+  OptionsV2.kernel_name = getenv("HSA_HOTSWAP_TRANSLATE_KERNEL");
+  if (OptionsV2.kernel_name && OptionsV2.kernel_name[0] != '\0')
+    OptionsV2.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_REQUEST_USE_KERNEL_NAME;
   const char *OptLevel = getenv("HSA_HOTSWAP_OPT_LEVEL");
   if (OptLevel) {
     char *End = NULL;
     unsigned long Value = strtoul(OptLevel, &End, 10);
     if (End == OptLevel || *End != '\0' || Value > 3)
       fail("invalid HSA_HOTSWAP_OPT_LEVEL: %s", OptLevel);
-    if (!TruncateOptionsAtFlags)
-      Options.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_USE_OPT_LEVEL;
-    Options.opt_level = (uint32_t)Value;
+    OptionsV2.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_REQUEST_USE_OPT_LEVEL;
+    OptionsV2.opt_level = (uint32_t)Value;
   }
   if (getenv("HSA_HOTSWAP_CACHE_DISABLE"))
-    Options.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_CACHE_DISABLE;
+    OptionsV2.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_REQUEST_CACHE_DISABLE;
   if (getenv("HSA_HOTSWAP_CACHE_READONLY"))
-    Options.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_CACHE_READONLY;
+    OptionsV2.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_REQUEST_CACHE_READONLY;
   if (getenv("HSA_HOTSWAP_STRICT"))
-    Options.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_STRICT;
+    OptionsV2.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_REQUEST_STRICT;
   if (getenv("HSA_HOTSWAP_ASSUME_HIP_GLOBAL_OFFSET_ZERO"))
-    Options.flags |=
-        AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_ASSUME_HIP_GLOBAL_OFFSET_ZERO;
-  // Simulate an older caller whose options struct ended at `flags`. COMGR must
-  // ignore appended fields such as `kernel_name` and `opt_level` when `size`
-  // does not cover them, even though this test binary initialized them above.
-  if (TruncateOptionsAtFlags)
-    Options.size = offsetof(amd_comgr_hotswap_transpile_options_t, flags) +
-                   sizeof(Options.flags);
+    OptionsV2.flags |=
+        AMD_COMGR_HOTSWAP_TRANSPILE_REQUEST_ASSUME_HIP_GLOBAL_OFFSET_ZERO;
 
-  amd_comgr_status_t Status =
-      amd_comgr_hotswap_transpile_with_options(
-          InputData, SourceISA, TargetISA, &Options, &OutputData, &ResultData);
+  amd_comgr_data_t OutputData = {0};
+  amd_comgr_hotswap_transpile_result_t ResultData = {0};
+  amd_comgr_status_t Status;
+  if (LegacyOptions) {
+    amd_comgr_hotswap_transpile_options_t Options;
+    memset(&Options, 0, sizeof(Options));
+    Options.size = sizeof(Options);
+    Options.cache_directory = OptionsV2.cache_directory;
+    Options.cache_skip_kernels = OptionsV2.cache_skip_kernels;
+    Options.hotswap_rules_path = OptionsV2.hotswap_rules_path;
+    if (OptionsV2.flags & AMD_COMGR_HOTSWAP_TRANSPILE_REQUEST_CACHE_DISABLE)
+      Options.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_CACHE_DISABLE;
+    if (OptionsV2.flags & AMD_COMGR_HOTSWAP_TRANSPILE_REQUEST_CACHE_READONLY)
+      Options.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_CACHE_READONLY;
+    if (OptionsV2.flags & AMD_COMGR_HOTSWAP_TRANSPILE_REQUEST_STRICT)
+      Options.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_STRICT;
+    if (OptionsV2.flags &
+        AMD_COMGR_HOTSWAP_TRANSPILE_REQUEST_ASSUME_HIP_GLOBAL_OFFSET_ZERO)
+      Options.flags |=
+          AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_ASSUME_HIP_GLOBAL_OFFSET_ZERO;
+    Status = amd_comgr_hotswap_transpile_with_options(
+        InputData, SourceISA, TargetISA, &Options, &OutputData, &ResultData);
+  } else {
+    amd_comgr_hotswap_transpile_request_t Request;
+    memset(&Request, 0, sizeof(Request));
+    Request.version = BadRequestVersion
+                          ? 999
+                          : AMD_COMGR_HOTSWAP_TRANSPILE_REQUEST_VERSION_2;
+    Request.payload = &OptionsV2;
+    Status = amd_comgr_hotswap_transpile_with_request(
+        InputData, SourceISA, TargetISA, &Request, &OutputData, &ResultData);
+  }
 
   if (Status == AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT) {
     printf("RESULT: INVALID_ARGUMENT\n");
