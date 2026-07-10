@@ -6386,14 +6386,7 @@ bool AMDGPUAsmParser::ParseDirectiveAMDHSAKernel() {
   if (!Seen.contains(".amdhsa_next_free_sgpr"))
     return TokError(".amdhsa_next_free_sgpr directive is required");
 
-  // A machine-generated object may carry an explicit .amdhsa_user_sgpr_count
-  // smaller than the count implied by the enabled user SGPRs (e.g. a cross-ISA
-  // transpiler intermediate). Clamp up to the implied value so the emitted
-  // descriptor stays self-consistent.
-  unsigned UserSGPRCount =
-      ExplicitUserSGPRCount
-          ? std::max(*ExplicitUserSGPRCount, ImpliedUserSGPRCount)
-          : ImpliedUserSGPRCount;
+  unsigned UserSGPRCount = ExplicitUserSGPRCount.value_or(ImpliedUserSGPRCount);
   if (UserSGPRCount > getMaxNumUserSGPRs())
     return TokError("too many user SGPRs enabled, found " +
                     Twine(UserSGPRCount) + ", but only " +
@@ -6440,12 +6433,9 @@ bool AMDGPUAsmParser::ParseDirectiveAMDHSAKernel() {
       COMPUTE_PGM_RSRC1_GRANULATED_WAVEFRONT_SGPR_COUNT_SHIFT,
       COMPUTE_PGM_RSRC1_GRANULATED_WAVEFRONT_SGPR_COUNT, getContext());
 
-  // Diagnosed as a warning rather than a hard error: UserSGPRCount is clamped
-  // above to max(explicit, implied), so a too-small explicit count is tolerated
-  // and the object still assembles.
   if (ExplicitUserSGPRCount && ImpliedUserSGPRCount > *ExplicitUserSGPRCount)
-    Warning(getLoc(), "amdgpu_user_sgpr_count smaller than implied by "
-                      "enabled user SGPRs; using the implied count");
+    return TokError("amdgpu_user_sgpr_count smaller than implied by "
+                    "enabled user SGPRs");
 
   if (isGFX1250Plus()) {
     AMDGPU::MCKernelDescriptor::bits_set(
