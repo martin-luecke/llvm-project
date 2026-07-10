@@ -894,12 +894,7 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
   // undef-derived values -- producing addresses that fault on
   // subsequent SPE-gated loads (the active lane's pointer
   // arithmetic picks up undef data through a cross-lane op, then
-  // the gated load fires with that poisoned address).  Empirically
-  // surfaced by `compare_correctness`'s `matmul_fp16` /
-  // `matmul_fp16_16x16` Triton recipes (HIP error 700 on every
-  // shape under WaveNative; bumping `num_warps` to 2 fills the
-  // target wavefront and eliminates the fault, confirming the
-  // phantom-lane attribution).
+  // the gated load fires with that poisoned address).
   //
   // `ModuloReplicationProjection` leaves hardware EXEC at the
   // dispatcher's boot state (the source-wave-sized active mask,
@@ -931,6 +926,15 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
   const bool WaveNativeEligible = !UseThreadLoop && EnableWaveNative &&
                                   Isa.isWave32() && !TargetIsa.isWave32() &&
                                   !PhantomLaneRegime;
+  // The projection is constructed after decode (below) because the
+  // WaveNative-vs-MODREP choice depends on the instruction stream. MODREP is
+  // the default; WaveNative is only required for WMMA->MFMA layout transposes
+  // that need all 64 target lanes simultaneously, so it is restricted to
+  // kernels that contain WMMA. The wave_id-in-workgroup hazard (a subgroup id
+  // read via ttmp8[29:25] whose value depends on the absolute target-lane
+  // position, not lane_id mod W_src) is detected and refused separately by the
+  // obstruction analysis (ObstructionKind::TtmpWaveIdLeak in
+  // wave-size-obstruction.cpp), not by this selector.
   std::unique_ptr<WaveProjection> ProjectionPtr;
 
   if (!UseThreadLoop && EnableWaveNative && PhantomLaneRegime &&
@@ -990,9 +994,9 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
   DecodeResult Decoded = std::move(*DecodedOrErr);
   auto &Insts = Decoded.Insts;
 
-  // HUNYUAN: projection selection deferred from above so we can inspect the
-  // decoded stream. WaveNative only for WMMA kernels; everything else uses
-  // MODREP. See the WaveNativeEligible comment above for the rationale.
+  // Projection selection is deferred from above so it can inspect the decoded
+  // stream. WaveNative is used only for WMMA kernels; every other kernel uses
+  // MODREP. See the WaveNativeEligible comment above.
   bool HasWMMA = false;
   for (const DecodedInst &Di : Insts) {
     switch (Di.CanonOp) {
@@ -1029,10 +1033,9 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
         Isa, TargetIsa, I32Ty, I64Ty);
     if (WaveNativeEligible && !HasWMMA)
       errs() << "transpiler: kernel '" << KernelName
-             << "' is a cross-widen candidate but contains no WMMA; using "
-                "ModuloReplicationProjection (WaveNative packing would break "
-                "tid>>log2(W_src) subgroup-id addressing on multi-warp "
-                "workgroups). See raiser.cpp projection-selection comment.\n";
+             << "' has no WMMA; using ModuloReplicationProjection "
+                "(WaveNative is only required for WMMA->MFMA layout "
+                "transposes).\n";
   }
   ProjectionPtr->setMaxFlatWorkgroupSize(Meta.MaxFlatWorkgroupSize);
   WaveProjection &Projection = *ProjectionPtr;
@@ -1433,12 +1436,8 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
   // addrspace(3) via int-to-ptr conversion and never sets the attr
   // gets `group_segment_fixed_size: 0` in the emitted HSACO.  The
   // hardware then treats every LDS op as out-of-segment and returns
-  // zero / drops writes.  This silently miscompiled every lifted
-  // kernel with a non-trivial LDS round-trip, most visibly Triton's
-  // `matmul_fp16` (mode-5 B-only-varying input returned all zeros
-  // because the cross-thread LDS fragment shuffle read from an
-  // uninitialised segment; see matrix-translation.md sec. 12.4 for the
-  // bisection).
+  // zero / drops writes, so a raised kernel with a non-trivial LDS
+  // round-trip reads from an uninitialised segment.
   //
   // We mirror the source's `.group_segment_fixed_size` by setting the
   // per-function `amdgpu-lds-size` attribute in the source-declared
@@ -1643,15 +1642,11 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
   // `loadInputValue` path (see LLVM's `AMDGPULegalizerInfo.cpp` --
   // `WorkGroupIDY = ArgDescriptor::createRegister(TTMP7, 0xFFFFu)`,
   // `WorkGroupIDZ = ArgDescriptor::createRegister(TTMP7, 0xFFFF0000u)`).
-  // Triton-generated gfx1250 kernels read the Y component via
-  // `s_and_b32 sN, ttmp7, 0xffff` (e.g. matmul_fp16_16x16's `pid_n =
-  // tl.program_id(1)` lowering), so a kernel raised without ttmp7
-  // initialised always sees `workgroup_id_y == 0` -- only the
-  // leftmost column of workgroups in a 2D-grid kernel writes its
-  // tile, and the right-side tiles stay at whatever the destination
-  // memory held at dispatch (verified empirically: matmul_fp16_16x16
-  // M=32 with an all-1s input shows cols 0..15 = correct 32.0,
-  // cols 16..31 = poison-fill from the host's pre-launch memset).
+  // A consumer that reads the Y component via `s_and_b32 sN, ttmp7,
+  // 0xffff` in a kernel raised without ttmp7 initialised always sees
+  // `workgroup_id_y == 0`, so only the leftmost column of workgroups
+  // in a 2D-grid kernel writes its tile and the right-side tiles stay
+  // at whatever the destination memory held at dispatch.
   // gfx11 (RDNA3) passes these via SGPRs set up by the CP instead.
   std::function<void(IRBuilder<> &)> SeedTtmp8 = [](IRBuilder<> &) {};
   if (AMDGPU::isGFX12Plus(*Mc.SubtargetInfo)) {
