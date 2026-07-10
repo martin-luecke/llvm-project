@@ -2068,12 +2068,10 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
   // carries no modifiers. NEG/ABS on src0/src1 are FP16 modifiers: they are
   // applied as FP16 operations before the select (bitcast → fabs/fneg → bitcast).
   if (Sop == CanonicalOp::V_CNDMASK_B16) {
-    if (Op.nSrcs() < 2) {
-      Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+    if (Op.nSrcs() < 2)
+      return RaiseFailure::unsupportedInstructionForm(
           Di, "VOP3",
           "v_cndmask_b16 has too few source operands; expected src0/src1");
-      return Hr;
-    }
     unsigned Src0Mods = Op.srcMod(0);
     unsigned Src1Mods = Op.srcMod(1);
     constexpr unsigned AllowedSrc0Mods = SISrcMods::OP_SEL_0 |
@@ -2082,19 +2080,17 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     constexpr unsigned AllowedSrc1Mods =
         SISrcMods::OP_SEL_0 | SISrcMods::NEG | SISrcMods::ABS;
     if ((Src0Mods & ~AllowedSrc0Mods) != 0 ||
-        (Src1Mods & ~AllowedSrc1Mods) != 0) {
-      Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+        (Src1Mods & ~AllowedSrc1Mods) != 0)
+      return RaiseFailure::unsupportedInstructionForm(
           Di, "VOP3",
           "v_cndmask_b16 has unsupported modifiers; only op_sel, neg, abs "
           "are modeled");
-      return Hr;
-    }
     bool Src0Hi = (Src0Mods & SISrcMods::OP_SEL_0) != 0;
     bool Src1Hi = (Src1Mods & SISrcMods::OP_SEL_0) != 0;
     bool DstHi = (Src0Mods & SISrcMods::DST_OP_SEL) != 0;
     Type *I16Ty = Type::getInt16Ty(Ctx.C);
-    auto applyFpMods = [&](Value *V, unsigned Mods, const char *AbsName,
-                           const char *NegName) -> Value * {
+    auto applyFpMods = [&](Value *V, unsigned Mods, StringRef AbsName,
+                           StringRef NegName) -> Value * {
       if (!(Mods & (SISrcMods::ABS | SISrcMods::NEG)))
         return V;
       V = Ctx.B.CreateBitCast(V, Ctx.F16Ty);
