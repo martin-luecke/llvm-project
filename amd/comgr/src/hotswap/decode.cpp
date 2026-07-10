@@ -241,6 +241,17 @@ Error driftCheckSrcN(DecodedInst &Di, const MCInstrDesc &Desc) {
   bool IsMadmk = ImmIdx >= 0 && Src0Idx >= 0 && Src1Idx >= 0 &&
                  Src0Idx < ImmIdx && ImmIdx < Src1Idx;
 
+  // v_movrel{d,s,sd}_b32 have a tied vdst_in at MC operand 0 (the op is a
+  // read-modify-write of one M0-relative lane), so the positional source walk
+  // records SrcMap[0] = the tied vdst_in while OpName::src0 lives at index 1.
+  // That is a legitimate layout, not decoder drift -- like MADMK -- so skip the
+  // strict srcN-position check at k=0 for this family. The v_movrel* handler
+  // reads vdst/vsrc by named operand index (not SrcMap[0]), so it does not
+  // depend on the layout skipped here. A data-dependent M0 has no
+  // statically-known index and fails gracefully downstream (stubbed under
+  // HSA_HOTSWAP_STUB_FAILED_KERNELS).
+  bool IsMovrel = StringRef(Di.RawMnemonic).starts_with("v_movrel");
+
   for (unsigned K = 0; K < 3; ++K) {
     int NamedSrc = AMDGPU::getNamedOperandIdx(Opc, KSrcNames[K]);
     if (NamedSrc < 0)
@@ -250,7 +261,7 @@ Error driftCheckSrcN(DecodedInst &Di, const MCInstrDesc &Desc) {
     // (src0) still receives the strict check, so a hypothetical
     // future drift in src0's MCInst position is still caught even
     // for MADMK opcodes.
-    bool SkipThis = IsMadmk && K == 1;
+    bool SkipThis = (IsMadmk && K == 1) || (IsMovrel && K == 0);
     if (!SkipThis && OurSrc != NamedSrc)
       return ReportErr("transpiler: srcMap disagrees with OpName::srcN table",
                        static_cast<int>(K), OurSrc, NamedSrc);
