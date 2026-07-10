@@ -719,7 +719,8 @@ void RaiseContext::emitUnderExec(llvm::function_ref<void()> Body) {
 }
 
 
-Value *RaiseContext::readOpExecWidth(const DecodedInst &Di, unsigned OpIdx) {
+RaiseContext::ExecMaskRead
+RaiseContext::readOpExecMask(const DecodedInst &Di, unsigned OpIdx) {
   // All callers expect the returned value at `regs.execTy` (the EXEC
   // alloca storage width). Under modulo-replication `execTy` matches
   // the source wave-mask width and reads of source-width SGPR / imm
@@ -749,14 +750,18 @@ Value *RaiseContext::readOpExecWidth(const DecodedInst &Di, unsigned OpIdx) {
   if (Di.isReg(OpIdx)) {
     ParsedReg Pr = parseReg(Di.getReg(OpIdx), OpIdx);
     if (Pr.RegKind == ParsedReg::VCC)
-      return Regs.readVCCAsWaveMask(B, Regs.ExecTy);
+      return {Regs.readVCCAsWaveMask(B, Regs.ExecTy),
+              ExecMaskReadKind::ExecWidthMask};
     if (Pr.RegKind == ParsedReg::EXEC)
-      return Regs.loadExec(B);
+      return {Regs.loadExec(B), ExecMaskReadKind::ExecWidthMask};
     if (Pr.RegKind == ParsedReg::VCC_HI_SCRATCH ||
         Pr.RegKind == ParsedReg::EXEC_HI_SCRATCH)
       // Wave32 vcc_hi / exec_hi are scratch scalars, not the wave mask.
-      return WidenToExec(Regs.readReg32(B, Pr));
+      return {WidenToExec(Regs.readReg32(B, Pr)),
+              ExecMaskReadKind::SourceWidthMask};
     if (Pr.RegKind == ParsedReg::SGPR) {
+      const bool HasExecWidthMaskFact =
+          SgprExecWidthMaskFactRegs.contains(Pr.BaseIdx);
       Value *Narrow =
           (Projection.sourceWaveScopedLaneOps() && Pr.WidthInDwords >= 2)
               ? Regs.loadSGPR64(B, Pr.BaseIdx)
@@ -768,15 +773,17 @@ Value *RaiseContext::readOpExecWidth(const DecodedInst &Di, unsigned OpIdx) {
         if (ShadowExec->getType() != Regs.ExecTy)
           ShadowExec = B.CreateZExtOrTrunc(ShadowExec, Regs.ExecTy,
                                            "wm_shadow_exec_cast");
-        return B.CreateSelect(ShadowValid, ShadowExec, Fallback,
-                              "exec_width_sgpr_shadow_sel");
+        return {B.CreateSelect(ShadowValid, ShadowExec, Fallback,
+                               "exec_width_sgpr_shadow_sel"),
+                HasExecWidthMaskFact ? ExecMaskReadKind::ExecWidthMask
+                                     : ExecMaskReadKind::SourceWidthMask};
       }
-      return Fallback;
+      return {Fallback, ExecMaskReadKind::SourceWidthMask};
     }
     errs() << "transpiler: readOpExecWidth unresolvable register '"
            << Mc.RegInfo->getName(Di.getReg(OpIdx)) << "' in " << Di.Mnemonic
            << "\n";
-    return UndefValue::get(Regs.ExecTy);
+    return {UndefValue::get(Regs.ExecTy), ExecMaskReadKind::UnknownOrScalar};
   }
   // Immediate and relocation-expression operands are always encoded at
   // the source wave-mask width (32 bits on wave32 source). Materialise
@@ -824,11 +831,15 @@ Value *RaiseContext::readOpExecWidth(const DecodedInst &Di, unsigned OpIdx) {
   if (std::optional<int64_t> Val = evalOperandAsConst(Di.Inst, OpIdx)) {
     uint64_t Bits = static_cast<uint64_t>(*Val) & SrcMask;
     Value *Narrow = ConstantInt::get(SrcTy, Bits, /*IsSigned=*/false);
-    return WidenToExec(Narrow);
+    return {WidenToExec(Narrow), ExecMaskReadKind::SourceWidthMask};
   }
   errs() << "transpiler: readOpExecWidth unresolvable operand " << OpIdx
          << " in " << Di.Mnemonic << "\n";
-  return UndefValue::get(Regs.ExecTy);
+  return {UndefValue::get(Regs.ExecTy), ExecMaskReadKind::UnknownOrScalar};
+}
+
+Value *RaiseContext::readOpExecWidth(const DecodedInst &Di, unsigned OpIdx) {
+  return readOpExecMask(Di, OpIdx).Value;
 }
 
 } // namespace COMGR::hotswap

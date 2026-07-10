@@ -142,17 +142,9 @@ static llvm::Value *tryGetSrcWaveMaskI1(RaiseContext &Ctx, OpResolver &Op,
   case ParsedReg::SGPR: {
     if (llvm::Value *Fresh = Ctx.lookupSgprWaveMaskI1(Pr.BaseIdx))
       return Fresh;
-    if (llvm::Value *ShadowValid = Ctx.loadSgprWaveMaskValid(Pr.BaseIdx)) {
+    if (Ctx.hasSgprExecWidthMaskFact(Pr.BaseIdx)) {
       llvm::Value *ShadowExec = Ctx.loadSgprWaveMaskExec(Pr.BaseIdx);
-      llvm::Value *ShadowI1 =
-          Ctx.Projection.extractLaneBitFromWaveMask(Ctx.B, ShadowExec);
-      llvm::Value *SgprMask = Ctx.Isa.isWave32()
-                                  ? Ctx.Regs.loadSGPR32(Ctx.B, Pr.BaseIdx)
-                                  : Ctx.Regs.loadSGPR64(Ctx.B, Pr.BaseIdx);
-      llvm::Value *Fallback =
-          Ctx.Projection.extractLaneBitFromWaveMask(Ctx.B, SgprMask);
-      return Ctx.B.CreateSelect(ShadowValid, ShadowI1, Fallback,
-                                "sop2_src_sgpr_mask_shadow_sel");
+      return Ctx.Projection.extractLaneBitFromWaveMask(Ctx.B, ShadowExec);
     }
     return nullptr;
   }

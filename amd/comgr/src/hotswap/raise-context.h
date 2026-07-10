@@ -21,6 +21,7 @@
 #include "wave-projection.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/IRBuilder.h"
@@ -178,6 +179,16 @@ struct RaiseContext {
   // Operand reading -- mirrors the lambdas in the original raiseToIR.
   llvm::Value *readOp32(const DecodedInst &Di, unsigned OpIdx);
   llvm::Value *readOp64(const DecodedInst &Di, unsigned OpIdx);
+  enum class ExecMaskReadKind : uint8_t {
+    UnknownOrScalar,
+    SourceWidthMask,
+    ExecWidthMask,
+  };
+  struct ExecMaskRead {
+    llvm::Value *Value = nullptr;
+    ExecMaskReadKind Kind = ExecMaskReadKind::UnknownOrScalar;
+  };
+  ExecMaskRead readOpExecMask(const DecodedInst &Di, unsigned OpIdx);
   llvm::Value *readOpExecWidth(const DecodedInst &Di, unsigned OpIdx);
   // Read the mask a source-wave instruction should see, e.g. for `v_mbcnt_lo`.
   // EXEC/VCC/SGPR-shadow masks are projected; scalars use readOp32.
@@ -520,6 +531,22 @@ struct RaiseContext {
   // shadow and fallback via `select`, avoiding SSA-dominance hazards.
   llvm::SmallVector<llvm::AllocaInst *> SgprWaveMaskExecShadow;
   llvm::SmallVector<llvm::AllocaInst *> SgprWaveMaskValidShadow;
+  llvm::DenseSet<int> SgprExecWidthMaskFactRegs = llvm::DenseSet<int>();
+
+  // SAVEEXEC offsets whose source mask is lane-position sensitive under
+  // cross-widening. The SAVEEXEC handler may lower these sites only when
+  // `readOpExecMask` classifies the source as an EXEC-width mask; source-width
+  // fallback would merge the two packed WaveNative source waves.
+  llvm::DenseSet<uint64_t> SaveExecRequiresExecWidthMask =
+      llvm::DenseSet<uint64_t>();
+
+  bool saveExecRequiresExecWidthMask(uint64_t Offset) const {
+    return SaveExecRequiresExecWidthMask.contains(Offset);
+  }
+
+  bool hasSgprExecWidthMaskFact(int BaseIdx) const {
+    return SgprExecWidthMaskFactRegs.contains(BaseIdx);
+  }
 
   // Conservative lane-wise kernarg-pointer provenance for the strict hidden-arg
   // SMEM gate. Filled before instruction lowering by a fixed-point over the
@@ -547,6 +574,7 @@ struct RaiseContext {
           B, CmpI1, Regs.ExecTy, "wm_shadow_exec");
       B.CreateStore(ExecMask, SgprWaveMaskExecShadow[BaseIdx]);
       B.CreateStore(B.getTrue(), SgprWaveMaskValidShadow[BaseIdx]);
+      SgprExecWidthMaskFactRegs.insert(BaseIdx);
     }
   }
 
@@ -594,6 +622,7 @@ struct RaiseContext {
   void invalidateSgprWaveMaskI1(int BaseIdx) {
     noteSgprWriteForKernargProvenance(BaseIdx);
     LastSgprWaveMaskI1.erase(BaseIdx);
+    SgprExecWidthMaskFactRegs.erase(BaseIdx);
     if (BaseIdx >= 0 &&
         static_cast<size_t>(BaseIdx) < SgprWaveMaskValidShadow.size())
       B.CreateStore(B.getFalse(), SgprWaveMaskValidShadow[BaseIdx]);
@@ -601,6 +630,7 @@ struct RaiseContext {
       auto Prev = LastSgprWaveMaskI1.find(BaseIdx - 1);
       if (Prev != LastSgprWaveMaskI1.end() && Prev->second.IsPair) {
         LastSgprWaveMaskI1.erase(Prev);
+        SgprExecWidthMaskFactRegs.erase(BaseIdx - 1);
         if (static_cast<size_t>(BaseIdx - 1) < SgprWaveMaskValidShadow.size())
           B.CreateStore(B.getFalse(), SgprWaveMaskValidShadow[BaseIdx - 1]);
       }
@@ -735,7 +765,16 @@ struct OpResolver {
     return Ctx.emitUpdateDpp(CachedDppOldVdst64, Raw, Di.DppCtrl, Di.DppRowMask,
                               Di.DppBankMask, Di.DppBoundCtrl);
   }
-  llvm::Value *srcExecWidth(unsigned I) { return Ctx.readOpExecWidth(Di, srcIdx(I)); }
+  // Read a source operand as an EXEC-width mask and report whether that value
+  // is an EXEC-width proof or only a source-width fallback.
+  RaiseContext::ExecMaskRead srcExecMask(unsigned I) {
+    return Ctx.readOpExecMask(Di, srcIdx(I));
+  }
+  // Compatibility wrapper for handlers that only need the EXEC-width value and
+  // do not make proof-sensitive decisions.
+  llvm::Value *srcExecWidth(unsigned I) {
+    return Ctx.readOpExecWidth(Di, srcIdx(I));
+  }
   int64_t srcImm(unsigned I) { return Di.getImm(srcIdx(I)); }
 
   ParsedReg dst(unsigned I = 0) { return Ctx.parseReg(Di.getReg(I), I); }
