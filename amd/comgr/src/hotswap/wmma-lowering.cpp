@@ -521,8 +521,8 @@ static void runGroupPass(IRBuilder<> &B, Module &M, RaiseContext &Ctx,
         Ctx.Projection.wrapAsWWMValue(B, ResultDwords[I], "wmma_collect_wwm");
 }
 
-Value *emitWMMAtoMFMA(RaiseContext &Ctx, Value *A, Value *Vb, Value *C,
-                       WMMAInputType InputType) {
+Expected<Value *> emitWMMAtoMFMA(RaiseContext &Ctx, Value *A, Value *Vb,
+                                 Value *C, WMMAInputType InputType) {
   // The redistribute / 2×MFMA / collect chain is a Wave64 collective.
   // Per-MFMA-output `strict.wwm` markers inside `runGroupPass` handle
   // the two projections uniformly:
@@ -571,7 +571,7 @@ Value *emitWMMAtoMFMA(RaiseContext &Ctx, Value *A, Value *Vb, Value *C,
 
   const unsigned NumSrcWaves = Ctx.Projection.numSourceWavesPerTarget();
   if (NumSrcWaves != 1 && NumSrcWaves != 2)
-    report_fatal_error(
+    return createStringError(
         "WMMA->MFMA lowering defined only for wave32 source projections; "
         "numSourceWavesPerTarget() must be 1 (MODREP phantom-lane) or 2 "
         "(WaveNative cross-widen) -- a new projection class must declare "
@@ -761,8 +761,8 @@ static void runGroupPassF32K4(IRBuilder<> &B, Module &M, RaiseContext &Ctx,
         Ctx.Projection.wrapAsWWMValue(B, ResultDwords[I], "wmma_collect_wwm");
 }
 
-Value *emitWmmAtoMfmaF3216x16x4(RaiseContext &Ctx, Value *A, Value *Vb,
-                                   Value *C) {
+Expected<Value *> emitWmmAtoMfmaF3216x16x4(RaiseContext &Ctx, Value *A,
+                                           Value *Vb, Value *C) {
   // K=4 f32 counterpart to `emitWMMAtoMFMA` above -- see that
   // function's block comment for the full design rationale
   // (projection-aware per-MFMA `strict.wwm` wrapping via
@@ -784,7 +784,7 @@ Value *emitWmmAtoMfmaF3216x16x4(RaiseContext &Ctx, Value *A, Value *Vb,
 
   const unsigned NumSrcWaves = Ctx.Projection.numSourceWavesPerTarget();
   if (NumSrcWaves != 1 && NumSrcWaves != 2)
-    report_fatal_error(
+    return createStringError(
         "WMMA->MFMA lowering defined only for wave32 source projections; "
         "numSourceWavesPerTarget() must be 1 (MODREP phantom-lane) or 2 "
         "(WaveNative cross-widen) -- a new projection class must declare "
@@ -873,7 +873,7 @@ Value *emitWmmAtoMfmaF3216x16x4(RaiseContext &Ctx, Value *A, Value *Vb,
 //   equivalent argument, so we apply it as IR fneg / fabs on the redistributed
 //   <4 x f32> C input *before* the MFMA call.  The cMod argument is required
 //   to be a ConstantInt -- callers pass an immediate-derived value, and any
-//   non-constant trips the report_fatal_error branch (matching the
+//   non-constant trips the cast<ConstantInt> assertion (matching the
 //   discipline of the WMMA-side fast path which also assumes a constant).
 //
 // Scale operand layout:
@@ -894,7 +894,7 @@ Value *emitWmmAtoMfmaF3216x16x4(RaiseContext &Ctx, Value *A, Value *Vb,
 //   init_whole_wave; under MODREP the wrapAsWWMValue calls keep the chain
 //   inside SIWholeQuadMode's WWM region.
 
-llvm::Value *emitWMMAScaleF8F6F4toScaledMFMA(
+llvm::Expected<llvm::Value *> emitWMMAScaleF8F6F4toScaledMFMA(
     RaiseContext &ctx, Value *a, Value *b, Value *c, Value *matrixAFmt,
     Value *matrixBFmt, Value *cMod, Value *matrixAScale, Value *matrixAScaleFmt,
     Value *scaleSrc0, Value *matrixBScale, Value *matrixBScaleFmt,
@@ -941,7 +941,7 @@ llvm::Value *emitWMMAScaleF8F6F4toScaledMFMA(
 
   const unsigned numSrcWaves = ctx.Projection.numSourceWavesPerTarget();
   if (numSrcWaves != 1 && numSrcWaves != 2)
-    report_fatal_error(
+    return createStringError(
         "WMMA-scale F8F6F4 -> MFMA lowering defined only for wave32 source "
         "projections; numSourceWavesPerTarget() must be 1 (MODREP) or 2 "
         "(WaveNative cross-widen).");

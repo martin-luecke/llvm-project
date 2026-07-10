@@ -135,16 +135,16 @@ llvm::OptimizationLevel toOptimizationLevel(unsigned Level) {
   }
 }
 
-std::unique_ptr<llvm::TargetMachine>
+llvm::Expected<std::unique_ptr<llvm::TargetMachine>>
 createHotswapTargetMachine(llvm::StringRef TargetISA, unsigned OptLevel) {
   std::string Err;
   llvm::Triple TheTriple(kAMDGPUTriple);
   const llvm::Target *TheTarget =
       llvm::TargetRegistry::lookupTarget(TheTriple, Err);
   // The triple is hardcoded and the AMDGPU target is linked in, so a lookup
-  // miss is a build misconfiguration rather than a recoverable error.
+  // miss is a build misconfiguration rather than a kernel-level error.
   if (!TheTarget)
-    llvm::report_fatal_error(
+    return llvm::createStringError(
         llvm::Twine("transpiler: AMDGPU target not registered: ") + Err);
   llvm::CodeGenOptLevel CGOL = llvm::CodeGenOpt::getLevel(OptLevel).value_or(
       llvm::CodeGenOptLevel::Default);
@@ -422,13 +422,15 @@ static bool raiseAndCompileKernel(
   Result.Timings.writeIrSeconds +=
       timingElapsed(Options.CollectTimings, WriteIrStart);
 
-  std::unique_ptr<llvm::TargetMachine> TM =
+  llvm::Expected<std::unique_ptr<llvm::TargetMachine>> TMOrErr =
       createHotswapTargetMachine(TargetISA, Options.OptLevel);
-  if (!TM) {
+  if (!TMOrErr) {
     llvm::errs() << "transpiler: failed to create TargetMachine for '"
-                 << KernelName << "'\n";
+                 << KernelName << "': " << llvm::toString(TMOrErr.takeError())
+                 << "\n";
     return false;
   }
+  std::unique_ptr<llvm::TargetMachine> TM = std::move(*TMOrErr);
   M.setDataLayout(TM->createDataLayout());
 
   auto OptStart = timingStart(Options.CollectTimings);
