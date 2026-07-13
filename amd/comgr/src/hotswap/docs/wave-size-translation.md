@@ -65,7 +65,7 @@ The archetypes surveyed in issue #11:
 | Structural re-lifting (decompile to a CFG of structured predicates) | Only works on structured control flow; Triton / AITER output does not guarantee it. |
 | Wrap every EXEC-gated instruction in a construct divergent on the lane's EXEC bit | Fits SIMT IR, preserves "any kernel." Two equivalent encodings (`br i1` diamond, masked intrinsic carrying the same `i1`) differ only in shape. |
 
-The last row is **SPE**; §5.1 specifies the diamond form.
+The last row is **SPE**; sec. 5.1 specifies the diamond form.
 
 ### 2.2 Wave-size projection -- the ladder
 
@@ -77,17 +77,17 @@ hetGPU / DynamoRIO wave-width binary translators) converges on:
 |---|---|---|---|
 | Half-wave masking (legacy transpiler) | ~50% | `blockDim.x ≤ 32` only. | Silently drops the upper half of every `blockDim.x > 32` workgroup -- 100% of the GPT-OSS and AITER corpora. Keeping it as a fallback hands callers a second wrong answer when the preferred projection refuses. |
 | Full-wave packing (two source waves per target wave) | 100% | None. | Every wave-level op (EXEC arithmetic, VCC, ballots, cross-lane primitives) breaks -- packed waves share hardware EXEC but expect disjoint ones. |
-| Thread-loop transformation | ~50% | Lane-position-dependent EXEC kernels. | Class 2 obstructions (§6) persist -- a thread loop cannot re-express `v_permlane64` as something wave32 observes. |
+| Thread-loop transformation | ~50% | Lane-position-dependent EXEC kernels. | Class 2 obstructions (sec. 6) persist -- a thread loop cannot re-express `v_permlane64` as something wave32 observes. |
 | Scalarisation | 1 / W_s | Near-total. | ~32× slowdown on wave32; last-resort rung only. |
-| Wave-native projection **(default for wave32 -> wave64 since 2026-04-21)** | 100% | Wave-size-oblivious kernels AND `num_warps > 1` source kernels AND matrix kernels dependent on Wave64-collective correctness (§5.6.1). | `@llvm.amdgcn.init_whole_wave` at kernel entry forces hardware EXEC = -1 kernel-wide; the original per-lane active mask is saved to the (widened) EXEC alloca. Each target lane has its own modeled-EXEC bit -- lanes 0..31 of target wave 0 model source wave 0, lanes 32..63 model source wave 1 (each with its own EXEC register, NOT replicas). Costs a per-kernel `init_whole_wave` prologue and a per-side-effect SPE diamond. Correct on the superset of the modulo-replication domain: everything modulo-replication gets right, plus `num_warps > 1` kernels where source EXEC registers are independent per wave (documented at hotswap/docs/modrep-predicate-chain.md §6). |
-| Modulo-replication | 100% | Narrow subset of wave-size-oblivious kernels where every source wave replicates cleanly onto the target wave (G1-passing, no `num_warps > 1` state per §5.6.1). | The target wave runs as two wave32 replicas sharing the source EXEC mask; the source-EXEC bit for target lane `i` is selected at `lane_id MOD W_s`. Correct **iff** the source is wave-size-oblivious AND a single source EXEC replicates faithfully across both replicas -- falsifiable per kernel by §7. Retained as an opt-in (`--disable-wave-native` / `enableWaveNative=false`) for pointwise / independent-half kernels AND for lit fixtures that pin MODREP-shape IR invariants (the C5 predicate-chain classifier only refuses under MODREP). |
+| Wave-native projection **(default for wave32 -> wave64 since 2026-04-21)** | 100% | Wave-size-oblivious kernels AND `num_warps > 1` source kernels AND matrix kernels dependent on Wave64-collective correctness (sec. 5.6.1). | `@llvm.amdgcn.init_whole_wave` at kernel entry forces hardware EXEC = -1 kernel-wide; the original per-lane active mask is saved to the (widened) EXEC alloca. Each target lane has its own modeled-EXEC bit -- lanes 0..31 of target wave 0 model source wave 0, lanes 32..63 model source wave 1 (each with its own EXEC register, NOT replicas). Costs a per-kernel `init_whole_wave` prologue and a per-side-effect SPE diamond. Correct on the superset of the modulo-replication domain: everything modulo-replication gets right, plus `num_warps > 1` kernels where source EXEC registers are independent per wave (documented at hotswap/docs/modrep-predicate-chain.md sec. 6). |
+| Modulo-replication | 100% | Narrow subset of wave-size-oblivious kernels where every source wave replicates cleanly onto the target wave (G1-passing, no `num_warps > 1` state per sec. 5.6.1). | The target wave runs as two wave32 replicas sharing the source EXEC mask; the source-EXEC bit for target lane `i` is selected at `lane_id MOD W_s`. Correct **iff** the source is wave-size-oblivious AND a single source EXEC replicates faithfully across both replicas -- falsifiable per kernel by sec. 7. Retained as an opt-in (`--disable-wave-native` / `enableWaveNative=false`) for pointwise / independent-half kernels AND for lit fixtures that pin MODREP-shape IR invariants (the C5 predicate-chain classifier only refuses under MODREP). |
 
 The first four rows each miscompile a named construct or pay a
 ~wave-width throughput penalty. Wave-native is the post-graduation
 default and what survives for `num_warps > 1` and matrix kernels;
 modulo-replication is the pre-graduation default and remains
 valid on the narrower class where single-replica EXEC semantics are
-faithful. §6 defines *wave-size-obliviousness* precisely and §7
+faithful. sec. 6 defines *wave-size-obliviousness* precisely and sec. 7
 discharges it statically via a three-outcome procedure (emit /
 rewrite / refuse). Thread-loop and scalarisation remain higher-obligation
 rungs for kernels that reach outcome (c) under either projection.
@@ -119,7 +119,7 @@ Three load-bearing behaviours the source inherits from wave32:
    reconstructs the full lane id; `V_MBCNT_HI_U32_B32` is absent or
    constant-zero. `mbcnt_lo(...)` produces values in `[0, 32)`.
 
-These are the semantic anchors every obstruction class in §6 violates
+These are the semantic anchors every obstruction class in sec. 6 violates
 under naive widening.
 
 ## 4. Target model -- gfx942 / gfx950 wave64
@@ -134,7 +134,7 @@ Three symmetric behaviours the target imposes:
    `llvm.amdgcn.permlane16` / `permlanex16` / `permlane16.swap` fail
    ISel on CDNA. `ds_bpermute`, DPP modifiers, and `ds_swizzle` are
    available on gfx8+ and usable as rewrite building blocks. These
-   absences shape §7's rewrite table.
+   absences shape sec. 7's rewrite table.
 3. **`V_MBCNT_HI_U32_B32` is real.** A direct modulo-replication of a
    wave32 kernel that builds lane id via `mbcnt_lo(...) + mbcnt_hi(...)`
    observes values in `[0, 64)` instead of `[0, 32)` -- a Class 1
@@ -151,7 +151,7 @@ fold collapses to the identity and LLVM opts erase it along with the
 diamond in uniform regions; cross-lane primitives emit their native
 intrinsics directly; the Phase 1.4.5 classifier short-circuits
 (`buildObstructionReport` returns empty when source and target wave
-sizes match). On mismatch, the classifier runs and dispatches per §7.
+sizes match). On mismatch, the classifier runs and dispatches per sec. 7.
 
 Source-wave width comes from the disassembled ISA; target width from
 `ISAProfile` via `MCSubtargetInfo::hasFeature(FeatureWavefrontSize32)`
@@ -246,7 +246,7 @@ replicas sharing the source EXEC mask.
 
 Picture (wave32 -> wave64, R = 2); columns are the SSA values
 `ModuloReplicationProjection::emitLaneActiveBit` emits, identical to
-§5.1's IR block:
+sec. 5.1's IR block:
 
 ```text
 target wave (one physical wave64 = 64 lanes):
@@ -274,16 +274,16 @@ replication).
 Modulo-replication preserves cross-lane primitive semantics only if
 the primitive is itself lifted to an LLVM cross-lane intrinsic -- a
 same-lane "copy operand to dst" stub silently drops the remap. Every
-SemOp below is either a landed rewrite here or a §7 refusal; no
+SemOp below is either a landed rewrite here or a sec. 7 refusal; no
 third path.
 
 Lifted SemOps (`V_PERMLANE32_SWAP_B32`, `V_PERMLANE64_B32`,
-`DS_PERMUTE_B32` pending as P6.b are refused in §7):
+`DS_PERMUTE_B32` pending as P6.b are refused in sec. 7):
 
 | SemOp | Handling | Landing |
 |---|---|---|
 | `V_READFIRSTLANE_B32` | `llvm.amdgcn.readfirstlane.i32`; SGPR dest bypasses `emitUnderExec`. | pre-SPE |
-| `V_READLANE_B32` / `V_WRITELANE_B32` | `llvm.amdgcn.readlane` / `writelane`. Never-written source VGPRs read as `undef` (hardware-undefined on those lanes). Static const operands outside `[0, W_s)` caught by §7's `OutOfRangeLaneOperand`. | pre-SPE |
+| `V_READLANE_B32` / `V_WRITELANE_B32` | `llvm.amdgcn.readlane` / `writelane`. Never-written source VGPRs read as `undef` (hardware-undefined on those lanes). Static const operands outside `[0, W_s)` caught by sec. 7's `OutOfRangeLaneOperand`. | pre-SPE |
 | `V_MBCNT_LO_U32_B32` / `V_MBCNT_HI_U32_B32` | Same-wave uses `llvm.amdgcn.mbcnt.{lo,hi}`. Wave32 -> wave64 recomputes `mbcnt_lo` from the source-wave-local lane id and the current source-wave slice of EXEC/VCC/SGPR shadow masks; `mbcnt_hi` is the wave32 pass-through of `src1`. | pre-SPE + source-wave mask slice |
 | `DS_BPERMUTE_B32` (P1) | `llvm.amdgcn.ds.bpermute`. Selector assumed in `[0, source_wave)` -> naturally half-independent on wave64. | `d9bfd99626` |
 | `V_PERMLANE16_B32` / `V_PERMLANEX16_B32` (P2) | `ds_bpermute` emulation from decoded selector nibbles, `^ 0x10` for `permlanex16`. Only `op_sel:[1,0]` supported (`fi=0` / `bc=1` refuse). Target-independent -- gfx942 lacks native ISel. | `4ff69403f0`, `01ca97e4aa` |
@@ -293,7 +293,7 @@ Lifted SemOps (`V_PERMLANE32_SWAP_B32`, `V_PERMLANE64_B32`,
 
 Cross-lane closure on GPT-OSS is complete as of P4 (`0c3f526008`);
 residual failures after P1 / P2 / P4 / P5 / P6 are orthogonal Phase 5
-handler gaps (§9).
+handler gaps (sec. 9).
 
 **VCC is bi-modal** -- per-lane `i1` for `v_cndmask`, wave-level `iN`
 for SALU. Reads into wave-level consumers route through
@@ -361,7 +361,7 @@ is mode-insensitive, while flagging every unproven kernel.
 so any read-before-write produces `0` / `false`, never `undef` /
 `poison`:
 
-- `exec`: projection-chosen (§5.6.1). `ModuloReplicationProjection::emitInitialExec`
+- `exec`: projection-chosen (sec. 5.6.1). `ModuloReplicationProjection::emitInitialExec`
   returns `-1`; `WaveNativeProjection::emitInitialExec` emits
   `@llvm.amdgcn.init_whole_wave` and seeds the alloca with the ballot
   of its `i1` return value.
@@ -426,7 +426,7 @@ the source author's wave32 view.
 
 Modulo-replication does not need `init_whole_wave`: its EXEC alloca
 is source-width, cross-lane primitives are rewritten to wave32-
-equivalent constructs (§5.3), and the only Wave64-collective is
+equivalent constructs (sec. 5.3), and the only Wave64-collective is
 SPE's internal ballot in `extractLaneBitFromWaveMask`, which treats
 the upper half as an independent replica.
 `ModuloReplicationProjection::emitInitialExec` returns the default
@@ -444,7 +444,7 @@ Post-graduation (2026-04-21), the default is `WaveNativeProjection`
 for wave32 -> wave64 cross-widening; `ModuloReplicationProjection`
 is the fallback selected by `--disable-wave-native` or
 `enableWaveNative=false`. See `hotswap/docs/modrep-predicate-chain.md`
-§6 "Picked: WaveNative as default" for the empirical evidence
+sec. 6 "Picked: WaveNative as default" for the empirical evidence
 (the C5 examples are loud-refused under MODREP and match under the
 default WaveNative evidence, including `canary_bpermute_scan_fp32`,
 `swiglu_fp32`, `rmsnorm_fp32`, and `corpus_layernorm_fp32`; no
@@ -530,14 +530,14 @@ correctness across the cross-wave boundary.
 
 The rescue is correct in isolation but insufficient when the lifted
 VGPR value feeds a cross-lane primitive's scalar source operand in
-the presence of WMMA -- see §5.6.3 below for the post-mem2reg rewrite
-that unblocks that shape, and the `WaveIdLiftScalarized` row in §7
+the presence of WMMA -- see sec. 5.6.3 below for the post-mem2reg rewrite
+that unblocks that shape, and the `WaveIdLiftScalarized` row in sec. 7
 for the three-outcome decision the classifier makes today
 (rescue -> refuse -> rewrite).
 
 ### 5.6.3 Cross-widen `writelane` / `readlane` rewrite -- Class 1 rewrite for implicitly-scalarised scalar feeds
 
-The §5.6.2 rescue is a necessary-but-not-sufficient precondition for
+The sec. 5.6.2 rescue is a necessary-but-not-sufficient precondition for
 `wave_id`-keyed matmul tile assignment. Even with the BFE rewritten
 to a divergent `(workitem.id.x >> log2(W_s)) & 0x1F` leaf, any
 downstream `v_writelane_b32` or `v_readlane_b32` whose scalar
@@ -549,9 +549,9 @@ source_wave[0]'s `wave_id = 0` and source_wave[1]'s `wave_id = 1`
 collapse into a single uniform scalar in the target wave, and every
 tile-column address keyed on `wave_id` writes into the wrong
 target-wave half. WMMA forecloses the `ThreadLoopProjection`
-escape hatch (§5.2 requires the full target wave simultaneously --
+escape hatch (sec. 5.2 requires the full target wave simultaneously --
 TLP's one-source-wave-at-a-time iteration cannot stage the WMMA
-operand matrix correctly), which is why the pre-rewrite §7 row for
+operand matrix correctly), which is why the pre-rewrite sec. 7 row for
 this shape is a loud refusal.
 
 Rewrite: a post-mem2reg function-level pass -- `rewriteCrossLaneDivergent`
@@ -719,7 +719,7 @@ position beyond `lane_id mod W_s`:
   wave-size-dependent at the type level.
 - `s_bfe_u32 sDST, ttmp8, 0x50019` -- `wave_id_in_workgroup` read
   from the CP-seeded ttmp8[29:25] field. Rescued in place by the
-  §5.6.2 wave_id lift; any *other* ttmp8 source read still
+  sec. 5.6.2 wave_id lift; any *other* ttmp8 source read still
   refuses via `TtmpWaveIdLeak`. The rescue itself also triggers
   `WaveIdLiftScalarized` in the specific shape where the lift's
   per-lane divergent VGPR value flows into a `v_writelane_b32` /
@@ -730,9 +730,9 @@ position beyond `lane_id mod W_s`:
   (source_wave[0]'s `wave_id=0` and source_wave[1]'s `wave_id=1`
   both become a uniform 0 in the target wave's scalar operand),
   and WMMA forecloses the `ThreadLoopProjection` escape hatch
-  (§5.2 requires the full target wave simultaneously). Default
+  (sec. 5.2 requires the full target wave simultaneously). Default
   behaviour is a loud refusal; under `--enable-writelane-rewrite`
-  the Phase 6.5 rewrite in §5.6.3 replaces every divergent-feed
+  the Phase 6.5 rewrite in sec. 5.6.3 replaces every divergent-feed
   `writelane` with a per-lane `select` and every divergent-feed
   `readlane` with a `ds_bpermute`, preserving the source's per-
   source-wave `wave_id` distinction through the rewritten call and
@@ -765,12 +765,12 @@ single-participant:
 - Half-wave broadcasts: `if (lane_id < 16) { ... }` lowered to an EXEC
   compare.
 
-Classes 1 and 4 dominate Triton / AITER output; Class 2 is §7's
+Classes 1 and 4 dominate Triton / AITER output; Class 2 is sec. 7's
 rewrite set; Class 3 is rare in our corpus but unbounded in principle.
 
 The classifier (`wave_size_obstruction.{hpp,cpp}`) names each mode as
 an `ObstructionKind` and tags per-site traces with the class label
-parenthetically; per-site detail and refusal reasons are in §7. Lit
+parenthetically; per-site detail and refusal reasons are in sec. 7. Lit
 fixtures pin one example per `ObstructionKind`, named after the class
 (`lit_tests/c1_lane_id_leak`, `c1_ttmp_wave_id_lift` -- Class-1 rescue,
 not refusal -- `c2_permlane_swap`, `c2_dpp_quad_perm`, `c2_ds_swizzle`,
@@ -798,7 +798,7 @@ Per site a `(ObstructionKind, RewriteId, rewriteImplemented)` triple
 decides between three outcomes. The tables below enumerate every
 configuration the classifier produces today.
 
-**Landed -- emits inline** (`rewriteImplemented = true`). §5.3 holds the
+**Landed -- emits inline** (`rewriteImplemented = true`). sec. 5.3 holds the
 implementation view; these are the classifier markers paired with
 their handlers:
 
@@ -809,7 +809,7 @@ their handlers:
 | `permlane16_swap` (C2) | Paired `ds_bpermute`, partner `lane_id XOR 16`. | `LaneGroupShuffle` / `P4_PermLaneSwap` |
 | DPP16 modifiers (C2) | `llvm.amdgcn.update.dpp`. DPP8 is pending below. | `DppCrossLane` / `P5_DppModifier` |
 | `ds_swizzle_b32` with QUAD_PERM / BITMASK_PERM / valid FFT_MODE / valid ROTATE_MODE (C2) | `llvm.amdgcn.ds.swizzle` with validated imm. | `DsSwizzle` / `P6_DsSwizzle` |
-| Canonical `s_bfe_u32 sDST, ttmp8, 0x50019` + `v_writelane_b32` / `v_readlane_b32` with a cross-widen-divergent scalar feed + `v_wmma_*` (C1). **Opt-in rewrite**, gated on `--enable-writelane-rewrite`. Post-mem2reg pass (§5.6.3) replaces the divergent-feed writelane with a per-lane `select` and the divergent-feed readlane with a `ds_bpermute`; preserves the per-source-wave `wave_id` distinction that the backend's implicit `v_readfirstlane_b32` would otherwise collapse. Without the flag the same shape is refused below as `WaveIdLiftScalarized`. | `select` on per-lane `lane_id` equality (writelane half); `ds_bpermute` with target-wave-half-scoped index (readlane half). §5.6.3. | `WaveIdLiftScalarized` / `PostRaiseCrossLaneRewrite` |
+| Canonical `s_bfe_u32 sDST, ttmp8, 0x50019` + `v_writelane_b32` / `v_readlane_b32` with a cross-widen-divergent scalar feed + `v_wmma_*` (C1). **Opt-in rewrite**, gated on `--enable-writelane-rewrite`. Post-mem2reg pass (sec. 5.6.3) replaces the divergent-feed writelane with a per-lane `select` and the divergent-feed readlane with a `ds_bpermute`; preserves the per-source-wave `wave_id` distinction that the backend's implicit `v_readfirstlane_b32` would otherwise collapse. Without the flag the same shape is refused below as `WaveIdLiftScalarized`. | `select` on per-lane `lane_id` equality (writelane half); `ds_bpermute` with target-wave-half-scoped index (readlane half). sec. 5.6.3. | `WaveIdLiftScalarized` / `PostRaiseCrossLaneRewrite` |
 | `v_mbcnt_* -> v_cmpx_*` EXEC predicates under WaveNative (C4) | `v_mbcnt_lo` slices the current source-wave mask from EXEC/VCC/SGPR-shadow state, `v_mbcnt_hi` stays a source-wave pass-through, and `V_CMPX` ballots the compare into target-width EXEC storage. Covers single-lane elect (`mbcnt == 0`) and the same source-wave-local prefix-count compare family. | `CmpxFromLaneId` / `WaveNativeMbcntCmpx` |
 
 **Unrewritable -- principled refusal** (`rewrite = None` -> kind-specific
@@ -819,12 +819,12 @@ their handlers:
 |---|---|---|
 | `v_mbcnt_hi_u32_b32` read (C1). `mbcnt_hi` against target `EXEC_HI` produces 32..63 in the upper half; no rewrite without dataflow. | `MbcntHiLaneIdLeak` | `CrossWaveLaneIdLeak` |
 | `v_readlane` / `v_writelane` with static const operand outside `[0, W_s)` (C1). | `OutOfRangeLaneOperand` | `CrossWaveLaneIdLeak` |
-| Non-canonical `ttmp8` source read co-occurring with a WMMA op (C1). Canonical `s_bfe_u32 sDST, ttmp8, 0x50019` is rescued in §5.6.2 and filtered out by `isCanonicalWaveIdBfe`; the classifier only refuses shapes where the raiser's `ttmp8[29:25]` model of `wave_id` can't be soundly reused (other BFE immediates, non-BFE consumers, 64-bit base-pointer loads). | `TtmpWaveIdLeak` | `CrossWaveLaneIdLeak` |
-| Canonical `s_bfe_u32 sDST, ttmp8, 0x50019` co-occurring with `v_writelane_b32` / `v_readlane_b32` **and** with a `v_wmma_*` op (C1) **when `--enable-writelane-rewrite` is OFF**. The §5.6.2 lift emits a per-lane divergent VGPR for `wave_id`, but the backend inserts an implicit `v_readfirstlane_b32` when that SGPR-shaped value feeds the cross-lane primitive's scalar source operand; the scalarisation erases the per-source-wave distinction and miscompiles every `wave_id`-keyed tile-column address. WMMA rules out the `ThreadLoopProjection` escape hatch (§5.2 wants the full target wave simultaneously). Under the flag, §5.6.3's Phase 6.5 rewrite replaces the divergent-feed cross-lane primitive with a principled `select` / `ds_bpermute` pair and the site graduates to the **Landed** table above. Pinned by `lit_tests/c1_wave_id_lift_scalarized` (REFUSE RUN line -- the REWRITTEN RUN line pins the Landed path). | `WaveIdLiftScalarized` | `CrossWaveLaneIdLeak` |
+| Non-canonical `ttmp8` source read co-occurring with a WMMA op (C1). Canonical `s_bfe_u32 sDST, ttmp8, 0x50019` is rescued in sec. 5.6.2 and filtered out by `isCanonicalWaveIdBfe`; the classifier only refuses shapes where the raiser's `ttmp8[29:25]` model of `wave_id` can't be soundly reused (other BFE immediates, non-BFE consumers, 64-bit base-pointer loads). | `TtmpWaveIdLeak` | `CrossWaveLaneIdLeak` |
+| Canonical `s_bfe_u32 sDST, ttmp8, 0x50019` co-occurring with `v_writelane_b32` / `v_readlane_b32` **and** with a `v_wmma_*` op (C1) **when `--enable-writelane-rewrite` is OFF**. The sec. 5.6.2 lift emits a per-lane divergent VGPR for `wave_id`, but the backend inserts an implicit `v_readfirstlane_b32` when that SGPR-shaped value feeds the cross-lane primitive's scalar source operand; the scalarisation erases the per-source-wave distinction and miscompiles every `wave_id`-keyed tile-column address. WMMA rules out the `ThreadLoopProjection` escape hatch (sec. 5.2 wants the full target wave simultaneously). Under the flag, sec. 5.6.3's Phase 6.5 rewrite replaces the divergent-feed cross-lane primitive with a principled `select` / `ds_bpermute` pair and the site graduates to the **Landed** table above. Pinned by `lit_tests/c1_wave_id_lift_scalarized` (REFUSE RUN line -- the REWRITTEN RUN line pins the Landed path). | `WaveIdLiftScalarized` | `CrossWaveLaneIdLeak` |
 | `v_permlane64_b32` (C2). No wave32 analogue -- a wave32 source can't meaningfully encode a 64-lane rotate. | `FullWaveRotate` | `CrossWaveUnrewritableShuffle` |
 | Non-commutative atomics (C3): `GLOBAL_ / FLAT_ / BUFFER_ATOMIC_{SWAP, CMPSWAP}`, `S_ATOMIC_SWAP`. Lanes `i` and `i + W_s` race on the same address; no rewrite preserves the single-participant invariant. | `NonCommutativeAtomic` | `CrossWaveReplicaRace` |
 | `s_*_saveexec_b32` whose source mask is derived from `v_mbcnt_*` decoded-register provenance (C4). This catches scalar EXEC masks built from lane-id data while allowing unrelated `v_mbcnt_*` shuffle selectors plus ordinary bounds masks. `v_cmpx` sites in the same structural family graduate to the Landed table under WaveNative and remain refused under MODREP. | `SaveExecFromLaneId` | `CrossWaveLanePredicatedExec` |
-| `llvm.amdgcn.workitem.id.x()` reaches an `icmp` against a compile-time constant `K` with `0 < K <= W_s - 1`, chain NOT AND-masked by `(W_s - 1)` first (C5). Lane-position-scoped predicate (scan-stage guards `tid >= 2^s`, half-wave broadcasts, quad-level masks) that partitions lanes by position within a single source wave and therefore diverges between MODREP's source-wave 0 and target replica-1. Post-mem2reg IR-level classifier in `c5_predicate_chain_classifier.{hpp,cpp}` (raiser.cpp Phase 6.6); produced ONLY by this classifier, never by `buildObstructionReport`'s MC walk. Narrow-O1-landed per hotswap/docs/modrep-predicate-chain.md §5 O1. Catches `canary_bpermute_scan_fp32` (Kogge-Stone K ∈ {1, 3, 7, 15}); does not catch `swiglu_fp32` / `corpus_layernorm_fp32` (icmp against a dynamic kernarg -- different class per modrep-predicate-chain.md §6.4's orthogonal VOPD-cndmask / carry-chain fixes). | `WorkitemIdPredicateChain` | `CrossWavePredicateChain` |
+| `llvm.amdgcn.workitem.id.x()` reaches an `icmp` against a compile-time constant `K` with `0 < K <= W_s - 1`, chain NOT AND-masked by `(W_s - 1)` first (C5). Lane-position-scoped predicate (scan-stage guards `tid >= 2^s`, half-wave broadcasts, quad-level masks) that partitions lanes by position within a single source wave and therefore diverges between MODREP's source-wave 0 and target replica-1. Post-mem2reg IR-level classifier in `c5_predicate_chain_classifier.{hpp,cpp}` (raiser.cpp Phase 6.6); produced ONLY by this classifier, never by `buildObstructionReport`'s MC walk. Narrow-O1-landed per hotswap/docs/modrep-predicate-chain.md sec. 5 O1. Catches `canary_bpermute_scan_fp32` (Kogge-Stone K ∈ {1, 3, 7, 15}); does not catch `swiglu_fp32` / `corpus_layernorm_fp32` (icmp against a dynamic kernarg -- different class per modrep-predicate-chain.md sec. 6.4's orthogonal VOPD-cndmask / carry-chain fixes). | `WorkitemIdPredicateChain` | `CrossWavePredicateChain` |
 
 **Pending -- structurally recognised, not yet lowered**
 (`rewrite != None && rewriteImplemented = false` -> all produce
@@ -883,17 +883,17 @@ details in the cited section.
 - **G1 -- Wave-size obliviousness classifier** (Phase 1.4.5, cross-wave
   path). Per-site `ObstructionKind` traces under
   `-debug-only=wave-projection`; refuses with the appropriate
-  `CrossWave*` on unrewritable or pending. §7.
+  `CrossWave*` on unrewritable or pending. sec. 7.
 - **G2 -- SPE allow-list gate** (Phase 1.5, all paths). Aborts on any
-  EXEC writer without `routesExecThroughStoreExec = true`. §5.4.
+  EXEC writer without `routesExecThroughStoreExec = true`. sec. 5.4.
 - **G3 -- `verifyExecAttrCoverage`** (startup). Fails raiser init if any
   `MCInstrDesc::implicit_defs(EXEC)` opcode has a mapped SemOp
-  missing the attribute. §5.4.
+  missing the attribute. sec. 5.4.
 - **G4 -- HWREG direction-aware classifier** (per instruction).
-  Unknown ids abort on both directions. §5.5.
+  Unknown ids abort on both directions. sec. 5.5.
 - **G5 -- Cross-lane allow-list** (cross-wave path). Every cross-lane
   SemOp either lifts to an LLVM intrinsic or is flagged by G1 -- no
-  third path. §5.3.
+  third path. sec. 5.3.
 - **G6 -- Principled refusal at unsupported projections.**
   `ThreadLoopProjection` overrides `report_fatal_error`; scalarisation
   has no skeleton. The MAINTENANCE block in `wave-projection.hpp` is
@@ -932,7 +932,7 @@ epic; not wave-size.
    exists. A future IR-level dataflow pass can still refine cases that
    require reasoning through memory, control-flow joins, or backend
    uniformity facts beyond the decoded MC stream.
-2. **`s_setreg MODE` is dropped with a warning** (§5.5) rather than
+2. **`s_setreg MODE` is dropped with a warning** (sec. 5.5) rather than
    lowered to a real FP-mode change. Correct only for kernels whose
    downstream FP is mode-insensitive.
 3. **P4.b -- partial-EXEC permlane16_swap.** The e32-form lift assumes
@@ -958,7 +958,7 @@ epic; not wave-size.
 ## 11. Relationship to other axes
 
 - **Matrix (`matrix-translation.md`).** WMMA assumes EXEC=full at the
-  issue site; §5.6.1's `init_whole_wave` supplies it kernel-wide on
+  issue site; sec. 5.6.1's `init_whole_wave` supplies it kernel-wide on
   the wave-native path, so WMMA -> MFMA lowering needs no WWM markers.
 - **TDM (`tdm-translation.md`).** Cross-target
   `tensor_{load,store}_*` emulation is source-wave-local under the
@@ -976,7 +976,7 @@ epic; not wave-size.
   as wave64; this axis owns what the raised IR body does once
   dispatched. Both must agree -- ABI rewrite without SPE body rewrite
   is the legacy transpiler's failure mode.
-- **Capability dispatch (`target-capability-dispatch.md`).** §5.0 is
+- **Capability dispatch (`target-capability-dispatch.md`).** sec. 5.0 is
   this axis's instance of the project-wide "emit native when
   supported, decompose only when not" principle. Same-wave retargeting
   takes the native path unconditionally.

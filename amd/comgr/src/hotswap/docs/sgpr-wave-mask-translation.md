@@ -2,7 +2,7 @@
 
 > **Status:** design accepted; **intra-BB shadow** implementation landing
 > now (first PR). The **widened-SGPR-storage** alternative is documented
-> in §4 for future reference; it is NOT implemented and not scheduled.
+> in sec. 4 for future reference; it is NOT implemented and not scheduled.
 >
 > **Scope:** wave32 source -> wave64 target cross-widening (gfx1250 ->
 > gfx942 / gfx950). Same-wave and narrowing directions (wave64 -> wave32
@@ -61,15 +61,15 @@ reach it.
 
 ## 3. Design space
 
-Three strategies were surveyed. The comparison is below; §3.1 picks one
-and §4 documents the alternative that is deliberately NOT scheduled so
+Three strategies were surveyed. The comparison is below; sec. 3.1 picks one
+and sec. 4 documents the alternative that is deliberately NOT scheduled so
 a future reader can pick it up without re-running this analysis.
 
 | strategy | correctness domain | invasiveness | composes with future work |
 |---|---|---|---|
-| **3.1 Side-channel shadow** (chosen) | intra-BB V_CMP -> V_CNDMASK without scalar interference -- the dominant corpus pattern | localised: ~40 LOC touching 5 files, strictly additive | yes; becomes redundant once §4 or a future reaching-definitions pass lands |
-| **3.2 Obstruction classifier refusal** (declined -- conversation history) | all cases where §3.1 or §4 would fix it | ~50 LOC in `wave-size-obstruction.cpp` | parallel second-line defence regardless of which fix lands |
-| **4 Widened SGPR storage** (not scheduled) | all V_CMP -> SGPR -> wave-mask-consumer patterns, cross-BB, scalar-interleaved, other consumers | systemic: reg-file model change, every SGPR handler audited | supersedes §3.1; orthogonal to §3.2 |
+| **3.1 Side-channel shadow** (chosen) | intra-BB V_CMP -> V_CNDMASK without scalar interference -- the dominant corpus pattern | localised: ~40 LOC touching 5 files, strictly additive | yes; becomes redundant once sec. 4 or a future reaching-definitions pass lands |
+| **3.2 Obstruction classifier refusal** (declined -- conversation history) | all cases where sec. 3.1 or sec. 4 would fix it | ~50 LOC in `wave-size-obstruction.cpp` | parallel second-line defence regardless of which fix lands |
+| **4 Widened SGPR storage** (not scheduled) | all V_CMP -> SGPR -> wave-mask-consumer patterns, cross-BB, scalar-interleaved, other consumers | systemic: reg-file model change, every SGPR handler audited | supersedes sec. 3.1; orthogonal to sec. 3.2 |
 
 ### 3.1 Chosen approach -- intra-BB per-lane-i1 shadow
 
@@ -164,14 +164,14 @@ Previously proposed in this project: detect `V_CMP -> SGPR -> consumed-as-
 per-lane-mask` patterns in `wave-size-obstruction.cpp` and refuse the
 kernel. Declined because it converts a correctness regression into a
 coverage regression, which the Triton / AITER corpora cannot afford.
-Can still land as a second-line defence behind §3.1, covering the
+Can still land as a second-line defence behind sec. 3.1, covering the
 residual cases (cross-BB, scalar-interleaved, other consumers) that the
 shadow does not reach.
 
 ## 4. Not scheduled -- widened-SGPR-storage (full-correctness alternative)
 
 Recorded here so a future investigator does not re-run the trade-off
-analysis. This IS the correct answer if §3.1 proves insufficient.
+analysis. This IS the correct answer if sec. 3.1 proves insufficient.
 
 ### 4.1 Idea
 
@@ -262,7 +262,7 @@ a read of the other role triggers a lossy projection.
 
 ### 4.4 When to pull this in
 
-Only when §3.1's limitations hurt a real corpus kernel. Specifically:
+Only when sec. 3.1's limitations hurt a real corpus kernel. Specifically:
 
 - A kernel's V_CMP producer and V_CNDMASK consumer are in different
   basic blocks, AND the intervening code path cannot be rewritten to
@@ -280,11 +280,11 @@ Only when §3.1's limitations hurt a real corpus kernel. Specifically:
   before a proper reaching-definitions pass on the raised IR is ready.
 
 The V_CMP-to-V_CNDMASK end-to-end recipe is the regression gate for
-whichever design lands: with §3.1 it expands from the narrow block-size
-subset to the full sweep; with §4 it stays at the full sweep and
+whichever design lands: with sec. 3.1 it expands from the narrow block-size
+subset to the full sweep; with sec. 4 it stays at the full sweep and
 additionally pins a cross-BB / scalar-interleaved variant.
 
-## 5. Scope boundaries of the chosen design (§3.1)
+## 5. Scope boundaries of the chosen design (sec. 3.1)
 
 ### In scope
 
@@ -302,7 +302,7 @@ additionally pins a cross-BB / scalar-interleaved variant.
   dataflow-upgrade TODO in `wave-size-obstruction.cpp`) is the natural
   landing site for this.
 - **Scalar-interleaved pattern.** `V_CMP; s_mov_b32 sN, imm;
-  V_CNDMASK` falls back correctly. Fixing this requires §4 or a scalar-
+  V_CNDMASK` falls back correctly. Fixing this requires sec. 4 or a scalar-
   write-that-preserves-wave-mask-role annotation scheme.
 - **Other wave-mask consumers.** `S_AND_B32 sexec, sN, sM` and friends
   that read an SGPR as a wave mask on the EXEC path still go through
@@ -346,10 +346,10 @@ additionally pins a cross-BB / scalar-interleaved variant.
 
 ## 7. Evolution path
 
-- **Step 1 (this PR, §3.1).** Intra-BB V_CMP -> V_CNDMASK cache.
+- **Step 1 (this PR, sec. 3.1).** Intra-BB V_CMP -> V_CNDMASK cache.
   Closes the corpus_asin_fp32 miscompile.
 - **Step 2 (follow-up, optional).** Obstruction-classifier refusal
-  (§3.2) for the residual cases the cache does not cover. Converts
+  (sec. 3.2) for the residual cases the cache does not cover. Converts
   remaining cross-BB / scalar-interleaved miscompiles into loud
   refusals rather than wrong answers.
 - **Step 3 (conditional).** Reaching-definitions dataflow on the
@@ -358,7 +358,7 @@ additionally pins a cross-BB / scalar-interleaved variant.
   "full-function per-SGPR last-wave-mask-writer". Wave-mask reads
   from any dominator anywhere in the function benefit.
 - **Step 4 (conditional).** If any of the "when to pull this in"
-  conditions in §4.4 materialise on a real corpus kernel, implement
-  §4 (widened SGPR storage). The shadow from Steps 1 + 3 becomes
+  conditions in sec. 4.4 materialise on a real corpus kernel, implement
+  sec. 4 (widened SGPR storage). The shadow from Steps 1 + 3 becomes
   redundant (widened storage is lossless; there is nothing for the
   shadow to repair) and can be deleted.

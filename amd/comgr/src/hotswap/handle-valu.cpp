@@ -206,7 +206,7 @@ Intrinsic::ID true16AddSubSatIntrinsic(bool IsSub, bool IsSigned) {
 // silently ignoring the explicit scalar operand on e64 forms. That
 // matches the VOPD `v_dual_cndmask_b32` SGPR-condition bug that
 // miscompiled `canary_bpermute_scan_fp32` and `corpus_layernorm_fp32`
-// (hotswap/docs/modrep-predicate-chain.md §6.4). The current corpus
+// (hotswap/docs/modrep-predicate-chain.md sec. 6.4). The current corpus
 // (Triton on gfx1250 / gfx942, AITER TensileLite) does not exercise
 // the non-VCC SGPR form of these instructions -- Triton emits
 // `v_add_nc_u32` / `v_add_nc_u64` (no-carry) on gfx1250 and the
@@ -231,7 +231,7 @@ Intrinsic::ID true16AddSubSatIntrinsic(bool IsSub, bool IsSigned) {
 //     raw SGPR alloca (lossy under wave32 -> wave64 cross-widening
 //     if the producer truncated to source width -- same residual as
 //     the non-VOPD V_CNDMASK_B32 handler, see
-//     hotswap/docs/sgpr-wave-mask-translation.md §3.1).
+//     hotswap/docs/sgpr-wave-mask-translation.md sec. 3.1).
 //   * NOREG (null ssrc2) -> zero carry-in (hardware semantics for
 //     null scalar source; defensive -- AMDGPU backends don't emit
 //     this in practice, but an i1 zero is the least-surprising
@@ -362,7 +362,7 @@ Error refuseDivScaleScratchFlagDest(const DecodedInst &Di, OpResolver &Op) {
 // Returns a `<8 x bfloat>` Value; the caller hands it to
 // `writeRegVec` exactly like the same-target intrinsic path does.
 //
-// see hotswap/docs/matrix-translation.md §7.4 -- MXFP4 dequant primitive.
+// see hotswap/docs/matrix-translation.md sec. 7.4 -- MXFP4 dequant primitive.
 //
 // Algorithm (per lane i in 0..7; matches
 // `mxfp4::mxfp4BitAlgebraBf16Bits` in mxfp4-dequant.cpp step-for-step
@@ -393,10 +393,10 @@ Error refuseDivScaleScratchFlagDest(const DecodedInst &Di, OpResolver &Op) {
 // Corner-case summary (all bit-exact against the OCP MXFP spec + what
 // the hardware primitive emits on bit-valid inputs; see
 // `tests/mxfp4_dequant_test.cpp` for the full 4096-point sweep):
-//   * FP4 ±0 × NaN scale  -> NaN (IEEE 0 × NaN = NaN).  The NaN-scale
+//   * FP4 +/-0 x NaN scale  -> NaN (IEEE 0 x NaN = NaN).  The NaN-scale
 //     branch short-circuits before the magnitude-zero check.
-//   * FP4 ±0 × finite scale -> ±0 preserving sign.
-//   * Overflow (new_exp >= 0xFF): saturate to BF16 ±Inf.  BF16
+//   * FP4 +/-0 x finite scale -> +/-0 preserving sign.
+//   * Overflow (new_exp >= 0xFF): saturate to BF16 +/-Inf.  BF16
 //     supports Inf even though FP4 does not -- destination-format
 //     semantics apply after the scale add.
 //   * Underflow (new_exp <= 0): compute BF16 subnormal via right-shift
@@ -472,8 +472,8 @@ static llvm::Value *emitCvtScalePk8Bf16Fp4CrossTargetExpansion(
     llvm::Value *Bf16MantNorm =
         B.CreateSelect(MantFp4Nz, C0x40, C0, "mxfp4_bf16_mant_norm");
 
-    // Subnormal-FP4 BF16 fields: if mant_fp4 = 1 (FP4 ±0.5) use
-    // bf16_exp = 126; otherwise (FP4 ±0) bf16_exp = 0.  bf16_mant is
+    // Subnormal-FP4 BF16 fields: if mant_fp4 = 1 (FP4 +/-0.5) use
+    // bf16_exp = 126; otherwise (FP4 +/-0) bf16_exp = 0.  bf16_mant is
     // always 0 in this branch.
     llvm::Value *Bf16ExpSub =
         B.CreateSelect(MantFp4Nz, C126, C0, "mxfp4_bf16_exp_sub");
@@ -496,7 +496,7 @@ static llvm::Value *emitCvtScalePk8Bf16Fp4CrossTargetExpansion(
         B.CreateAdd(Bf16Exp, ScaleByte, "mxfp4_exp_plus_scale");
     llvm::Value *NewExp = B.CreateSub(ExpPlusScale, C127, "mxfp4_new_exp");
 
-    // Overflow branch: new_exp >= 0xFF -> BF16 ±Inf.  Comparison is
+    // Overflow branch: new_exp >= 0xFF -> BF16 +/-Inf.  Comparison is
     // signed because new_exp may underflow negative; anything >=
     // 0xFF is overflow regardless.
     llvm::Value *IsOverflow =
@@ -517,7 +517,7 @@ static llvm::Value *emitCvtScalePk8Bf16Fp4CrossTargetExpansion(
 
     // Subnormal branch: new_exp <= 0 -> shift (implicit-1).mant right
     // by (1 - new_exp).  If shift >= 8 the BF16 representation loses
-    // every bit and we flush to ±0.  This defensive clamp is
+    // every bit and we flush to +/-0.  This defensive clamp is
     // unreachable today -- for FP4 exp >= 1 + scale_byte = 0 the
     // minimum new_exp is 127 + 0 - 127 = 0, giving shift_amt = 1; we
     // keep the clamp so widening the declared support set (e.g. a
@@ -556,8 +556,8 @@ static llvm::Value *emitCvtScalePk8Bf16Fp4CrossTargetExpansion(
 
     // i32 -> i16 -> bfloat insertion.  Trunc drops the zero-padded
     // upper bits; every result branch above produces a value in
-    // [0, 0xFFFF] (qNaN=0x7FC0, Inf|sign ≤ 0xFF80, normal|sign|mant
-    // ≤ 0xFFC0, sub|sign ≤ 0x80C0), so trunc is information-
+    // [0, 0xFFFF] (qNaN=0x7FC0, Inf|sign <= 0xFF80, normal|sign|mant
+    // <= 0xFFC0, sub|sign <= 0x80C0), so trunc is information-
     // preserving.
     llvm::Value *LaneI16 = B.CreateTrunc(LaneI32, I16Ty, "mxfp4_lane_i16");
     llvm::Value *LaneBf = B.CreateBitCast(LaneI16, Bf16Ty, "mxfp4_lane_bf16");
@@ -3252,7 +3252,7 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
   //     `emitCvtScalePk8Bf16Fp4CrossTargetExpansion` above.  Bit-exact
   //     against the hardware primitive on bit-valid inputs within the
   //     declared support set (see `hotswap/docs/matrix-translation.md
-  //     §7.4`).
+  //     sec. 7.4`).
   //
   // Both arms share the same operand-shape validation (src/scale i32,
   // `scale_sel` immediate, `scale_sel == 0` or refuse) so a corpus
@@ -3285,7 +3285,7 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
           "4-bit scale_sel field on packed-8 FP4 are not pinned "
           "in-tree today; captured corpus uses only scale_sel=0 "
           "across every instance) -- see hotswap/docs/"
-          "matrix-translation.md §7.4");
+          "matrix-translation.md sec. 7.4");
     }
 
     Value *Src = Op.src(0);

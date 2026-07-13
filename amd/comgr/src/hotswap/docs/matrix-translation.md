@@ -40,8 +40,8 @@ mismatches make simple intrinsic substitution impossible:
 The translation has to simultaneously (a) keep the two wave32
 projections disjoint, (b) bridge the fragment layouts at the
 boundary between source-visible VGPRs and the MFMA call, and (c)
-handle K asymmetry. §3–§6 derive the general framework; §7 applies
-it to MXFP; §8–§9 set the gates.
+handle K asymmetry. sec. 3–sec. 6 derive the general framework; sec. 7 applies
+it to MXFP; sec. 8–sec. 9 set the gates.
 
 ## 2. Why the baseline lowering works
 
@@ -97,7 +97,7 @@ Calculator):
 | 16×16×32 IU8 | 8 (v16i8) | 8 (v16i8) | 8 (v8i32) |
 | 16×16×64 F8F6F4 | 16 for FP8/BF8, 12 for FP6/BF6, 8 for FP4 | same | 8 (v8f32) |
 
-SWMMAC adds a 4×packed-per-lane sparsity mask. Deferred (§8).
+SWMMAC adds a 4×packed-per-lane sparsity mask. Deferred (sec. 8).
 
 ## 4. Target model -- gfx950 MFMA / scaled MFMA shapes
 
@@ -143,7 +143,7 @@ between two handler paths:
    gfx1251, gfx942 -> gfx942) and for any future target that gains WMMA
    with the same shape.
 2. **Decompose path.** Target lacks the shape -> run one of the
-   templates below (§5.1–§5.3).
+   templates below (sec. 5.1–sec. 5.3).
 
 The existing F16 handler already implements this for WMMA vs. MFMA:
 
@@ -164,7 +164,7 @@ The existing F16 handler already implements this for WMMA vs. MFMA:
     }
 ```
 
-Each new shape added in §5.1–§5.3 generalises this branch: the native
+Each new shape added in sec. 5.1–sec. 5.3 generalises this branch: the native
 path is just one `Intrinsic::getOrInsertDeclaration` + call when the
 target capability bit is set; the decompose path is the template body.
 
@@ -176,11 +176,11 @@ generation check. Extend `ISAProfile` with one bit per shape family so
 
 | Source SemOp family | Native on target iff | Decompose template | Introduced by |
 |---|---|---|---|
-| `V_WMMA_F32_16x16x32_F16/BF16` | `targetIsa.hasWMMA12` (existing; `FeatureWMMA128bInsts`) | Template A (§5.1) | gfx12 (gfx1100+) |
+| `V_WMMA_F32_16x16x32_F16/BF16` | `targetIsa.hasWMMA12` (existing; `FeatureWMMA128bInsts`) | Template A (sec. 5.1) | gfx12 (gfx1100+) |
 | `V_WMMA_I32_16x16x32_IU8` | `targetIsa.hasWMMA12` | Template A | gfx12 |
-| `V_WMMA_F32_16x16x64_F8F6F4` | `targetIsa.hasWMMA1250` (new; `FeatureGFX1250Insts`) | Template B (§5.2) onto `V_MFMA_F32_16x16x128_F8F6F4` when `targetIsa.hasMFMA` | gfx1250 |
-| `V_WMMA_SCALED_F32_16x16x64_F8F6F4` | `targetIsa.hasWMMA1250` | Template C (§5.3) onto `V_MFMA_SCALE_F32_16x16x128_F8F6F4` when `targetIsa.hasScaledMFMA` | gfx1250 |
-| `V_SWMMAC_F32_16x16x32_F16` | target has SWMMAC (no AMD target does today) | -- (refuse, §R2) | gfx1250 |
+| `V_WMMA_F32_16x16x64_F8F6F4` | `targetIsa.hasWMMA1250` (new; `FeatureGFX1250Insts`) | Template B (sec. 5.2) onto `V_MFMA_F32_16x16x128_F8F6F4` when `targetIsa.hasMFMA` | gfx1250 |
+| `V_WMMA_SCALED_F32_16x16x64_F8F6F4` | `targetIsa.hasWMMA1250` | Template C (sec. 5.3) onto `V_MFMA_SCALE_F32_16x16x128_F8F6F4` when `targetIsa.hasScaledMFMA` | gfx1250 |
+| `V_SWMMAC_F32_16x16x32_F16` | target has SWMMAC (no AMD target does today) | -- (refuse, sec. R2) | gfx1250 |
 
 The names line up with the TableGen `SubtargetFeature` definitions
 (`FeatureWMMA128bInsts`, `FeatureGFX1250Insts`, etc.) so `ISAProfile::
@@ -189,7 +189,7 @@ per bit.
 
 `hasScaledMFMA` is a new bit for gfx950's `V_MFMA_SCALE_*` family. On
 gfx942 it is false -> Template C refuses (no software dequant fallback
-per §5.4). On gfx1250 it is false too (native `V_WMMA_SCALED` is the
+per sec. 5.4). On gfx1250 it is false too (native `V_WMMA_SCALED` is the
 intended path) -> use the native path above.
 
 #### 5.0.2 Identity and same-family translation
@@ -211,9 +211,9 @@ same-family translation is unnecessary: the capability branch above is
 **the** fast path. It preserves the compiler's shape decisions exactly
 because the intrinsic signature matches the source opcode.
 
-#### 5.0.3 Relationship to the shape-registration gate (§G1)
+#### 5.0.3 Relationship to the shape-registration gate (sec. G1)
 
-`verifyMatrixShapeCoverage` (§G1) enforces that every WMMA SemOp has a
+`verifyMatrixShapeCoverage` (sec. G1) enforces that every WMMA SemOp has a
 registered shape descriptor. This subsection adds the second column to
 that table: for each `(sourceSemOp, targetIsa)` pair, exactly one of
 {native intrinsic name, decompose template id, `refuse(reason)`} is
@@ -225,7 +225,7 @@ data, driven by the registered capability columns.
 
 Applies when the gfx950 shape has the same K as the gfx1250 shape
 and the same M×N. **One MFMA per WMMA** via the two-pass pattern of
-§2, with shape-specific dtype and fragment-size wiring.
+sec. 2, with shape-specific dtype and fragment-size wiring.
 
 ```
 emit<ShapeX>WMMAtoMFMA(ctx, a, b, c):
@@ -300,7 +300,7 @@ operand. The scale format (E8M0) is identical between architectures
 
 The translation:
 
-1. Fuse the pair of source WMMA_scaled calls per §5.2.
+1. Fuse the pair of source WMMA_scaled calls per sec. 5.2.
 2. Redistribute A, B, C fragments as in Template A.
 3. Redistribute the scale fragments (new -- their lane layout is
    defined in the ISA reference chapter 14.x). Scales live in VGPRs
@@ -320,15 +320,15 @@ defeats the purpose of MXFP. Rejected per the "no fallback" policy.
 If Template C refuses, we refuse the kernel.
 
 **Scope note -- distinguishing rejected-Template-D from the landed
-§7.4 ISA-level dequant lift.** The Template-D rejection above is
+sec. 7.4 ISA-level dequant lift.** The Template-D rejection above is
 scoped to *synthesis*: the raiser must not choose dequant-then-dense-
 matmul as an automatic fallback for a scaled WMMA/MFMA shape Template
-C refuses. §7.4 (`v_cvt_scale_pk8_bf16_fp4` cross-target lift) is a
+C refuses. sec. 7.4 (`v_cvt_scale_pk8_bf16_fp4` cross-target lift) is a
 different axis: when the *source* kernel itself already emits the
 gfx1250 ISA-level dequant primitive (Triton's `tl.dot_scaled` on
 gfx1250 does this before a dense BF16 WMMA), faithfully lifting that
 primitive across targets is an individual-instruction lowering, not a
-Template-D synthesis. The bit-exactness discipline in §7.4 (refuse
+Template-D synthesis. The bit-exactness discipline in sec. 7.4 (refuse
 loudly on any input shape we can't prove bit-identical to the
 hardware primitive) is precisely what separates a faithful lift from
 a Template-D fallback. If the source emits it, we lift it; we do not
@@ -391,8 +391,8 @@ per 32-element block; K=128 holds 4 scale blocks per operand.
 > **Status:** cross-target lift landed. `scale_sel == 0` bit-exact on
 > gfx1250 -> gfx942/gfx950; `scale_sel != 0` refuses loudly until the
 > 4-bit field's semantics are pinned in-tree. This subsection is
-> additive to §7.1–§7.3 (the Gluon `wmma_scaled` path); the two
-> surfaces are orthogonal (see §5.4's scope note).
+> additive to sec. 7.1–sec. 7.3 (the Gluon `wmma_scaled` path); the two
+> surfaces are orthogonal (see sec. 5.4's scope note).
 
 #### What it is
 
@@ -512,7 +512,7 @@ through scaled-WMMA.
 
 End-to-end lift of the two corpus matmul_ogs kernels
 (`_matmul_ogs_06d912ce88af`, `_matmul_ogs_0af655e6ea2b`) still blocks
-on pending **Template A** (BF16 16×16×32 WMMA -> MFMA; see §T2) and on
+on pending **Template A** (BF16 16×16×32 WMMA -> MFMA; see sec. T2) and on
 async copy / tensor data movement (`global_load_async_to_lds_*`,
 landed separately). Those
 kernels emit 64× `v_cvt_scale_pk8_bf16_fp4` + 64× `v_wmma_f32_16x16x32_bf16`
@@ -542,7 +542,7 @@ maps to a SemOp whose descriptor has no target mapping, refuse with
 
 No gfx950 equivalent. Refuse.
 
-### R3 -- Unfusible K-doubled pair (§5.2)
+### R3 -- Unfusible K-doubled pair (sec. 5.2)
 
 ### R4 -- Divergent EXEC at the WMMA site
 
@@ -560,7 +560,7 @@ Note that "EXEC is all-ones at the WMMA" is an invariant on the
 alloca), not the *hardware* EXEC of the target gfx942/gfx950
 wavefront. The wave-native projection forces hardware EXEC = -1
 kernel-wide via `@llvm.amdgcn.init_whole_wave` at entry (see
-`wave-size-translation.md` §5.6.1), so the Wave64-collective
+`wave-size-translation.md` sec. 5.6.1), so the Wave64-collective
 semantics of `ds_bpermute` / MFMA / `v_cndmask` always work across
 all 64 lanes regardless of the source kernel's partial-wave launch
 shape. What R4 gates is that the source kernel author did not put
@@ -636,7 +636,7 @@ to handle the scaled variant. Implement scale-layout redistribution
 ### T5 -- Uniform-reachability predicate for WMMA sites (G3)
 
 Reuse SPE's uniform-reachability analysis (already required by
-`wave-size-translation.md §5.1`). Extend `SemOpAttrs` with
+`wave-size-translation.md sec. 5.1`). Extend `SemOpAttrs` with
 `requiresUniformExec` and set it on every WMMA SemOp. Per-kernel
 gate fires automatically once the attr is honoured. ~40 LoC.
 
@@ -793,7 +793,7 @@ would drop at least one of those three anchors.
 
 ### 12.4 Remaining `matmul_fp16` divergence -- multi-WMMA + `v_permlane16_swap_b32`
 
-With §12.3's fix applied and the refusal gate lifted locally,
+With sec. 12.3's fix applied and the refusal gate lifted locally,
 `matmul_fp16_16x16` passes 5/5 in end-to-end validation.  The sibling
 `matmul_fp16` (BLOCK=32, four parallel WMMAs per WG, epilogue
 without LDS round-trip) still diverges for non-uniform inputs.
@@ -908,7 +908,7 @@ entirely).
 `.group_segment_fixed_size: 0` and uses DYNAMIC LDS (512 / 2048
 bytes at launch per the Triton sidecar), so my fix does not
 affect its KD.  The matmul_fp16 multi-WMMA residual documented
-in §12.4 persists after this fix -- it's a separate bug.
+in sec. 12.4 persists after this fix -- it's a separate bug.
 
 ### 12.4.3 Session-4 per-cell characterization (2026-04-22)
 
@@ -1208,7 +1208,7 @@ LG0/LG1 and LG2/LG3 (and zero coverage of the `{0-7, 16-23}` K
 half that lives in v194-201).
 
 **Gate reinstated**: the refusal gate in
-`handle-valu-vop3p.cpp` now cites §12.4.4 directly.  Fixing this
+`handle-valu-vop3p.cpp` now cites sec. 12.4.4 directly.  Fixing this
 requires one of:
 
   1. Decoding the gfx1250 WMMA.A ISA layout (how lane L, dw g, half h
@@ -1262,7 +1262,7 @@ Single-WMMA kernels never emit this opcode.
     the validated `emitWMMAtoMFMA` / `emitWMMAtoMFMA_F32_16x16x4`
     paths instead of refusing.
   * Multi-WMMA-per-K-iter kernels still refuse loudly with the
-    §12.4.4 root-cause citation.
+    sec. 12.4.4 root-cause citation.
 
 **Lit fixture updates** that fell out of the narrowing:
 
@@ -1276,7 +1276,7 @@ Single-WMMA kernels never emit this opcode.
     shape (MFMA call + strict.wwm + collect bpermute).
 
 The still-broken `matmul_fp16` path's fix is the same open set
-enumerated in §12.4.4 above (decode WMMA.A ISA layout, re-lift
+enumerated in sec. 12.4.4 above (decode WMMA.A ISA layout, re-lift
 permlane16_swap, or raise a 16-VGPR `<32 x half>` A input); the
 narrowed gate just stops collateral damage to kernels that aren't
 actually affected by that investigation.
@@ -1384,14 +1384,14 @@ swap (LG1/LG2 interchange) IS correct for operand A (mode 7 /
 mode 9 confirm) but INCORRECT for operand B under the post-swap
 layout above -- because the single-register-set assumption breaks
 down.  The experimental fix was reverted.  The narrowed refusal
-gate from §12.4.5 remains the principled outcome.
+gate from sec. 12.4.5 remains the principled outcome.
 
 ### 12.4.7 Session-8 root cause pinned (2026-04-23)
 
 Session 7 concluded the raiser-level layout work was blocked on
 ISA decoding that wasn't accessible.  The user then made MI400
 Shader Programming Guide excerpts available via
-`hotswap/docs/manuals/`, and the § V_PERMLANE16_SWAP_B32 pragma
+`hotswap/docs/manuals/`, and the sec. V_PERMLANE16_SWAP_B32 pragma
 showed the root cause was NOT in `wmma-lowering.cpp` /
 `redistributeInput` at all -- it was one layer up, in the
 `v_permlane16_swap_b32` lift itself (`handle-valu-cross-lane.cpp`
@@ -1534,7 +1534,7 @@ Regression guards landed with the fix:
 - **ABI** (`abi-translation.md`): AGPR vs VGPR-only accumulator is
   declared at ABI level. The raiser emits VGPR accumulators; target
   backend's AGPR allocator is allowed to move them.
-- **Cross-cutting capability dispatch:** §5.0 is the matrix-axis
+- **Cross-cutting capability dispatch:** sec. 5.0 is the matrix-axis
   instance of the project-wide "emit native when the target supports
   it, decompose only when it does not" principle. See
   `target-capability-dispatch.md` for the shared design and the

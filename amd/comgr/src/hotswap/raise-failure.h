@@ -75,14 +75,14 @@ enum class RaiseFailureReason : uint16_t {
   // until the embedded helper or device-library body is linked and inlined.
   DeviceLibraryLinkFailed,
   // Phase 1.4.5 wave-size-obstruction classifier (hotswap/docs/
-  // wave-size-translation.md §7's three-outcome decision procedure).
+  // wave-size-translation.md sec. 7's three-outcome decision procedure).
   // One reason per refusal *decision* so diagnostics can bucket
   // failures without parsing the failure text. See
   // `wave-size-obstruction.h` for the classifier
   // taxonomy and the mapping between these reasons and the more
   // specific `ObstructionKind` values.
   //
-  // The Class 1..4 grouping from wave-size-translation.md §6 is
+  // The Class 1..4 grouping from wave-size-translation.md sec. 6 is
   // preserved as cross-references in the comments below; it is not
   // part of the enum-value identity.
   CrossWaveLaneIdLeak, // Class 1: MbcntHiLaneIdLeak / OutOfRangeLaneOperand.
@@ -218,10 +218,10 @@ struct RaiseFailure : public llvm::ErrorInfo<RaiseFailure> {
                                              const llvm::Twine &Detail);
 
   // Phase 1.4.5 wave-size-obstruction classifier (hotswap/docs/
-  // wave-size-translation.md §7). `di` supplies the offending
+  // wave-size-translation.md sec. 7). `di` supplies the offending
   // mnemonic + offset. `kindDetail` should carry the human-readable
   // `ObstructionKind` name (from `obstructionKindName`), the P-item
-  // identifier from the §5.3 rewrite table (where applicable), and
+  // identifier from the sec. 5.3 rewrite table (where applicable), and
   // any operand-level context the classifier extracted (e.g.
   // "operand value N >= W_s=M"). The resulting failure is renderable
   // by `reasonString` for batch-test bucketing without parsing
@@ -250,7 +250,7 @@ struct RaiseFailure : public llvm::ErrorInfo<RaiseFailure> {
   // the first failing call's icmp + constant so callers can surface
   // attribution without parsing `detail`. See
   // `c5_predicate_chain_classifier.{hpp,cpp}` and
-  // hotswap/docs/modrep-predicate-chain.md §5 (narrow-O1).
+  // hotswap/docs/modrep-predicate-chain.md sec. 5 (narrow-O1).
   static llvm::Error crossWavePredicateChain(llvm::StringRef KernelName,
                                              const llvm::Twine &Detail);
 

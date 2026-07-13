@@ -27,7 +27,7 @@ relies on hardware OOB clamping. The cumulative effect on gfx942 was
 a guaranteed launch fault -- the runtime never populates
 `FLAT_SCRATCH` on a KD whose `enable_sgpr_flat_scratch_init` bit is
 zero (we model only the source-ISA user-SGPR set, see
-`abi-translation.md` §3.4), so the first `flat_store` to the scratch
+`abi-translation.md` sec. 3.4), so the first `flat_store` to the scratch
 aperture from the OOB-sink path takes a SIGSEGV.
 
 ## 2. Symptom (R1)
@@ -97,8 +97,8 @@ clean.
 
 The bug class here is **implicit ABI coupling through the AMDGPU
 backend's allocation-lowering heuristics**. The pipeline cares about
-two ABI surfaces (see `abi-translation.md` §3 for the source side and
-§4 for the target side):
+two ABI surfaces (see `abi-translation.md` sec. 3 for the source side and
+sec. 4 for the target side):
 
 - The **source-side** user-SGPR set we model -- chosen to mirror the
   source binary's KD bits, deliberately omitting
@@ -137,7 +137,7 @@ The translation rule that falls out is:
 > the backend treats as evidence of scratch / dispatch-ptr /
 > implicitarg-ptr usage.
 
-`abi-translation.md` §4.2 lists what the backend cannot infer (and
+`abi-translation.md` sec. 4.2 lists what the backend cannot infer (and
 which we therefore propagate via attributes); the dual to that list
 is what the backend **does** infer from IR shape, and which therefore
 must stay out of the IR unless the source binary actually requested
@@ -171,6 +171,6 @@ tensor-copy follow-up work, …).
   `transpiler/raiser.cpp` Phase 4 +
   `transpiler/reg-file.cpp::AllocaRegFile::collectAllocas`.
 - ABI surface this interacts with: `docs/abi-translation.md`
-  §3.4 (source-side user-SGPR layout, including the
-  `flat_scratch_init` bit we deliberately do not set) and §4.2
+  sec. 3.4 (source-side user-SGPR layout, including the
+  `flat_scratch_init` bit we deliberately do not set) and sec. 4.2
   (target-side scratch attribute propagation).

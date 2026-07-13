@@ -2,7 +2,7 @@
 
 **Status.** Option O1 (projection-aware loud-refuse classifier) landed; O2
 (mask rewrite) deferred indefinitely on semantic grounds; O3 is now active
-only as the analysis-selected ThreadLoop retry for the §5.6.3
+only as the analysis-selected ThreadLoop retry for the sec. 5.6.3
 explicit-readfirstlane SGPR-forced class. Under `WaveNativeProjection` (the
 default for wave32 -> wave64 cross-widening) the class is structurally
 suppressed except for the defensive phantom-lane sub-case. Under
@@ -12,7 +12,7 @@ active target replica lane can exist; statically single-source-wave launches
 (`0 < max_flat_workgroup_size ≤ W_s`) remain supported because upper target
 lanes are hardware-inactive for the entire kernel body.
 
-**Boundary with the §5.6.3 cross-lane safety-net.** This document's
+**Boundary with the sec. 5.6.3 cross-lane safety-net.** This document's
 C5 predicate-chain refusal is projection-dependent (suppressed under
 WaveNative except the defensive phantom-lane sub-case, active under MODREP
 only when launch metadata does not prove the no-active-replica regime).
@@ -38,7 +38,7 @@ this narrowed route; it is not a general "ThreadLoop solves C5" claim.
 
 **Scope.** Wave-size axis: kernels compiled for a source wave
 width `W_s` that reach cross-widening (`W_t > W_s`) under
-modulo-replication, pass the `wave-size-translation.md §6`
+modulo-replication, pass the `wave-size-translation.md sec. 6`
 obstruction classes C1–C4, raise cleanly through `raise_cli`,
 and yet compute mathematically wrong values on the target
 because their kernel-emitted predicates reference
@@ -55,18 +55,18 @@ MODREP.
 
 ## 1. Problem statement
 
-The `wave-size-translation.md §6` obstruction classes (C1–C4)
+The `wave-size-translation.md sec. 6` obstruction classes (C1–C4)
 enumerate the *structural* ways modulo-replication can be wrong:
 absolute lane-ID leaks (C1), wave-baked cross-lane ops (C2),
 inter-replica communication via shared state (C3), and
 lane-position-dependent EXEC writes (C4). Every site G1 refuses
 is one of these; everything else emits modulo-replication code
-that the §5 SIMT Predicated Execution (SPE) projection assumes is
+that the sec. 5 SIMT Predicated Execution (SPE) projection assumes is
 wave-size-oblivious by construction.
 
 A recipe passes G1 iff every site in its disassembly is either
-(a) wave-invariant, (b) rewritable per §5.3's landed table, or
-(c) pending-rewrite-recognised. §7's soundness claim reads:
+(a) wave-invariant, (b) rewritable per sec. 5.3's landed table, or
+(c) pending-rewrite-recognised. sec. 7's soundness claim reads:
 
 > Every kernel the tool emits code for is provably wave-size-
 > oblivious; every kernel it refuses is one we cannot prove safe.
@@ -84,7 +84,7 @@ target-wave `tid` range rather than the source-wave `[0, W_s)`.
 For kernels that use this predicate as "which lanes participate
 in stage `s` of a scan" or "which lanes write which slot of an
 output tile", the result is a silent miscompile that is neither
-classified by G1 nor rewritten by §5.3.
+classified by G1 nor rewritten by sec. 5.3.
 
 This document defines the class, argues it is orthogonal to
 C1–C4, enumerates the fix options, and documents the landed
@@ -153,7 +153,7 @@ narrow-O1 shape -- the classifier is defined to treat
 dynamic-operand icmps as bounds checks, not lane-position gates.
 The decision to narrow ingredient (3) to compile-time K is what
 keeps baselines like `vecadd_f16`, `rope_fp32`, `corpus_add_fp32`,
-`corpus_asin_fp32` green. See §5 O1's rationale for why the
+`corpus_asin_fp32` green. See sec. 5 O1's rationale for why the
 broader "unmasked tid reaches any icmp" rule was rejected.
 
 ---
@@ -172,7 +172,7 @@ Each of C1–C4 checked against the canonical example:
   the scan-shaped kernel on C1.
 - **C2. Wave-baked cross-lane op.** `ds_bpermute_b32`,
   `v_permlanex16`, `ds_swizzle_b32`, DPP with wave-wide
-  semantics. All landed rewrites per §5.3. A Kogge-Stone scan
+  semantics. All landed rewrites per sec. 5.3. A Kogge-Stone scan
   emits many `ds_bpermute_b32`; the P1 lift produces
   correctness-equivalent IR per the handler's MODREP comment.
   The class's miscompile is downstream of the cross-lane op,
@@ -191,7 +191,7 @@ this document closes is:
 > Predicates on `workitem.id.x()` (or derived SSA values) that
 > gate side effects -- stores, addr arithmetic, scan / reduction
 > predicates -- are NOT audited by any existing C-class and are
-> NOT rewritten by §5.3, even though their semantics change
+> NOT rewritten by sec. 5.3, even though their semantics change
 > under MODREP when `W_t > W_s`.
 
 ---
@@ -200,7 +200,7 @@ this document closes is:
 
 ### 4.1 The MODREP contract
 
-`wave-size-translation.md §5.2` states the projection formally:
+`wave-size-translation.md sec. 5.2` states the projection formally:
 
 > The target wave runs as `R = W_t / W_s` replicas of the source
 > wave. Correctness requires every replica observes the same
@@ -208,7 +208,7 @@ this document closes is:
 > `r` with lane `l_target = r · W_s + l_source` must compute the
 > same value the source's lane `l_source` would have.
 
-The §5.4 SPE allow-list gate + §5.3 cross-lane rewrite table
+The sec. 5.4 SPE allow-list gate + sec. 5.3 cross-lane rewrite table
 jointly ensure this for every SemOp. The SPE prelude masks
 `mbcnt`-derived `lane_id` by `W_s − 1` so the active-lane gate
 evaluates on the source-wave-scoped `l_source`. Each landed
@@ -259,8 +259,8 @@ descriptor; it does not upscale to target-wave alignment):
 ### 4.4 Class summary
 
 Every site exhibiting the class shares the three ingredients of
-§2 plus active target lanes outside the source-wave lane domain
-(§4.3 sub-case 1, or unknown launch metadata that cannot rule it
+sec. 2 plus active target lanes outside the source-wave lane domain
+(sec. 4.3 sub-case 1, or unknown launch metadata that cannot rule it
 out). The class is orthogonal to C1–C4: C1 is about `mbcnt_hi` /
 `ballot` leaks (already caught); this class is about
 `workitem.id.x()`.
@@ -280,7 +280,7 @@ profile.
 ### O1. G1 classifier extension + loud refusal
 
 Add a post-raise IR-level classifier that identifies the class
-signature of §2 and refuses the kernel with a new
+signature of sec. 2 and refuses the kernel with a new
 `CrossWavePredicateChain` diagnostic. No rewrite attempted; the
 classifier's correctness depends only on a forward use-chain
 walk from each `@llvm.amdgcn.workitem.id.x()` call.
@@ -301,7 +301,7 @@ refuses when `max_flat_workgroup_size == 0` (unknown) or
 but does not refuse when `0 < max_flat_workgroup_size ≤ W_s`. WaveNative
 suppresses the shape in the normal no-phantom regime and retains a defensive
 phantom-lane refusal for direct callers. ThreadLoop suppresses only for the
-separately-proven §5.6.3 retry route.
+separately-proven sec. 5.6.3 retry route.
 
 **Coverage.** Catches the Kogge-Stone scan shape (stage guards
 `tid > 2^s − 1` with `s < log2(W_s)`). Does not catch kernels
@@ -316,7 +316,7 @@ friends), which is the design intent.
 narrow-O1 shape and has possible active replica lanes) are benign;
 false negatives (missing a wave-size-sensitive predicate whose operand is
 dynamic) leave a residual silent-miscompile class for dynamic-operand
-shapes, which §6 argues is covered empirically by the WaveNative-default
+shapes, which sec. 6 argues is covered empirically by the WaveNative-default
 suppression + end-to-end corpus regression testing.
 
 ### O2. Predicate-chain rewrite
@@ -336,7 +336,7 @@ mask is a no-op on the active set; the cross-lane-primitive
 inactive-lane-leak is outside the rewrite's scope.
 
 **Invasiveness.** ~500 LoC rewrite pass + use-chain classifier
-+ ~300 LoC lit tests. Structurally analogous to §5.6.3's
++ ~300 LoC lit tests. Structurally analogous to sec. 5.6.3's
 `rewrite-cross-lane-divergent.cpp`.
 
 **Risk.** False-positive rewrites that change the semantic of a
@@ -348,7 +348,7 @@ fundamentally, the mask is *semantically incorrect* for
 expects source wave 1's lanes to see `tid ≥ W_s` (e.g. for
 per-wave partitioning) -- masking those lanes' `tid` by `W_s − 1`
 forces their predicate to evaluate on the wrong range. This is
-the primary reason O2 is deferred; see §6.
+the primary reason O2 is deferred; see sec. 6.
 
 ### O3. ThreadLoopProjection for scan-shaped patterns
 
@@ -366,7 +366,7 @@ in a gather).
 
 **Invasiveness.** The full serial-body loop remains the largest of the four.
 The landed implementation is narrower: `ThreadLoopProjection` supplies the
-projection boundary needed by the §5.6.3 SGPR-forced route and makes
+projection boundary needed by the sec. 5.6.3 SGPR-forced route and makes
 lane-indexed primitives source-wave-scoped there. It does not claim to cover
 arbitrary scan-shaped C5 kernels by itself; those still need either the full
 loop body transform or another explicit rewrite.
@@ -452,7 +452,7 @@ refusal or an attribution breadcrumb.
 - `ThreadLoopProjection`: refusal is suppressed only for the existing
   analysis-triggered SGPR-forced explicit-readfirstlane retry route.
 
-**Regression guards.** See §7.
+**Regression guards.** See sec. 7.
 
 ### 6.2 O2 deferred indefinitely
 
@@ -460,7 +460,7 @@ The proposed `tid AND (W_s − 1)` mask rewrite is semantically
 incorrect for the multi-warp (`num_warps > 1`) shape and a
 structural no-op for single-warp sub-case 2 (active lanes
 already have `tid ∈ [0, W_s)`). No recipe in the current corpus
-would be helped by it. Reopening criteria in §6.5.
+would be helped by it. Reopening criteria in sec. 6.5.
 
 ### 6.3 `WaveNativeProjection` as cross-widening default
 
@@ -484,13 +484,13 @@ The predicate-chain class the narrow-O1 classifier detects is
 MODREP-specific by construction -- under WaveNative the replicas
 don't exist and each target lane's `tid` is its own source-wave
 `tid`. The classifier short-circuits the refusal under
-WaveNative by design (§6.1's projection gate), except for the
+WaveNative by design (sec. 6.1's projection gate), except for the
 defensive phantom-lane direct-caller guard.
 
 Rationale for the default choice:
 
 - **WMMA / matrix-kernel correctness.** `wave-size-translation.md
-  §5.6.1` documents the Wave64-collective correctness invariant:
+  sec. 5.6.1` documents the Wave64-collective correctness invariant:
   the WMMA -> MFMA lowering and every convergent cross-lane
   primitive issues a single Wave64 intrinsic that reads all 64
   lanes regardless of EXEC; under partial-wave hardware EXEC
@@ -514,7 +514,7 @@ MODREP code is fully retained:
    and for operators debugging projection-specific behaviour.
 3. The narrow-O1 classifier's refusal path runs under MODREP when active
    replica lanes can exist, short-circuits under single-source-wave MODREP,
-   and short-circuits under WaveNative per §6.1.
+   and short-circuits under WaveNative per sec. 6.1.
 
 ### 6.4 Scope note: orthogonal fixes for canary / corpus_layernorm
 
@@ -542,11 +542,11 @@ mirroring the `V_CNDMASK_B32_e64` handler in
 routing pattern to the six `V_{ADD,SUB,SUBREV}_CO_(CI_)U32`
 carry-chain handlers in `handle-valu.cpp` closes the VOPD /
 VOP3B SGPR-operand class independently of the predicate-chain
-class this document scopes. See the lit fixtures in §7.2 for
+class this document scopes. See the lit fixtures in sec. 7.2 for
 the IR-level regression fences and the Triton-corpus end-to-end
 verdicts.
 
-The narrow-O1 classifier (§6.1) still serves as the MODREP-path
+The narrow-O1 classifier (sec. 6.1) still serves as the MODREP-path
 regression guard for the predicate-chain class -- on a future
 kernel that genuinely hits the class under MODREP with possible active
 replica lanes, the classifier loud-refuses rather than silently
@@ -560,7 +560,7 @@ O2 / O3 / O4 reopen if:
   flows into an `icmp` against a compile-time constant in
   `(0, W_s − 1]` AND whose downstream miscompile mechanism is
   demonstrably the predicate-chain class (not a VOPD-cndmask /
-  carry-chain SGPR-operand issue like §6.4, and not an
+  carry-chain SGPR-operand issue like sec. 6.4, and not an
   inactive-lane-leak from sub-case 2). Triggers an O2 redesign
   with a real mechanism trace of the new recipe.
 - **B.** A corpus recipe is shown to need the
@@ -622,7 +622,7 @@ O2 / O3 / O4 reopen if:
 
 ### 7.2 Orthogonal VOPD / VOP3B SGPR-operand fixes
 
-Separate class from §6.1, documented in §6.4 and cross-referenced
+Separate class from sec. 6.1, documented in sec. 6.4 and cross-referenced
 here because they close `canary_bpermute_scan_fp32` /
 `corpus_layernorm_fp32` end-to-end:
 
@@ -661,7 +661,7 @@ against `gfx1250 -> gfx942` cross-widening, WaveNative default):
   `canary_dpp_reduce_fp32`, `canary_permlanex16_rowmax_fp32`)
   -- MATCH 4/4.
 - `corpus_softmax_fp32` -- EXIT=2 via the writelane safety net
-  (`wave-size-translation.md §5.6.3`); orthogonal class.
+  (`wave-size-translation.md sec. 5.6.3`); orthogonal class.
 
 `ctest` + `llvm-lit`: no regressions introduced by the landed
 design. Batch-raise corpus coverage is unchanged. The Matmul128 family
@@ -690,23 +690,23 @@ Raise a single kernel to IR under each projection:
 ## 8. References
 
 - [`wave-size-translation.md`](wave-size-translation.md) -- the
-  canonical wave-size axis spec. Specifically §5.2
-  (modulo-replication definition), §5.3 (cross-lane rewrite
-  table), §5.6.1 (hardware vs modeled EXEC under
-  cross-widening), §5.6.3 (writelane/readlane post-raise
-  rewrite), §6 (obstruction classes C1–C4), §7 (decision
-  procedure), §8 (principled fail-loudly gates).
+  canonical wave-size axis spec. Specifically sec. 5.2
+  (modulo-replication definition), sec. 5.3 (cross-lane rewrite
+  table), sec. 5.6.1 (hardware vs modeled EXEC under
+  cross-widening), sec. 5.6.3 (writelane/readlane post-raise
+  rewrite), sec. 6 (obstruction classes C1–C4), sec. 7 (decision
+  procedure), sec. 8 (principled fail-loudly gates).
 - [`target-capability-dispatch.md`](target-capability-dispatch.md)
-  §5 -- `SemOpAttrs` extension pattern (relevant if a future
+  sec. 5 -- `SemOpAttrs` extension pattern (relevant if a future
   revision hangs a `predicateChainLaneScoped` bit on tid-
   emitting SemOps).
 - `c5_predicate_chain_classifier.{hpp,cpp}` -- the
   narrow-O1 classifier. Header carries the full design contract
   and the `waveNative` parameter docstring.
 - `handle-vopd.cpp` -- the VOPD `v_cndmask_b32`
-  SGPR-condition handler (§6.4).
+  SGPR-condition handler (sec. 6.4).
 - `handle-valu.cpp` -- the six carry-chain handlers
-  with `readCarryInI1` / `writeCarryOutI1` helpers (§6.4).
+  with `readCarryInI1` / `writeCarryOutI1` helpers (sec. 6.4).
 - `handle-valu-vop3p.cpp` -- the non-VOPD
   `V_CNDMASK_B32` handler; the reference implementation whose
   SGPR-aware routing the VOPD + carry-chain fixes mirror.
@@ -721,10 +721,10 @@ Raise a single kernel to IR under each projection:
 1. Is there evidence of a GPT-OSS / AITER kernel in the broader
    corpus (beyond the current Triton set) that
    genuinely hits the predicate-chain class -- i.e., matches the
-   §2 signature AND miscompiles in a way not explained by the
-   VOPD-cndmask / carry-chain class (§6.4) or the
+   sec. 2 signature AND miscompiles in a way not explained by the
+   VOPD-cndmask / carry-chain class (sec. 6.4) or the
    inactive-lane-leak sub-case 2 mode? If so, it's the
-   reopening trigger A in §6.5 and motivates actually
+   reopening trigger A in sec. 6.5 and motivates actually
    implementing O2.
 2. Should `target-capability-dispatch.md`'s `SemOpAttrs`
    extension grow a `predicateChainLaneScoped` bit on

@@ -3,7 +3,7 @@
 > **Status:** design proposal, not yet implemented. Current raiser
 > re-materialises the kernarg layout (`KernargLayout` in
 > `kernarg-layout.hpp`) and emits a fresh kernel descriptor via the
-> target backend (see `raiser.cpp` §Phase 2), which covers the 80%
+> target backend (see `raiser.cpp` sec. Phase 2), which covers the 80%
 > path for simple Triton kernels. This doc specifies the remaining
 > 20% -- the hidden-arg surface, embedded descriptors, and the gates
 > that make ABI mismatches fail loudly instead of silently
@@ -42,7 +42,7 @@ There are three distinct surfaces, each handled differently:
 | Kernarg segment | Host-side layout, shared by both ISAs | Same -- unchanged | **Layout-preserving** (but hidden-arg slots shift) |
 | Embedded descriptors (V#, T#) | Rare; constructed at runtime from kernargs | Same -- runtime-constructed | **Pass-through** (principle); refuse on embedded constant V# |
 
-The first two are where the real work lives. §4 and §5 cover them.
+The first two are where the real work lives. sec. 4 and sec. 5 cover them.
 The third is included for completeness: it is a gate, not a rewrite.
 
 ## 3. Source model -- gfx1250 (gfx12) AMDHSA KD and kernarg
@@ -67,7 +67,7 @@ the target backend re-derives):
 - `enable_sgpr_kernarg_segment_ptr` / the user-SGPR preload bits --
   determine which user SGPRs carry which implicit pointers (kernarg
   base, dispatch packet, queue ptr, …). gfx12 and gfx9 have different
-  user-SGPR layouts. See §3.3.
+  user-SGPR layouts. See sec. 3.3.
 
 Everything else (VGPR/SGPR granulated counts, register usage modes,
 occupancy hints, round-mode bits) is a target-backend output, not a
@@ -101,7 +101,7 @@ function signature (`raiser.cpp:201-205`). That is correct for
 kernels that never load from them. The moment a kernel reads any
 hidden slot, we silently return zero -- because the allocated kernarg
 bytes are still there, but the IR has no formal parameter covering
-them. This is the first principled gate we need (§7).
+them. This is the first principled gate we need (sec. 7).
 
 ### 3.4 User-SGPR preload layout
 
@@ -133,8 +133,8 @@ right intrinsic. This already works.
 
 The ABI axis participates in the same project-wide
 "emit native when the target supports it, decompose / synthesise only
-when it does not" principle as matrix (§5.0), async / tensor-copy, and sync
-(§5.0). It is subtler here because "native emit" for ABI means "the
+when it does not" principle as matrix (sec. 5.0), async / tensor-copy, and sync
+(sec. 5.0). It is subtler here because "native emit" for ABI means "the
 target backend re-synthesises the KD from IR attributes" rather than
 "the handler emits a specific LLVM intrinsic". What varies by target
 are the user-SGPR layout, the hidden-arg block contents, and the
@@ -181,13 +181,13 @@ if (ctx.sourceIsa.hasGFX12UserSGPRLayout) {
 }
 ```
 
-Hidden-arg resolution (§5) then layers on the second branch: for each
+Hidden-arg resolution (sec. 5) then layers on the second branch: for each
 slot, look up the `(sourceIsa, targetIsa)` cell in the compatibility
 table to decide identity/derivable/host-inject/refuse.
 
 #### 4.0.3 Consequences for same-family retarget
 
-gfx1251 -> gfx1250 is an identity on every capability bit in §4.0.1.
+gfx1251 -> gfx1250 is an identity on every capability bit in sec. 4.0.1.
 The KD re-emission is bit-identical to the source (modulo backend-
 rederived fields like register counts), every hidden arg maps
 "identity", and no gate fires. This is why the same-family path
@@ -248,11 +248,11 @@ scratch backing would change the source launch ABI instead of translating it.
 | Source (gfx1250) | Target (gfx950) | Strategy |
 |---|---|---|
 | `enable_wavefront_size32=1` | Must be wave64 | Clear bit; emit via `CallingConv::AMDGPU_KERNEL` on wave64 subtarget -- backend does the right thing |
-| gfx12 user-SGPR slots for `workgroup_id_x` | gfx9 slots | Abstracted at intrinsic level; see §3.4 |
+| gfx12 user-SGPR slots for `workgroup_id_x` | gfx9 slots | Abstracted at intrinsic level; see sec. 3.4 |
 | `private_segment_size` at 32-lane wave | At 64-lane wave | Backend re-derives; we propagate via attribute |
-| `group_segment_size` ≤ 327,680 | Limit 163,840 | **Refuse** if source > 163,840 (§7) |
+| `group_segment_size` ≤ 327,680 | Limit 163,840 | **Refuse** if source > 163,840 (sec. 7) |
 | `kernarg_size` arbitrary | Same bit-for-bit | Preserve via `KernargLayout` |
-| gfx12 hidden-arg block | gfx9 hidden-arg block | **Per-arg compatibility table** (§5) |
+| gfx12 hidden-arg block | gfx9 hidden-arg block | **Per-arg compatibility table** (sec. 5) |
 
 ## 5. Hidden argument compatibility table
 
@@ -336,7 +336,7 @@ first use (optional; off by default).
 ### 6.3 Image descriptors (T#)
 
 Not used by any captured corpus kernel. Treat as refusal until a real
-case appears. The scan in §6.1 extends naturally.
+case appears. The scan in sec. 6.1 extends naturally.
 
 ## 7. Principled fail-loudly gates
 
@@ -358,7 +358,7 @@ For every `s_load_*` whose resolved kernarg offset lands in the
 implicit-args block (`offset ≥ kernargs.implicitArgsBase`), identify
 which named hidden arg it reads. If the arg is not in the source's
 declared `meta.args` (Triton sometimes reads past its own declared
-args), refuse. If the arg maps to a **refuse** row in §5, refuse. If
+args), refuse. If the arg maps to a **refuse** row in sec. 5, refuse. If
 it maps to a **derivable** row, substitute the IR constant.
 
 ### G3 -- User-SGPR compatibility (startup)
@@ -371,7 +371,7 @@ verification over a fixed mapping table.
 
 ### G4 -- Embedded descriptor refusal (per-kernel)
 
-§6.1 scan; refuse on any hit.
+sec. 6.1 scan; refuse on any hit.
 
 ### G5 -- Kernarg alignment (per-kernel)
 
@@ -453,19 +453,19 @@ Startup check against both subtargets. ~60 LoC.
    parses `meta.*` from the ELF note block. Do we also need the raw
    64-byte KD bytes as input to the gates, or is the parsed `meta` a
    sufficient model? Current answer: parsed `meta` is sufficient
-   because every field in §3.1 is already surfaced there. The raw KD
+   because every field in sec. 3.1 is already surfaced there. The raw KD
    is discarded.
 2. **Hostcall and multigrid-sync on cross-ISA translation.** Identity
-   entries in §5 assume the hostcall ABI is ISA-stable. If a future
+   entries in sec. 5 assume the hostcall ABI is ISA-stable. If a future
    runtime bumps the hostcall format between gfx1250 and gfx950, the
    table grows a new class: `host-incompatible` (refuse). No action
    today.
-3. **Embedded V# detection false positives.** §6.1's scan is a
+3. **Embedded V# detection false positives.** sec. 6.1's scan is a
    heuristic. If it turns out to produce spurious refusals on any
    real kernel, move the check to first-use of the constant by a V#
    consumer (so we only flag V#s we can prove are V#s). This is a
    straightforward refinement; today's corpus has no constants
-   matching the pattern at all, so we ship §6.1 as-is.
+   matching the pattern at all, so we ship sec. 6.1 as-is.
 4. **Multi-target from one source.** If the same gfx1250 binary will
    be retargeted to *both* gfx942 and gfx950 in the same process, do
    the gates need per-target caching? Today the raiser runs per
@@ -474,7 +474,7 @@ Startup check against both subtargets. ~60 LoC.
 
 ## 12. Cross-axis relationship -- capability dispatch
 
-§4.0 is the ABI-axis instance of the project-wide "emit native when
+sec. 4.0 is the ABI-axis instance of the project-wide "emit native when
 the target supports it, synthesise only when it does not" principle.
 See `target-capability-dispatch.md` for the shared design and the
 open implementation question (does LLVM already expose per-feature /

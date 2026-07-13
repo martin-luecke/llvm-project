@@ -73,7 +73,7 @@ Combined, the three extensions close n=4 fully: WRONG 498 ->
 match.  The matmul128x128-class shadow cache's invariants
 (I1 additive, I2 SSA-monotonic within a BB, I3 any
 interference defeats the cache, see sgpr-wave-mask-translation
-.md §3.1) are preserved -- the propagation only ADDS shadow
+.md sec. 3.1) are preserved -- the propagation only ADDS shadow
 entries; it never masks the narrow-mask fallback when the
 wave-width info isn't actually available.
 
@@ -126,7 +126,7 @@ and `canary_tl_topk_bf16_nw1` all graduate from `WRONG 2048/2048`
 2856/8192 -> 670/8192 (-76%) and 1542/2048 -> 263/2048 (-83%)
 respectively; the residuals are bf16 reduction-order drift with
 tight `abs tol=0.0` comparators -- same class as the m1 residual
-documented under FMA_MIX below, and not a miscompile (see §
+documented under FMA_MIX below, and not a miscompile (see sec. 
 "Residual characterisation" below).  The `canary_tl_sort_fp32
 _deterministic` sibling continues to match under the new rewrite
 (the xor3-partner sibling rewrite also still fires, both now
@@ -1798,7 +1798,7 @@ Re-added to `xfail.cmake` with that precise reason.
 **Files touched:**
 `rewrite_cross_lane_divergent.{hpp,cpp}`,
 `lit_tests/writelane_uniform_noop/*`,
-`wave-size-translation.md` §5.6.3,
+`wave-size-translation.md` sec. 5.6.3,
 `the regression test configuration`,
 `GPU regression tests`,
 `raise_cli.cpp` (added `--write-hsaco` for disassembly triage).

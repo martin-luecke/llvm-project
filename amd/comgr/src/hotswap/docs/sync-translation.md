@@ -158,7 +158,7 @@ completeness.
 ### 5.0 Target-capability dispatch (native vs. collapse)
 
 Every sync primitive in the source has a target-capability branch that
-mirrors the matrix axis (`matrix-translation.md §5.0`): emit the same
+mirrors the matrix axis (`matrix-translation.md sec. 5.0`): emit the same
 primitive natively when the target supports it, and decompose (or
 collapse, or refuse) when it does not.
 
@@ -173,36 +173,36 @@ Extend `ISAProfile` with:
 
 | New bit | Backing feature | Governs |
 |---|---|---|
-| `hasSplitBarriers` | `FeatureGFX12Insts` (split `s_barrier_signal` / `s_barrier_wait`) | §5.1 |
-| `hasSplitWaitCnt` | `FeatureGFX12Insts` (split `s_wait_loadcnt`, `s_wait_dscnt`, …) | §5.2 |
-| `hasSWaitAlu` | `FeatureGFX12Insts` (`s_wait_alu`) | §5.2 |
-| `hasClusterBarriers` | `FeatureClusters` (upstream TableGen name) | §5.5 |
+| `hasSplitBarriers` | `FeatureGFX12Insts` (split `s_barrier_signal` / `s_barrier_wait`) | sec. 5.1 |
+| `hasSplitWaitCnt` | `FeatureGFX12Insts` (split `s_wait_loadcnt`, `s_wait_dscnt`, …) | sec. 5.2 |
+| `hasSWaitAlu` | `FeatureGFX12Insts` (`s_wait_alu`) | sec. 5.2 |
+| `hasClusterBarriers` | `FeatureClusters` (upstream TableGen name) | sec. 5.5 |
 
 `hasCacheScopedOps` (for `global_inv` / `global_wb` / …) is not a
 separate bit -- gfx950 and gfx12 have overlapping but non-identical
-families. §5.4 handles the per-op mapping instead of treating it as
+families. sec. 5.4 handles the per-op mapping instead of treating it as
 one capability.
 
 #### 5.0.2 Dispatch table
 
 | Source primitive | Target has capability | Action | Target lacks capability | Action |
 |---|---|---|---|---|
-| `S_BARRIER_SIGNAL/WAIT` (`imm16=0`) | `hasSplitBarriers` | emit split intrinsic pair (§5.1.a) | -- | collapse to `llvm.amdgcn.s.barrier` (§5.1.b, existing) |
-| `S_BARRIER_SIGNAL/WAIT` (`imm16≠0`) | `hasSplitBarriers` | emit named-barrier intrinsic (§5.1.a) | -- | **refuse** (`namedBarrierUnsupported`; §5.1) |
-| `S_WAIT_{LOAD,STORE,DS,KM,X}CNT` | `hasSplitWaitCnt` | emit matching `llvm.amdgcn.s.waitcnt.*` | -- | no-op (backend re-derives on combined counter) (§5.2) |
-| `S_WAIT_ALU` | `hasSWaitAlu` | emit native intrinsic | -- | no-op (backend handles VALU hazards) (§5.2) |
+| `S_BARRIER_SIGNAL/WAIT` (`imm16=0`) | `hasSplitBarriers` | emit split intrinsic pair (sec. 5.1.a) | -- | collapse to `llvm.amdgcn.s.barrier` (sec. 5.1.b, existing) |
+| `S_BARRIER_SIGNAL/WAIT` (`imm16≠0`) | `hasSplitBarriers` | emit named-barrier intrinsic (sec. 5.1.a) | -- | **refuse** (`namedBarrierUnsupported`; sec. 5.1) |
+| `S_WAIT_{LOAD,STORE,DS,KM,X}CNT` | `hasSplitWaitCnt` | emit matching `llvm.amdgcn.s.waitcnt.*` | -- | no-op (backend re-derives on combined counter) (sec. 5.2) |
+| `S_WAIT_ALU` | `hasSWaitAlu` | emit native intrinsic | -- | no-op (backend handles VALU hazards) (sec. 5.2) |
 | `S_BARRIER` (monolithic) | always (every AMDGPU target) | emit `llvm.amdgcn.s.barrier` | -- | -- |
-| Atomics with `(ordering, scope)` | always (LLVM IR is shared) | emit `atomicrmw` with tags (§5.3) | -- | -- |
-| `GLOBAL_INV/WB/WBINV`, `BUFFER_INV` | per-target table (§5.4) | emit matching intrinsic | -- | refuse |
-| Cluster barriers | `hasClusterBarriers` | emit cluster intrinsic pair | -- | refuse (§5.5) |
+| Atomics with `(ordering, scope)` | always (LLVM IR is shared) | emit `atomicrmw` with tags (sec. 5.3) | -- | -- |
+| `GLOBAL_INV/WB/WBINV`, `BUFFER_INV` | per-target table (sec. 5.4) | emit matching intrinsic | -- | refuse |
+| Cluster barriers | `hasClusterBarriers` | emit cluster intrinsic pair | -- | refuse (sec. 5.5) |
 
 #### 5.0.3 Consequences for same-family retarget
 
 The gfx1251 -> gfx1250 path takes the native branch for every sync
 primitive: split barriers stay split, split wait counters stay split,
 `s_wait_alu` stays, and atomics keep their decoded `(ordering, scope)`
-tuple. The "collapse" paths below (§5.1.b's monolithic barrier,
-§5.2's no-op waitcnt) are reached only when targeting pre-gfx12 ISAs
+tuple. The "collapse" paths below (sec. 5.1.b's monolithic barrier,
+sec. 5.2's no-op waitcnt) are reached only when targeting pre-gfx12 ISAs
 like gfx942/gfx950. Same as matrix: there is no fast path in the
 byte-patching sense -- the capability branch above **is** the fast
 path.
@@ -232,8 +232,8 @@ if (sop == SemOp::S_BARRIER_WAIT && ctx.targetIsa.hasSplitBarriers) {
 ```
 
 The `imm16` barrier resource id passes through unchanged -- named
-barriers are valid on split-capable targets. G1 (§7) only fires on
-pre-gfx12 targets where the collapse in §5.1.b cannot represent them.
+barriers are valid on split-capable targets. G1 (sec. 7) only fires on
+pre-gfx12 targets where the collapse in sec. 5.1.b cannot represent them.
 
 #### 5.1.b Collapse path -- pre-gfx12 targets (existing policy)
 
@@ -263,7 +263,7 @@ It is incorrect in three cases:
 collapse path. Per-kernel gate: if `!targetIsa.hasSplitBarriers` and
 any `S_BARRIER_SIGNAL` / `S_BARRIER_WAIT` instruction has `imm16 != 0`,
 refuse with `RaiseFailure::namedBarrierUnsupported`. When the target
-has split barriers, named barriers pass through unchanged via §5.1.a.
+has split barriers, named barriers pass through unchanged via sec. 5.1.a.
 
 At the raiser level that means:
 
@@ -271,13 +271,13 @@ At the raiser level that means:
 if (sop == SemOp::S_BARRIER_SIGNAL || sop == SemOp::S_BARRIER_WAIT) {
   int64_t barrierId = di.getImm(0);
   if (ctx.targetIsa.hasSplitBarriers) {
-    // §5.1.a: native split path, barrierId preserved
+    // sec. 5.1.a: native split path, barrierId preserved
     return emitNativeSplitBarrier(ctx, sop, barrierId);
   }
   if (barrierId != 0)
     return HandlerResult::fail(
         RaiseFailure::namedBarrierUnsupported(di, barrierId));
-  // else: fall through to existing collapse policy (§5.1.b)
+  // else: fall through to existing collapse policy (sec. 5.1.b)
 }
 ```
 
@@ -402,24 +402,24 @@ kernel using it lands; placeholder in the refusal taxonomy.
 
 ## 6. Decision procedure (per kernel)
 
-Run after ABI gates (`abi-translation.md §7`), before any IR
+Run after ABI gates (`abi-translation.md sec. 7`), before any IR
 emission for sync-related SemOps:
 
 ```
 for each decoded instruction:
   if sop is barrier family:
     if targetIsa.hasSplitBarriers:
-      emit matching split intrinsic (§5.1.a), imm16 preserved
+      emit matching split intrinsic (sec. 5.1.a), imm16 preserved
     elif imm16 != 0:
       refuse (namedBarrierUnsupported)
     else:
-      emit llvm.amdgcn.s.barrier (§5.1.b)
+      emit llvm.amdgcn.s.barrier (sec. 5.1.b)
   if sop is waitcnt family:
     assert attrs.isScheduleHint == true
     if targetIsa.hasSplitWaitCnt:
-      emit matching split waitcnt intrinsic (§5.2.a)
+      emit matching split waitcnt intrinsic (sec. 5.2.a)
     else:
-      skip (no-op, §5.2.b)
+      skip (no-op, sec. 5.2.b)
   if sop is atomic:
     parse th/scope from decoded modifiers
     map to (ordering, syncscope)
@@ -486,7 +486,7 @@ waitcnt) at raise time; refuse on hit.
    whose result is read conditionally) where the source's explicit
    waitcnt carries a dependence the IR loses? We have not seen one,
    but the question is worth auditing once SPE is tightened
-   (`wave-size-translation.md §5.1`).
+   (`wave-size-translation.md sec. 5.1`).
 3. **Atomic scope default.** When decoded `th/scope` are absent
    (instruction has no modifiers), we currently default to SC+system.
    Triton usually emits with explicit modifiers; Tensilelite sometimes
@@ -551,7 +551,7 @@ correctness). T4 and T5 follow once real kernels hit them.
   no-op today when emulation lowers the operation to synchronous
   buffer loads. Once async-copy is natively lowered, `s_wait_xcnt`
   has to become a real dependency in the IR.
-- **Cross-cutting capability dispatch:** §5.0 is the sync-axis
+- **Cross-cutting capability dispatch:** sec. 5.0 is the sync-axis
   instance of the project-wide "emit native when the target supports
   it, decompose only when it does not" principle. See
   `target-capability-dispatch.md`.

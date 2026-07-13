@@ -27,13 +27,13 @@ class WaveProjection;
 // Wave-size obstruction classifier.
 //
 // Implements the obstruction catalog + 3-outcome decision procedure
-// specified in hotswap/docs/wave-size-translation.md §§6–7. Given a
+// specified in hotswap/docs/wave-size-translation.md sec. sec. 6-7. Given a
 // decoded instruction stream for a source kernel whose target wave
 // size differs from the source's, this pass produces an
 // `ObstructionReport` whose sites enumerate every construct in the
 // kernel that violates the wave-size-obliviousness theorem (see
-// wave-size-translation.md §6 for the precise definition), tagged
-// with (a) the obstruction class, (b) the rewrite entry in §7's
+// wave-size-translation.md sec. 6 for the precise definition), tagged
+// with (a) the obstruction class, (b) the rewrite entry in sec. 7's
 // landed-rewrites table (if any) that would discharge it, and
 // (c) whether the rewrite is implemented in the current raiser.
 //
@@ -92,7 +92,7 @@ class WaveProjection;
 //
 // Each enum value names the *specific failure mode* the classifier
 // detected. The Class 1..4 grouping from hotswap/docs/wave-size-
-// translation.md §6 is preserved as the comment headers below; that
+// translation.md sec. 6 is preserved as the comment headers below; that
 // grouping is the stable design-doc cross-reference, but it is not
 // part of the code-level identity of an obstruction (a reader should
 // not have to bounce to the doc to know what
@@ -102,7 +102,7 @@ class WaveProjection;
 enum class ObstructionKind : uint8_t {
   None = 0,
 
-  // ── Class 1 (wave-size-translation.md §6): absolute lane-ID leaks ──
+  // -- Class 1 (wave-size-translation.md sec. 6): absolute lane-ID leaks --
   // The kernel exposes the absolute target-hardware lane position
   // through one of these constructs; under modulo-replication the
   // value diverges from what the wave32 source intended.
@@ -275,7 +275,7 @@ struct ObstructionReport {
   llvm::SmallVector<ObstructionSite> Sites;
 
   // True iff any site has `rewrite == RewriteId::None` -- i.e. we saw
-  // an obstruction for which no rewrite in §4's table applies. This is
+  // an obstruction for which no rewrite in sec. 4's table applies. This is
   // the outcome-(c) condition.
   bool hasUnrewritable() const;
 
@@ -316,7 +316,7 @@ struct ObstructionReport {
 // corpus graduation (see raiser.h for the full rationale); callers
 // that want to pin the pre-rewrite REFUSE contract (lit fixtures for
 // the `c1_wave_id_lift_scalarized` REFUSE sibling, etc.) pass `false`
-// explicitly. See wave-size-translation.md §5.6.3.
+// explicitly. See wave-size-translation.md sec. 5.6.3.
 ObstructionReport buildObstructionReport(llvm::ArrayRef<DecodedInst> Insts,
                                          const MCState &Mc,
                                          const WaveProjection &Projection,

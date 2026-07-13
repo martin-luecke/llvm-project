@@ -44,7 +44,7 @@ using namespace llvm;
 // Taxonomy rendering. The text in each branch is the label that
 // surfaces in the classifier trace and that lit tests assert on. The
 // obstruction-class number (Class 1..4, see hotswap/docs/wave-size-
-// translation.md §6) is included parenthetically so operators reading
+// translation.md sec. 6) is included parenthetically so operators reading
 // the trace can cross-reference the spec without mental translation.
 // ----------------------------------------------------------------------------
 
@@ -195,7 +195,7 @@ std::optional<int64_t> extractLaneOperandImm(const DecodedInst &Di) {
 // Decide whether a `ds_swizzle_b32` immediate encodes a swizzle mode
 // that is *structurally* wave-size-oblivious under modulo-replication
 // (the projection-ladder's first rung, see hotswap/docs/wave-size-
-// translation.md §2.2).
+// translation.md sec. 2.2).
 //
 // The 16-bit imm encodes one of seven modes (SIDefines.h
 // `Swizzle::Id`). Per AMDGPU SIDefines.h `Swizzle::EncBits`:
@@ -633,9 +633,9 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
   // that reads other bits or uses a different bitfield extract
   // semantics would silently miscompile. Those sites are collected
   // here; non-WMMA kernels have a future escape hatch through
-  // `ThreadLoopProjection` (§2.2 -- iterate the body R = W_t / W_s
+  // `ThreadLoopProjection` (sec. 2.2 -- iterate the body R = W_t / W_s
   // times with a synthetic per-source-wave wave_id in ttmp8), and
-  // WMMA kernels refuse because the §5.2 lane layout requires the
+  // WMMA kernels refuse because the sec. 5.2 lane layout requires the
   // full target wave simultaneously and cannot be TLP-split.
   llvm::SmallVector<const DecodedInst *> Ttmp8ReadSites;
 
@@ -663,10 +663,10 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
   //
   // Both buffers are emptied into `ObstructionReport::sites` after the
   // walk completes, gated on `haveWMMA` -- the non-WMMA case has a
-  // future ThreadLoopProjection escape hatch (§2.2; iterate the body
+  // future ThreadLoopProjection escape hatch (sec. 2.2; iterate the body
   // R = W_t / W_s times with a synthetic per-source-wave wave_id in
   // ttmp8) and must not be refused preemptively here. WMMA kernels
-  // cannot use TLP because §5.2 WMMA lane layout requires the full
+  // cannot use TLP because sec. 5.2 WMMA lane layout requires the full
   // target wave simultaneously, so the refusal is terminal.
   llvm::SmallVector<const DecodedInst *> CanonicalWaveIdBfeSites;
   llvm::SmallVector<const DecodedInst *> CrossLaneScalarSites;
@@ -674,7 +674,7 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
   for (const DecodedInst &Di : Insts) {
     const CanonicalOp Sop = Di.CanonOp;
 
-    // --- §3 Class 1: wave_id leak via ttmp8 source read --------------
+    // --- sec. 3 Class 1: wave_id leak via ttmp8 source read --------------
     // Under cross-widening, raiser.cpp seeds the transpiler's ttmp8
     // alloca from `workitem.id.x >> 5` shifted into bits [29:25] so
     // the per-lane value encodes the source's `wave_id_in_workgroup`.
@@ -695,7 +695,7 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
     // the site emission until after the loop has established whether
     // the kernel also contains WMMA (see below). Without WMMA the
     // leak is handled by ThreadLoopProjection; with WMMA it is
-    // unrewritable (TLP and WMMA are mutually exclusive -- §5.2 WMMA
+    // unrewritable (TLP and WMMA are mutually exclusive -- sec. 5.2 WMMA
     // lane layout requires the full target wave) and we refuse.
     if (readsTtmp8Source(Di, MRI) && !isCanonicalWaveIdBfe(Di, MRI))
       Ttmp8ReadSites.push_back(&Di);
@@ -734,7 +734,7 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
       break;
     }
 
-    // --- §3 Class 1: absolute lane-ID leaks --------------------------
+    // --- sec. 3 Class 1: absolute lane-ID leaks --------------------------
     if (Sop == CanonicalOp::V_MBCNT_HI_U32_B32) {
       // For wave32 source widened to wave64, mbcnt_hi is a pass-through
       // of src1: the hi-half mask `(1 << max(0, L - 32)) - 1` is empty
@@ -818,7 +818,7 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
       continue;
     }
 
-    // --- §3 Class 2: wave-width-specific cross-lane shuffles --------
+    // --- sec. 3 Class 2: wave-width-specific cross-lane shuffles --------
     if (Sop == CanonicalOp::V_PERMLANE64_B32) {
       ObstructionSite Site;
       Site.Inst = &Di;
@@ -875,7 +875,7 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
       Site.Kind = ObstructionKind::DsSwizzle;
       Site.Rewrite = RewriteId::P6_DsSwizzle;
       // P6 landed (see the DS_SWIZZLE_B32 row of hotswap/docs/wave-
-      // size-translation.md §5.3): the handler in handle-ds.cpp emits
+      // size-translation.md sec. 5.3): the handler in handle-ds.cpp emits
       // `llvm.amdgcn.ds.swizzle(value, offset)`
       // with the 16-bit immediate plumbed through. The lift is only
       // wave-size-oblivious for the QUAD_PERM and BITMASK_PERM
@@ -966,7 +966,7 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
       continue;
     }
 
-    // --- §3 Class 3: replica races on shared state ------------------
+    // --- sec. 3 Class 3: replica races on shared state ------------------
     // The CanonicalOp set here is the complete enumeration of
     // non-commutative atomics modeled in canonical-op.h today. New
     // non-commutative atomic encodings (e.g. SCRATCH_ATOMIC_SWAP if we
@@ -1060,7 +1060,7 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
       continue;
     }
 
-    // --- §3 Class 4: lane-predicated EXEC writers -------------------
+    // --- sec. 3 Class 4: lane-predicated EXEC writers -------------------
     // Handled by `findLanePredicatedExecSites` above.  The main walk
     // intentionally does not emit C4 sites from mere opcode presence:
     // kernels often contain `v_mbcnt_*` for ds_bpermute selectors and
@@ -1074,8 +1074,8 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
   // wave_id extraction is clang/hip boilerplate in every non-trivial
   // gfx1250 kernel, so unconditionally refusing on it would collapse
   // coverage. We only refuse when the kernel also contains WMMA --
-  // in which case ThreadLoopProjection (the §2.2 escape hatch for
-  // class-4 wave_id leaks) cannot be applied because the §5.2 WMMA
+  // in which case ThreadLoopProjection (the sec. 2.2 escape hatch for
+  // class-4 wave_id leaks) cannot be applied because the sec. 5.2 WMMA
   // lane layout requires the full target wave simultaneously. In the
   // non-WMMA case, fall through silently; the caller's projection
   // selector will pick TLP in raiser.cpp.
@@ -1109,9 +1109,9 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
   //                                           ; single value -> per-
   //                                           ; source-wave tile offset
   //                                           ; LOST.
-  //     …
-  //     v_wmma_f32_16x16x32_f16 …             ; WMMA -> TLP not available.
-  //     …
+  //     ...
+  //     v_wmma_f32_16x16x32_f16 ...             ; WMMA -> TLP not available.
+  //     ...
   //     v_readlane_b32 sDST, vgpr256, 4       ; reads the collapsed value.
   //     v_or_b32 v_col, sDST, v_col_within    ; per-source-wave column
   //                                           ; base is now uniform,
@@ -1170,7 +1170,7 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
           "this cross-lane primitive's scalar source operand, "
           "collapsing source_wave[0]'s and source_wave[1]'s distinct "
           "values into a single uniform. WMMA forecloses the "
-          "ThreadLoopProjection escape hatch (§5.2 requires the full "
+          "ThreadLoopProjection escape hatch (sec. 5.2 requires the full "
           "target wave simultaneously), so no correct projection is "
           "available.";
       Report.Sites.push_back(std::move(Site));
@@ -1313,7 +1313,7 @@ llvm::Error selectFailureFromReport(const ObstructionReport &Report) {
       // cannot see `workitem.id.x` emission (it's an IR-level
       // intrinsic call, not a source-side CanonicalOp), so tagging a
       // DecodedInst with this kind is a contract violation.
-      // See hotswap/docs/modrep-predicate-chain.md §5.
+      // See hotswap/docs/modrep-predicate-chain.md sec. 5.
       llvm_unreachable(
           "WorkitemIdPredicateChain is produced only by the IR-level "
           "classifier (c5-predicate-chain-classifier.cpp); "
