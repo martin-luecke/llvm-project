@@ -158,7 +158,8 @@ int main(int argc, char *argv[]) {
   if (argc < 4)
     fail("usage: hotswap-transpile <elf_file> <source_isa> <target_isa> "
          "[--zero-size|--wrong-kind|--use-options-api|"
-         "--bad-options-version] "
+         "--test-bad-options-version|--test-null-kernel-name-option|"
+         "--test-empty-kernel-name-option|--test-invalid-opt-level] "
          "[--output=<path>] [-O0|-O1|-O2|-O3]");
 
   const char *ElfFile = argv[1];
@@ -168,6 +169,9 @@ int main(int argc, char *argv[]) {
   int WrongKind = 0;
   int UseOptionsApi = 0;
   int BadOptionsVersion = 0;
+  int TestNullKernelNameOption = 0;
+  int TestEmptyKernelNameOption = 0;
+  int TestInvalidOptLevel = 0;
   int OptLevel = -1;
   // Optional path to dump the transpiled bytes to. lit tests use this to
   // hand the output to llvm-readelf / llvm-objdump for ISA-level smoke
@@ -176,7 +180,10 @@ int main(int argc, char *argv[]) {
   static const char ZeroSizeOpt[] = "--zero-size";
   static const char WrongKindOpt[] = "--wrong-kind";
   static const char UseOptionsApiOpt[] = "--use-options-api";
-  static const char BadOptionsVersionOpt[] = "--bad-options-version";
+  static const char BadOptionsVersionOpt[] = "--test-bad-options-version";
+  static const char TestNullKernelNameOpt[] = "--test-null-kernel-name-option";
+  static const char TestEmptyKernelNameOpt[] = "--test-empty-kernel-name-option";
+  static const char TestInvalidOptLevelOpt[] = "--test-invalid-opt-level";
   static const char OutputPrefix[] = "--output=";
   for (int i = 4; i < argc; i++) {
     int ParsedOptLevel = parse_opt_level_arg(argv[i]);
@@ -189,6 +196,15 @@ int main(int argc, char *argv[]) {
     else if (strncmp(argv[i], BadOptionsVersionOpt,
                      sizeof(BadOptionsVersionOpt)) == 0)
       BadOptionsVersion = 1;
+    else if (strncmp(argv[i], TestNullKernelNameOpt,
+                     sizeof(TestNullKernelNameOpt)) == 0)
+      TestNullKernelNameOption = 1;
+    else if (strncmp(argv[i], TestEmptyKernelNameOpt,
+                     sizeof(TestEmptyKernelNameOpt)) == 0)
+      TestEmptyKernelNameOption = 1;
+    else if (strncmp(argv[i], TestInvalidOptLevelOpt,
+                     sizeof(TestInvalidOptLevelOpt)) == 0)
+      TestInvalidOptLevel = 1;
     else if (strncmp(argv[i], OutputPrefix, sizeof(OutputPrefix) - 1) == 0)
       OutputPath = argv[i] + sizeof(OutputPrefix) - 1;
     else if (ParsedOptLevel >= 0)
@@ -220,9 +236,21 @@ int main(int argc, char *argv[]) {
   OptionsV2.kernel_name = getenv("HSA_HOTSWAP_TRANSLATE_KERNEL");
   if (OptionsV2.kernel_name && OptionsV2.kernel_name[0] != '\0')
     OptionsV2.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_V2_USE_KERNEL_NAME;
+  if (TestNullKernelNameOption) {
+    OptionsV2.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_V2_USE_KERNEL_NAME;
+    OptionsV2.kernel_name = NULL;
+  }
+  if (TestEmptyKernelNameOption) {
+    OptionsV2.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_V2_USE_KERNEL_NAME;
+    OptionsV2.kernel_name = "";
+  }
   if (OptLevel >= 0) {
     OptionsV2.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_V2_USE_OPT_LEVEL;
     OptionsV2.opt_level = (uint32_t)OptLevel;
+  }
+  if (TestInvalidOptLevel) {
+    OptionsV2.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_V2_USE_OPT_LEVEL;
+    OptionsV2.opt_level = 4;
   }
   if (getenv("HSA_HOTSWAP_CACHE_DISABLE"))
     OptionsV2.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_V2_CACHE_DISABLE;

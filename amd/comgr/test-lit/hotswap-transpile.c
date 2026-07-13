@@ -12,8 +12,20 @@
 // RUN:                   amdgcn-amd-amdhsa--gfx942 --wrong-kind \
 // RUN:   | %FileCheck --check-prefix=WRONGKIND %s
 // RUN: hotswap-transpile %t.elf amdgcn-amd-amdhsa--gfx1250 \
-// RUN:                   amdgcn-amd-amdhsa--gfx942 --bad-options-version \
+// RUN:                   amdgcn-amd-amdhsa--gfx942 --test-bad-options-version \
 // RUN:   2>&1 | %FileCheck --check-prefix=BADOPTIONS %s
+// RUN: hotswap-transpile %t.elf amdgcn-amd-amdhsa--gfx1250 \
+// RUN:                   amdgcn-amd-amdhsa--gfx942 \
+// RUN:                   --test-null-kernel-name-option \
+// RUN:   2>&1 | %FileCheck --check-prefix=BAD-KERNEL-NAME %s
+// RUN: hotswap-transpile %t.elf amdgcn-amd-amdhsa--gfx1250 \
+// RUN:                   amdgcn-amd-amdhsa--gfx942 \
+// RUN:                   --test-empty-kernel-name-option \
+// RUN:   2>&1 | %FileCheck --check-prefix=BAD-KERNEL-NAME %s
+// RUN: hotswap-transpile %t.elf amdgcn-amd-amdhsa--gfx1250 \
+// RUN:                   amdgcn-amd-amdhsa--gfx942 \
+// RUN:                   --test-invalid-opt-level \
+// RUN:   2>&1 | %FileCheck --check-prefix=BAD-OPT-LEVEL %s
 // RUN: hotswap-transpile %t.elf amdgcn-amd-amdhsa--gfx1250 \
 // RUN:                   amdgcn-amd-amdhsa--gfx942 \
 // RUN:   | %FileCheck --check-prefix=NOKERNELS %s
@@ -101,6 +113,10 @@
 // WRONGKIND: RESULT: INVALID_ARGUMENT
 // BADOPTIONS-DAG: unsupported hotswap options version 999 (expected 2)
 // BADOPTIONS-DAG: RESULT: INVALID_ARGUMENT
+// BAD-KERNEL-NAME-DAG: USE_KERNEL_NAME without a kernel name
+// BAD-KERNEL-NAME-DAG: RESULT: INVALID_ARGUMENT
+// BAD-OPT-LEVEL-DAG: opt_level must be between 0 and 3
+// BAD-OPT-LEVEL-DAG: RESULT: INVALID_ARGUMENT
 // NOKERNELS: RESULT: ERROR
 // VECADD: RESULT: SUCCESS bytes={{[1-9][0-9]*}}
 // SRCISA: Flags: {{.*}}gfx950
