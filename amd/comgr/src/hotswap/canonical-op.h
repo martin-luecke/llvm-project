@@ -368,7 +368,7 @@ enum class CanonicalOp : uint16_t {
   // sin/cos(src * 2*pi), not generic radian-domain sin/cos; lower through
   // the AMDGPU intrinsics that select the hardware TRANS instructions.
   V_SIN_F32, V_COS_F32,
-  V_FREXP_EXP_I32_F64,
+  V_FREXP_EXP_I32_F32, V_FREXP_EXP_I32_F64,
   // Targets with native tanh support lower this through `llvm.amdgcn.tanh.*`;
   // other targets use OCML when a matching OCML entry point exists.
   V_TANH_F32,

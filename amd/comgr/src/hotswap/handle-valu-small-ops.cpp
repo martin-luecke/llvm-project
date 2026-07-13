@@ -172,19 +172,15 @@ handleValuSmallOps(RaiseContext &Ctx, const DecodedInst &Di, OpResolver &Op) {
     int VsrcIdx = AMDGPU::getNamedOperandIdx(Opc, AMDGPU::OpName::src0);
     if (VdstIdx < 0 || VsrcIdx < 0 || !Di.isReg(VdstIdx) ||
         !Di.isReg(VsrcIdx)) {
-      Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+      return RaiseFailure::unsupportedInstructionForm(
           Di, "VOP1", "v_movrel* missing vdst/vsrc register operand");
-      return Hr;
     }
     std::optional<uint64_t> M0 = Ctx.getM0Const();
     if (!M0) {
-      // Data-dependent M0: no statically-known relative index. Refuse
-      // rather than emit an unbounded index cascade.
-      Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+      return RaiseFailure::unsupportedInstructionForm(
           Di, "VOP1",
           "v_movrel* with non-constant M0 (data-dependent register-relative "
           "index) is not supported; only a raise-time-constant M0 is handled");
-      return Hr;
     }
     ParsedReg VdstBase = Ctx.parseReg(Di.getReg(VdstIdx), VdstIdx);
     ParsedReg VsrcBase = Ctx.parseReg(Di.getReg(VsrcIdx), VsrcIdx);
@@ -200,10 +196,9 @@ handleValuSmallOps(RaiseContext &Ctx, const DecodedInst &Di, OpResolver &Op) {
     long DstIdx = VdstBase.BaseIdx + (RelDst ? Rel : 0);
     long SrcIdx = VsrcBase.BaseIdx + (RelSrc ? Rel : 0);
     if (!InRange(DstIdx) || !InRange(SrcIdx)) {
-      Hr.Failure = RaiseFailure::unsupportedInstructionForm(
+      return RaiseFailure::unsupportedInstructionForm(
           Di, "VOP1",
           "v_movrel* M0-relative VGPR index out of range (MEMVIOL)");
-      return Hr;
     }
     // Read the value to move: vsrc's SSA value for V_MOVRELD; the
     // relative-source VGPR for V_MOVRELS / V_MOVRELSD.
@@ -867,6 +862,17 @@ handleValuSmallOps(RaiseContext &Ctx, const DecodedInst &Di, OpResolver &Op) {
     Ctx.writeReg32(Op.dst(),
                    Ctx.B.CreateBitCast(
                        Ctx.B.CreateCall(RsqFn, {S}, "rsq"), Ctx.I32Ty));
+    Hr.Handled = true;
+    return Hr;
+  }
+  case CanonicalOp::V_FREXP_EXP_I32_F32: {
+    if (Error Err = requireDefaultOutputModsIfPresent(Di))
+      return Err;
+    Value *S = Ctx.B.CreateBitCast(Op.srcF(0), Ctx.F32Ty);
+    Function *Fn = Intrinsic::getOrInsertDeclaration(
+        &Ctx.M, Intrinsic::amdgcn_frexp_exp, {Ctx.I32Ty, Ctx.F32Ty});
+    Value *Exp = Ctx.B.CreateCall(Fn, {S}, "frexp_exp");
+    Ctx.writeReg32(Op.dst(), Exp);
     Hr.Handled = true;
     return Hr;
   }
