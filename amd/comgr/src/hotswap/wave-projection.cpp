@@ -356,7 +356,7 @@ WaveNativeProjection::WaveNativeProjection(const ISAProfile &SrcIsa,
          "wave64 target cross-widening; other directions must use "
          "ModuloReplicationProjection (same-wave / narrowing) or a "
          "future ThreadLoopProjection implementation. See hotswap/"
-         "docs/wave-size-translation.md \u00a72.2 for the projection "
+         "docs/wave-size-translation.md 2.2 for the projection "
          "ladder.");
 }
 
