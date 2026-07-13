@@ -8,6 +8,7 @@
 #include "llvm/Config/llvm-config.h"
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/ObjectFile.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/JSON.h"
@@ -402,26 +403,21 @@ bool requireEqualString(const llvm::json::Object &obj, llvm::StringRef field,
   return true;
 }
 
-bool validateKernelNameField(const llvm::json::Object &obj,
-                             llvm::StringRef expected,
-                             std::string &Reason) {
+llvm::Error validateKernelNameField(const llvm::json::Object &obj,
+                                    llvm::StringRef expected) {
   const llvm::json::Value *rawValue = obj.get("kernel_name");
   if (!rawValue) {
     if (expected.empty())
-      return true;
-    Reason = "metadata field 'kernel_name' missing";
-    return false;
+      return llvm::Error::success();
+    return llvm::createStringError("metadata field 'kernel_name' missing");
   }
   auto value = rawValue->getAsString();
-  if (!value) {
-    Reason = "metadata field 'kernel_name' is not a string";
-    return false;
-  }
-  if (*value != expected) {
-    Reason = "metadata field 'kernel_name' mismatch";
-    return false;
-  }
-  return true;
+  if (!value)
+    return llvm::createStringError(
+        "metadata field 'kernel_name' is not a string");
+  if (*value != expected)
+    return llvm::createStringError("metadata field 'kernel_name' mismatch");
+  return llvm::Error::success();
 }
 
 bool requireEqualInt(const llvm::json::Object &obj, llvm::StringRef field,
@@ -555,9 +551,13 @@ bool validateMetadata(const TranslationCacheRequest &request,
       !requireEqualString(obj, "hotswap_build_identity",
                           keyData.buildIdentity, Reason) ||
       !requireEqualString(obj, "device_libraries_identity",
-                          keyData.deviceLibrariesIdentity, Reason) ||
-      !validateKernelNameField(obj, request.KernelName, Reason) ||
-      !requireEqualInt(obj, "kernel_count",
+                          keyData.deviceLibrariesIdentity, Reason))
+    return false;
+  if (llvm::Error Err = validateKernelNameField(obj, request.KernelName)) {
+    Reason = llvm::toString(std::move(Err));
+    return false;
+  }
+  if (!requireEqualInt(obj, "kernel_count",
                        static_cast<int64_t>(keyData.kernelNames.size()),
                        Reason) ||
       !validateKernelArray(obj, keyData.kernelNames, Reason) ||

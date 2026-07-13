@@ -654,13 +654,13 @@ amd_comgr_status_t hotswapTranspileWithResolvedOptions(
     PipelineOptions.OptLevel = CacheRequest.OptLevel;
     if (!CacheRequest.KernelName.empty()) {
       Pipeline = COMGR::hotswap::runPipeline(InputBuf,
-                                             SourceIdent.Processor.str(),
-                                             TargetIdent.Processor.str(),
+                                             SourceIdent.Processor,
+                                             TargetIdent.Processor,
                                              CacheRequest.KernelName,
                                              PipelineOptions);
     } else {
       Pipeline = COMGR::hotswap::runPipelineAllKernels(
-          InputBuf, SourceIdent.Processor.str(), TargetIdent.Processor.str(),
+          InputBuf, SourceIdent.Processor, TargetIdent.Processor,
           PipelineOptions);
     }
     addPipelineTimings(Timings, Pipeline.Timings);
