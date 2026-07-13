@@ -120,11 +120,8 @@ enum class WMMAInputType {
 ///                   AND the accumulator pack/result element type.
 /// \returns  <8 x t> -- result in Wave32 layout, where t = float for
 ///           every variant except IU8 which returns <8 x i32>.
-llvm::Value *emitWMMAtoMFMA(RaiseContext &Ctx,
-                            llvm::Value *A,
-                            llvm::Value *B,
-                            llvm::Value *C,
-                            WMMAInputType InputType);
+llvm::Value *emitWMMAtoMFMA(RaiseContext &Ctx, llvm::Value *A, llvm::Value *B,
+                            llvm::Value *C, WMMAInputType InputType);
 
 /// Lower a Wave32 v_wmma_f32_16x16x4_f32 (gfx1250 RDNA4 VOP3P opcode
 /// 0x05D) to Wave64 mfma_f32_16x16x4f32 (gfx942 CDNA3) using
@@ -174,10 +171,8 @@ llvm::Value *emitWMMAtoMFMA(RaiseContext &Ctx,
 /// \param b  WMMA source B fragment (<2 x f32> in Wave32)
 /// \param c  WMMA accumulator fragment (<8 x f32> in Wave32)
 /// \returns  `<8 x float>` -- result in Wave32 C-layout.
-llvm::Value *emitWmmAtoMfmaF3216x16x4(RaiseContext &Ctx,
-                                         llvm::Value *A,
-                                         llvm::Value *B,
-                                         llvm::Value *C);
+llvm::Value *emitWmmAtoMfmaF3216x16x4(RaiseContext &Ctx, llvm::Value *A,
+                                      llvm::Value *B, llvm::Value *C);
 
 /// Lower a Wave32 v_wmma_scale_f32_16x16x128_f8f6f4 (gfx1250 RDNA4 VOP3PX2)
 /// to a Wave64 v_mfma_scale_f32_16x16x128_f8f6f4 (gfx950 CDNA4 VOP3PX) via

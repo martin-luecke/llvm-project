@@ -64,8 +64,8 @@ int64_t getGlobalFlatOffset(const DecodedInst &Di) {
 }
 
 FlatAddr decodeGlobalLoadAddr(RaiseContext &Ctx, const DecodedInst &Di,
-                               OpResolver &Op, int ElemBytes,
-                               StringRef DiagLabel) {
+                              OpResolver &Op, int ElemBytes,
+                              StringRef DiagLabel) {
   FlatAddr Out;
   Value *Addr = nullptr;
 
@@ -105,8 +105,8 @@ FlatAddr decodeGlobalLoadAddr(RaiseContext &Ctx, const DecodedInst &Di,
 }
 
 FlatAddr decodeGlobalStoreAddr(RaiseContext &Ctx, const DecodedInst &Di,
-                                OpResolver &Op, int ElemBytes,
-                                StringRef DiagLabel) {
+                               OpResolver &Op, int ElemBytes,
+                               StringRef DiagLabel) {
   FlatAddr Out;
   Value *Addr = nullptr;
 
@@ -133,7 +133,8 @@ FlatAddr decodeGlobalStoreAddr(RaiseContext &Ctx, const DecodedInst &Di,
     std::string Msg;
     raw_string_ostream Os(Msg);
     Os << "transpiler: unrecognized " << DiagLabel
-       << " operand shape (expected plain VGPR+VGPR or SADDR VGPR+VGPR+SGPR): \""
+       << " operand shape (expected plain VGPR+VGPR or SADDR VGPR+VGPR+SGPR): "
+          "\""
        << Di.FullText << "\" (mnemonic=" << Di.RawMnemonic << ")";
     report_fatal_error(StringRef(Os.str()));
   }

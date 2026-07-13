@@ -124,11 +124,9 @@ Value *selectRuntimeDword(RaiseContext &Ctx, Value *Idx,
 // convention in spirit (prefix-on-shift, prefix-on-trunc), adapted
 // to the FLAT addrspace to keep lit patterns family-local.
 Value *emitD16HiHalfTruncI16(RaiseContext &Ctx, Value *Src32) {
-  Value *Shifted = Ctx.B.CreateLShr(Src32,
-                                     ConstantInt::get(Ctx.I32Ty, 16),
-                                     "d16hi_shift");
-  return Ctx.B.CreateTrunc(Shifted, Type::getInt16Ty(Ctx.C),
-                            "d16hi_trunc");
+  Value *Shifted =
+      Ctx.B.CreateLShr(Src32, ConstantInt::get(Ctx.I32Ty, 16), "d16hi_shift");
+  return Ctx.B.CreateTrunc(Shifted, Type::getInt16Ty(Ctx.C), "d16hi_trunc");
 }
 
 // Byte-store sibling of `emitD16HiHalfTruncI16`. Both `_D16_HI` store
@@ -140,11 +138,9 @@ Value *emitD16HiHalfTruncI16(RaiseContext &Ctx, Value *Src32) {
 // (`d16hi_shift` / `d16hi_trunc`) match the b16 helper so the lit
 // family stays uniform.
 Value *emitD16HiHalfTruncI8(RaiseContext &Ctx, Value *Src32) {
-  Value *Shifted = Ctx.B.CreateLShr(Src32,
-                                     ConstantInt::get(Ctx.I32Ty, 16),
-                                     "d16hi_shift");
-  return Ctx.B.CreateTrunc(Shifted, Type::getInt8Ty(Ctx.C),
-                            "d16hi_trunc");
+  Value *Shifted =
+      Ctx.B.CreateLShr(Src32, ConstantInt::get(Ctx.I32Ty, 16), "d16hi_shift");
+  return Ctx.B.CreateTrunc(Shifted, Type::getInt8Ty(Ctx.C), "d16hi_trunc");
 }
 
 int64_t firstScratchImm(const DecodedInst &Di, OpResolver &Op,
@@ -171,13 +167,12 @@ std::string formatScratchAbiDetail(RaiseContext &Ctx, const Twine &Why) {
        KERNEL_CODE_PROPERTY_ENABLE_SGPR_PRIVATE_SEGMENT_SIZE) != 0;
   Why.print(Os);
   Os << " source_scratch_kd={private_segment_fixed_size="
-     << Ctx.SourcePrivateSegmentFixedSize
-     << ", compute_pgm_rsrc2=0x" << utohexstr(Ctx.SourceComputePgmRsrc2)
+     << Ctx.SourcePrivateSegmentFixedSize << ", compute_pgm_rsrc2=0x"
+     << utohexstr(Ctx.SourceComputePgmRsrc2)
      << ", enable_private_segment=" << (SourceEnablePrivate ? 1 : 0)
      << ", kernel_code_properties=0x"
      << utohexstr(static_cast<unsigned>(Ctx.SourceKernelCodeProperties))
-     << ", enable_sgpr_flat_scratch_init="
-     << (SourceFlatScratchInit ? 1 : 0)
+     << ", enable_sgpr_flat_scratch_init=" << (SourceFlatScratchInit ? 1 : 0)
      << ", enable_sgpr_private_segment_size="
      << (SourcePrivateSegmentSize ? 1 : 0) << "}.";
   Os.flush();
@@ -188,12 +183,11 @@ Expected<AllocaInst *> getOrCreateSourcePrivateSegment(RaiseContext &Ctx,
                                                        const DecodedInst &Di) {
   if (Ctx.SourcePrivateSegmentFixedSize == 0) {
     std::string Detail = formatScratchAbiDetail(
-        Ctx,
-        "scratch_* requires source KD private-segment allocation, but "
-        "the parsed source KD reports zero private_segment_fixed_size; "
-        "refusing rather than inventing scratch backing.");
-    errs() << "transpiler: FLAT scratch refused: " << Di.Mnemonic
-           << " -- " << Detail << "\n";
+        Ctx, "scratch_* requires source KD private-segment allocation, but "
+             "the parsed source KD reports zero private_segment_fixed_size; "
+             "refusing rather than inventing scratch backing.");
+    errs() << "transpiler: FLAT scratch refused: " << Di.Mnemonic << " -- "
+           << Detail << "\n";
     return RaiseFailure::unsupportedInstructionForm(Di, "FLAT", Detail);
   }
 
@@ -203,21 +197,19 @@ Expected<AllocaInst *> getOrCreateSourcePrivateSegment(RaiseContext &Ctx,
   BasicBlock &Entry = Ctx.Kernel->getEntryBlock();
   IRBuilder<> EntryB(&*Entry.getFirstInsertionPt());
   auto *Size = ConstantInt::get(Ctx.I32Ty, Ctx.SourcePrivateSegmentFixedSize);
-  auto *Alloca =
-      EntryB.CreateAlloca(Ctx.I8Ty, /*AddrSpace=*/5, Size,
-                          "source_private_segment");
+  auto *Alloca = EntryB.CreateAlloca(Ctx.I8Ty, /*AddrSpace=*/5, Size,
+                                     "source_private_segment");
   Alloca->setAlignment(Align(4));
   Ctx.ScratchPrivateSegmentAlloca = Alloca;
   Ctx.UsesScratchPrivateSegment = true;
-  LLVM_DEBUG(dbgs() << "transpiler: FLAT scratch ABI: allocated source "
-                    << "private segment model for '" << Ctx.Kernel->getName()
-                    << "' size=" << Ctx.SourcePrivateSegmentFixedSize
-                    << " compute_pgm_rsrc2=0x"
-                    << utohexstr(Ctx.SourceComputePgmRsrc2)
-                    << " kernel_code_properties=0x"
-                    << utohexstr(static_cast<unsigned>(
-                           Ctx.SourceKernelCodeProperties))
-                    << "\n");
+  LLVM_DEBUG(
+      dbgs() << "transpiler: FLAT scratch ABI: allocated source "
+             << "private segment model for '" << Ctx.Kernel->getName()
+             << "' size=" << Ctx.SourcePrivateSegmentFixedSize
+             << " compute_pgm_rsrc2=0x" << utohexstr(Ctx.SourceComputePgmRsrc2)
+             << " kernel_code_properties=0x"
+             << utohexstr(static_cast<unsigned>(Ctx.SourceKernelCodeProperties))
+             << "\n");
   return Alloca;
 }
 
@@ -275,8 +267,7 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
   CanonicalOp Sop = Di.CanonOp;
 
   if (Sop == CanonicalOp::GLOBAL_WB) {
-    std::optional<int64_t> Cpol =
-        readNamedImmOperand(Di, AMDGPU::OpName::cpol);
+    std::optional<int64_t> Cpol = readNamedImmOperand(Di, AMDGPU::OpName::cpol);
     if (!Cpol) {
       return RaiseFailure::unsupportedInstructionForm(
           Di, "FLAT", "global_wb missing immediate cpol/scope operand");
@@ -466,11 +457,14 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
             "scratch_* shape reached unreachable dispatch: " + Di.Mnemonic));
   }
 
-  if (Sop == CanonicalOp::GLOBAL_LOAD_USHORT || Sop == CanonicalOp::GLOBAL_LOAD_SHORT_D16_HI ||
-      Sop == CanonicalOp::GLOBAL_LOAD_SSHORT || Sop == CanonicalOp::GLOBAL_LOAD_UBYTE ||
+  if (Sop == CanonicalOp::GLOBAL_LOAD_USHORT ||
+      Sop == CanonicalOp::GLOBAL_LOAD_SHORT_D16_HI ||
+      Sop == CanonicalOp::GLOBAL_LOAD_SSHORT ||
+      Sop == CanonicalOp::GLOBAL_LOAD_UBYTE ||
       Sop == CanonicalOp::GLOBAL_LOAD_SBYTE) {
     ParsedReg Dest = Op.dst();
-    bool IsByte = Sop == CanonicalOp::GLOBAL_LOAD_UBYTE || Sop == CanonicalOp::GLOBAL_LOAD_SBYTE;
+    bool IsByte = Sop == CanonicalOp::GLOBAL_LOAD_UBYTE ||
+                  Sop == CanonicalOp::GLOBAL_LOAD_SBYTE;
     Type *LoadTy = IsByte ? Ctx.I8Ty : Type::getInt16Ty(Ctx.C);
     // The ISA only guarantees natural alignment for each sub-dword access:
     // 1 byte for byte loads, 2 bytes for short loads. Using the ABI default
@@ -479,7 +473,7 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     Align LoadAlign = Align(IsByte ? 1 : 2);
 
     FlatAddr Fa = decodeGlobalLoadAddr(Ctx, Di, Op, IsByte ? 1 : 2,
-                                        "GLOBAL_LOAD sub-dword");
+                                       "GLOBAL_LOAD sub-dword");
     Value *Addr = Fa.Ptr;
     // SPE-gate the memory access itself, not just the VGPR write-back.
     // The store counterparts (GLOBAL_STORE_*, ~line 196 below) are
@@ -498,8 +492,8 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     Ctx.emitUnderExec([&] {
       bool IsUnsigned = Sop == CanonicalOp::GLOBAL_LOAD_UBYTE ||
                         Sop == CanonicalOp::GLOBAL_LOAD_USHORT;
-      Value *Loaded = Ctx.B.CreateAlignedLoad(LoadTy, Addr, LoadAlign,
-                                              "gload_sub");
+      Value *Loaded =
+          Ctx.B.CreateAlignedLoad(LoadTy, Addr, LoadAlign, "gload_sub");
       Value *Ext = IsUnsigned ? Ctx.B.CreateZExt(Loaded, Ctx.I32Ty)
                               : Ctx.B.CreateSExt(Loaded, Ctx.I32Ty);
       if (Sop == CanonicalOp::GLOBAL_LOAD_SHORT_D16_HI) {
@@ -514,17 +508,22 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
 
-  if (Sop == CanonicalOp::GLOBAL_LOAD_DWORD || Sop == CanonicalOp::GLOBAL_LOAD_DWORDX2 ||
-      Sop == CanonicalOp::GLOBAL_LOAD_DWORDX3 || Sop == CanonicalOp::GLOBAL_LOAD_DWORDX4) {
+  if (Sop == CanonicalOp::GLOBAL_LOAD_DWORD ||
+      Sop == CanonicalOp::GLOBAL_LOAD_DWORDX2 ||
+      Sop == CanonicalOp::GLOBAL_LOAD_DWORDX3 ||
+      Sop == CanonicalOp::GLOBAL_LOAD_DWORDX4) {
     int LoadDwords = 1;
-    if (Sop == CanonicalOp::GLOBAL_LOAD_DWORDX2) LoadDwords = 2;
-    else if (Sop == CanonicalOp::GLOBAL_LOAD_DWORDX3) LoadDwords = 3;
-    else if (Sop == CanonicalOp::GLOBAL_LOAD_DWORDX4) LoadDwords = 4;
+    if (Sop == CanonicalOp::GLOBAL_LOAD_DWORDX2)
+      LoadDwords = 2;
+    else if (Sop == CanonicalOp::GLOBAL_LOAD_DWORDX3)
+      LoadDwords = 3;
+    else if (Sop == CanonicalOp::GLOBAL_LOAD_DWORDX4)
+      LoadDwords = 4;
 
     ParsedReg Dest = Op.dst();
 
-    FlatAddr Fa = decodeGlobalLoadAddr(Ctx, Di, Op, LoadDwords * 4,
-                                        "GLOBAL_LOAD dword");
+    FlatAddr Fa =
+        decodeGlobalLoadAddr(Ctx, Di, Op, LoadDwords * 4, "GLOBAL_LOAD dword");
     Value *Addr = Fa.Ptr;
 
     // Same SPE-gating rationale as the GLOBAL_LOAD sub-dword block
@@ -539,13 +538,12 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
       if (LoadDwords == 1) {
         Ctx.Regs.writeReg32(
             Ctx.B, Dest,
-            Ctx.B.CreateBitCast(
-                Ctx.B.CreateLoad(Ctx.F32Ty, Addr, "gload"),
-                Ctx.I32Ty));
+            Ctx.B.CreateBitCast(Ctx.B.CreateLoad(Ctx.F32Ty, Addr, "gload"),
+                                Ctx.I32Ty));
       } else {
         Type *VecTy = FixedVectorType::get(Ctx.I32Ty, LoadDwords);
         Value *Loaded = Ctx.B.CreateLoad(VecTy, Addr, "gload");
-        for (int D = 0; D < LoadDwords; D++) {
+        for (int D = 0; D < LoadDwords; ++D) {
           ParsedReg Sub = Dest;
           Sub.BaseIdx = Dest.BaseIdx + D;
           Sub.WidthInDwords = 1;
@@ -559,10 +557,13 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
 
-  if (Sop == CanonicalOp::GLOBAL_STORE_BYTE || Sop == CanonicalOp::GLOBAL_STORE_BYTE_D16_HI ||
+  if (Sop == CanonicalOp::GLOBAL_STORE_BYTE ||
+      Sop == CanonicalOp::GLOBAL_STORE_BYTE_D16_HI ||
       Sop == CanonicalOp::GLOBAL_STORE_SHORT ||
-      Sop == CanonicalOp::GLOBAL_STORE_SHORT_D16_HI || Sop == CanonicalOp::GLOBAL_STORE_DWORD ||
-      Sop == CanonicalOp::GLOBAL_STORE_DWORDX2 || Sop == CanonicalOp::GLOBAL_STORE_DWORDX3 ||
+      Sop == CanonicalOp::GLOBAL_STORE_SHORT_D16_HI ||
+      Sop == CanonicalOp::GLOBAL_STORE_DWORD ||
+      Sop == CanonicalOp::GLOBAL_STORE_DWORDX2 ||
+      Sop == CanonicalOp::GLOBAL_STORE_DWORDX3 ||
       Sop == CanonicalOp::GLOBAL_STORE_DWORDX4) {
     int StoreDwords = 1;
     int StoreBits = 32;
@@ -583,10 +584,14 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     // exercises with no cross-lane ops) stored the LOW 16 bits of the
     // biased sum, reading as NaN-ish (`0x7FFF`) for typical values.
     bool StoreHiHalf = false;
-    if (Sop == CanonicalOp::GLOBAL_STORE_DWORDX4) StoreDwords = 4;
-    else if (Sop == CanonicalOp::GLOBAL_STORE_DWORDX3) StoreDwords = 3;
-    else if (Sop == CanonicalOp::GLOBAL_STORE_DWORDX2) StoreDwords = 2;
-    else if (Sop == CanonicalOp::GLOBAL_STORE_DWORD) StoreDwords = 1;
+    if (Sop == CanonicalOp::GLOBAL_STORE_DWORDX4)
+      StoreDwords = 4;
+    else if (Sop == CanonicalOp::GLOBAL_STORE_DWORDX3)
+      StoreDwords = 3;
+    else if (Sop == CanonicalOp::GLOBAL_STORE_DWORDX2)
+      StoreDwords = 2;
+    else if (Sop == CanonicalOp::GLOBAL_STORE_DWORD)
+      StoreDwords = 1;
     else if (Sop == CanonicalOp::GLOBAL_STORE_SHORT ||
              Sop == CanonicalOp::GLOBAL_STORE_SHORT_D16_HI) {
       StoreBits = 16;
@@ -604,10 +609,9 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     // is 1 or 2 bytes; for dword/dwordx{2,3,4} it is 4, 8, 12, or 16
     // bytes -- the compiler emits `global_store_dwordx4 … scale_offset`
     // with a lane-index vaddr to lower `out[tid] = vec4` patterns.
-    int ElemBytes = StoreBits < 32 ? (StoreBits / 8)
-                                    : std::max(StoreDwords, 1) * 4;
-    FlatAddr Fa =
-        decodeGlobalStoreAddr(Ctx, Di, Op, ElemBytes, "GLOBAL_STORE");
+    int ElemBytes =
+        StoreBits < 32 ? (StoreBits / 8) : std::max(StoreDwords, 1) * 4;
+    FlatAddr Fa = decodeGlobalStoreAddr(Ctx, Di, Op, ElemBytes, "GLOBAL_STORE");
     Value *Addr = Fa.Ptr;
     ParsedReg StData = Fa.StData;
 
@@ -621,7 +625,7 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
       Value *Val;
       if (StoreHiHalf) {
         Val = (StoreBits == 8) ? emitD16HiHalfTruncI8(Ctx, Src32)
-                                : emitD16HiHalfTruncI16(Ctx, Src32);
+                               : emitD16HiHalfTruncI16(Ctx, Src32);
       } else {
         Val = Ctx.B.CreateTrunc(Src32, Type::getIntNTy(Ctx.C, StoreBits));
       }
@@ -720,13 +724,21 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     unsigned AccessBytes = 0;
     switch (Sop) {
     case CanonicalOp::GLOBAL_LOAD_ASYNC_TO_LDS_B8:
-      AccessTy = Ctx.I8Ty; AccessBytes = 1; break;
+      AccessTy = Ctx.I8Ty;
+      AccessBytes = 1;
+      break;
     case CanonicalOp::GLOBAL_LOAD_ASYNC_TO_LDS_B32:
-      AccessTy = Ctx.I32Ty; AccessBytes = 4; break;
+      AccessTy = Ctx.I32Ty;
+      AccessBytes = 4;
+      break;
     case CanonicalOp::GLOBAL_LOAD_ASYNC_TO_LDS_B64:
-      AccessTy = FixedVectorType::get(Ctx.I32Ty, 2); AccessBytes = 8; break;
+      AccessTy = FixedVectorType::get(Ctx.I32Ty, 2);
+      AccessBytes = 8;
+      break;
     case CanonicalOp::GLOBAL_LOAD_ASYNC_TO_LDS_B128:
-      AccessTy = FixedVectorType::get(Ctx.I32Ty, 4); AccessBytes = 16; break;
+      AccessTy = FixedVectorType::get(Ctx.I32Ty, 4);
+      AccessBytes = 16;
+      break;
     default:
       llvm_unreachable("dispatch matched async-to-LDS family but width "
                        "CanonicalOp fell through the access-type switch");
@@ -778,8 +790,8 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
       // per-lane global address; any correction to the signed/
       // unsigned semantics should be made in one place across the
       // whole GLOBAL_LOAD surface.
-      Value *Voff = Ctx.B.CreateZExt(
-          Ctx.Regs.readReg32(Ctx.B, VaddrPr), Ctx.I64Ty, "voff_zext");
+      Value *Voff = Ctx.B.CreateZExt(Ctx.Regs.readReg32(Ctx.B, VaddrPr),
+                                     Ctx.I64Ty, "voff_zext");
       // The SADDR form's address is computed as `saddr + voff` at
       // this point, WITHOUT the `scale_offset` multiplier applied.
       // Reasoning, one clause per arm:
@@ -821,9 +833,8 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
       // `decode.cpp::decodeScaleOffset` for the authoritative
       // SCAL-bit extraction.
       if (Di.HasScaleOffset && !Ctx.TargetIsa.HasTensorOps)
-        Voff = Ctx.B.CreateMul(
-            Voff, ConstantInt::get(Ctx.I64Ty, AccessBytes),
-            "scaled_voff");
+        Voff = Ctx.B.CreateMul(Voff, ConstantInt::get(Ctx.I64Ty, AccessBytes),
+                               "scaled_voff");
       GlobalAddr = Ctx.B.CreateAdd(Saddr, Voff, "saddr_vaddr");
       ImmStart = 3;
     } else {
@@ -846,7 +857,8 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     int64_t CpolImm = 0;
     bool SawOffset = false;
     for (unsigned K = ImmStart; K < Op.nSrcs(); ++K) {
-      if (!Di.isImm(Op.srcIdx(K))) continue;
+      if (!Di.isImm(Op.srcIdx(K)))
+        continue;
       int64_t V = Di.getImm(Op.srcIdx(K));
       if (!SawOffset) {
         FlatOffset = V;
@@ -870,16 +882,21 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
       Intrinsic::ID Iid;
       switch (Sop) {
       case CanonicalOp::GLOBAL_LOAD_ASYNC_TO_LDS_B8:
-        Iid = Intrinsic::amdgcn_global_load_async_to_lds_b8; break;
+        Iid = Intrinsic::amdgcn_global_load_async_to_lds_b8;
+        break;
       case CanonicalOp::GLOBAL_LOAD_ASYNC_TO_LDS_B32:
-        Iid = Intrinsic::amdgcn_global_load_async_to_lds_b32; break;
+        Iid = Intrinsic::amdgcn_global_load_async_to_lds_b32;
+        break;
       case CanonicalOp::GLOBAL_LOAD_ASYNC_TO_LDS_B64:
-        Iid = Intrinsic::amdgcn_global_load_async_to_lds_b64; break;
+        Iid = Intrinsic::amdgcn_global_load_async_to_lds_b64;
+        break;
       case CanonicalOp::GLOBAL_LOAD_ASYNC_TO_LDS_B128:
-        Iid = Intrinsic::amdgcn_global_load_async_to_lds_b128; break;
+        Iid = Intrinsic::amdgcn_global_load_async_to_lds_b128;
+        break;
       default:
-        llvm_unreachable("dispatch matched async-to-LDS family but width CanonicalOp "
-                         "fell through the switch");
+        llvm_unreachable(
+            "dispatch matched async-to-LDS family but width CanonicalOp "
+            "fell through the switch");
       }
       Function *Fn = Intrinsic::getOrInsertDeclaration(&Ctx.M, Iid);
       Value *OffsetArg = ConstantInt::get(Ctx.I32Ty, FlatOffset);
@@ -914,12 +931,10 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     Value *EmuGlobalPtr = GlobalPtr;
     Value *EmuLdsPtr = LdsPtr;
     if (FlatOffset != 0) {
-      EmuGlobalPtr = Ctx.B.CreateGEP(Ctx.I8Ty, EmuGlobalPtr,
-                                      Ctx.B.getInt64(FlatOffset),
-                                      "async_gptr_off");
+      EmuGlobalPtr = Ctx.B.CreateGEP(
+          Ctx.I8Ty, EmuGlobalPtr, Ctx.B.getInt64(FlatOffset), "async_gptr_off");
       EmuLdsPtr = Ctx.B.CreateGEP(Ctx.I8Ty, EmuLdsPtr,
-                                   Ctx.B.getInt64(FlatOffset),
-                                   "async_lptr_off");
+                                  Ctx.B.getInt64(FlatOffset), "async_lptr_off");
     }
 
     // cpol (gfx12+ cachepolicy bits: th, scope, scale_offset) has
@@ -1021,8 +1036,9 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     const unsigned TotalBytes = NumDwords * 4;
     const unsigned ElemsPerDword = 32 / ElemBits;
     const uint32_t ElemMask = llvm::maskTrailingOnes<uint32_t>(ElemBits);
-    assert(NumDwords * ElemsPerDword == GroupSize &&
-           "byte-aligned TR packing assumes one element per (lane, dword slot)");
+    assert(
+        NumDwords * ElemsPerDword == GroupSize &&
+        "byte-aligned TR packing assumes one element per (lane, dword slot)");
 
     ParsedReg Dest = Op.dst();
     FlatAddr Fa =
@@ -1174,18 +1190,17 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
                                           : Intrinsic::amdgcn_global_prefetch;
 
     if (!Ctx.TargetIsa.HasTensorOps) {
-      llvm::errs()
-          << "transpiler: FLAT: " << Di.Mnemonic
-          << " has no equivalent on the compilation target "
-          << "(gfx1250 VMEM-prefetch unit; LLVM intrinsic "
-          << Intrinsic::getName(PrefetchIntrinsic)
-          << " is gated by HasVmemPrefInsts, "
-          << "only set on gfx1250+). The closest sibling "
-          << "amdgcn.s.prefetch.data requires a uniform SGPR "
-          << "pointer which we cannot prove for the divergent "
-          << "VGPR address used here without divergence "
-          << "analysis -- refusing to emit a fallback or silently "
-          << "drop the hint.\n";
+      llvm::errs() << "transpiler: FLAT: " << Di.Mnemonic
+                   << " has no equivalent on the compilation target "
+                   << "(gfx1250 VMEM-prefetch unit; LLVM intrinsic "
+                   << Intrinsic::getName(PrefetchIntrinsic)
+                   << " is gated by HasVmemPrefInsts, "
+                   << "only set on gfx1250+). The closest sibling "
+                   << "amdgcn.s.prefetch.data requires a uniform SGPR "
+                   << "pointer which we cannot prove for the divergent "
+                   << "VGPR address used here without divergence "
+                   << "analysis -- refusing to emit a fallback or silently "
+                   << "drop the hint.\n";
       return RaiseFailure::unsupportedInstructionForm(
           Di, "FLAT",
           "gfx1250-only VMEM prefetch (HasVmemPrefInsts); no "
@@ -1219,8 +1234,8 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
                 " SADDR: expected (SGPR_64, VGPR_32) for (saddr, vaddr)");
       }
       Value *Saddr = Ctx.Regs.readReg64(Ctx.B, SaddrPr);
-      Value *Voff = Ctx.B.CreateZExt(
-          Ctx.Regs.readReg32(Ctx.B, VaddrPr), Ctx.I64Ty, "voff_zext");
+      Value *Voff = Ctx.B.CreateZExt(Ctx.Regs.readReg32(Ctx.B, VaddrPr),
+                                     Ctx.I64Ty, "voff_zext");
       PrefetchAddr = Ctx.B.CreateAdd(Saddr, Voff, "saddr_vaddr");
       ImmStart = 2;
     } else {
@@ -1237,7 +1252,8 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     int64_t CpolImm = 0;
     bool SawOffset = false;
     for (unsigned K = ImmStart; K < Op.nSrcs(); ++K) {
-      if (!Di.isImm(Op.srcIdx(K))) continue;
+      if (!Di.isImm(Op.srcIdx(K)))
+        continue;
       int64_t V = Di.getImm(Op.srcIdx(K));
       if (!SawOffset) {
         FlatOffset = V;
@@ -1251,12 +1267,10 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     if (PrefetchPtr->getType() != PrefetchPtrTy)
       PrefetchPtr = Ctx.B.CreateIntToPtr(PrefetchPtr, PrefetchPtrTy);
     if (FlatOffset != 0)
-      PrefetchPtr = Ctx.B.CreateGEP(Ctx.I8Ty, PrefetchPtr,
-                                     Ctx.B.getInt64(FlatOffset),
-                                     "prefetch_addr");
+      PrefetchPtr = Ctx.B.CreateGEP(
+          Ctx.I8Ty, PrefetchPtr, Ctx.B.getInt64(FlatOffset), "prefetch_addr");
 
-    Function *Fn =
-        Intrinsic::getOrInsertDeclaration(&Ctx.M, PrefetchIntrinsic);
+    Function *Fn = Intrinsic::getOrInsertDeclaration(&Ctx.M, PrefetchIntrinsic);
     Value *CpolArg = ConstantInt::get(Ctx.I32Ty, CpolImm);
     Ctx.B.CreateCall(Fn, {PrefetchPtr, CpolArg});
 
@@ -1271,10 +1285,13 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
   // semantics preserved per case (the shared decoder unconditionally
   // casts to `ctx.ptrGlobalTy` which is addrspace(1); we route through
   // it only for the SADDR form where that cast is hardware-correct).
-  if (Sop == CanonicalOp::FLAT_LOAD_USHORT || Sop == CanonicalOp::FLAT_LOAD_SSHORT ||
-      Sop == CanonicalOp::FLAT_LOAD_UBYTE || Sop == CanonicalOp::FLAT_LOAD_SBYTE) {
+  if (Sop == CanonicalOp::FLAT_LOAD_USHORT ||
+      Sop == CanonicalOp::FLAT_LOAD_SSHORT ||
+      Sop == CanonicalOp::FLAT_LOAD_UBYTE ||
+      Sop == CanonicalOp::FLAT_LOAD_SBYTE) {
     ParsedReg Dest = Op.dst();
-    bool IsByte = Sop == CanonicalOp::FLAT_LOAD_UBYTE || Sop == CanonicalOp::FLAT_LOAD_SBYTE;
+    bool IsByte = Sop == CanonicalOp::FLAT_LOAD_UBYTE ||
+                  Sop == CanonicalOp::FLAT_LOAD_SBYTE;
     Value *Addr = nullptr;
     // SADDR form: saddr(SGPR64), vaddr(VGPR32), [scale_offset] [offset:imm]
     // -- semantically a global_load (SGPR base + per-lane VGPR offset),
@@ -1284,7 +1301,7 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
         Op.srcReg(0).RegKind == ParsedReg::SGPR &&
         Op.srcReg(1).RegKind == ParsedReg::VGPR) {
       FlatAddr Fa = decodeGlobalLoadAddr(Ctx, Di, Op, IsByte ? 1 : 2,
-                                          "FLAT_LOAD sub-dword (SADDR)");
+                                         "FLAT_LOAD sub-dword (SADDR)");
       Addr = Fa.Ptr;
     } else {
       // Plain-flat form: VGPR64 holds the full per-lane flat address.
@@ -1297,12 +1314,12 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
       if (Addr->getType() != PtrFlatTy)
         Addr = Ctx.B.CreateIntToPtr(Addr, PtrFlatTy);
       int64_t MemOffset = 0;
-      for (unsigned K = 1; K < Op.nSrcs(); K++)
+      for (unsigned K = 1; K < Op.nSrcs(); ++K)
         if (Di.isImm(Op.srcIdx(K)) && Di.getImm(Op.srcIdx(K)) != 0)
           MemOffset = Di.getImm(Op.srcIdx(K));
       if (MemOffset != 0)
-        Addr = Ctx.B.CreateInBoundsGEP(Ctx.I8Ty, Addr,
-                                        Ctx.B.getInt64(MemOffset));
+        Addr =
+            Ctx.B.CreateInBoundsGEP(Ctx.I8Ty, Addr, Ctx.B.getInt64(MemOffset));
     }
     Type *LoadTy = IsByte ? Ctx.I8Ty : Type::getInt16Ty(Ctx.C);
     // SPE-gate the memory access itself. Same rationale as the
@@ -1323,12 +1340,17 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
 
-  if (Sop == CanonicalOp::FLAT_LOAD_DWORD || Sop == CanonicalOp::FLAT_LOAD_DWORDX2 ||
-      Sop == CanonicalOp::FLAT_LOAD_DWORDX3 || Sop == CanonicalOp::FLAT_LOAD_DWORDX4) {
+  if (Sop == CanonicalOp::FLAT_LOAD_DWORD ||
+      Sop == CanonicalOp::FLAT_LOAD_DWORDX2 ||
+      Sop == CanonicalOp::FLAT_LOAD_DWORDX3 ||
+      Sop == CanonicalOp::FLAT_LOAD_DWORDX4) {
     int LoadDwords = 1;
-    if (Sop == CanonicalOp::FLAT_LOAD_DWORDX2) LoadDwords = 2;
-    else if (Sop == CanonicalOp::FLAT_LOAD_DWORDX4) LoadDwords = 4;
-    else if (Sop == CanonicalOp::FLAT_LOAD_DWORDX3) LoadDwords = 3;
+    if (Sop == CanonicalOp::FLAT_LOAD_DWORDX2)
+      LoadDwords = 2;
+    else if (Sop == CanonicalOp::FLAT_LOAD_DWORDX4)
+      LoadDwords = 4;
+    else if (Sop == CanonicalOp::FLAT_LOAD_DWORDX3)
+      LoadDwords = 3;
 
     // Two operand-shape variants, with distinct address-space semantics:
     //
@@ -1366,7 +1388,7 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
         Op.srcReg(0).RegKind == ParsedReg::SGPR &&
         Op.srcReg(1).RegKind == ParsedReg::VGPR) {
       FlatAddr Fa = decodeGlobalLoadAddr(Ctx, Di, Op, LoadDwords * 4,
-                                          "FLAT_LOAD dword (SADDR)");
+                                         "FLAT_LOAD dword (SADDR)");
       Addr = Fa.Ptr;
     } else {
       Addr = Ctx.Regs.readReg64(Ctx.B, Op.srcReg(0));
@@ -1374,12 +1396,12 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
       if (Addr->getType() != PtrFlatTy)
         Addr = Ctx.B.CreateIntToPtr(Addr, PtrFlatTy);
       int64_t MemOffset = 0;
-      for (unsigned K = 1; K < Op.nSrcs(); K++)
+      for (unsigned K = 1; K < Op.nSrcs(); ++K)
         if (Di.isImm(Op.srcIdx(K)) && Di.getImm(Op.srcIdx(K)) != 0)
           MemOffset = Di.getImm(Op.srcIdx(K));
       if (MemOffset != 0)
-        Addr = Ctx.B.CreateInBoundsGEP(Ctx.I8Ty, Addr,
-                                        Ctx.B.getInt64(MemOffset));
+        Addr =
+            Ctx.B.CreateInBoundsGEP(Ctx.I8Ty, Addr, Ctx.B.getInt64(MemOffset));
     }
 
     ParsedReg Dest = Op.dst();
@@ -1393,13 +1415,12 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
       if (LoadDwords == 1) {
         Ctx.Regs.writeReg32(
             Ctx.B, Dest,
-            Ctx.B.CreateBitCast(
-                Ctx.B.CreateLoad(Ctx.F32Ty, Addr, "flat_load"),
-                Ctx.I32Ty));
+            Ctx.B.CreateBitCast(Ctx.B.CreateLoad(Ctx.F32Ty, Addr, "flat_load"),
+                                Ctx.I32Ty));
       } else {
         Type *VecTy = FixedVectorType::get(Ctx.I32Ty, LoadDwords);
         Value *Loaded = Ctx.B.CreateLoad(VecTy, Addr, "flat_load");
-        for (int D = 0; D < LoadDwords; D++) {
+        for (int D = 0; D < LoadDwords; ++D) {
           ParsedReg Sub = Dest;
           Sub.BaseIdx = Dest.BaseIdx + D;
           Sub.WidthInDwords = 1;
@@ -1413,9 +1434,12 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
 
-  if (Sop == CanonicalOp::FLAT_STORE_DWORD || Sop == CanonicalOp::FLAT_STORE_DWORDX2 ||
-      Sop == CanonicalOp::FLAT_STORE_DWORDX3 || Sop == CanonicalOp::FLAT_STORE_DWORDX4 ||
-      Sop == CanonicalOp::FLAT_STORE_BYTE || Sop == CanonicalOp::FLAT_STORE_SHORT ||
+  if (Sop == CanonicalOp::FLAT_STORE_DWORD ||
+      Sop == CanonicalOp::FLAT_STORE_DWORDX2 ||
+      Sop == CanonicalOp::FLAT_STORE_DWORDX3 ||
+      Sop == CanonicalOp::FLAT_STORE_DWORDX4 ||
+      Sop == CanonicalOp::FLAT_STORE_BYTE ||
+      Sop == CanonicalOp::FLAT_STORE_SHORT ||
       Sop == CanonicalOp::FLAT_STORE_SHORT_D16_HI) {
     int StoreDwords = 1;
     int StoreBits = 32;
@@ -1425,16 +1449,23 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     // the GLOBAL_STORE_ branch for the full rationale (bf16 RNE
     // epilogue, pre-fix miscompile shape, etc.).
     bool StoreHiHalf = false;
-    if (Sop == CanonicalOp::FLAT_STORE_DWORDX4) StoreDwords = 4;
-    else if (Sop == CanonicalOp::FLAT_STORE_DWORDX3) StoreDwords = 3;
-    else if (Sop == CanonicalOp::FLAT_STORE_DWORDX2) StoreDwords = 2;
-    else if (Sop == CanonicalOp::FLAT_STORE_DWORD) StoreDwords = 1;
+    if (Sop == CanonicalOp::FLAT_STORE_DWORDX4)
+      StoreDwords = 4;
+    else if (Sop == CanonicalOp::FLAT_STORE_DWORDX3)
+      StoreDwords = 3;
+    else if (Sop == CanonicalOp::FLAT_STORE_DWORDX2)
+      StoreDwords = 2;
+    else if (Sop == CanonicalOp::FLAT_STORE_DWORD)
+      StoreDwords = 1;
     else if (Sop == CanonicalOp::FLAT_STORE_SHORT ||
              Sop == CanonicalOp::FLAT_STORE_SHORT_D16_HI) {
-      StoreBits = 16; StoreDwords = 0;
+      StoreBits = 16;
+      StoreDwords = 0;
       StoreHiHalf = (Sop == CanonicalOp::FLAT_STORE_SHORT_D16_HI);
+    } else if (Sop == CanonicalOp::FLAT_STORE_BYTE) {
+      StoreBits = 8;
+      StoreDwords = 0;
     }
-    else if (Sop == CanonicalOp::FLAT_STORE_BYTE) { StoreBits = 8; StoreDwords = 0; }
 
     // Two operand-shape variants with distinct AS semantics; mirror
     // the FLAT_LOAD_DWORD handler's case split.  For stores:
@@ -1444,17 +1475,16 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     //
     // See the FLAT_LOAD_DWORD comment block above for the full
     // derivation and rcp_sqrt_kernel regression anchor.
-    int ElemBytes = StoreBits < 32 ? (StoreBits / 8)
-                                    : std::max(StoreDwords, 1) * 4;
+    int ElemBytes =
+        StoreBits < 32 ? (StoreBits / 8) : std::max(StoreDwords, 1) * 4;
     Value *Addr = nullptr;
     ParsedReg StData;
-    if (Op.nSrcs() >= 3 && Op.isSrcReg(0) && Op.isSrcReg(1) &&
-        Op.isSrcReg(2) &&
+    if (Op.nSrcs() >= 3 && Op.isSrcReg(0) && Op.isSrcReg(1) && Op.isSrcReg(2) &&
         Op.srcReg(0).RegKind == ParsedReg::VGPR &&
         Op.srcReg(1).RegKind == ParsedReg::VGPR &&
         Op.srcReg(2).RegKind == ParsedReg::SGPR) {
-      FlatAddr Fa = decodeGlobalStoreAddr(Ctx, Di, Op, ElemBytes,
-                                           "FLAT_STORE (SADDR)");
+      FlatAddr Fa =
+          decodeGlobalStoreAddr(Ctx, Di, Op, ElemBytes, "FLAT_STORE (SADDR)");
       Addr = Fa.Ptr;
       StData = Fa.StData;
     } else {
@@ -1463,12 +1493,12 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
       if (Addr->getType() != PtrFlatTy)
         Addr = Ctx.B.CreateIntToPtr(Addr, PtrFlatTy);
       int64_t MemOffset = 0;
-      for (unsigned K = 2; K < Op.nSrcs(); K++)
+      for (unsigned K = 2; K < Op.nSrcs(); ++K)
         if (Di.isImm(Op.srcIdx(K)) && Di.getImm(Op.srcIdx(K)) != 0)
           MemOffset = Di.getImm(Op.srcIdx(K));
       if (MemOffset != 0)
-        Addr = Ctx.B.CreateInBoundsGEP(Ctx.I8Ty, Addr,
-                                        Ctx.B.getInt64(MemOffset));
+        Addr =
+            Ctx.B.CreateInBoundsGEP(Ctx.I8Ty, Addr, Ctx.B.getInt64(MemOffset));
       StData = Op.srcReg(1);
     }
     if (StoreDwords == 0) {
@@ -1477,10 +1507,10 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
       // rationale; this branch mirrors the GLOBAL_STORE path above
       // so both FLAT and GLOBAL `_D16_HI` variants graduate through
       // the same emission shape.
-      Value *Val = StoreHiHalf
-                      ? emitD16HiHalfTruncI16(Ctx, Src32)
-                      : Ctx.B.CreateTrunc(
-                            Src32, Type::getIntNTy(Ctx.C, StoreBits));
+      Value *Val =
+          StoreHiHalf
+              ? emitD16HiHalfTruncI16(Ctx, Src32)
+              : Ctx.B.CreateTrunc(Src32, Type::getIntNTy(Ctx.C, StoreBits));
       Ctx.emitUnderExec([&] { Ctx.B.CreateStore(Val, Addr); });
     } else if (StoreDwords == 1) {
       Value *Val = Ctx.Regs.readReg32(Ctx.B, StData);
@@ -1495,10 +1525,12 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
   }
 
   // flat_atomic_* -- same as global_atomic but flat address space
-  if (Sop >= CanonicalOp::FLAT_ATOMIC_ADD && Sop <= CanonicalOp::FLAT_ATOMIC_MAX_NUM_F64) {
+  if (Sop >= CanonicalOp::FLAT_ATOMIC_ADD &&
+      Sop <= CanonicalOp::FLAT_ATOMIC_MAX_NUM_F64) {
     // Contract: the RTN/non-RTN collapse in OpcodeMap relies on
     // IsAtomicRet <=> (numDefs > 0) to decide result writeback below.
-    assert(((Di.TsFlags & SIInstrFlags::IsAtomicRet) != 0) == (Di.NumDefs > 0) &&
+    assert(((Di.TsFlags & SIInstrFlags::IsAtomicRet) != 0) ==
+               (Di.NumDefs > 0) &&
            "flat atomic: IsAtomicRet disagrees with numDefs");
     // Two operand-shape variants, mirroring the FLAT_LOAD/STORE case
     // split and the GLOBAL_ATOMIC block below:
@@ -1527,8 +1559,8 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     // `getGlobalFlatOffset`.
     Value *Addr = nullptr;
     ParsedReg StData;
-    const bool IsSaddr = Op.nSrcs() >= 3 && Op.isSrcReg(0) &&
-                         Op.isSrcReg(1) && Op.isSrcReg(2) &&
+    const bool IsSaddr = Op.nSrcs() >= 3 && Op.isSrcReg(0) && Op.isSrcReg(1) &&
+                         Op.isSrcReg(2) &&
                          Op.srcReg(0).RegKind == ParsedReg::VGPR &&
                          Op.srcReg(1).RegKind == ParsedReg::VGPR &&
                          Op.srcReg(2).RegKind == ParsedReg::SGPR;
@@ -1548,8 +1580,8 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     }
     if (IsSaddr) {
       FlatAddr Fa = decodeGlobalStoreAddr(Ctx, Di, Op,
-                                           /*elemBytes=*/Is64 ? 8 : 4,
-                                           "FLAT_ATOMIC (SADDR)");
+                                          /*elemBytes=*/Is64 ? 8 : 4,
+                                          "FLAT_ATOMIC (SADDR)");
       Addr = Fa.Ptr;
       StData = Fa.StData;
     } else {
@@ -1564,7 +1596,7 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
       StData = Op.srcReg(1);
     }
     Value *Data = Is64 ? Ctx.Regs.readReg64(Ctx.B, StData)
-                        : Ctx.Regs.readReg32(Ctx.B, StData);
+                       : Ctx.Regs.readReg32(Ctx.B, StData);
 
     if (Sop == CanonicalOp::FLAT_ATOMIC_CMPSWAP ||
         Sop == CanonicalOp::FLAT_ATOMIC_CMPSWAP_X2) {
@@ -1577,10 +1609,10 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
       Value *NewVal = IsI64 ? Ctx.Regs.readReg64(Ctx.B, NewReg)
                             : Ctx.Regs.readReg32(Ctx.B, NewReg);
       Ctx.emitUnderExec([&] {
-        auto *Cas = Ctx.B.CreateAtomicCmpXchg(
-            Addr, CmpVal, NewVal, MaybeAlign(),
-            AtomicOrdering::SequentiallyConsistent,
-            AtomicOrdering::SequentiallyConsistent);
+        auto *Cas =
+            Ctx.B.CreateAtomicCmpXchg(Addr, CmpVal, NewVal, MaybeAlign(),
+                                      AtomicOrdering::SequentiallyConsistent,
+                                      AtomicOrdering::SequentiallyConsistent);
         if (Di.NumDefs > 0) {
           Value *OldVal = Ctx.B.CreateExtractValue(Cas, 0);
           if (IsI64)
@@ -1596,16 +1628,36 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     AtomicRMWInst::BinOp AtomicOp;
     bool IsFp = false;
     switch (Sop) {
-    case CanonicalOp::FLAT_ATOMIC_ADD:  AtomicOp = AtomicRMWInst::Add; break;
-    case CanonicalOp::FLAT_ATOMIC_SUB:  AtomicOp = AtomicRMWInst::Sub; break;
-    case CanonicalOp::FLAT_ATOMIC_AND:  AtomicOp = AtomicRMWInst::And; break;
-    case CanonicalOp::FLAT_ATOMIC_OR:   AtomicOp = AtomicRMWInst::Or; break;
-    case CanonicalOp::FLAT_ATOMIC_XOR:  AtomicOp = AtomicRMWInst::Xor; break;
-    case CanonicalOp::FLAT_ATOMIC_SMIN: AtomicOp = AtomicRMWInst::Min; break;
-    case CanonicalOp::FLAT_ATOMIC_SMAX: AtomicOp = AtomicRMWInst::Max; break;
-    case CanonicalOp::FLAT_ATOMIC_UMIN: AtomicOp = AtomicRMWInst::UMin; break;
-    case CanonicalOp::FLAT_ATOMIC_UMAX: AtomicOp = AtomicRMWInst::UMax; break;
-    case CanonicalOp::FLAT_ATOMIC_SWAP: AtomicOp = AtomicRMWInst::Xchg; break;
+    case CanonicalOp::FLAT_ATOMIC_ADD:
+      AtomicOp = AtomicRMWInst::Add;
+      break;
+    case CanonicalOp::FLAT_ATOMIC_SUB:
+      AtomicOp = AtomicRMWInst::Sub;
+      break;
+    case CanonicalOp::FLAT_ATOMIC_AND:
+      AtomicOp = AtomicRMWInst::And;
+      break;
+    case CanonicalOp::FLAT_ATOMIC_OR:
+      AtomicOp = AtomicRMWInst::Or;
+      break;
+    case CanonicalOp::FLAT_ATOMIC_XOR:
+      AtomicOp = AtomicRMWInst::Xor;
+      break;
+    case CanonicalOp::FLAT_ATOMIC_SMIN:
+      AtomicOp = AtomicRMWInst::Min;
+      break;
+    case CanonicalOp::FLAT_ATOMIC_SMAX:
+      AtomicOp = AtomicRMWInst::Max;
+      break;
+    case CanonicalOp::FLAT_ATOMIC_UMIN:
+      AtomicOp = AtomicRMWInst::UMin;
+      break;
+    case CanonicalOp::FLAT_ATOMIC_UMAX:
+      AtomicOp = AtomicRMWInst::UMax;
+      break;
+    case CanonicalOp::FLAT_ATOMIC_SWAP:
+      AtomicOp = AtomicRMWInst::Xchg;
+      break;
     case CanonicalOp::FLAT_ATOMIC_ADD_X2:
       AtomicOp = AtomicRMWInst::Add;
       break;
@@ -1637,34 +1689,43 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
       AtomicOp = AtomicRMWInst::Xchg;
       break;
     case CanonicalOp::FLAT_ATOMIC_ADD_F32:
-      AtomicOp = AtomicRMWInst::FAdd; IsFp = true;
-      Data = Ctx.B.CreateBitCast(Data, Ctx.F32Ty); break;
+      AtomicOp = AtomicRMWInst::FAdd;
+      IsFp = true;
+      Data = Ctx.B.CreateBitCast(Data, Ctx.F32Ty);
+      break;
     // MIN/MAX_F64 use `fminimumnum`/`fmaximumnum` (IEEE 754-2019);
     // bit-exact for gfx1250 `_min/_max_num_f64`.
     case CanonicalOp::FLAT_ATOMIC_ADD_F64:
-      AtomicOp = AtomicRMWInst::FAdd; IsFp = true;
-      Data = Ctx.B.CreateBitCast(Data, Ctx.F64Ty); break;
+      AtomicOp = AtomicRMWInst::FAdd;
+      IsFp = true;
+      Data = Ctx.B.CreateBitCast(Data, Ctx.F64Ty);
+      break;
     case CanonicalOp::FLAT_ATOMIC_MIN_NUM_F64:
-      AtomicOp = AtomicRMWInst::FMinimumNum; IsFp = true;
-      Data = Ctx.B.CreateBitCast(Data, Ctx.F64Ty); break;
+      AtomicOp = AtomicRMWInst::FMinimumNum;
+      IsFp = true;
+      Data = Ctx.B.CreateBitCast(Data, Ctx.F64Ty);
+      break;
     case CanonicalOp::FLAT_ATOMIC_MAX_NUM_F64:
-      AtomicOp = AtomicRMWInst::FMaximumNum; IsFp = true;
-      Data = Ctx.B.CreateBitCast(Data, Ctx.F64Ty); break;
+      AtomicOp = AtomicRMWInst::FMaximumNum;
+      IsFp = true;
+      Data = Ctx.B.CreateBitCast(Data, Ctx.F64Ty);
+      break;
     default:
       return RaiseFailure::unsupportedInstructionForm(Di, "FLAT",
                                                       "unhandled flat atomic");
     }
     Ctx.emitUnderExec([&] {
-      auto *Rmw = Ctx.B.CreateAtomicRMW(
-          AtomicOp, Addr, Data, MaybeAlign(),
-          AtomicOrdering::SequentiallyConsistent);
+      auto *Rmw = Ctx.B.CreateAtomicRMW(AtomicOp, Addr, Data, MaybeAlign(),
+                                        AtomicOrdering::SequentiallyConsistent);
       if (Di.NumDefs > 0) {
         Value *RetVal = Rmw;
         if (Is64) {
-          if (IsFp) RetVal = Ctx.B.CreateBitCast(RetVal, Ctx.I64Ty);
+          if (IsFp)
+            RetVal = Ctx.B.CreateBitCast(RetVal, Ctx.I64Ty);
           Ctx.Regs.writeReg64(Ctx.B, Op.dst(), RetVal);
         } else {
-          if (IsFp) RetVal = Ctx.B.CreateBitCast(RetVal, Ctx.I32Ty);
+          if (IsFp)
+            RetVal = Ctx.B.CreateBitCast(RetVal, Ctx.I32Ty);
           Ctx.Regs.writeReg32(Ctx.B, Op.dst(), RetVal);
         }
       }
@@ -1674,8 +1735,10 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
   }
 
   // ---- Global atomics ----
-  if (Sop >= CanonicalOp::GLOBAL_ATOMIC_ADD && Sop <= CanonicalOp::GLOBAL_ATOMIC_MAX_NUM_F64) {
-    assert(((Di.TsFlags & SIInstrFlags::IsAtomicRet) != 0) == (Di.NumDefs > 0) &&
+  if (Sop >= CanonicalOp::GLOBAL_ATOMIC_ADD &&
+      Sop <= CanonicalOp::GLOBAL_ATOMIC_MAX_NUM_F64) {
+    assert(((Di.TsFlags & SIInstrFlags::IsAtomicRet) != 0) ==
+               (Di.NumDefs > 0) &&
            "global atomic: IsAtomicRet disagrees with numDefs");
     // Delegate addressing to `decodeGlobalStoreAddr`.  Global atomics
     // share the store's operand shape -- (vaddr, vdata, [saddr], [imms]) --
@@ -1712,8 +1775,8 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     // `_nw4` variant) -- the atomic fired at the wrong address with
     // the wrong value.  `decodeGlobalStoreAddr` handles the shape
     // discriminator and uses `getGlobalFlatOffset` (the named
-    // OpName::offset operand) for the offset field, so CPol no longer leaks into
-    // the offset lookup.  See `hotswap/docs/learnings.md` entry
+    // OpName::offset operand) for the offset field, so CPol no longer leaks
+    // into the offset lookup.  See `hotswap/docs/learnings.md` entry
     // "2026-04-23 -- global_atomic SADDR form silently miscompiled"
     // for the full investigation and the regression gate.
     //
@@ -1730,19 +1793,18 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
           "f64 atomic min/max from a pre-gfx12 source uses raw "
           "compare semantics, not minimumNumber");
     }
-    FlatAddr Fa = decodeGlobalStoreAddr(Ctx, Di, Op,
-                                         /*elemBytes=*/Is64 ? 8 : 4,
-                                         "GLOBAL_ATOMIC");
+    FlatAddr Fa =
+        decodeGlobalStoreAddr(Ctx, Di, Op,
+                              /*elemBytes=*/Is64 ? 8 : 4, "GLOBAL_ATOMIC");
     // b64 integer swap (`global_atomic_swap_x2`, collapsed to
     // GLOBAL_ATOMIC_SWAP in opcode-map): read/atomic/write at 64-bit width
     // like the F64 path but as a plain integer (no fp bitcast). Detect by
     // MC opcode rather than mnemonic string or vdata width (the latter is
     // unreliable for tuple VGPRs on gfx1250).
     const unsigned Opc = Di.Inst.getOpcode();
-    const bool IsB64IntSwap =
-        Sop == CanonicalOp::GLOBAL_ATOMIC_SWAP &&
-        (Opc == AMDGPU::GLOBAL_ATOMIC_SWAP_X2 ||
-         Opc == AMDGPU::GLOBAL_ATOMIC_SWAP_X2_SADDR);
+    const bool IsB64IntSwap = Sop == CanonicalOp::GLOBAL_ATOMIC_SWAP &&
+                              (Opc == AMDGPU::GLOBAL_ATOMIC_SWAP_X2 ||
+                               Opc == AMDGPU::GLOBAL_ATOMIC_SWAP_X2_SADDR);
     const bool Use64 = Is64 || IsB64IntSwap;
     Value *Addr = Fa.Ptr;
     Value *Data = Use64 ? Ctx.Regs.readReg64(Ctx.B, Fa.StData)
@@ -1766,48 +1828,84 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
                               Ctx.B.CreateExtractValue(Cas, 0));
       });
       Hr.Handled = true;
-    return Hr;
+      return Hr;
     }
 
     AtomicRMWInst::BinOp AtomicOp;
     Type *AtomicTy = Ctx.I32Ty;
     bool IsFp = false;
     switch (Sop) {
-    case CanonicalOp::GLOBAL_ATOMIC_ADD:  AtomicOp = AtomicRMWInst::Add; break;
+    case CanonicalOp::GLOBAL_ATOMIC_ADD:
+      AtomicOp = AtomicRMWInst::Add;
+      break;
     case CanonicalOp::GLOBAL_ATOMIC_ADD_X2:
       AtomicOp = AtomicRMWInst::Add;
       break;
-    case CanonicalOp::GLOBAL_ATOMIC_SUB:  AtomicOp = AtomicRMWInst::Sub; break;
-    case CanonicalOp::GLOBAL_ATOMIC_AND:  AtomicOp = AtomicRMWInst::And; break;
-    case CanonicalOp::GLOBAL_ATOMIC_OR:   AtomicOp = AtomicRMWInst::Or; break;
-    case CanonicalOp::GLOBAL_ATOMIC_XOR:  AtomicOp = AtomicRMWInst::Xor; break;
-    case CanonicalOp::GLOBAL_ATOMIC_SMIN: AtomicOp = AtomicRMWInst::Min; break;
-    case CanonicalOp::GLOBAL_ATOMIC_SMAX: AtomicOp = AtomicRMWInst::Max; break;
-    case CanonicalOp::GLOBAL_ATOMIC_UMIN: AtomicOp = AtomicRMWInst::UMin; break;
-    case CanonicalOp::GLOBAL_ATOMIC_UMAX: AtomicOp = AtomicRMWInst::UMax; break;
+    case CanonicalOp::GLOBAL_ATOMIC_SUB:
+      AtomicOp = AtomicRMWInst::Sub;
+      break;
+    case CanonicalOp::GLOBAL_ATOMIC_AND:
+      AtomicOp = AtomicRMWInst::And;
+      break;
+    case CanonicalOp::GLOBAL_ATOMIC_OR:
+      AtomicOp = AtomicRMWInst::Or;
+      break;
+    case CanonicalOp::GLOBAL_ATOMIC_XOR:
+      AtomicOp = AtomicRMWInst::Xor;
+      break;
+    case CanonicalOp::GLOBAL_ATOMIC_SMIN:
+      AtomicOp = AtomicRMWInst::Min;
+      break;
+    case CanonicalOp::GLOBAL_ATOMIC_SMAX:
+      AtomicOp = AtomicRMWInst::Max;
+      break;
+    case CanonicalOp::GLOBAL_ATOMIC_UMIN:
+      AtomicOp = AtomicRMWInst::UMin;
+      break;
+    case CanonicalOp::GLOBAL_ATOMIC_UMAX:
+      AtomicOp = AtomicRMWInst::UMax;
+      break;
     case CanonicalOp::GLOBAL_ATOMIC_SWAP:
       AtomicOp = AtomicRMWInst::Xchg;
-      if (IsB64IntSwap) AtomicTy = Ctx.I64Ty;
+      if (IsB64IntSwap)
+        AtomicTy = Ctx.I64Ty;
       break;
     case CanonicalOp::GLOBAL_ATOMIC_ADD_F32:
-      AtomicOp = AtomicRMWInst::FAdd; AtomicTy = Ctx.F32Ty; IsFp = true; break;
+      AtomicOp = AtomicRMWInst::FAdd;
+      AtomicTy = Ctx.F32Ty;
+      IsFp = true;
+      break;
     case CanonicalOp::GLOBAL_ATOMIC_PK_ADD_BF16:
       AtomicOp = AtomicRMWInst::FAdd;
-      AtomicTy = FixedVectorType::get(Type::getBFloatTy(Ctx.C), 2); IsFp = true; break;
+      AtomicTy = FixedVectorType::get(Type::getBFloatTy(Ctx.C), 2);
+      IsFp = true;
+      break;
     case CanonicalOp::GLOBAL_ATOMIC_PK_ADD_F16:
       AtomicOp = AtomicRMWInst::FAdd;
-      AtomicTy = FixedVectorType::get(Type::getHalfTy(Ctx.C), 2); IsFp = true; break;
+      AtomicTy = FixedVectorType::get(Type::getHalfTy(Ctx.C), 2);
+      IsFp = true;
+      break;
     case CanonicalOp::GLOBAL_ATOMIC_ADD_F64:
-      AtomicOp = AtomicRMWInst::FAdd; AtomicTy = Ctx.F64Ty; IsFp = true; break;
+      AtomicOp = AtomicRMWInst::FAdd;
+      AtomicTy = Ctx.F64Ty;
+      IsFp = true;
+      break;
     case CanonicalOp::GLOBAL_ATOMIC_MIN_NUM_F64:
-      AtomicOp = AtomicRMWInst::FMinimumNum; AtomicTy = Ctx.F64Ty; IsFp = true; break;
+      AtomicOp = AtomicRMWInst::FMinimumNum;
+      AtomicTy = Ctx.F64Ty;
+      IsFp = true;
+      break;
     case CanonicalOp::GLOBAL_ATOMIC_MAX_NUM_F64:
-      AtomicOp = AtomicRMWInst::FMaximumNum; AtomicTy = Ctx.F64Ty; IsFp = true; break;
+      AtomicOp = AtomicRMWInst::FMaximumNum;
+      AtomicTy = Ctx.F64Ty;
+      IsFp = true;
+      break;
     default:
       return RaiseFailure::unsupportedInstructionForm(
           Di, "FLAT", "unsupported global atomic variant");
     }
-    if (IsFp) Data = Ctx.B.CreateBitCast(Data, AtomicTy);
+    if (IsFp)
+      Data = Ctx.B.CreateBitCast(Data, AtomicTy);
     auto EmitSwapRMW = [&] {
       Ctx.emitUnderExec([&] {
         Value *Prev = Ctx.B.CreateAtomicRMW(AtomicOp, Addr, Data, MaybeAlign(),
@@ -1826,12 +1924,13 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     // this, target lanes `i` and `i+W_s` both pass the emitUnderExec mask
     // and double-issue the atomic. Predicating on `lane_id < W_s` issues
     // exactly one atomic per source lane, matching native wave32. Returning
-    // swaps and non-MODREP projections are refused in wave-size-obstruction.cpp.
-    const bool GateOneReplica =
-        Sop == CanonicalOp::GLOBAL_ATOMIC_SWAP && Di.NumDefs == 0 &&
-        Ctx.TargetIsa.WaveSize > Ctx.Isa.WaveSize &&
-        Ctx.Projection.numSourceWavesPerTarget() == 1 &&
-        !Ctx.Projection.providesFullWaveExecInvariant();
+    // swaps and non-MODREP projections are refused in
+    // wave-size-obstruction.cpp.
+    const bool GateOneReplica = Sop == CanonicalOp::GLOBAL_ATOMIC_SWAP &&
+                                Di.NumDefs == 0 &&
+                                Ctx.TargetIsa.WaveSize > Ctx.Isa.WaveSize &&
+                                Ctx.Projection.numSourceWavesPerTarget() == 1 &&
+                                !Ctx.Projection.providesFullWaveExecInvariant();
     if (GateOneReplica) {
       Value *LaneId = Ctx.emitLaneIdx();
       Value *WsC = ConstantInt::get(LaneId->getType(), Ctx.Isa.WaveSize);

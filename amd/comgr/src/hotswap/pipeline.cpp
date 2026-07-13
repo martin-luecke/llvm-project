@@ -583,8 +583,8 @@ static PipelineResult runPipelineImpl(llvm::MemoryBufferRef CodeObjectData,
     LLVM_DEBUG(llvm::dbgs() << "transpiler:   [" << (I + 1) << "/"
                             << KernelNames.size() << "] " << KName << " ... ");
 
-    if (!raiseAndCompileKernel(Text, CodeObjectData, KName, SourceISA, TargetISA,
-                               TmpDir, ObjPath, Result, Options)) {
+    if (!raiseAndCompileKernel(Text, CodeObjectData, KName, SourceISA,
+                               TargetISA, TmpDir, ObjPath, Result, Options)) {
       LLVM_DEBUG(llvm::dbgs() << "FAILED\n");
       Result.Success = false;
       return finish();

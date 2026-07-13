@@ -15,6 +15,7 @@ namespace COMGR::hotswap {
 // CanonicalOp lands in the enum, the compiler's `-Wswitch` (enabled by
 // default for scoped enums) will flag the missing case here.
 const char *canonicalOpName(CanonicalOp Op) {
+  // clang-format off
 #define S(N) case CanonicalOp::N: return #N;
   switch (Op) {
     S(Unknown)
@@ -327,6 +328,7 @@ const char *canonicalOpName(CanonicalOp Op) {
     case CanonicalOp::CanonicalOp_COUNT: return "<CanonicalOp_COUNT>";
   }
 #undef S
+  // clang-format on
   return "<unknown CanonicalOp>";
 }
 

@@ -46,8 +46,8 @@ struct FlatAddr {
 //
 // Fails loudly on unrecognised shapes.
 FlatAddr decodeGlobalLoadAddr(RaiseContext &Ctx, const DecodedInst &Di,
-                               OpResolver &Op, int ElemBytes,
-                               llvm::StringRef DiagLabel);
+                              OpResolver &Op, int ElemBytes,
+                              llvm::StringRef DiagLabel);
 
 // Decode a GLOBAL_STORE addressing operand shape. Recognised forms:
 //
@@ -57,8 +57,8 @@ FlatAddr decodeGlobalLoadAddr(RaiseContext &Ctx, const DecodedInst &Di,
 // On success, `.stData` is populated with the vdata register. Other
 // behaviour matches `decodeGlobalLoadAddr`.
 FlatAddr decodeGlobalStoreAddr(RaiseContext &Ctx, const DecodedInst &Di,
-                                OpResolver &Op, int ElemBytes,
-                                llvm::StringRef DiagLabel);
+                               OpResolver &Op, int ElemBytes,
+                               llvm::StringRef DiagLabel);
 
 // Decode the first immediate in a GLOBAL/FLAT memory operand tail as the signed
 // byte offset. Later immediates are encoding flags (`cpol`, TH, scope) and are

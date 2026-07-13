@@ -93,7 +93,8 @@ namespace COMGR::hotswap {
 
 namespace {
 
-llvm::DenseSet<uint64_t> collectInstructionOffsets(ArrayRef<DecodedInst> Insts) {
+llvm::DenseSet<uint64_t>
+collectInstructionOffsets(ArrayRef<DecodedInst> Insts) {
   llvm::DenseSet<uint64_t> Offsets;
   for (const DecodedInst &Di : Insts)
     Offsets.insert(Di.Offset);
@@ -160,16 +161,17 @@ ThreadLoopDecisionResult decideThreadLoopFallback(unsigned SourceWaveSize,
   // (scalar memory operands, inline asm, unknown calls) still refuse loudly.
   constexpr bool kThreadLoopAutoActivateSgprForcedCrossWiden = true;
   if (kThreadLoopAutoActivateSgprForcedCrossWiden)
-    return {ThreadLoopDecision::EligibleAndGateOn,
-            "SGPR-forced cross-widen refusal is covered by ThreadLoopProjection"};
+    return {
+        ThreadLoopDecision::EligibleAndGateOn,
+        "SGPR-forced cross-widen refusal is covered by ThreadLoopProjection"};
   return {ThreadLoopDecision::EligibleButGateOff,
           "eligible but graduation gate is off"};
 }
 
-static bool isSemOpInRange(CanonicalOp Op, CanonicalOp First, CanonicalOp Last) {
+static bool isSemOpInRange(CanonicalOp Op, CanonicalOp First,
+                           CanonicalOp Last) {
   auto V = static_cast<uint16_t>(Op);
-  return V >= static_cast<uint16_t>(First) &&
-         V <= static_cast<uint16_t>(Last);
+  return V >= static_cast<uint16_t>(First) && V <= static_cast<uint16_t>(Last);
 }
 
 // Kernarg-pointer provenance for source hidden-arg SMEM loads.
@@ -187,7 +189,8 @@ static bool isSemOpInRange(CanonicalOp Op, CanonicalOp First, CanonicalOp Last) 
 // that originally held kernarg_segment_ptr at each decoded basic block:
 //   * Entry+Const(N) - every incoming path carries the dispatch-provided entry
 //                     kernarg pointer plus the same constant byte offset N.
-//   * NonEntry      - every incoming path overwrote the pair with a value loaded
+//   * NonEntry      - every incoming path overwrote the pair with a value
+//   loaded
 //                     from memory rather than the dispatch-provided entry SGPR
 //                     value. Constant rebases of such a value remain NonEntry.
 //   * Unknown       - paths disagree, are unreachable, or include an
@@ -279,7 +282,8 @@ struct KernargProvenanceBlock {
   SmallVector<unsigned, 2> Successors;
 };
 
-// Classify a register definition as a tracked SGPR lane, irrelevant, or unknown.
+// Classify a register definition as a tracked SGPR lane, irrelevant, or
+// unknown.
 static KernargPrepassDef classifyKernargPrepassDef(const MCRegisterInfo &MRI,
                                                    MCRegister Reg) {
   if (!Reg)
@@ -378,8 +382,8 @@ static void markKernargPtrLaneEffect(KernargPtrLaneEffect &Effect,
 // Summarize how one decoded instruction affects the kernarg pointer SGPR pair.
 static KernargPtrLaneEffect
 instructionKernargPtrEffect(const MCRegisterInfo &MRI, const MCInstrInfo &MII,
-                            const MCSubtargetInfo &STI,
-                            const DecodedInst &Di, unsigned KernargPtrSgpr) {
+                            const MCSubtargetInfo &STI, const DecodedInst &Di,
+                            unsigned KernargPtrSgpr) {
   const MCInstrDesc &Desc = MII.get(Di.Inst.getOpcode());
   const unsigned NumDefs = Desc.getNumDefs();
   KernargPtrLaneEffect Effect;
@@ -400,10 +404,10 @@ instructionKernargPtrEffect(const MCRegisterInfo &MRI, const MCInstrInfo &MII,
         IsDwordSmemLoad
             ? kernargPrepassDefRegClassWidth32(MII, MRI, STI, Desc, I)
             : kernargPrepassRegWidth32(MRI, Di.getReg(I));
-    markKernargPtrLaneEffect(
-        Effect, Def.Index, DefWidth, KernargPtrSgpr,
-        IsDwordSmemLoad ? KernargPtrLaneEffectKind::NonEntry
-                        : KernargPtrLaneEffectKind::Unknown);
+    markKernargPtrLaneEffect(Effect, Def.Index, DefWidth, KernargPtrSgpr,
+                             IsDwordSmemLoad
+                                 ? KernargPtrLaneEffectKind::NonEntry
+                                 : KernargPtrLaneEffectKind::Unknown);
   }
   return Effect;
 }
@@ -411,8 +415,9 @@ instructionKernargPtrEffect(const MCRegisterInfo &MRI, const MCInstrInfo &MII,
 // Apply an instruction or block effect to one incoming lane state. Preserve
 // effects leave the lane unchanged; concrete effects overwrite the lane fact
 // unless the block has not been reached yet.
-static KernargPtrLaneDataflowState applyKernargPtrLaneEffect(
-    KernargPtrLaneDataflowState State, KernargPtrLaneEffectKind Effect) {
+static KernargPtrLaneDataflowState
+applyKernargPtrLaneEffect(KernargPtrLaneDataflowState State,
+                          KernargPtrLaneEffectKind Effect) {
   if (State == KernargPtrLaneDataflowState::Unvisited ||
       Effect == KernargPtrLaneEffectKind::Preserve)
     return State;
@@ -445,13 +450,10 @@ applyKernargPtrEffect(KernargPtrDataflowState State,
 // instructions reduce to lane overwrite effects; scalar add/sub of a literal
 // gets a pair-level transfer because it can preserve `Entry+Const` or
 // `NonEntry` provenance through a constant rebase.
-static KernargPtrDataflowState
-applyKernargPtrInstructionEffect(const MCRegisterInfo &MRI,
-                                 const MCInstrInfo &MII,
-                                 const MCSubtargetInfo &STI,
-                                 KernargPtrDataflowState State,
-                                 const DecodedInst &Di,
-                                 unsigned KernargPtrSgpr) {
+static KernargPtrDataflowState applyKernargPtrInstructionEffect(
+    const MCRegisterInfo &MRI, const MCInstrInfo &MII,
+    const MCSubtargetInfo &STI, KernargPtrDataflowState State,
+    const DecodedInst &Di, unsigned KernargPtrSgpr) {
   if (State.Low == KernargPtrLaneDataflowState::Unvisited &&
       State.High == KernargPtrLaneDataflowState::Unvisited)
     return State;
@@ -496,8 +498,7 @@ joinKernargPtrLaneStates(KernargPtrLaneDataflowState Lhs,
 
 // Join predecessor facts independently for both tracked lanes.
 static KernargPtrDataflowState
-joinKernargPtrStates(KernargPtrDataflowState Lhs,
-                     KernargPtrDataflowState Rhs) {
+joinKernargPtrStates(KernargPtrDataflowState Lhs, KernargPtrDataflowState Rhs) {
   if (Lhs.Low == KernargPtrLaneDataflowState::Unvisited &&
       Lhs.High == KernargPtrLaneDataflowState::Unvisited)
     return Rhs;
@@ -546,9 +547,10 @@ toFinalKernargPtrProvenance(KernargPtrDataflowState State) {
 }
 
 // Compute recovered CFG successors for the kernarg provenance prepass.
-static SmallVector<uint64_t> computeKernargProvenanceSuccessors(
-    const DecodedInst &LastInst, std::optional<uint64_t> NextBlockOffset,
-    const SetPcAnalysis &SetpcAnalysis) {
+static SmallVector<uint64_t>
+computeKernargProvenanceSuccessors(const DecodedInst &LastInst,
+                                   std::optional<uint64_t> NextBlockOffset,
+                                   const SetPcAnalysis &SetpcAnalysis) {
   // Ordinary SOPP successors use the shared decoded CFG model. SETPC/SWAPPC
   // successors come from setpc-analysis.
   if (LastInst.CanonOp != CanonicalOp::S_SET_PC_I64 &&
@@ -577,12 +579,10 @@ static SmallVector<uint64_t> computeKernargProvenanceSuccessors(
 
 // Fill RaiseContext's per-BB kernarg provenance map by fixed-point over the
 // recovered source CFG.
-static void
-computeKernargPtrProvenance(RaiseContext &Ctx, ArrayRef<DecodedInst> Insts,
-                            const std::set<uint64_t> &BlockStarts,
-                            uint64_t KernelOffset,
-                            const DenseMap<uint64_t, BasicBlock *>
-                                &OffsetToBb) {
+static void computeKernargPtrProvenance(
+    RaiseContext &Ctx, ArrayRef<DecodedInst> Insts,
+    const std::set<uint64_t> &BlockStarts, uint64_t KernelOffset,
+    const DenseMap<uint64_t, BasicBlock *> &OffsetToBb) {
   assert(Ctx.Layout && "RaiseContext requires descriptor-derived SGPR layout");
   if (Insts.empty() || Ctx.Layout->KernargSegmentPtrSgpr < 0)
     return;
@@ -615,8 +615,9 @@ computeKernargPtrProvenance(RaiseContext &Ctx, ArrayRef<DecodedInst> Insts,
 
     Block.HasInsts = true;
     Block.FirstIdx = FirstIt->second;
-    uint64_t NextStart =
-        I + 1 < NumStarts ? Starts[I + 1] : std::numeric_limits<uint64_t>::max();
+    uint64_t NextStart = I + 1 < NumStarts
+                             ? Starts[I + 1]
+                             : std::numeric_limits<uint64_t>::max();
     Block.LastIdx = Block.FirstIdx;
     for (unsigned J = Block.FirstIdx;
          J < NumInsts && Insts[J].Offset < NextStart; ++J) {
@@ -657,9 +658,8 @@ computeKernargPtrProvenance(RaiseContext &Ctx, ArrayRef<DecodedInst> Insts,
   auto EntryIt = BlockIndexByOffset.find(KernelOffset);
   assert(EntryIt != BlockIndexByOffset.end() &&
          "decoded block starts must include kernel entry");
-  MergeInto(EntryIt->second,
-            {KernargPtrLaneDataflowState::LiveEntry,
-             KernargPtrLaneDataflowState::LiveEntry});
+  MergeInto(EntryIt->second, {KernargPtrLaneDataflowState::LiveEntry,
+                              KernargPtrLaneDataflowState::LiveEntry});
 
   // Walk each instruction so transfer functions can depend on the incoming
   // pair fact; Entry+Const rebases cannot be pre-composed as lane effects.
@@ -676,7 +676,8 @@ computeKernargPtrProvenance(RaiseContext &Ctx, ArrayRef<DecodedInst> Insts,
   // Finite-height lattice: facts only move upward from Unvisited to a concrete
   // path fact and then, if paths disagree or a write is unknown, to Unknown.
   // Entry+Const joins preserve only identical offsets; differing offsets become
-  // Unknown, so backedges that increment the entry pointer converge by refusing.
+  // Unknown, so backedges that increment the entry pointer converge by
+  // refusing.
   bool Changed = true;
   while (Changed) {
     Changed = false;
@@ -691,13 +692,14 @@ computeKernargPtrProvenance(RaiseContext &Ctx, ArrayRef<DecodedInst> Insts,
     auto BbIt = OffsetToBb.find(Blocks[I].Start);
     if (BbIt == OffsetToBb.end())
       continue;
-    Ctx.setKernargPtrProvenanceForBlock(
-        BbIt->second, toFinalKernargPtrProvenance(State[I]));
+    Ctx.setKernargPtrProvenanceForBlock(BbIt->second,
+                                        toFinalKernargPtrProvenance(State[I]));
   }
 }
 
-static bool threadLoopUnsupportedWorkgroupMemoryOrBarrier(
-    ArrayRef<DecodedInst> Insts, std::string &Detail) {
+static bool
+threadLoopUnsupportedWorkgroupMemoryOrBarrier(ArrayRef<DecodedInst> Insts,
+                                              std::string &Detail) {
   for (const DecodedInst &Di : Insts) {
     StringRef Kind;
     switch (Di.CanonOp) {
@@ -915,15 +917,15 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
                              !PhantomLaneRegime;
   std::unique_ptr<WaveProjection> ProjectionPtr;
   if (UseThreadLoop) {
-    ProjectionPtr = std::make_unique<ThreadLoopProjection>(
-        Isa, TargetIsa, I32Ty, I64Ty);
+    ProjectionPtr =
+        std::make_unique<ThreadLoopProjection>(Isa, TargetIsa, I32Ty, I64Ty);
     errs() << "transpiler: kernel '" << KernelName
            << "' selected ThreadLoopProjection (analysis-triggered "
               "cross-widen route; writelane/readlane rewrite may be "
               "disabled by the retry caller)\n";
   } else if (UseWaveNative) {
-    ProjectionPtr = std::make_unique<WaveNativeProjection>(Isa, TargetIsa,
-                                                             I32Ty, I64Ty);
+    ProjectionPtr =
+        std::make_unique<WaveNativeProjection>(Isa, TargetIsa, I32Ty, I64Ty);
   } else {
     ProjectionPtr = std::make_unique<ModuloReplicationProjection>(
         Isa, TargetIsa, I32Ty, I64Ty);
@@ -931,16 +933,16 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
   ProjectionPtr->setMaxFlatWorkgroupSize(Meta.MaxFlatWorkgroupSize);
   WaveProjection &Projection = *ProjectionPtr;
 
-  if (!UseThreadLoop && EnableWaveNative && PhantomLaneRegime && Isa.isWave32() &&
-      !TargetIsa.isWave32()) {
+  if (!UseThreadLoop && EnableWaveNative && PhantomLaneRegime &&
+      Isa.isWave32() && !TargetIsa.isWave32()) {
     // Log the fallback so operators can trace which kernels moved to
     // MODREP and why.  A regression that silently flips WaveNative's
     // selection on a phantom-lane kernel would then (re-)produce the
     // HIP-700 miscompile this fallback guards against.
     errs() << "transpiler: kernel '" << KernelName
            << "' is in phantom-lane regime (max_flat_workgroup_size="
-           << Meta.MaxFlatWorkgroupSize << " < target wavefront width="
-           << TargetIsa.WaveSize
+           << Meta.MaxFlatWorkgroupSize
+           << " < target wavefront width=" << TargetIsa.WaveSize
            << "); falling back to ModuloReplicationProjection even "
               "though enableWaveNative=true, so phantom target lanes "
               "stay hardware-inactive and their undef-VGPR state "
@@ -980,10 +982,9 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
       KernelSize == 0 ? 0 : KernelOffset + KernelSize;
   const uint64_t DecodeLimit =
       KernelEndOffset == 0 ? TextBytes.size() : KernelEndOffset;
-  DecodeResult Decoded =
-      decodeKernel(Mc, OpcMap,
-                   ArrayRef<uint8_t>(TextBytes.data(), TextBytes.size()),
-                   KernelOffset, KernelEndOffset);
+  DecodeResult Decoded = decodeKernel(
+      Mc, OpcMap, ArrayRef<uint8_t>(TextBytes.data(), TextBytes.size()),
+      KernelOffset, KernelEndOffset);
   auto &Insts = Decoded.Insts;
   auto &BlockStarts = Decoded.BlockStarts;
 
@@ -1062,8 +1063,7 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
   // the structured classifier in Phase 1.4.5 below is the primary
   // decision surface. See wave-projection.cpp for the text of the
   // legacy diagnostic.
-  emitCrossWaveWarning(Projection, Mc, Insts, SourceIsa,
-                       CompilationTargetIsa);
+  emitCrossWaveWarning(Projection, Mc, Insts, SourceIsa, CompilationTargetIsa);
 
   // ==== Phase 1.4.5: Wave-size obstruction classifier
   // (hotswap/docs/wave-size-translation.md §7) ====
@@ -1171,8 +1171,8 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
   TargetOptions Opts;
   std::unique_ptr<TargetMachine> Tm(Mc.Target->createTargetMachine(
       Triple("amdgcn-amd-amdhsa"),
-      CompilationTargetIsa.empty() ? SourceIsa : CompilationTargetIsa,
-      "", Opts, Reloc::PIC_));
+      CompilationTargetIsa.empty() ? SourceIsa : CompilationTargetIsa, "", Opts,
+      Reloc::PIC_));
   if (!Tm) {
     errs() << "transpiler: Failed to create TargetMachine\n";
     return RaiseFailure::targetMachineCreationFailed();
@@ -1266,9 +1266,10 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
     // Pin the workgroup size to exactly what the source kernel declared, so
     // the backend lays out LDS / workitem IDs the same way the original
     // gfx1250 binary did.
-    int MaxWg = Meta.MaxFlatWorkgroupSize > 0 ? Meta.MaxFlatWorkgroupSize : 1024;
+    int MaxWg =
+        Meta.MaxFlatWorkgroupSize > 0 ? Meta.MaxFlatWorkgroupSize : 1024;
     F->addFnAttr("amdgpu-flat-work-group-size",
-                  std::to_string(MaxWg) + "," + std::to_string(MaxWg));
+                 std::to_string(MaxWg) + "," + std::to_string(MaxWg));
 
     // Deliberately do NOT set "amdgpu-waves-per-eu".  Pinning occupancy
     // constrains register allocation and caused spurious VGPR spills for
@@ -1354,8 +1355,8 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
       Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_workgroup_id_y);
   Function *FnDispatchPtr =
       Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_dispatch_ptr);
-  Function *FnKargPtr =
-      Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_kernarg_segment_ptr);
+  Function *FnKargPtr = Intrinsic::getOrInsertDeclaration(
+      &M, Intrinsic::amdgcn_kernarg_segment_ptr);
   // Build the source-ISA user-SGPR ABI from the kernel descriptor.
   // Phase 4 seeding and handler-side ABI-sensitive decoding (e.g.
   // handle_smem's kernarg-pointer detection) both key off this layout.
@@ -1434,7 +1435,8 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
   // Hidden-arg remaps use the ABI version the backend will emit for this
   // module. If target emission starts pinning a module flag, thread that value
   // here instead of relying on LLVM's default.
-  unsigned TargetCodeObjectVersion = AMDGPU::getDefaultAMDHSACodeObjectVersion();
+  unsigned TargetCodeObjectVersion =
+      AMDGPU::getDefaultAMDHSACodeObjectVersion();
   auto EmitPreloadedKernargDword = [&](IRBuilder<> &SeedB,
                                        int ByteOffset) -> Expected<Value *> {
     SourceHiddenArgContext HiddenCtx{C,
@@ -1540,7 +1542,8 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
     // HotSwap path models non-cluster source execution, so use the singleton
     // cluster encoding: per-cluster workgroup IDs and max IDs are all zero.
     B.CreateStore(B.getInt32(0), Regs.Ttmp[6]);
-    B.CreateStore(B.CreateCall(FnWorkgroupIdX, {}, "ttmp9_wg_id"), Regs.Ttmp[9]);
+    B.CreateStore(B.CreateCall(FnWorkgroupIdX, {}, "ttmp9_wg_id"),
+                  Regs.Ttmp[9]);
 
     // ttmp7 = (workgroup_id_z << 16) | (workgroup_id_y & 0xFFFF).
     // We mask Y to 16 bits before shifting Z so a stray-high-bit Y
@@ -1648,17 +1651,37 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
     return Error::success();
   };
 
-  // ==== Phase 5: Raise each instruction; collect all failures in allFailures. ====
+  // ==== Phase 5: Raise each instruction; collect all failures in allFailures.
+  // ====
 
   auto *F16Ty = Type::getHalfTy(C);
   auto *F64Ty = Type::getDoubleTy(C);
   // `userSgprLayout` was built above before Phase 4 so entry SGPR seeding
   // and handler-side ABI decisions use the same descriptor-derived mapping.
-  RaiseContext Ctx{C, M, B, Regs, Projection, Mc, Isa, TargetIsa,
-                   TargetCodeObjectVersion, Kernargs, &UserSgprLayout, F,
+  RaiseContext Ctx{C,
+                   M,
+                   B,
+                   Regs,
+                   Projection,
+                   Mc,
+                   Isa,
+                   TargetIsa,
+                   TargetCodeObjectVersion,
+                   Kernargs,
+                   &UserSgprLayout,
+                   F,
                    nullptr,
-                   I1Ty, I8Ty, I32Ty, I64Ty, F32Ty, F16Ty, F64Ty,
-                   PtrGlobalTy, OffsetToBb, KernelOffset, KernelEndOffset};
+                   I1Ty,
+                   I8Ty,
+                   I32Ty,
+                   I64Ty,
+                   F32Ty,
+                   F16Ty,
+                   F64Ty,
+                   PtrGlobalTy,
+                   OffsetToBb,
+                   KernelOffset,
+                   KernelEndOffset};
   Ctx.SetpcAnalysis = &SetpcAnalysis;
   Ctx.SourcePrivateSegmentFixedSize = Meta.PrivateSegmentFixedSize;
   Ctx.SourceComputePgmRsrc2 = Meta.ComputePgmRsrc2;
@@ -1683,8 +1706,8 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
   for (unsigned I = 0; I < Regs.Sgpr.size(); ++I) {
     auto *MaskA = B.CreateAlloca(Regs.ExecTy, nullptr,
                                  "sgpr_mask_shadow_" + std::to_string(I));
-    auto *ValidA = B.CreateAlloca(I1Ty, nullptr,
-                                  "sgpr_mask_valid_" + std::to_string(I));
+    auto *ValidA =
+        B.CreateAlloca(I1Ty, nullptr, "sgpr_mask_valid_" + std::to_string(I));
     B.CreateStore(ConstantInt::get(Regs.ExecTy, 0), MaskA);
     B.CreateStore(B.getFalse(), ValidA);
     Ctx.SgprWaveMaskExecShadow.push_back(MaskA);
@@ -1773,8 +1796,7 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
 
   llvm::Error RaiseFailures = llvm::Error::success();
   int RaisedCount = 0;
-  for (size_t InstIdx = 0; InstIdx < Insts.size(); ++InstIdx) {
-    const DecodedInst &Di = Insts[InstIdx];
+  for (const DecodedInst &Di : Insts) {
 
     // If a terminator ended the recovered CFG path and the next decoded
     // instruction is not a known block leader, that instruction is unreachable
@@ -1849,27 +1871,27 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
 
       if (AMDGPU::isVOPD(Opc))
         return handleVOPD(Ctx, Di, Op);
-      else if (Flags & SIInstrFlags::IsMAI)
+      if (Flags & SIInstrFlags::IsMAI)
         return handleMFMA(Ctx, Di, Op);
-      else if (Flags & KValu)
+      if (Flags & KValu)
         return handleVALU(Ctx, Di, Op);
-      else if (Flags & SIInstrFlags::SOPP)
+      if (Flags & SIInstrFlags::SOPP)
         return handleSOPP(Ctx, Di, Op);
-      else if (Flags & SIInstrFlags::SOPC)
+      if (Flags & SIInstrFlags::SOPC)
         return handleSOPC(Ctx, Di, Op);
-      else if (Flags & SIInstrFlags::SOP1)
+      if (Flags & SIInstrFlags::SOP1)
         return handleSOP1(Ctx, Di, Op);
-      else if (Flags & SIInstrFlags::SOP2)
+      if (Flags & SIInstrFlags::SOP2)
         return handleSOP2(Ctx, Di, Op);
-      else if (Flags & SIInstrFlags::SOPK)
+      if (Flags & SIInstrFlags::SOPK)
         return handleSOPK(Ctx, Di, Op);
-      else if (Flags & SIInstrFlags::SMRD)
+      if (Flags & SIInstrFlags::SMRD)
         return handleSMEM(Ctx, Di, Op);
-      else if (Flags & SIInstrFlags::FLAT)
+      if (Flags & SIInstrFlags::FLAT)
         return handleFLAT(Ctx, Di, Op);
-      else if (Flags & SIInstrFlags::MUBUF)
+      if (Flags & SIInstrFlags::MUBUF)
         return handleMUBUF(Ctx, Di, Op);
-      else if (Flags & SIInstrFlags::DS)
+      if (Flags & SIInstrFlags::DS)
         return handleDS(Ctx, Di, Op);
       // VIMAGE TENSOR pseudo-instructions (`tensor_load_to_lds_d{2,4}`,
       // `tensor_store_from_lds_d{2,4}`, MIMGInstructions.td:2049-2113).
@@ -1883,7 +1905,7 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
       // (`isGFX125xOnly`) generation and the handler's only contract
       // today is a cross-target loud refusal; the same gating applies
       // when the same-target intrinsic-emit path lands.
-      else if (Flags & SIInstrFlags::TENSOR_CNT)
+      if (Flags & SIInstrFlags::TENSOR_CNT)
         return handleVIMAGE(Ctx, Di, Op);
 
       std::string Format = formatName(Di.TsFlags, Opc);
@@ -1923,62 +1945,61 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
       continue;
     }
 
-      if (Di.DefsScc && !Hr.SccHandled && Hr.SccResult) {
-        Value *Zero = Constant::getNullValue(Hr.SccResult->getType());
-        Ctx.Regs.storeSCC(Ctx.B, Ctx.B.CreateICmpNE(Hr.SccResult, Zero));
+    if (Di.DefsScc && !Hr.SccHandled && Hr.SccResult) {
+      Value *Zero = Constant::getNullValue(Hr.SccResult->getType());
+      Ctx.Regs.storeSCC(Ctx.B, Ctx.B.CreateICmpNE(Hr.SccResult, Zero));
+    }
+    if (Di.DefsExec)
+      Result.HasDivergentExec = true;
+    // Pattern B call-site post-processing: if this s_add_co_ci_u32
+    // is the high-half terminator of a getpc+add chain that feeds
+    // a Pattern B `s_set_pc_i64` enumerated-dispatch cascade (i.e.
+    // some downstream s_set_pc_i64 reads the same ret-pair this
+    // chain populated), overwrite the ret-pair SGPR with the plain
+    // i64 marker `resolvedReturnAddr` -- i.e. the source-MC byte
+    // offset of the BB this chain meant to return to. The
+    // downstream cascade compares against the same offsets via
+    // `icmp eq i64 %marker, <offset_k>` for each enumerated
+    // target; when this predecessor's marker matches one of the
+    // enumerated offsets, mem2reg + SCCP + InstCombine fold the
+    // compare to `i1 true` across the phi join and SimplifyCFG
+    // collapses the cmp+br cascade into a direct
+    // `br label %BB_<offset>`. The SOP2 handler has already done
+    // its (binary-PC-producing) arithmetic above; this commit
+    // happens *after* and clobbers that result on purpose -- that
+    // value was an opaque runtime PC we never want to see
+    // downstream.
+    //
+    // An earlier revision of this hook wrote
+    // `ptrtoint(blockaddress(@kernel, %BB_returnAddr)) to i64`
+    // here so the cascade could compare against a `blockaddress`
+    // constant. That form survived mem2reg + SCCP unfolded in
+    // irreducible tensilelite-shaped CFGs (the `storeSGPR64`
+    // hi/lo split prevented the cross-phi fold), leaving a
+    // `BlockAddress` SDNode alive into AMDGPU ISel, which has no
+    // codegen pattern for it and aborts llc with
+    //   `Cannot select: t1: i64 = BlockAddress<@kernel, %bb_N>`.
+    // Using a plain integer marker keeps `BlockAddress` solely
+    // as a direct-branch `label` operand (which DOES have a
+    // codegen pattern), sidestepping the ISel crash entirely.
+    // See setpc-analysis.h + canonical-op.h's S_SET_PC_I64 doc +
+    // `emitEnumeratedDispatch` in handle-sop1.cpp.
+    if (Di.CanonOp == CanonicalOp::S_ADDC_U32) {
+      auto It = SetpcAnalysis.ChainTerminators.find(Di.Offset);
+      if (It != SetpcAnalysis.ChainTerminators.end()) {
+        // Force the BB to exist so the downstream cascade's
+        // direct branch has a destination; we don't use the
+        // pointer here.
+        (void)Ctx.lookupBB(It->second.ResolvedReturnAddr);
+        Value *RetMarker =
+            ConstantInt::get(Ctx.I64Ty, It->second.ResolvedReturnAddr);
+        Ctx.Regs.storeSGPR64(Ctx.B, static_cast<int>(It->second.RetPairLowReg),
+                             RetMarker);
       }
-      if (Di.DefsExec)
-        Result.HasDivergentExec = true;
-      // Pattern B call-site post-processing: if this s_add_co_ci_u32
-      // is the high-half terminator of a getpc+add chain that feeds
-      // a Pattern B `s_set_pc_i64` enumerated-dispatch cascade (i.e.
-      // some downstream s_set_pc_i64 reads the same ret-pair this
-      // chain populated), overwrite the ret-pair SGPR with the plain
-      // i64 marker `resolvedReturnAddr` -- i.e. the source-MC byte
-      // offset of the BB this chain meant to return to. The
-      // downstream cascade compares against the same offsets via
-      // `icmp eq i64 %marker, <offset_k>` for each enumerated
-      // target; when this predecessor's marker matches one of the
-      // enumerated offsets, mem2reg + SCCP + InstCombine fold the
-      // compare to `i1 true` across the phi join and SimplifyCFG
-      // collapses the cmp+br cascade into a direct
-      // `br label %BB_<offset>`. The SOP2 handler has already done
-      // its (binary-PC-producing) arithmetic above; this commit
-      // happens *after* and clobbers that result on purpose -- that
-      // value was an opaque runtime PC we never want to see
-      // downstream.
-      //
-      // An earlier revision of this hook wrote
-      // `ptrtoint(blockaddress(@kernel, %BB_returnAddr)) to i64`
-      // here so the cascade could compare against a `blockaddress`
-      // constant. That form survived mem2reg + SCCP unfolded in
-      // irreducible tensilelite-shaped CFGs (the `storeSGPR64`
-      // hi/lo split prevented the cross-phi fold), leaving a
-      // `BlockAddress` SDNode alive into AMDGPU ISel, which has no
-      // codegen pattern for it and aborts llc with
-      //   `Cannot select: t1: i64 = BlockAddress<@kernel, %bb_N>`.
-      // Using a plain integer marker keeps `BlockAddress` solely
-      // as a direct-branch `label` operand (which DOES have a
-      // codegen pattern), sidestepping the ISel crash entirely.
-      // See setpc-analysis.h + canonical-op.h's S_SET_PC_I64 doc +
-      // `emitEnumeratedDispatch` in handle-sop1.cpp.
-      if (Di.CanonOp == CanonicalOp::S_ADDC_U32) {
-        auto It = SetpcAnalysis.ChainTerminators.find(Di.Offset);
-        if (It != SetpcAnalysis.ChainTerminators.end()) {
-          // Force the BB to exist so the downstream cascade's
-          // direct branch has a destination; we don't use the
-          // pointer here.
-          (void)Ctx.lookupBB(It->second.ResolvedReturnAddr);
-          Value *RetMarker =
-              ConstantInt::get(Ctx.I64Ty, It->second.ResolvedReturnAddr);
-          Ctx.Regs.storeSGPR64(Ctx.B,
-                                static_cast<int>(It->second.RetPairLowReg),
-                                RetMarker);
-        }
-      }
+    }
 
-      RaisedCount++;
-      continue;
+    ++RaisedCount;
+    continue;
   }
 
   if (RaiseReadFailure) {
@@ -2241,20 +2262,17 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
     // the classifier then decides whether that MODREP instance can have an
     // active replica lane before turning an observed C5 site into a refusal.
     PredicateChainProjection PredProjection =
-        UseThreadLoop ? PredicateChainProjection::ThreadLoop
-                      : (UseWaveNative
-                             ? PredicateChainProjection::WaveNative
+        UseThreadLoop
+            ? PredicateChainProjection::ThreadLoop
+            : (UseWaveNative ? PredicateChainProjection::WaveNative
                              : PredicateChainProjection::ModuloReplication);
-    PredicateChainClassifierReport PredReport =
-        classifyPredicateChain(*F, Isa.WaveSize, TargetIsa.WaveSize,
-                                PredProjection,
-                                /*maxFlatWorkgroupSize=*/
-                                Meta.MaxFlatWorkgroupSize > 0
-                                    ? static_cast<unsigned>(
-                                          Meta.MaxFlatWorkgroupSize)
-                                    : 0u,
-                                UseThreadLoop &&
-                                    SuppressC5ForThreadLoopRoute);
+    PredicateChainClassifierReport PredReport = classifyPredicateChain(
+        *F, Isa.WaveSize, TargetIsa.WaveSize, PredProjection,
+        /*maxFlatWorkgroupSize=*/
+        Meta.MaxFlatWorkgroupSize > 0
+            ? static_cast<unsigned>(Meta.MaxFlatWorkgroupSize)
+            : 0u,
+        UseThreadLoop && SuppressC5ForThreadLoopRoute);
 
     if (!PredReport.Refused && !PredReport.ObservedSites.empty()) {
       Result.C5SuppressedCount +=
@@ -2269,9 +2287,8 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
                        ? "WaveNativeProjection"
                        : "ModuloReplicationProjection");
         dbgs() << "c5-predicate-chain: observed "
-               << PredReport.ObservedSites.size()
-               << " C5-shape site(s) in '" << KernelName << "' under "
-               << ProjectionName
+               << PredReport.ObservedSites.size() << " C5-shape site(s) in '"
+               << KernelName << "' under " << ProjectionName
                << " (refusal "
                   "suppressed per c5-predicate-chain-classifier.h "
                   "projection contract):\n";
@@ -2290,9 +2307,8 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
       };
       constexpr bool kEnableThreadLoopC5Retry = false;
       const bool CanRetryThreadLoop =
-          kEnableThreadLoopC5Retry &&
-          PredReport.WaveNativeEqualityRefusal && !ForceThreadLoopProjection &&
-          TargetIsa.WaveSize > Isa.WaveSize &&
+          kEnableThreadLoopC5Retry && PredReport.WaveNativeEqualityRefusal &&
+          !ForceThreadLoopProjection && TargetIsa.WaveSize > Isa.WaveSize &&
           (TargetIsa.WaveSize % Isa.WaveSize) == 0 && !HasMatrixOp();
       if (CanRetryThreadLoop) {
         errs() << "transpiler: post-raise fallback: retrying kernel '"
@@ -2313,10 +2329,11 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
              << reasonString(RaiseFailureReason::CrossWavePredicateChain)
              << " on 'workitem.id.x-predicate-chain-classifier' — "
              << PredReport.RefusalDetail << "\n";
-      errs() << "  outcome: (c) refuse — WorkitemIdPredicateChain (§3 Class 5"
-             << (PredReport.WaveNativePhantomRefusal ? " phantom-lane sub-case"
-                                                     : "")
-             << ")\n";
+      errs()
+          << "  outcome: (c) refuse -- WorkitemIdPredicateChain (sec. 3 Class 5"
+          << (PredReport.WaveNativePhantomRefusal ? " phantom-lane sub-case"
+                                                  : "")
+          << ")\n";
       return RaiseFailure::crossWavePredicateChain(KernelName,
                                                    PredReport.RefusalDetail);
     }

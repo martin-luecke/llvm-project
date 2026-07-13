@@ -15,6 +15,7 @@ namespace COMGR::hotswap {
 
 // Architecture-neutral instruction identity used for dispatch in the raiser.
 // Each entry maps to one or more MC opcodes via OpcodeMap.
+// clang-format off
 enum class CanonicalOp : uint16_t {
   Unknown = 0,
 
@@ -1384,6 +1385,7 @@ enum class CanonicalOp : uint16_t {
 
   CanonicalOp_COUNT
 };
+// clang-format on
 
 inline bool isMatrixCanonicalOp(CanonicalOp Op) {
   const uint16_t V = static_cast<uint16_t>(Op);

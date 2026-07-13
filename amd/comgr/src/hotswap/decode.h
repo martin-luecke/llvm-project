@@ -53,13 +53,11 @@ struct DecodeResult {
 // KMaxSrcs overflow). This is the LLVM-version-drift guard surface --
 // every check here catches an upstream LLVM change before it can silently
 // corrupt a handler's view of an instruction.
-DecodeResult decodeKernel(const MCState &Mc,
-                          const OpcodeMap &OpcMap,
-                          llvm::ArrayRef<uint8_t> TextBytes,
-                          uint64_t KernelOffset,
-                          uint64_t KernelEndOffset = 0,
-                          std::optional<uint64_t> KernelStartOffset =
-                              std::nullopt);
+DecodeResult
+decodeKernel(const MCState &Mc, const OpcodeMap &OpcMap,
+             llvm::ArrayRef<uint8_t> TextBytes, uint64_t KernelOffset,
+             uint64_t KernelEndOffset = 0,
+             std::optional<uint64_t> KernelStartOffset = std::nullopt);
 
 // Compute the decoded CFG successors for a block ending in LastInst.
 // NextBlockOffset is the linear fallthrough block start, or std::nullopt when

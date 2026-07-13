@@ -20,6 +20,7 @@ class MCInstrInfo;
 
 namespace COMGR::hotswap {
 
+enum class CanonicalOp : uint16_t;
 class OpcodeMap;
 
 // Per-CanonicalOp metadata that the raiser cross-references at its pre-
@@ -64,8 +65,8 @@ llvm::ArrayRef<CanonicalOpAttrSpec> getHandlerSOP1Attrs();
 llvm::ArrayRef<CanonicalOpAttrSpec> getHandlerSOP2Attrs();
 llvm::ArrayRef<CanonicalOpAttrSpec> getHandlerValuVcmpAttrs();
 
-// O(1) lookup keyed on CanonicalOp. Returns a default-constructed CanonicalOpAttrs
-// for SemOps that have no declared attrs (fail-closed).
+// O(1) lookup keyed on CanonicalOp. Returns a default-constructed
+// CanonicalOpAttrs for SemOps that have no declared attrs (fail-closed).
 const CanonicalOpAttrs &getCanonicalOpAttrs(CanonicalOp Op);
 
 // Startup invariant: for every MC opcode whose MCInstrDesc declares
