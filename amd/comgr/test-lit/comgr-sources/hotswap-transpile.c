@@ -165,17 +165,23 @@ int main(int argc, char *argv[]) {
   // hand the output to llvm-readelf / llvm-objdump for ISA-level smoke
   // checks; the validation paths leave it NULL and only inspect stdout.
   const char *OutputPath = NULL;
+  static const char ZeroSizeOpt[] = "--zero-size";
+  static const char WrongKindOpt[] = "--wrong-kind";
+  static const char UseOptionsApiOpt[] = "--use-options-api";
+  static const char BadOptionsVersionOpt[] = "--bad-options-version";
+  static const char OutputPrefix[] = "--output=";
   for (int i = 4; i < argc; i++) {
-    if (strcmp(argv[i], "--zero-size") == 0)
+    if (strncmp(argv[i], ZeroSizeOpt, sizeof(ZeroSizeOpt)) == 0)
       ZeroSize = 1;
-    else if (strcmp(argv[i], "--wrong-kind") == 0)
+    else if (strncmp(argv[i], WrongKindOpt, sizeof(WrongKindOpt)) == 0)
       WrongKind = 1;
-    else if (strcmp(argv[i], "--use-options-api") == 0)
+    else if (strncmp(argv[i], UseOptionsApiOpt, sizeof(UseOptionsApiOpt)) == 0)
       UseOptionsApi = 1;
-    else if (strcmp(argv[i], "--bad-options-version") == 0)
+    else if (strncmp(argv[i], BadOptionsVersionOpt,
+                     sizeof(BadOptionsVersionOpt)) == 0)
       BadOptionsVersion = 1;
-    else if (strncmp(argv[i], "--output=", 9) == 0)
-      OutputPath = argv[i] + 9;
+    else if (strncmp(argv[i], OutputPrefix, sizeof(OutputPrefix) - 1) == 0)
+      OutputPath = argv[i] + sizeof(OutputPrefix) - 1;
     else
       fail("unknown option: %s", argv[i]);
   }
