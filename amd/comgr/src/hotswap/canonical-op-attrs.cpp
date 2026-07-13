@@ -8,18 +8,18 @@
 
 #include "canonical-op-attrs.h"
 
+#include "canonical-op.h"
 #include "opcode-map.h"
 #include "raise-failure.h"
 
 #include "MCTargetDesc/AMDGPUMCTargetDesc.h" // AMDGPU::EXEC, EXEC_LO, EXEC_HI
 #include "Utils/AMDGPUBaseInfo.h"            // AMDGPU::mc2PseudoReg
 
+#include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCRegister.h"
-#include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/raw_ostream.h"
 
 #include <cassert>
 #include <cstddef>

@@ -18,6 +18,7 @@
 #include "hotswap/decode.h"
 #include "hotswap/decoded-inst.h"
 #include "hotswap/pipeline.h"
+#include "hotswap/raise-failure.h"
 #include "hotswap/raiser.h"
 
 #include "llvm/IR/BasicBlock.h"

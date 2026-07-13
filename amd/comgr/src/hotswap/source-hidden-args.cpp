@@ -8,6 +8,8 @@
 
 #include "source-hidden-args.h"
 
+#include "kernarg-layout.h"
+
 #include "SIDefines.h"
 #include "Utils/AMDGPUBaseInfo.h"
 

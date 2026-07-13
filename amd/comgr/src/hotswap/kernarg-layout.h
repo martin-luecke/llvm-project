@@ -9,13 +9,15 @@
 #ifndef HOTSWAP_TRANSPILER_KERNARG_LAYOUT_H
 #define HOTSWAP_TRANSPILER_KERNARG_LAYOUT_H
 
-#include "code-object-utils.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
 
+#include <cstdint>
 #include <optional>
 
 namespace COMGR::hotswap {
+
+struct KernelArgMeta;
 
 // Source-kernel kernarg-segment metadata needed without reading the segment.
 struct KernargLayout {

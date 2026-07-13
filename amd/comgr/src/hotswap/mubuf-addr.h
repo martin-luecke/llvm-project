@@ -9,14 +9,20 @@
 #ifndef HOTSWAP_TRANSPILER_MUBUF_ADDR_H
 #define HOTSWAP_TRANSPILER_MUBUF_ADDR_H
 
-#include "decoded-inst.h"
 #include "parsed-reg.h"
-#include "raise-context.h"
 
-#include "llvm/IR/Value.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
 
+namespace llvm {
+class Value;
+}
+
 namespace COMGR::hotswap {
+
+struct DecodedInst;
+struct OpResolver;
+struct RaiseContext;
 
 // Decoded addressing shape of a MUBUF / VBUFFER load, store, or atomic.
 //

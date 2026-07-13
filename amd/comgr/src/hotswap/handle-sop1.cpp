@@ -7,19 +7,42 @@
 //===----------------------------------------------------------------------===//
 
 #include "canonical-op-attrs.h"
+#include "canonical-op.h"
+#include "decoded-inst.h"
 #include "handlers.h"
+#include "isa-profile.h"
+#include "parsed-reg.h"
+#include "raise-context.h"
+#include "raise-failure.h"
+#include "reg-file.h"
+#include "setpc-analysis.h"
+#include "wave-projection.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/Twine.h"
+#include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
+#include "llvm/IR/Type.h"
+#include "llvm/IR/Value.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include "llvm/MC/MCExpr.h"
-#include "llvm/MC/MCInst.h"
+#include <cassert>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <string>
+
 using namespace llvm;
 
 namespace COMGR::hotswap {

@@ -10,6 +10,7 @@
 
 #include "decoded-inst.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
 namespace COMGR::hotswap {

@@ -10,20 +10,30 @@
 
 #include "comgr-metadata.h"
 #include "comgr-symbol.h"
+#include "comgr.h"
 #include "hotswap-error.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/BinaryFormat/MsgPackDocument.h"
+#include "llvm/BinaryFormat/MsgPackReader.h"
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/ObjectFile.h"
+#include "llvm/Object/SymbolicFile.h"
 #include "llvm/Support/AMDHSAKernelDescriptor.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <array>
 #include <cstring>
+#include <map>
 #include <memory>
 #include <optional>
+#include <utility>
+#include <vector>
 
 namespace COMGR::hotswap {
 

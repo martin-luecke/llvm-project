@@ -10,10 +10,10 @@
 #define HOTSWAP_TRANSPILER_OCML_RUNTIME_H
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/IR/DerivedTypes.h"
 #include "llvm/Support/Error.h"
 
 namespace llvm {
-class FunctionCallee;
 class Module;
 } // namespace llvm
 

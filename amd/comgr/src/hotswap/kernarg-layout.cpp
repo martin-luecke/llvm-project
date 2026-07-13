@@ -8,6 +8,7 @@
 
 #include "kernarg-layout.h"
 
+#include "code-object-utils.h"
 #include "llvm/ADT/StringRef.h"
 
 #include <cstdint>

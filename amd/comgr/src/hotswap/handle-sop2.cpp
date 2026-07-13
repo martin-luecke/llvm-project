@@ -7,13 +7,31 @@
 //===----------------------------------------------------------------------===//
 
 #include "canonical-op-attrs.h"
+#include "canonical-op.h"
+#include "decoded-inst.h"
 #include "handlers.h"
-#include "hotswap/raise-failure.h"
+#include "isa-profile.h"
+#include "parsed-reg.h"
+#include "raise-context.h"
+#include "raise-failure.h"
+#include "reg-file.h"
+#include "wave-projection.h"
 
+#include "llvm/ADT/ArrayRef.h"
+ #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
-#include "llvm/IR/IntrinsicsAMDGPU.h"
-#include "llvm/Support/ErrorHandling.h"
+#include "llvm/IR/Type.h"
+#include "llvm/IR/Value.h"
+#include "llvm/MC/MCRegister.h"
+#include "llvm/Support/Error.h"
+
+#include <cstdint>
 
 using namespace llvm;
 

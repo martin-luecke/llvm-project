@@ -10,8 +10,14 @@
 #include "hotswap-error.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/MC/MCInstrInfo.h"
+#include "llvm/MC/MCTargetOptions.h"
+#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/TargetSelect.h"
+#include "llvm/Support/raw_ostream.h"
+#include "llvm/TargetParser/Triple.h"
+
+#include <utility>
 
 using namespace llvm;
 

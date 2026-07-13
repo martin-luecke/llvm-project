@@ -12,9 +12,12 @@
 #include "canonical-op.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/IR/InstrTypes.h"
-#include "llvm/MC/MCInstrInfo.h"
 
 #include <cstdint>
+
+namespace llvm {
+class MCInstrInfo;
+}
 
 namespace COMGR::hotswap {
 
