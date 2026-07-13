@@ -10,15 +10,33 @@
 
 #include "canonical-op.h"
 
-#include "MCTargetDesc/AMDGPUMCTargetDesc.h" // AMDGPU::OpName
-#include "SIDefines.h"                        // SISrcMods::OP_SEL_0
+#include "SIDefines.h" // SISrcMods::OP_SEL_0
 #include "Utils/AMDGPUBaseInfo.h"
 
+#include "decoded-inst.h"
+#include "isa-profile.h"
+#include "parsed-reg.h"
+#include "raise-context.h"
+#include "raise-failure.h"
+#include "reg-file.h"
+#include "wave-projection.h"
+
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/IR/Constant.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
+#include "llvm/IR/Value.h"
+#include "llvm/MC/MCInst.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/raw_ostream.h"
+
+#include <cstdint>
+#include <string>
 
 using namespace llvm;
 

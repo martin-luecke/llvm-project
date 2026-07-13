@@ -9,14 +9,12 @@
 #ifndef HOTSWAP_TRANSPILER_RAISE_CONTEXT_H
 #define HOTSWAP_TRANSPILER_RAISE_CONTEXT_H
 
+#include "canonical-op.h"
 #include "decoded-inst.h"
 #include "isa-profile.h"
-#include "kernarg-layout.h"
-#include "mc-state.h"
 #include "parsed-reg.h"
 #include "raise-failure.h"
 #include "reg-file.h"
-#include "setpc-analysis.h"
 #include "user-sgpr-layout.h"
 #include "wave-projection.h"
 
@@ -24,16 +22,31 @@
 #include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/IRBuilder.h"
-#include "llvm/IR/Module.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/Value.h"
 #include "llvm/MC/MCRegister.h"
-#include "llvm/Support/Error.h"
 
 #include <cassert>
-#include <map>
+#include <climits>
+#include <cstddef>
+#include <cstdint>
 #include <optional>
-#include <utility>
+
+namespace llvm {
+class BasicBlock;
+class Error;
+class Function;
+class LLVMContext;
+class Module;
+class Type;
+} // namespace llvm
 
 namespace COMGR::hotswap {
+
+struct KernargLayout;
+struct MCState;
+struct SetPcAnalysis;
 
 // Result of classifying an instruction as a constant rebase of the tracked
 // kernarg pointer pair. `TouchesKernargPtr` distinguishes "not this pattern"

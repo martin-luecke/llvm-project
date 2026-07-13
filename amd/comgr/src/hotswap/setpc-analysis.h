@@ -9,8 +9,6 @@
 #ifndef HOTSWAP_TRANSPILER_SETPC_ANALYSIS_H
 #define HOTSWAP_TRANSPILER_SETPC_ANALYSIS_H
 
-#include "decoded-inst.h"
-
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -22,6 +20,7 @@
 
 namespace COMGR::hotswap {
 
+struct DecodedInst;
 struct MCState;
 
 // Static analysis pass that classifies every `s_set_pc_i64` site in a

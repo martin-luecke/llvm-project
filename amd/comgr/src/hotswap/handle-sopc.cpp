@@ -8,7 +8,21 @@
 
 #include "handlers.h"
 
+#include "canonical-op.h"
+#include "decoded-inst.h"
+#include "parsed-reg.h"
+#include "raise-context.h"
+#include "reg-file.h"
+
+#include "llvm/IR/Constant.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Type.h"
+#include "llvm/IR/Value.h"
+#include "llvm/Support/Error.h"
+
+#include <cstdint>
 
 using namespace llvm;
 

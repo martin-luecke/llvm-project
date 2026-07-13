@@ -10,10 +10,8 @@
 #define HOTSWAP_TRANSPILER_SOURCE_HIDDEN_ARGS_H
 
 #include "code-object-utils.h"
-#include "kernarg-layout.h"
 
 #include "llvm/ADT/ArrayRef.h"
-#include "llvm/ADT/Twine.h"
 
 #include <string>
 

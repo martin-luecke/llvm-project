@@ -134,24 +134,33 @@
 
 #include "setpc-analysis.h"
 
-#include "MCTargetDesc/AMDGPUMCTargetDesc.h"
+#include "AMDGPUGenRegisterInfoEnums.inc"
 #include "SIDefines.h"
+#include "Utils/AMDGPUBaseInfo.h"
+#include "canonical-op.h"
 #include "decode.h"
+#include "decoded-inst.h"
 #include "mc-state.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseMapInfo.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/ADT/iterator.h"
+#include "llvm/ADT/iterator_range.h"
 #include "llvm/MC/MCInst.h"
+#include "llvm/MC/MCRegister.h"
 #include "llvm/MC/MCRegisterInfo.h"
-#include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <deque>
 #include <optional>
 #include <set>
+#include <utility>
 
 using namespace llvm;
 

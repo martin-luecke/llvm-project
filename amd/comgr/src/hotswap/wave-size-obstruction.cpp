@@ -7,22 +7,26 @@
 //===----------------------------------------------------------------------===//
 
 #include "wave-size-obstruction.h"
-#include "wave-projection.h"
 
-#include <cstdlib>
+#include <optional>
+#include <utility>
 
+#include "amdgpu-formats.h"
+#include "canonical-op.h"
 #include "decoded-inst.h"
 #include "isa-profile.h"
 #include "mc-state.h"
-#include "canonical-op.h"
+#include "raise-failure.h"
 #include "wave-projection.h"
 
 #include "MCTargetDesc/AMDGPUMCTargetDesc.h" // AMDGPU::OpName, AMDGPU::TTMP_32RegClassID, AMDGPU::mc2PseudoReg
-#include "Utils/AMDGPUBaseInfo.h"             // AMDGPU::getNamedOperandIdx
+#include "Utils/AMDGPUBaseInfo.h" // AMDGPU::getNamedOperandIdx
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/MC/MCInst.h"
+#include "llvm/MC/MCRegister.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Format.h"

@@ -6,14 +6,34 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "handlers.h"
 #include "decode.h"
+#include "handlers.h"
 
 #include "SIDefines.h"
-#include "llvm/ADT/Twine.h"
-#include "llvm/IR/IntrinsicsAMDGPU.h"
+#include "canonical-op.h"
+#include "decoded-inst.h"
+#include "isa-profile.h"
+#include "parsed-reg.h"
+#include "raise-context.h"
+#include "raise-failure.h"
+#include "reg-file.h"
 
-#include <climits>
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/Twine.h"
+#include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Constant.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/FPEnv.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/IntrinsicsAMDGPU.h"
+#include "llvm/IR/Value.h"
+#include "llvm/Support/Error.h"
+
+#include <stdint.h>
 using namespace llvm;
 
 namespace COMGR::hotswap {

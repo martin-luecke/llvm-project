@@ -8,9 +8,12 @@
 
 #include "opcode-map.h"
 
+#include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <optional>
 #include <string>
+#include <utility>
 
 // AMDGPU target-private headers. They expose:
 //   AMDGPU::getMCOpcode           (declared in Utils/AMDGPUBaseInfo.h)
@@ -25,16 +28,19 @@
 // SIInstrInfo.h drags in the CodeGen TargetInstrInfo base, which we do not
 // use at runtime, but pulling it in is preferable to hand-rolling forward
 // declarations that would silently go stale if LLVM changes a signature.
-#include "MCTargetDesc/AMDGPUMCTargetDesc.h"
 #include "SIDefines.h"
 #include "SIInstrInfo.h"
 #include "Utils/AMDGPUBaseInfo.h"
+#include "canonical-op.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/StringMapEntry.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCInstrInfo.h"
+#include "llvm/Support/AllocatorBase.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 

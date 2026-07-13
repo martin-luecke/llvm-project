@@ -9,22 +9,37 @@
 #include "raise-context.h"
 
 #include "MCTargetDesc/AMDGPUMCTargetDesc.h" // AMDGPU::VCC, AMDGPU::EXEC, ...
-#include "SIDefines.h"                        // AMDGPU::HWEncoding::*
+#include "SIDefines.h"                       // AMDGPU::HWEncoding::*
 #include "Utils/AMDGPUBaseInfo.h"
+#include "decoded-inst.h"
+#include "isa-profile.h"
+#include "mc-state.h"
+#include "parsed-reg.h"
+#include "raise-failure.h"
+#include "reg-file.h"
+#include "wave-projection.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Constant.h"
 #include "llvm/IR/Constants.h"
-#include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
-#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
+#include "llvm/IR/Type.h"
+#include "llvm/MC/MCInst.h"
+#include "llvm/MC/MCInstrDesc.h"
+#include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/TypeSize.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <memory>
+#include <string>
+#include <utility>
 
 using namespace llvm;
 

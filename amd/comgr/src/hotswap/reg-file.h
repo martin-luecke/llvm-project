@@ -14,12 +14,12 @@
 #include "llvm/ADT/FunctionExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/IRBuilder.h"
-#include "llvm/IR/Instructions.h"
-#include "llvm/IR/Type.h"
-#include "llvm/IR/Value.h"
 
 namespace llvm {
+class AllocaInst;
 class MCRegisterInfo;
+class Type;
+class Value;
 } // namespace llvm
 
 namespace COMGR::hotswap {

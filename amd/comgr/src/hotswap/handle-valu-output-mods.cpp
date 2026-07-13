@@ -8,10 +8,14 @@
 
 #include "handle-valu-output-mods.h"
 
-#include "canonical-op.h"
+#include "raise-failure.h"
 
 #include "Utils/AMDGPUBaseInfo.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/MC/MCInst.h"
+
+#include <optional>
+#include <stdint.h>
 
 using namespace llvm;
 

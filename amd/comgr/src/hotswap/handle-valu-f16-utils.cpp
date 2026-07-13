@@ -9,9 +9,22 @@
 #include "handle-valu-f16-utils.h"
 
 #include "SIDefines.h"
+#include "decoded-inst.h"
+#include "parsed-reg.h"
+#include "raise-context.h"
+#include "raise-failure.h"
+#include "reg-file.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/IR/Constant.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/Type.h"
+
+#include <limits.h>
+#include <stdint.h>
 
 using namespace llvm;
 

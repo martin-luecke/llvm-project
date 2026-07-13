@@ -9,22 +9,19 @@
 #ifndef HOTSWAP_TRANSPILER_RAISER_H
 #define HOTSWAP_TRANSPILER_RAISER_H
 
-#include "code-object-utils.h"
-#include "raise-failure.h"
-
-#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
 #include "llvm/Support/Error.h"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 
-namespace llvm {
-class LLVMContext;
-class Module;
-} // namespace llvm
-
 namespace COMGR::hotswap {
+
+struct KernelMeta;
 
 struct RaiseResult {
   std::unique_ptr<llvm::LLVMContext> Ctx;

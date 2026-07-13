@@ -9,14 +9,21 @@
 #ifndef HOTSWAP_TRANSPILER_FLAT_ADDR_H
 #define HOTSWAP_TRANSPILER_FLAT_ADDR_H
 
-#include "decoded-inst.h"
 #include "parsed-reg.h"
-#include "raise-context.h"
 
 #include "llvm/ADT/StringRef.h"
-#include "llvm/IR/Value.h"
+
+#include <cstdint>
+
+namespace llvm {
+class Value;
+}
 
 namespace COMGR::hotswap {
+
+struct DecodedInst;
+struct OpResolver;
+struct RaiseContext;
 
 // Decoded address-shape of a FLAT / GLOBAL load or store.
 //

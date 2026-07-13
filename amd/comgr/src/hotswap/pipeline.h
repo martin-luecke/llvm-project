@@ -6,6 +6,7 @@
 #include "llvm/Support/MemoryBufferRef.h"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 
 namespace COMGR::hotswap {

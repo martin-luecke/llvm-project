@@ -9,9 +9,6 @@
 #ifndef HOTSWAP_TRANSPILER_USER_SGPR_LAYOUT_H
 #define HOTSWAP_TRANSPILER_USER_SGPR_LAYOUT_H
 
-#include "code-object-utils.h"
-#include "isa-profile.h"
-
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
@@ -20,6 +17,9 @@
 #include <string>
 
 namespace COMGR::hotswap {
+
+struct ISAProfile;
+struct KernelMeta;
 
 // UserSgprLayout -- what each SGPR contains at function entry on the source
 // ISA, derived from the kernel descriptor (KernelMeta::kernelCodeProperties,

@@ -9,28 +9,30 @@
 #include "decode.h"
 
 #include "amdgpu-formats.h"
+#include "canonical-op.h"
 #include "decoded-inst.h"
 #include "mc-state.h"
 #include "opcode-map.h"
-#include "canonical-op.h"
 
-#include "MCTargetDesc/AMDGPUMCTargetDesc.h" // AMDGPU::EXEC, VCC, SCC, ...
+#include "SIDefines.h"
 #include "Utils/AMDGPUBaseInfo.h"
 
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/MC/MCDisassembler/MCDisassembler.h"
-#include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstPrinter.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCRegister.h"
-#include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/Format.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
+
+#include "AMDGPUGenRegisterInfoEnums.inc"
 
 #include <cassert>
 #include <climits>

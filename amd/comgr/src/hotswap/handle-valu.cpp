@@ -6,29 +6,49 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "handle-valu-internal.h"
 #include "handle-valu-f16-utils.h"
+#include "handle-valu-internal.h"
 #include "handle-valu-output-mods.h"
 #include "handlers.h"
-#include "opcode-map.h"
 
-#include "canonical-op.h"
 #include "SIDefines.h"
 #include "Utils/AMDGPUBaseInfo.h"
+#include "canonical-op.h"
+#include "decoded-inst.h"
+#include "isa-profile.h"
+#include "mc-state.h"
+#include "parsed-reg.h"
+#include "raise-context.h"
+#include "raise-failure.h"
+#include "reg-file.h"
+#include "wave-projection.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/IR/Constant.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/FPEnv.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
+#include "llvm/IR/Type.h"
+#include "llvm/IR/Value.h"
+#include "llvm/MC/MCInst.h"
+#include "llvm/MC/MCRegisterInfo.h"
+#include "llvm/Support/Casting.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
-#include <map>
+#include <climits>
+#include <cstdint>
 #include <optional>
-#include <tuple>
+#include <string>
 
 using namespace llvm;
 

@@ -9,10 +9,10 @@
 #ifndef HOTSWAP_TRANSPILER_SEM_OP_ATTRS_H
 #define HOTSWAP_TRANSPILER_SEM_OP_ATTRS_H
 
-#include "canonical-op.h"
-
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Error.h"
+
+#include <cstdint>
 
 namespace llvm {
 class MCInstrInfo;

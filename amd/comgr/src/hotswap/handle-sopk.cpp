@@ -7,13 +7,28 @@
 //===----------------------------------------------------------------------===//
 
 #include "amdgpu-mode-hwreg.h"
+#include "canonical-op.h"
+#include "decoded-inst.h"
 #include "handlers.h"
+#include "isa-profile.h"
 #include "pipeline.h" // isStrictMode()
+#include "raise-context.h"
+#include "raise-failure.h"
+#include "reg-file.h"
 
 #include "SIDefines.h" // AMDGPU::Hwreg::Id
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/bit.h"
+#include "llvm/IR/Constant.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
-#include "llvm/Support/MathExtras.h"
+#include "llvm/IR/Value.h"
+#include "llvm/MC/MCInst.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstdint>

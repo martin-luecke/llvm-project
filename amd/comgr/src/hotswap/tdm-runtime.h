@@ -29,10 +29,10 @@
 // behaviour exactly.
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/IR/DerivedTypes.h"
 #include "llvm/Support/Error.h"
 
 namespace llvm {
-class FunctionCallee;
 class Module;
 } // namespace llvm
 

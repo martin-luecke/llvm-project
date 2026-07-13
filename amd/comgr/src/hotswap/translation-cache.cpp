@@ -4,10 +4,14 @@
 #include "comgr-device-libs.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/ObjectFile.h"
+#include "llvm/Support/Casting.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/JSON.h"
@@ -17,11 +21,14 @@
 #include "llvm/Support/SHA256.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include <dlfcn.h>
 #include <chrono>
+#include <cstdint>
+#include <dlfcn.h>
 #include <optional>
 #include <string>
 #include <sys/stat.h>
+#include <utility>
+#include <vector>
 
 #define DEBUG_TYPE "translation-cache"
 
