@@ -143,6 +143,36 @@ bool isIntrinsicVGPRSafePropagator(Intrinsic::ID Id) {
   case Intrinsic::amdgcn_div_scale:
   case Intrinsic::amdgcn_exp2:
   case Intrinsic::amdgcn_log:
+  // Whole-wave / whole-quad execution-mode markers.  Each is declared
+  // `Intrinsic<[llvm_any_ty], [LLVMMatchType<0>], [IntrNoMem,
+  // IntrSpeculatable, ...]>` in IntrinsicsAMDGPU.td: a pure "copy the
+  // source value to the destination" op whose only effect is to
+  // constrain the EXEC mask under which the source is *computed*
+  // (whole-wave for wwm, whole-quad for wqm).  The result is the same
+  // per-lane value in the same register class as the input -- there is
+  // no SGPR-forced operand and no scalarisation in any codegen path, so
+  // our tracked per-source-wave state passes through unchanged.  Hence
+  // VGPRSafePropagator: keep walking the result's users.
+  //
+  // Why this matters here: this very pass *emits* `@llvm.amdgcn.
+  // strict.wwm` to wrap the rewritten `ds_bpermute` gather under MODREP
+  // (issue #152, `forceWholeWaveGather` above), and the cross-lane VALU
+  // handlers wrap their `ds_bpermute`-emulated `permlane16` / MFMA / WMMA
+  // results in `strict.wwm` via `WaveProjection::wrapAsWWMValue` during
+  // lifting.  A reduction-bearing Triton kernel (RMSNorm / layer-norm /
+  // softmax) therefore routinely has an `update.dpp` reduction step whose
+  // result flows through one of these markers before it is stored.  Left
+  // off this list the marker fell through to `Unknown` -> `SGPRForced`
+  // and the classifier refused the whole function ("update.dpp ... reaches
+  // an SGPR-forced consumer (call @llvm.amdgcn.strict.wwm.i32
+  // (unaudited))"), even though the marker is strictly VGPR-safe.  All
+  // five are value-preserving markers, so the audit bar matches the VALU
+  // arithmetic entries below.
+  case Intrinsic::amdgcn_strict_wwm:
+  case Intrinsic::amdgcn_wwm: // deprecated alias of strict_wwm
+  case Intrinsic::amdgcn_strict_wqm:
+  case Intrinsic::amdgcn_wqm:
+  case Intrinsic::amdgcn_softwqm:
   // Cross-lane primitives the rewrite also rewrites in this same
   // pass: their post-rewrite shape is `select` / `ds_bpermute`, both
   // VGPR-safe. We can treat them as VGPR-safe propagators pre-
