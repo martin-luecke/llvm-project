@@ -46,6 +46,14 @@ struct RaiseResult {
   bool HasDivergentExec = false;
 };
 
+// Build a trapping stub for a kernel that cannot be translated. Keeps the
+// translated code object loadable (so sibling kernels stay usable) while
+// ensuring a dispatch of the stub fails loudly (llvm.trap / s_trap 2 on
+// AMDGPU) rather than silently returning garbage. Preserves the source
+// kernarg ABI via a byref placeholder so the descriptor's kernarg_segment_size
+// matches `Meta.KernargSegmentSize`.
+RaiseResult raiseStubKernel(const KernelMeta &Meta, llvm::StringRef KernelName);
+
 llvm::Expected<RaiseResult>
 raiseToIR(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
           llvm::StringRef KernelName, const KernelMeta &Meta,

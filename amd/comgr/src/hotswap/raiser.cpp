@@ -2453,4 +2453,69 @@ raiseToIR(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
       FunctionExtents);
 }
 
+RaiseResult raiseStubKernel(const KernelMeta &Meta,
+                            llvm::StringRef KernelName) {
+  RaiseResult Result;
+  Result.Ctx = std::make_unique<LLVMContext>();
+  LLVMContext &C = *Result.Ctx;
+  Result.Module = std::make_unique<Module>("hotswap_stub", C);
+  Module &M = *Result.Module;
+  // Match the real lift's module setup so the AMDGPU AsmPrinter emits the
+  // stub's HSA metadata consistently (raiseToIRImpl sets the triple too).
+  M.setTargetTriple(Triple("amdgcn-amd-amdhsa"));
+
+  Type *VoidTy = Type::getVoidTy(C);
+  Type *I8Ty = Type::getInt8Ty(C);
+
+  // Mirror the real-kernel signature from raiseToIRImpl: a single
+  // `ptr addrspace(4) byref([N x i8]) align 16` placeholder so the backend
+  // emits kernarg_segment_size = Meta.KernargSegmentSize (align 16). The body
+  // never reads it.
+  SmallVector<Type *, 1> ParamTypes;
+  Type *KernargByrefTy = nullptr;
+  if (Meta.KernargSegmentSize > 0) {
+    KernargByrefTy =
+        ArrayType::get(I8Ty, static_cast<uint64_t>(Meta.KernargSegmentSize));
+    ParamTypes.push_back(PointerType::get(C, /*addrspace=*/4));
+  }
+  FunctionType *FuncTy = FunctionType::get(VoidTy, ParamTypes, false);
+  Function *F =
+      Function::Create(FuncTy, GlobalValue::ExternalLinkage, KernelName, &M);
+  F->setCallingConv(CallingConv::AMDGPU_KERNEL);
+  if (KernargByrefTy != nullptr) {
+    F->addParamAttr(0, Attribute::getWithByRefType(C, KernargByrefTy));
+    F->addParamAttr(0, Attribute::getWithAlignment(C, Align(16)));
+  }
+
+  int MaxWg = Meta.MaxFlatWorkgroupSize > 0 ? Meta.MaxFlatWorkgroupSize : 1024;
+  F->addFnAttr("amdgpu-flat-work-group-size",
+               std::to_string(MaxWg) + "," + std::to_string(MaxWg));
+  // Suppress every implicit/hidden kernarg so the emitted descriptor's
+  // kernarg_segment_size stays exactly Meta.KernargSegmentSize (matching what
+  // the host launch provides). A no-op stub reads none of these, so unlike the
+  // real lift it can also suppress dispatch-ptr and all workitem-id fields.
+  static const char *const NoImplicitAttrs[] = {
+      "amdgpu-no-cluster-id-x",     "amdgpu-no-cluster-id-y",
+      "amdgpu-no-cluster-id-z",     "amdgpu-no-completion-action",
+      "amdgpu-no-default-queue",    "amdgpu-no-dispatch-id",
+      "amdgpu-no-dispatch-ptr",     "amdgpu-no-heap-ptr",
+      "amdgpu-no-hostcall-ptr",     "amdgpu-no-implicitarg-ptr",
+      "amdgpu-no-lds-kernel-id",    "amdgpu-no-multigrid-sync-arg",
+      "amdgpu-no-queue-ptr",        "amdgpu-no-workitem-id-x",
+      "amdgpu-no-workitem-id-y",    "amdgpu-no-workitem-id-z"};
+  for (const char *Attr : NoImplicitAttrs)
+    F->addFnAttr(Attr);
+  F->addFnAttr("uniform-work-group-size", "true");
+
+  BasicBlock *Entry = BasicBlock::Create(C, "entry", F);
+  IRBuilder<> StubB(Entry);
+  Function *TrapFn = Intrinsic::getOrInsertDeclaration(&M, Intrinsic::trap);
+  StubB.CreateCall(TrapFn, {});
+  StubB.CreateUnreachable();
+
+  Result.TotalCount = 0;
+  Result.LiftedCount = 0;
+  return Result;
+}
+
 } // namespace COMGR::hotswap

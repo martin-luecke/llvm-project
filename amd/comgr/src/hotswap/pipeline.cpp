@@ -345,45 +345,68 @@ static bool raiseAndCompileKernel(
                 Options.EnableWaveNative, Options.AssumeHipGlobalOffsetZero,
                 FunctionExtents);
   if (!RaisedOrErr) {
-    llvm::errs() << "transpiler: Raising '" << KernelName
-                 << "' to LLVM IR failed";
-    Result.FailKernel = KernelName;
-    bool IsFirstFailure = true;
+    // Opt-in: replace an untranslatable kernel with a trapping stub so the code
+    // object still loads and sibling kernels stay usable. See raiseStubKernel.
+    static const char *StubFailedEnv =
+        std::getenv("HSA_HOTSWAP_STUB_FAILED_KERNELS");
+    const bool StubFailedKernels = StubFailedEnv && StubFailedEnv[0] == '1';
+    if (StubFailedKernels) {
+      std::string FailMsg;
+      llvm::handleAllErrors(
+          RaisedOrErr.takeError(),
+          [&](RaiseFailure &Failure) { FailMsg = Failure.message(); },
+          [&](const llvm::ErrorInfoBase &Err) {
+            FailMsg = "raiseToIR returned failure without a structured reason: " +
+                      Err.message();
+          });
+      llvm::errs() << "transpiler: STUBBING untranslatable kernel '"
+                   << KernelName << "' with a trapping stub (" << FailMsg
+                   << "); its code object loads so sibling kernels stay usable, "
+                      "but DISPATCHING it is a hard device fault (s_trap), not a "
+                      "silent no-op -- translate this kernel if the trap fires\n";
+      RaisedOrErr = raiseStubKernel(Meta, KernelName);
+      // raiseStubKernel always succeeds; fall through to codegen with the stub.
+    } else {
+      llvm::errs() << "transpiler: Raising '" << KernelName
+                   << "' to LLVM IR failed";
+      Result.FailKernel = KernelName;
+      bool IsFirstFailure = true;
 
-    llvm::handleAllErrors(
-        RaisedOrErr.takeError(),
-        [&](RaiseFailure &Failure) {
-          std::string RenderedFailure = Failure.message();
-          llvm::errs() << " (" << RenderedFailure << ")";
-          if (IsFirstFailure) {
-            Result.FailMnemonic = Failure.Mnemonic;
-            Result.FailReason = reasonString(Failure.Reason);
-            Result.FailFormat = Failure.Format;
-            Result.FailDetail = RenderedFailure;
-            Result.FailOffset = Failure.Offset;
-          }
-          llvm::errs() << "\n";
-          IsFirstFailure = false;
-        },
-        [&](const llvm::ErrorInfoBase &Err) {
-          std::string RenderedFailure =
-              "raiseToIR returned failure without a structured reason: " +
-              Err.message();
-          llvm::errs() << " (" << RenderedFailure << ")";
-          if (IsFirstFailure) {
-            Result.FailMnemonic = "";
-            Result.FailReason = reasonString(RaiseFailureReason::InternalError);
-            Result.FailFormat = "";
-            Result.FailDetail = RenderedFailure;
-            Result.FailOffset = 0;
-          }
-          llvm::errs() << "\n";
-          IsFirstFailure = false;
-        });
+      llvm::handleAllErrors(
+          RaisedOrErr.takeError(),
+          [&](RaiseFailure &Failure) {
+            std::string RenderedFailure = Failure.message();
+            llvm::errs() << " (" << RenderedFailure << ")";
+            if (IsFirstFailure) {
+              Result.FailMnemonic = Failure.Mnemonic;
+              Result.FailReason = reasonString(Failure.Reason);
+              Result.FailFormat = Failure.Format;
+              Result.FailDetail = RenderedFailure;
+              Result.FailOffset = Failure.Offset;
+            }
+            llvm::errs() << "\n";
+            IsFirstFailure = false;
+          },
+          [&](const llvm::ErrorInfoBase &Err) {
+            std::string RenderedFailure =
+                "raiseToIR returned failure without a structured reason: " +
+                Err.message();
+            llvm::errs() << " (" << RenderedFailure << ")";
+            if (IsFirstFailure) {
+              Result.FailMnemonic = "";
+              Result.FailReason = reasonString(RaiseFailureReason::InternalError);
+              Result.FailFormat = "";
+              Result.FailDetail = RenderedFailure;
+              Result.FailOffset = 0;
+            }
+            llvm::errs() << "\n";
+            IsFirstFailure = false;
+          });
 
-    Result.Timings.raiseSeconds +=
-        timingElapsed(Options.CollectTimings, RaiseStart);
-    return false;
+      Result.Timings.raiseSeconds +=
+          timingElapsed(Options.CollectTimings, RaiseStart);
+      return false;
+    }
   }
 
   RaiseResult Raised = std::move(*RaisedOrErr);
