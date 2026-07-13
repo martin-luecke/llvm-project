@@ -1316,21 +1316,19 @@ Expected<HandlerResult> handleValuVoP3P(RaiseContext &Ctx,
       // reuse hints have no MFMA equivalent; silence -Wunused-variable.
       (void)MatrixAReuse;
       (void)MatrixBReuse;
-      if (!ResultVal)
-        return RaiseFailure::unsupportedInstructionForm(
-            Di, "VOP3P",
-            "emitWMMAScaleF8F6F4toScaledMFMA refused this fragment width "
-            "(ADwords/BDwords outside f8/f6/f4 set)");
 
     } else if (Ctx.TargetIsa.HasFP8Insts) {
       // Cross-target gfx1250 -> gfx942: K-decomposed unscaled FP8/BF8 MFMA
       // chain with software scale. Gated on HasFP8Insts (not HasMfma) so
       // gfx90a / gfx940 (MAI but no FP8 MFMA) don't take this path; gfx950
       // is already handled by the HasGfx950Insts branch above.
-      ResultVal = emitWMMAScaleF8F6F4toMFMA(
+      Expected<Value *> RV = emitWMMAScaleF8F6F4toMFMA(
           Ctx, A, B, *C, MatrixAFmt, MatrixBFmt, CMod, MatrixAScale,
           MatrixAScaleFmt, ScaleSrc0, MatrixBScale, MatrixBScaleFmt, ScaleSrc1,
           ADwords, BDwords);
+      if (!RV)
+        return RV.takeError();
+      ResultVal = *RV;
       (void)MatrixAReuse;
       (void)MatrixBReuse;
       if (!ResultVal)

@@ -1476,7 +1476,7 @@ Value *buildScaleFactorVec(IRBuilder<> &B, Module &M, Type *F32Ty,
 
 } // namespace
 
-Value *emitWMMAScaleF8F6F4toMFMA(
+Expected<Value *> emitWMMAScaleF8F6F4toMFMA(
     RaiseContext &ctx, Value *a, Value *b, Value *c, Value *matrixAFmt,
     Value *matrixBFmt, Value *cMod, Value *matrixAScale, Value *matrixAScaleFmt,
     Value *scaleSrc0, Value *matrixBScale, Value *matrixBScaleFmt,
@@ -1485,11 +1485,13 @@ Value *emitWMMAScaleF8F6F4toMFMA(
   Module &M = ctx.M;
 
   // Supported fragment widths per side: 16 (FP8/BF8), 12 (FP6/BF6), 8 (FP4).
+  // The decoder already guarantees these; a mismatch is an invariant violation
+  // rather than an unsupported form, so it stays loud in release builds.
   auto SupportedDwords = [](unsigned dw) {
     return dw == 16 || dw == 12 || dw == 8;
   };
   if (!SupportedDwords(aDwords) || !SupportedDwords(bDwords))
-    return nullptr;
+    return createStringError("unexpected WMMA F8F6F4 fragment width");
 
   auto AsConstInt = [](Value *V) -> int64_t {
     return cast<ConstantInt>(V)->getZExtValue();
