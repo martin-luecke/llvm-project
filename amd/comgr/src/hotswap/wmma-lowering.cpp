@@ -904,12 +904,12 @@ llvm::Expected<llvm::Value *> emitWMMAScaleF8F6F4toScaledMFMA(
 
   // Accept only the documented WMMA F8F6F4 widths.  The MC-pseudo decoder
   // in handle-valu-vop3p.cpp already rejects everything else with
-  // unsupportedInstructionForm; we re-check here so that any future extension that
-  // changes those values trips loudly rather than silently producing a
+  // unsupportedInstructionForm; we re-check here so that any future extension
+  // that changes those values trips loudly rather than silently producing a
   // mismatched lane redistribution.
   if (!(aDwords == 16 || aDwords == 12 || aDwords == 8) ||
       !(bDwords == 16 || bDwords == 12 || bDwords == 8))
-    return nullptr;
+    return createStringError("unexpected WMMA F8F6F4 fragment width");
 
   const unsigned mfmaADw = aDwords / 2;
   const unsigned mfmaBDw = bDwords / 2;
