@@ -1,50 +1,22 @@
-; Regression for the cross-lane use-chain classifier: an `update.dpp`
-; reduction step whose result flows through a whole-wave-mode marker
-; (`@llvm.amdgcn.strict.wwm`) before it is stored.  This is the shape a
-; reduction-bearing Triton kernel (RMSNorm / layer-norm / softmax) emits:
-; the DPP butterfly step feeds a `permlane16` broadcast, and the cross-lane
-; VALU handler wraps that `ds_bpermute`-emulated permlane result in
-; `strict.wwm` via `WaveProjection::wrapAsWWMValue` under MODREP (issue #152).
-;
-; The WWM/WQM markers are value-preserving (VGPR in, same-type VGPR out, no
-; SGPR-forced operand), so the forward use-chain classifier must treat them
-; as VGPR-safe propagators and keep walking.  Before the fix they fell
-; through to `Unknown` -> `SGPRForced`, so the classifier refused the whole
-; function ("update.dpp ... reaches an SGPR-forced consumer (call
-; @llvm.amdgcn.strict.wwm.i32 (unaudited))") and the kernel failed to raise
-; (`no kernel image is available for execution on the device` at runtime).
+; Cross-lane classifier must treat the WWM/WQM markers as VGPR-safe
+; propagators: an update.dpp result flowing through strict.wwm (the
+; permlane16 broadcast wrapped by wrapAsWWMValue under MODREP) is rewritten
+; to ds_bpermute rather than refused.
 
-; Under ModuloReplicationProjection the permlane16 broadcast is wrapped in
-; strict.wwm, so the DPP result's use chain passes through it.  The classifier
-; must now prove the chain VGPR-safe and rewrite the update.dpp to ds_bpermute
-; rather than refusing.
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 \
+; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:     --disable-wave-native --enable-writelane-rewrite \
-; RUN:     --emit-ir=dpp_reduction_wwm_chain_kernel 2>/dev/null \
+; RUN:     --emit-ir=dpp_reduction_wwm_chain_kernel \
 ; RUN:   | %FileCheck %s --check-prefix=MODREP
 
-; Under WaveNativeProjection init_whole_wave already holds HW EXEC = -1
-; kernel-wide, so wrapAsWWMValue is an identity and no strict.wwm marker is
-; emitted; the update.dpp is still rewritten to ds_bpermute.
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 \
+; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:     --enable-wave-native --enable-writelane-rewrite \
-; RUN:     --emit-ir=dpp_reduction_wwm_chain_kernel 2>/dev/null \
+; RUN:     --emit-ir=dpp_reduction_wwm_chain_kernel \
 ; RUN:   | %FileCheck %s --check-prefix=WAVENATIVE
 
-; The function is raised (not refused), the update.dpp is rewritten to
-; ds_bpermute, none survive, and the permlane16 result carries the strict.wwm
-; marker the classifier had to walk through.
 ; MODREP-LABEL: define amdgpu_kernel void @dpp_reduction_wwm_chain_kernel(
-; MODREP-DAG: %cwd_dpp_bperm = call i32 @llvm.amdgcn.ds.bpermute(i32 %cwd_dpp_selector, i32 %{{[^)]+}})
-; MODREP-DAG: %permlane16_emu_wwm = call i32 @llvm.amdgcn.strict.wwm.i32(i32 %permlane16_emu)
-; MODREP-NOT: call i32 @llvm.amdgcn.update.dpp.i32(
-
 ; WAVENATIVE-LABEL: define amdgpu_kernel void @dpp_reduction_wwm_chain_kernel(
-; WAVENATIVE: %cwd_dpp_bperm = call i32 @llvm.amdgcn.ds.bpermute(i32 %cwd_dpp_selector, i32 %{{[^)]+}})
-; WAVENATIVE-NOT: call i32 @llvm.amdgcn.update.dpp.i32(
-; WAVENATIVE-NOT: @llvm.amdgcn.strict.wwm
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
@@ -73,7 +45,15 @@ dpp_reduction_wwm_chain_kernel:
 	global_load_b32 v0, v2, s[2:3] scale_offset
 	s_wait_loadcnt 0x0
 	v_mov_b32_dpp v0, v0 row_shr:4 row_mask:0xf bank_mask:0xf bound_ctrl:1
+; update.dpp is rewritten to a whole-wave ds_bpermute gather (both projections).
+; MODREP-NOT: call i32 @llvm.amdgcn.update.dpp.i32(
+; MODREP-DAG: %cwd_dpp_bperm = call i32 @llvm.amdgcn.ds.bpermute(i32 %cwd_dpp_selector, i32 %{{[^)]+}})
+; WAVENATIVE-NOT: call i32 @llvm.amdgcn.update.dpp.i32(
+; WAVENATIVE: %cwd_dpp_bperm = call i32 @llvm.amdgcn.ds.bpermute(i32 %cwd_dpp_selector, i32 %{{[^)]+}})
 	v_permlane16_b32 v0, v0, 0x76543210, 0x76543210 op_sel:[1,0]
+; MODREP wraps the permlane16 broadcast in strict.wwm; WaveNative leaves it bare.
+; MODREP-DAG: %permlane16_emu_wwm = call i32 @llvm.amdgcn.strict.wwm.i32(i32 %permlane16_emu)
+; WAVENATIVE-NOT: @llvm.amdgcn.strict.wwm
 	global_store_b32 v2, v0, s[2:3] scale_offset
 	s_endpgm
 	.section	.rodata,"a",@progbits
@@ -111,3 +91,4 @@ amdhsa.version: [1, 2]
 ...
 
 	.end_amdgpu_metadata
+
