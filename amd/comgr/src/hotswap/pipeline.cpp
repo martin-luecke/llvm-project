@@ -322,10 +322,12 @@ static bool raiseAndCompileKernel(
              << llvm::utohexstr(KernelOffset) << " size 0x"
              << llvm::utohexstr(KernelSize) << "\n");
 
+  RaiseStats Stats;
   llvm::Expected<RaiseResult> RaisedOrErr =
       raiseToIR(Text.Bytes, SourceISA, KernelName, Meta, KernelOffset,
                 KernelSize, TargetISA, Options.EnableWritelaneRewrite,
-                Options.EnableWaveNative, Options.AssumeHipGlobalOffsetZero);
+                Options.EnableWaveNative, Options.AssumeHipGlobalOffsetZero,
+                &Stats);
   if (!RaisedOrErr) {
     llvm::errs() << "transpiler: Raising '" << KernelName
                  << "' to LLVM IR failed";
@@ -369,8 +371,8 @@ static bool raiseAndCompileKernel(
   }
 
   RaiseResult Raised = std::move(*RaisedOrErr);
-  Result.LiftedCount += Raised.LiftedCount;
-  Result.TotalCount += Raised.TotalCount;
+  Result.LiftedCount += Stats.LiftedCount;
+  Result.TotalCount += Stats.TotalCount;
   if (Raised.UsesScratchPrivateSegment) {
     Result.UsesScratchPrivateSegment = true;
     if (Raised.SourcePrivateSegmentFixedSize >
@@ -388,7 +390,7 @@ static bool raiseAndCompileKernel(
   Result.IrText += Raised.IrText;
 
   LLVM_DEBUG(llvm::dbgs() << "transpiler: Raised '" << KernelName << "' "
-                          << Raised.LiftedCount << "/" << Raised.TotalCount
+                          << Stats.LiftedCount << "/" << Stats.TotalCount
                           << " instructions\n");
 
   // Kernel names from Tensile et al. routinely exceed 255 bytes, which is
