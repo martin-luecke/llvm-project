@@ -45,6 +45,7 @@ RaiseContext::RaiseContext(
       KernelStartOffset(KernelStartOffset), KernelEndOffset(KernelEndOffset) {
   I1Ty = Type::getInt1Ty(C);
   I8Ty = Type::getInt8Ty(C);
+  I16Ty = Type::getInt16Ty(C);
   I32Ty = Type::getInt32Ty(C);
   I64Ty = Type::getInt64Ty(C);
   F32Ty = Type::getFloatTy(C);

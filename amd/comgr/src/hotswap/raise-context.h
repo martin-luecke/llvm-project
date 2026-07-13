@@ -100,6 +100,7 @@ struct RaiseContext {
 
   llvm::Type *I1Ty;
   llvm::Type *I8Ty;
+  llvm::Type *I16Ty;
   llvm::Type *I32Ty;
   llvm::Type *I64Ty;
   llvm::Type *F32Ty;
