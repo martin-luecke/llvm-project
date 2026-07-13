@@ -12,8 +12,8 @@
 // RUN:                   amdgcn-amd-amdhsa--gfx942 --wrong-kind \
 // RUN:   | %FileCheck --check-prefix=WRONGKIND %s
 // RUN: hotswap-transpile %t.elf amdgcn-amd-amdhsa--gfx1250 \
-// RUN:                   amdgcn-amd-amdhsa--gfx942 --bad-request-version \
-// RUN:   | %FileCheck --check-prefix=BADREQUEST %s
+// RUN:                   amdgcn-amd-amdhsa--gfx942 --bad-options-version \
+// RUN:   2>&1 | %FileCheck --check-prefix=BADOPTIONS %s
 // RUN: hotswap-transpile %t.elf amdgcn-amd-amdhsa--gfx1250 \
 // RUN:                   amdgcn-amd-amdhsa--gfx942 \
 // RUN:   | %FileCheck --check-prefix=NOKERNELS %s
@@ -98,7 +98,8 @@
 // BADISA: RESULT: INVALID_ARGUMENT
 // ZEROSIZE: RESULT: INVALID_ARGUMENT
 // WRONGKIND: RESULT: INVALID_ARGUMENT
-// BADREQUEST: RESULT: INVALID_ARGUMENT
+// BADOPTIONS-DAG: unsupported hotswap options version 999 (expected 2)
+// BADOPTIONS-DAG: RESULT: INVALID_ARGUMENT
 // NOKERNELS: RESULT: ERROR
 // VECADD: RESULT: SUCCESS bytes={{[1-9][0-9]*}}
 // SRCISA: Flags: {{.*}}gfx950

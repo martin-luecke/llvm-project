@@ -322,26 +322,26 @@ bool hasOptionsFlag(const amd_comgr_hotswap_transpile_options_t *options,
   return options && hasFlag(options->flags, static_cast<uint64_t>(flag));
 }
 
-bool hasRequestFlag(const amd_comgr_hotswap_transpile_options_v2_t *options,
-                    amd_comgr_hotswap_transpile_request_flags_t flag) {
+bool hasOptionsV2Flag(const amd_comgr_hotswap_transpile_options_v2_t *options,
+                      amd_comgr_hotswap_transpile_options_v2_flags_t flag) {
   return options && hasFlag(options->flags, static_cast<uint64_t>(flag));
 }
 
 llvm::Expected<std::string>
 getKernelNameOption(const amd_comgr_hotswap_transpile_options_v2_t *options) {
-  if (!hasRequestFlag(options,
-                      AMD_COMGR_HOTSWAP_TRANSPILE_REQUEST_USE_KERNEL_NAME))
+  if (!hasOptionsV2Flag(options,
+                        AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_V2_USE_KERNEL_NAME))
     return std::string();
   if (!options->kernel_name || options->kernel_name[0] == '\0')
     return llvm::createStringError(
-        "hotswap v2 request set USE_KERNEL_NAME without a kernel name");
+        "hotswap v2 options set USE_KERNEL_NAME without a kernel name");
   return std::string(options->kernel_name);
 }
 
 llvm::Expected<unsigned>
 getOptLevelOption(const amd_comgr_hotswap_transpile_options_v2_t *options) {
-  if (!hasRequestFlag(options,
-                      AMD_COMGR_HOTSWAP_TRANSPILE_REQUEST_USE_OPT_LEVEL))
+  if (!hasOptionsV2Flag(options,
+                        AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_V2_USE_OPT_LEVEL))
     return DefaultHotswapComgrOptLevel;
   if (options->opt_level > MaxHotswapComgrOptLevel)
     return llvm::createStringError(
@@ -381,6 +381,11 @@ resolveOptionsV2(const amd_comgr_hotswap_transpile_options_v2_t *options) {
     Resolved.CacheDisable = true;
     return Resolved;
   }
+  if (options->version != AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_VERSION_2)
+    return llvm::createStringError(
+        "unsupported hotswap options version " +
+        std::to_string(options->version) + " (expected " +
+        std::to_string(AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_VERSION_2) + ")");
 
   llvm::Expected<std::string> KernelName = getKernelNameOption(options);
   if (!KernelName)
@@ -392,33 +397,18 @@ resolveOptionsV2(const amd_comgr_hotswap_transpile_options_v2_t *options) {
   Resolved.CacheDirectory = options->cache_directory;
   Resolved.CacheSkipKernels = options->cache_skip_kernels;
   Resolved.HotswapRulesPath = options->hotswap_rules_path;
-  Resolved.CacheDisable = hasRequestFlag(
-      options, AMD_COMGR_HOTSWAP_TRANSPILE_REQUEST_CACHE_DISABLE);
-  Resolved.CacheReadonly = hasRequestFlag(
-      options, AMD_COMGR_HOTSWAP_TRANSPILE_REQUEST_CACHE_READONLY);
+  Resolved.CacheDisable = hasOptionsV2Flag(
+      options, AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_V2_CACHE_DISABLE);
+  Resolved.CacheReadonly = hasOptionsV2Flag(
+      options, AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_V2_CACHE_READONLY);
   Resolved.StrictMode =
-      hasRequestFlag(options, AMD_COMGR_HOTSWAP_TRANSPILE_REQUEST_STRICT);
-  Resolved.AssumeHipGlobalOffsetZero = hasRequestFlag(
+      hasOptionsV2Flag(options, AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_V2_STRICT);
+  Resolved.AssumeHipGlobalOffsetZero = hasOptionsV2Flag(
       options,
-      AMD_COMGR_HOTSWAP_TRANSPILE_REQUEST_ASSUME_HIP_GLOBAL_OFFSET_ZERO);
+      AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_V2_ASSUME_HIP_GLOBAL_OFFSET_ZERO);
   Resolved.KernelName = std::move(*KernelName);
   Resolved.OptLevel = *OptLevel;
   return Resolved;
-}
-
-llvm::Expected<ResolvedHotswapOptions> resolveRequest(
-    const amd_comgr_hotswap_transpile_request_t *request) {
-  if (!request)
-    return resolveOptionsV2(nullptr);
-  if (!request->payload)
-    return llvm::createStringError("hotswap request payload is null");
-  switch (request->version) {
-  case AMD_COMGR_HOTSWAP_TRANSPILE_REQUEST_VERSION_2:
-    return resolveOptionsV2(static_cast<
-                            const amd_comgr_hotswap_transpile_options_v2_t *>(
-        request->payload));
-  }
-  return llvm::createStringError("unsupported hotswap request version");
 }
 
 amd_comgr_status_t invalidOptions(llvm::Error err,
@@ -761,16 +751,16 @@ amd_comgr_status_t AMD_COMGR_API amd_comgr_hotswap_transpile_with_options(
       input, source_isa_name, target_isa_name, *Resolved, output, result);
 }
 
-amd_comgr_status_t AMD_COMGR_API amd_comgr_hotswap_transpile_with_request(
+amd_comgr_status_t AMD_COMGR_API amd_comgr_hotswap_transpile_with_options_v2(
     amd_comgr_data_t input, const char *source_isa_name,
     const char *target_isa_name,
-    const amd_comgr_hotswap_transpile_request_t *request,
+    const amd_comgr_hotswap_transpile_options_v2_t *options,
     amd_comgr_data_t *output,
     amd_comgr_hotswap_transpile_result_t *result) {
-  llvm::Expected<ResolvedHotswapOptions> Resolved = resolveRequest(request);
+  llvm::Expected<ResolvedHotswapOptions> Resolved = resolveOptionsV2(options);
   if (!Resolved)
     return invalidOptions(Resolved.takeError(),
-                          "amd_comgr_hotswap_transpile_with_request");
+                          "amd_comgr_hotswap_transpile_with_options_v2");
   return hotswapTranspileWithResolvedOptions(
       input, source_isa_name, target_isa_name, *Resolved, output, result);
 }

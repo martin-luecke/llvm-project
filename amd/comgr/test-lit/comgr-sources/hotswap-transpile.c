@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// Driver for amd_comgr_hotswap_transpile_with_request, the hotswap-backed
+// Driver for amd_comgr_hotswap_transpile_with_options_v2, the hotswap-backed
 // entry point that reports typed cache/proof metadata.
 //
 // Mirrors the call/return shape of hotswap-rewrite.c for the validation
@@ -151,7 +151,7 @@ int main(int argc, char *argv[]) {
   if (argc < 4)
     fail("usage: hotswap-transpile <elf_file> <source_isa> <target_isa> "
          "[--zero-size|--wrong-kind|--use-options-api|"
-         "--bad-request-version] "
+         "--bad-options-version] "
          "[--output=<path>]");
 
   const char *ElfFile = argv[1];
@@ -160,7 +160,7 @@ int main(int argc, char *argv[]) {
   int ZeroSize = 0;
   int WrongKind = 0;
   int UseOptionsApi = 0;
-  int BadRequestVersion = 0;
+  int BadOptionsVersion = 0;
   // Optional path to dump the transpiled bytes to. lit tests use this to
   // hand the output to llvm-readelf / llvm-objdump for ISA-level smoke
   // checks; the validation paths leave it NULL and only inspect stdout.
@@ -172,8 +172,8 @@ int main(int argc, char *argv[]) {
       WrongKind = 1;
     else if (strcmp(argv[i], "--use-options-api") == 0)
       UseOptionsApi = 1;
-    else if (strcmp(argv[i], "--bad-request-version") == 0)
-      BadRequestVersion = 1;
+    else if (strcmp(argv[i], "--bad-options-version") == 0)
+      BadOptionsVersion = 1;
     else if (strncmp(argv[i], "--output=", 9) == 0)
       OutputPath = argv[i] + 9;
     else
@@ -185,8 +185,8 @@ int main(int argc, char *argv[]) {
 
   amd_comgr_data_t InputData;
   // --wrong-kind: feed BC instead of EXECUTABLE. Exercises the data-kind
-  // gate in amd_comgr_hotswap_transpile_with_request, which mirrors the gate
-  // in the byte-level rewriter.
+  // gate in amd_comgr_hotswap_transpile_with_options_v2, which mirrors the
+  // gate in the byte-level rewriter.
   amd_comgr_data_kind_t Kind =
       WrongKind ? AMD_COMGR_DATA_KIND_BC : AMD_COMGR_DATA_KIND_EXECUTABLE;
   amd_comgr_(create_data(Kind, &InputData));
@@ -198,27 +198,29 @@ int main(int argc, char *argv[]) {
   OptionsV2.cache_directory = getenv("HSA_HOTSWAP_CACHE_DIR");
   OptionsV2.cache_skip_kernels = getenv("HSA_HOTSWAP_CACHE_SKIP_KERNELS");
   OptionsV2.hotswap_rules_path = getenv("HSA_HOTSWAP_RULES");
+  OptionsV2.version =
+      BadOptionsVersion ? 999 : AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_VERSION_2;
   OptionsV2.kernel_name = getenv("HSA_HOTSWAP_TRANSLATE_KERNEL");
   if (OptionsV2.kernel_name && OptionsV2.kernel_name[0] != '\0')
-    OptionsV2.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_REQUEST_USE_KERNEL_NAME;
+    OptionsV2.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_V2_USE_KERNEL_NAME;
   const char *OptLevel = getenv("HSA_HOTSWAP_OPT_LEVEL");
   if (OptLevel) {
     char *End = NULL;
     unsigned long Value = strtoul(OptLevel, &End, 10);
     if (End == OptLevel || *End != '\0' || Value > 3)
       fail("invalid HSA_HOTSWAP_OPT_LEVEL: %s", OptLevel);
-    OptionsV2.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_REQUEST_USE_OPT_LEVEL;
+    OptionsV2.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_V2_USE_OPT_LEVEL;
     OptionsV2.opt_level = (uint32_t)Value;
   }
   if (getenv("HSA_HOTSWAP_CACHE_DISABLE"))
-    OptionsV2.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_REQUEST_CACHE_DISABLE;
+    OptionsV2.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_V2_CACHE_DISABLE;
   if (getenv("HSA_HOTSWAP_CACHE_READONLY"))
-    OptionsV2.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_REQUEST_CACHE_READONLY;
+    OptionsV2.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_V2_CACHE_READONLY;
   if (getenv("HSA_HOTSWAP_STRICT"))
-    OptionsV2.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_REQUEST_STRICT;
+    OptionsV2.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_V2_STRICT;
   if (getenv("HSA_HOTSWAP_ASSUME_HIP_GLOBAL_OFFSET_ZERO"))
     OptionsV2.flags |=
-        AMD_COMGR_HOTSWAP_TRANSPILE_REQUEST_ASSUME_HIP_GLOBAL_OFFSET_ZERO;
+        AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_V2_ASSUME_HIP_GLOBAL_OFFSET_ZERO;
 
   amd_comgr_data_t OutputData = {0};
   amd_comgr_hotswap_transpile_result_t ResultData = {0};
@@ -230,27 +232,21 @@ int main(int argc, char *argv[]) {
     Options.cache_directory = OptionsV2.cache_directory;
     Options.cache_skip_kernels = OptionsV2.cache_skip_kernels;
     Options.hotswap_rules_path = OptionsV2.hotswap_rules_path;
-    if (OptionsV2.flags & AMD_COMGR_HOTSWAP_TRANSPILE_REQUEST_CACHE_DISABLE)
+    if (OptionsV2.flags & AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_V2_CACHE_DISABLE)
       Options.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_CACHE_DISABLE;
-    if (OptionsV2.flags & AMD_COMGR_HOTSWAP_TRANSPILE_REQUEST_CACHE_READONLY)
+    if (OptionsV2.flags & AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_V2_CACHE_READONLY)
       Options.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_CACHE_READONLY;
-    if (OptionsV2.flags & AMD_COMGR_HOTSWAP_TRANSPILE_REQUEST_STRICT)
+    if (OptionsV2.flags & AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_V2_STRICT)
       Options.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_STRICT;
     if (OptionsV2.flags &
-        AMD_COMGR_HOTSWAP_TRANSPILE_REQUEST_ASSUME_HIP_GLOBAL_OFFSET_ZERO)
+        AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_V2_ASSUME_HIP_GLOBAL_OFFSET_ZERO)
       Options.flags |=
           AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_ASSUME_HIP_GLOBAL_OFFSET_ZERO;
     Status = amd_comgr_hotswap_transpile_with_options(
         InputData, SourceISA, TargetISA, &Options, &OutputData, &ResultData);
   } else {
-    amd_comgr_hotswap_transpile_request_t Request;
-    memset(&Request, 0, sizeof(Request));
-    Request.version = BadRequestVersion
-                          ? 999
-                          : AMD_COMGR_HOTSWAP_TRANSPILE_REQUEST_VERSION_2;
-    Request.payload = &OptionsV2;
-    Status = amd_comgr_hotswap_transpile_with_request(
-        InputData, SourceISA, TargetISA, &Request, &OutputData, &ResultData);
+    Status = amd_comgr_hotswap_transpile_with_options_v2(
+        InputData, SourceISA, TargetISA, &OptionsV2, &OutputData, &ResultData);
   }
 
   if (Status == AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT) {
