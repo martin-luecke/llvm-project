@@ -111,6 +111,15 @@ struct RaiseContext {
   uint64_t KernelStartOffset = 0;
   uint64_t KernelEndOffset = 0;
 
+  RaiseContext(llvm::LLVMContext &C, llvm::Module &M, llvm::IRBuilder<> &B,
+               AllocaRegFile &Regs, const WaveProjection &Projection,
+               const MCState &Mc, const ISAProfile &Isa, ISAProfile TargetIsa,
+               unsigned TargetCodeObjectVersion, KernargLayout &Kernargs,
+               const UserSgprLayout *Layout, llvm::Function *Kernel,
+               llvm::BasicBlock *ThreadLoopLatch,
+               llvm::DenseMap<uint64_t, llvm::BasicBlock *> &OffsetToBb,
+               uint64_t KernelStartOffset, uint64_t KernelEndOffset);
+
   // Source KD private/scratch allocation. `handle-flat.cpp` sets
   // `usesScratchPrivateSegment` when it lowers a `scratch_*` instruction; the
   // on-demand private alloca is deliberately managed by LLVM's frame layout so
