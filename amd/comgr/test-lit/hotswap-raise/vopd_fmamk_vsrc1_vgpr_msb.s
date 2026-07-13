@@ -15,10 +15,6 @@
 ;   Correct (slot 2): fma addend reads the high copy -> 2.0 (1073741824)
 ;   Buggy   (slot 1): fma addend reads the low copy  -> 1.0 (1065353216)
 ; The dead low-copy store is DCE'd post-fix, so 1065353216 must not appear at all.
-; CHECK-LABEL: define amdgpu_kernel void @vopd_fmamk_vsrc1_vgpr_msb_kernel(
-; CHECK: %[[ADDEND:[0-9]+]] = bitcast i32 1073741824 to float
-; CHECK: call float @llvm.fma.f32(float %{{[^,]+}}, float 3.000000e+00, float %[[ADDEND]])
-; CHECK-NOT: bitcast i32 1065353216 to float
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
@@ -26,6 +22,7 @@
 	.globl	vopd_fmamk_vsrc1_vgpr_msb_kernel
 	.p2align	8
 	.type	vopd_fmamk_vsrc1_vgpr_msb_kernel,@function
+; CHECK-LABEL: define amdgpu_kernel void @vopd_fmamk_vsrc1_vgpr_msb_kernel(
 vopd_fmamk_vsrc1_vgpr_msb_kernel:
 ; %bb.0:
 	s_load_dwordx2 s[0:1], s[0:1], 0x0
@@ -38,6 +35,9 @@ vopd_fmamk_vsrc1_vgpr_msb_kernel:
 	v_dual_mov_b32 v2, v0 :: v_dual_mov_b32 v3, 2.0
 	; fmamk: vsrc1 = v3, slot 2 bank = 1, slot 1 bank = 0, K = 3.0
 	s_set_vgpr_msb 0x10
+; CHECK: %[[ADDEND:[0-9]+]] = bitcast i32 1073741824 to float
+; CHECK: call float @llvm.fma.f32(float %{{[^,]+}}, float 3.000000e+00, float %[[ADDEND]])
+; CHECK-NOT: bitcast i32 1065353216 to float
 	v_dual_mov_b32 v2, v8 :: v_dual_fmamk_f32 v3, v8, 0x40400000, v3
 	s_set_vgpr_msb 0
 	global_store_dword v0, v3, s[0:1]
