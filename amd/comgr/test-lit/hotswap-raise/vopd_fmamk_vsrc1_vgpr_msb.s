@@ -1,6 +1,6 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 \
-; RUN:     --emit-ir=vopd_fmamk_vsrc1_vgpr_msb_kernel 2>/dev/null \
+; RUN:     --emit-ir=vopd_fmamk_vsrc1_vgpr_msb_kernel \
 ; RUN:   | %FileCheck %s
 
 ; Regression guard for issue #153: V_DUAL_FMAMK_F32's vsrc1 must read its
