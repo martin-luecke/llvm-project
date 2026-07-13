@@ -23,6 +23,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
 #include "llvm/MC/MCRegister.h"
@@ -98,11 +99,11 @@ struct RaiseContext {
   llvm::Function *Kernel;
   llvm::BasicBlock *ThreadLoopLatch = nullptr;
 
-  llvm::Type *I1Ty;
-  llvm::Type *I8Ty;
-  llvm::Type *I16Ty;
-  llvm::Type *I32Ty;
-  llvm::Type *I64Ty;
+  llvm::IntegerType *I1Ty;
+  llvm::IntegerType *I8Ty;
+  llvm::IntegerType *I16Ty;
+  llvm::IntegerType *I32Ty;
+  llvm::IntegerType *I64Ty;
   llvm::Type *F32Ty;
   llvm::Type *F16Ty;
   llvm::Type *F64Ty;
