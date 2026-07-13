@@ -1674,7 +1674,7 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
   Ctx.AssumeHipGlobalOffsetZero = AssumeHipGlobalOffsetZero;
   if (Error E = computeKernargPtrProvenance(Ctx, Insts, Decoded.BlockStarts,
                                             KernelOffset, OffsetToBb))
-    return std::move(E);
+    return E;
   auto EntryBbIt = OffsetToBb.find(KernelOffset);
   if (EntryBbIt == OffsetToBb.end())
     return llvm::createStringError(
@@ -1822,7 +1822,7 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
     }
 
     if (Error E = Ctx.computeVGPRAdjust(Di))
-      return std::move(E);
+      return E;
     // Invalidate the SPE lane_active memoisation at every instruction
     // boundary. Any instruction is a potential EXEC writer (either through
     // our modeled CanonicalOp allow-list, or through a path we haven't yet

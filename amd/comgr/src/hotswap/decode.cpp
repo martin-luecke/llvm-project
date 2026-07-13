@@ -929,24 +929,24 @@ Expected<DecodeResult> decodeKernel(const MCState &Mc, const OpcodeMap &OpcMap,
 
     decodeScaleOffset(Di);
     if (Error E = decodeStaticSmemOffset(Di))
-      return std::move(E);
+      return E;
     if (Error E = decodeDppModifiers(Di))
-      return std::move(E);
+      return E;
     decodeDsSwizzleImm(Di);
     if (Error E = decodeVopd(Di, *Mc.InstrInfo, *Mc.RegInfo, OpcMap))
-      return std::move(E);
+      return E;
     if (Error E = buildSrcMap(Di, Desc))
-      return std::move(E);
+      return E;
     if (Error E = driftCheckTiedIn(Di, Desc))
-      return std::move(E);
+      return E;
     if (Error E = driftCheckSrcN(Di, Desc))
-      return std::move(E);
+      return E;
     classifyImplicitDefs(Di, Desc);
 
     if (Di.IsBranch)
       if (Error E = collectBranchTargets(Di, Off, InstSize, KernelStart,
                                          TotalSize, Out.BlockStarts))
-        return std::move(E);
+        return E;
 
     bool IsEnd = (Di.CanonOp == CanonicalOp::S_ENDPGM);
     Out.Insts.push_back(std::move(Di));

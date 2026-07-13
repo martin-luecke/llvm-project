@@ -1368,7 +1368,7 @@ rewriteCrossLaneDivergent(Function &F, unsigned SourceWaveSize,
     // rewriter successfully returns; a returned error propagates out
     // first, so it cannot leave the report lying.
     if (Error E = rewriteUpdateDppI32Call(CI, GetLaneId(), SourceWaveSize))
-      return std::move(E);
+      return E;
     ++Report.DppRewritten;
   }
 
