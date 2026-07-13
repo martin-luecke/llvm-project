@@ -133,6 +133,13 @@ static void print_result_if_present(amd_comgr_hotswap_transpile_result_t Result)
   printf("\n");
 }
 
+static int parse_opt_level_arg(const char *Arg) {
+  if (Arg[0] != '-' || Arg[1] != 'O' || Arg[2] < '0' || Arg[2] > '3' ||
+      Arg[3] != '\0')
+    return -1;
+  return Arg[2] - '0';
+}
+
 int main(int argc, char *argv[]) {
   // No args -> NULL-pointer validation. Mirrors hotswap-rewrite.c's first
   // mode so the two entry points have the same negative-test surface.
@@ -152,7 +159,7 @@ int main(int argc, char *argv[]) {
     fail("usage: hotswap-transpile <elf_file> <source_isa> <target_isa> "
          "[--zero-size|--wrong-kind|--use-options-api|"
          "--bad-options-version] "
-         "[--output=<path>]");
+         "[--output=<path>] [-O0|-O1|-O2|-O3]");
 
   const char *ElfFile = argv[1];
   const char *SourceISA = argv[2];
@@ -161,6 +168,7 @@ int main(int argc, char *argv[]) {
   int WrongKind = 0;
   int UseOptionsApi = 0;
   int BadOptionsVersion = 0;
+  int OptLevel = -1;
   // Optional path to dump the transpiled bytes to. lit tests use this to
   // hand the output to llvm-readelf / llvm-objdump for ISA-level smoke
   // checks; the validation paths leave it NULL and only inspect stdout.
@@ -171,6 +179,7 @@ int main(int argc, char *argv[]) {
   static const char BadOptionsVersionOpt[] = "--bad-options-version";
   static const char OutputPrefix[] = "--output=";
   for (int i = 4; i < argc; i++) {
+    int ParsedOptLevel = parse_opt_level_arg(argv[i]);
     if (strncmp(argv[i], ZeroSizeOpt, sizeof(ZeroSizeOpt)) == 0)
       ZeroSize = 1;
     else if (strncmp(argv[i], WrongKindOpt, sizeof(WrongKindOpt)) == 0)
@@ -182,6 +191,8 @@ int main(int argc, char *argv[]) {
       BadOptionsVersion = 1;
     else if (strncmp(argv[i], OutputPrefix, sizeof(OutputPrefix) - 1) == 0)
       OutputPath = argv[i] + sizeof(OutputPrefix) - 1;
+    else if (ParsedOptLevel >= 0)
+      OptLevel = ParsedOptLevel;
     else
       fail("unknown option: %s", argv[i]);
   }
@@ -209,14 +220,9 @@ int main(int argc, char *argv[]) {
   OptionsV2.kernel_name = getenv("HSA_HOTSWAP_TRANSLATE_KERNEL");
   if (OptionsV2.kernel_name && OptionsV2.kernel_name[0] != '\0')
     OptionsV2.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_V2_USE_KERNEL_NAME;
-  const char *OptLevel = getenv("HSA_HOTSWAP_OPT_LEVEL");
-  if (OptLevel) {
-    char *End = NULL;
-    unsigned long Value = strtoul(OptLevel, &End, 10);
-    if (End == OptLevel || *End != '\0' || Value > 3)
-      fail("invalid HSA_HOTSWAP_OPT_LEVEL: %s", OptLevel);
+  if (OptLevel >= 0) {
     OptionsV2.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_V2_USE_OPT_LEVEL;
-    OptionsV2.opt_level = (uint32_t)Value;
+    OptionsV2.opt_level = (uint32_t)OptLevel;
   }
   if (getenv("HSA_HOTSWAP_CACHE_DISABLE"))
     OptionsV2.flags |= AMD_COMGR_HOTSWAP_TRANSPILE_OPTIONS_V2_CACHE_DISABLE;

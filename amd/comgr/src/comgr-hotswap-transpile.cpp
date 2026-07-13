@@ -356,8 +356,11 @@ llvm::Expected<ResolvedHotswapOptions> resolveOptions(
     Resolved.CacheDisable = true;
     return Resolved;
   }
-  if (options->size != sizeof(amd_comgr_hotswap_transpile_options_t))
-    return llvm::createStringError("hotswap options size is invalid");
+  if (options->size < sizeof(amd_comgr_hotswap_transpile_options_t))
+    return llvm::createStringError(
+        "hotswap options size " + std::to_string(options->size) +
+        " is smaller than expected " +
+        std::to_string(sizeof(amd_comgr_hotswap_transpile_options_t)));
 
   Resolved.CacheDirectory = options->cache_directory;
   Resolved.CacheSkipKernels = options->cache_skip_kernels;

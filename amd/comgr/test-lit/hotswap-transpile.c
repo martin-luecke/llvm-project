@@ -84,10 +84,11 @@
 // RUN: %FileCheck --check-prefix=OPTKEYBASE %s < %t.default-opt.out
 // RUN: sed -n 's/.*cache_key=\([0-9a-f][0-9a-f]*\).*/\1/p' \
 // RUN:   %t.default-opt.out > %t.default-opt.key
-// RUN: env HSA_HOTSWAP_CACHE_DIR=%t.opt-cache HSA_HOTSWAP_OPT_LEVEL=0 \
+// RUN: env HSA_HOTSWAP_CACHE_DIR=%t.opt-cache \
 // RUN:     hotswap-transpile %S/vecadd_gfx950.co \
 // RUN:                   amdgcn-amd-amdhsa--gfx950 \
 // RUN:                   amdgcn-amd-amdhsa--gfx942 \
+// RUN:                   -O0 \
 // RUN:   > %t.o0.out
 // RUN: %FileCheck --check-prefix=OPTKEYBASE %s < %t.o0.out
 // RUN: sed -n 's/.*cache_key=\([0-9a-f][0-9a-f]*\).*/\1/p' \
