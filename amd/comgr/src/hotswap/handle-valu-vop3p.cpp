@@ -51,12 +51,17 @@ StringRef diagnosticMnemonic(const DecodedInst &Di) {
                              : StringRef(Di.Mnemonic);
 }
 
+// The mnemonic of some wmma scale instructions is suffixed by the size of the
+// elements of the input matrices. For each size, we take a different number of
+// vgprs that represent the input matrix. This function converts this suffix to
+// the number of vgprs.
+// TODO: derive this from matrix_a_fmt/matrix_b_fmt instead.
 unsigned wmmaFmtSuffixToDwords(StringRef Tag) {
   return StringSwitch<unsigned>(Tag)
-      .Case("f8", 16)
-      .Case("f6", 12)
-      .Case("f4", 8)
-      .Default(0);
+      .CaseLower("f8", 16)
+      .CaseLower("f6", 12)
+      .CaseLower("f4", 8)
+      .DefaultUnreachable();
 }
 
 Error readSourceMods(const DecodedInst &Di, OpResolver &Op, unsigned NumSrcs,
