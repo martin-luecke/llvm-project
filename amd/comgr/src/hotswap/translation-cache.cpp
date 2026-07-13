@@ -206,9 +206,9 @@ llvm::Expected<KeyData> buildKeyData(const TranslationCacheRequest &request,
     auto rulesHash = hashFile(request.HotswapRulesPath);
     Timings.rulesHashSeconds = timingElapsed(CollectTimings, rulesHashStart);
     if (!rulesHash)
-      return llvm::createStringError("failed to hash HSA_HOTSWAP_RULES '" +
-                                     request.HotswapRulesPath + "': " +
-                                     llvm::toString(rulesHash.takeError()));
+      return llvm::createStringError(
+          "failed to hash HSA_HOTSWAP_RULES '" + request.HotswapRulesPath +
+          "': " + llvm::toString(rulesHash.takeError()));
     data.rulesSha256 = std::move(*rulesHash);
   }
 
@@ -350,7 +350,8 @@ llvm::Expected<bool> requireBool(const llvm::json::Object &obj,
 }
 
 llvm::Error requireEqualString(const llvm::json::Object &obj,
-                               llvm::StringRef field, llvm::StringRef expected) {
+                               llvm::StringRef field,
+                               llvm::StringRef expected) {
   auto value = requireString(obj, field);
   if (!value)
     return value.takeError();
@@ -376,8 +377,8 @@ llvm::Error validateKernelNameField(const llvm::json::Object &obj,
   return llvm::Error::success();
 }
 
-llvm::Error requireEqualInt(const llvm::json::Object &obj, llvm::StringRef field,
-                            int64_t expected) {
+llvm::Error requireEqualInt(const llvm::json::Object &obj,
+                            llvm::StringRef field, int64_t expected) {
   auto value = requireInt(obj, field);
   if (!value)
     return value.takeError();
@@ -496,8 +497,8 @@ llvm::Error validateMetadata(const TranslationCacheRequest &request,
   if (auto e = requireEqualInt(obj, "opt_level",
                                static_cast<int64_t>(request.OptLevel)))
     return e;
-  if (auto e =
-          requireEqualString(obj, "hotswap_rules_path", request.HotswapRulesPath))
+  if (auto e = requireEqualString(obj, "hotswap_rules_path",
+                                  request.HotswapRulesPath))
     return e;
   if (auto e =
           requireEqualString(obj, "hotswap_rules_sha256", keyData.rulesSha256))
@@ -521,8 +522,9 @@ llvm::Error validateMetadata(const TranslationCacheRequest &request,
     return e;
   if (auto e = validateKernelNameField(obj, request.KernelName))
     return e;
-  if (auto e = requireEqualInt(obj, "kernel_count",
-                               static_cast<int64_t>(keyData.kernelNames.size())))
+  if (auto e =
+          requireEqualInt(obj, "kernel_count",
+                          static_cast<int64_t>(keyData.kernelNames.size())))
     return e;
   if (auto e = validateKernelArray(obj, keyData.kernelNames))
     return e;
