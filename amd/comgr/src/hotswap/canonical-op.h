@@ -448,9 +448,6 @@ enum class CanonicalOp : uint16_t {
 
   // -- VOP2 / VOP3 --
   V_ADD_F32, V_SUB_F32, V_SUBREV_F32, V_MUL_F32,
-  // v_mul_dx9_zero_f32 (gfx11+ asm mnemonic) / v_mul_legacy_f32 (pseudo):
-  // DX9-style multiply where 0.0 * anything -> +0.0, even for NaN/Inf inputs.
-  // Lowered via llvm.amdgcn.fmul.legacy, NOT plain fmul.
   V_MUL_LEGACY_F32,
   V_FMAC_F32, V_FMA_F32, V_FMAMK_F32, V_FMAAK_F32,
   V_ADD_NC_U32, V_SUB_NC_U32, V_SUBREV_NC_U32,
