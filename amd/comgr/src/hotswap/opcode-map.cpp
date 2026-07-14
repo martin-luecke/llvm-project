@@ -465,8 +465,6 @@ static const Entry kCanonTable[] = {
     E(V_SUB_F32_e64, V_SUB_F32),
     E(V_SUBREV_F32_e64, V_SUBREV_F32),
     E(V_MUL_F32_e64, V_MUL_F32),
-    // v_mul_dx9_zero_f32 (gfx11+ real) -> V_MUL_LEGACY_F32 pseudo (see
-    // canonical-op.h for the DX9 zero-flush rationale).
     E(V_MUL_LEGACY_F32_e64, V_MUL_LEGACY_F32),
     E(V_FMAC_F32_e64, V_FMAC_F32),
     E(V_FMA_F32_e64, V_FMA_F32),
