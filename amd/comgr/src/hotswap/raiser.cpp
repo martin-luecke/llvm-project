@@ -840,12 +840,14 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
     TargetSti = std::move(*StiOrErr);
     TargetIsa = ISAProfile::fromSubtarget(*TargetSti);
   }
-  if (Isa.WaveSize == 0)
+  if (!Isa.hasValidWaveSize())
     return RaiseFailure::internalFailure(
-        "transpiler: source ISA profile has zero wave size");
-  if (TargetIsa.WaveSize == 0)
+        "transpiler: source ISA profile has unsupported wave size " +
+        Twine(Isa.WaveSize));
+  if (!TargetIsa.hasValidWaveSize())
     return RaiseFailure::internalFailure(
-        "transpiler: target ISA profile has zero wave size");
+        "transpiler: target ISA profile has unsupported wave size " +
+        Twine(TargetIsa.WaveSize));
 
   // LLVMContext + common IR types are created here (earlier than they used
   // to be) so the WaveProjection has access to i32/i64 before the cross-
@@ -1780,14 +1782,13 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
   Ctx.SourceWaveSgprPairValidShadow.reserve(Regs.Sgpr.size());
   for (unsigned I = 0; I < Regs.Sgpr.size(); ++I) {
     auto *MaskA = B.CreateAlloca(Regs.ExecTy, nullptr,
-                                 "sgpr_mask_shadow_" + std::to_string(I));
+                                 "sgpr_mask_shadow_" + Twine(I));
     auto *ValidA =
-        B.CreateAlloca(I1Ty, nullptr, "sgpr_mask_valid_" + std::to_string(I));
+        B.CreateAlloca(I1Ty, nullptr, "sgpr_mask_valid_" + Twine(I));
     auto *PairA = B.CreateAlloca(
-        I64Ty, nullptr, "source_wave_sgpr_pair_" + std::to_string(I));
+        I64Ty, nullptr, "source_wave_sgpr_pair_" + Twine(I));
     auto *PairValidA = B.CreateAlloca(
-        I1Ty, nullptr,
-        "source_wave_sgpr_pair_valid_" + std::to_string(I));
+        I1Ty, nullptr, "source_wave_sgpr_pair_valid_" + Twine(I));
     B.CreateStore(ConstantInt::get(Regs.ExecTy, 0), MaskA);
     B.CreateStore(B.getFalse(), ValidA);
     B.CreateStore(ConstantInt::get(I64Ty, 0), PairA);

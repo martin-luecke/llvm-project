@@ -572,7 +572,7 @@ struct RaiseContext {
     if (!Projection.providesFullWaveExecInvariant())
       return emitLaneActiveBit();
     unsigned SourceBits = Isa.WaveSize;
-    assert(SourceBits != 0 && "source wave size must be non-zero");
+    assert(Isa.hasValidWaveSize() && "source wave size must be 32 or 64");
     if (SourceBits >= 64)
       return B.CreateICmpNE(Exec, llvm::ConstantInt::get(Exec->getType(), 0),
                             "source_wave_active");
