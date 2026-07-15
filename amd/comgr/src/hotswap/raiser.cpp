@@ -913,7 +913,7 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
       Meta.MaxFlatWorkgroupSize > 0 &&
       static_cast<unsigned>(Meta.MaxFlatWorkgroupSize) < TargetIsa.WaveSize;
   const bool UseThreadLoop = ForceThreadLoopProjection;
-  // HUNYUAN: WaveNative-vs-MODREP choice for a multi-warp workgroup depends on
+  // WaveNative-vs-MODREP choice for a multi-warp workgroup depends on
   // whether the kernel contains WMMA, so eligibility is computed here but the
   // projection is CONSTRUCTED AFTER decode (below). WaveNative packs two source
   // wave32 warps into one target wave64, which breaks kernels that derive a
