@@ -667,9 +667,8 @@ Expected<HandlerResult> handleValuVoP3P(RaiseContext &Ctx,
       Res = Ctx.B.CreateAdd(S0, S1, "pk_add_u16");
       break;
     case CanonicalOp::V_PK_SUB_I16:
-      // Lane-wise modular i16 subtract. As with V_PK_ADD_U16 / V_PK_MUL_LO_U16
-      // the low 16 bits are identical for signed and unsigned operands, so a
-      // plain `sub` without nuw/nsw matches the AMDGPU semantics directly.
+      // Modular i16 subtract: signed vs unsigned doesn't change the low 16
+      // bits, so plain `sub` without nuw/nsw matches the AMDGPU semantics.
       Res = Ctx.B.CreateSub(S0, S1, "pk_sub_i16");
       break;
     case CanonicalOp::V_PK_MUL_LO_U16:
