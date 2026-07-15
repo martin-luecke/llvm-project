@@ -177,6 +177,10 @@ void runOptPipeline(llvm::Module &M, llvm::TargetMachine &TM,
   MPM.run(M, MAM);
 }
 
+// Normalize raised setpc/swap_pc dispatch switches to ordinary branch trees
+// before AMDGPU codegen. Raw switch terminators are not safe to hand to the
+// irreducible-CFG path in the backend, so the pipeline calls this only for
+// kernels that the raiser marked as containing enumerated setpc dispatch.
 void lowerSwitchesToBranches(llvm::Module &M) {
   llvm::FunctionAnalysisManager FAM;
   llvm::PassBuilder PB;
@@ -190,6 +194,10 @@ void lowerSwitchesToBranches(llvm::Module &M) {
   }
 }
 
+// Fail closed if switch lowering did not remove every switch terminator. This
+// is deliberately module-wide: the setpc dispatch marker means the kernel
+// requires branch-only IR before codegen, and silently letting any switch
+// through would reintroduce the backend hazard this path exists to avoid.
 llvm::Error checkNoSwitchTerminators(const llvm::Module &M,
                                      llvm::StringRef KernelName) {
   for (const llvm::Function &F : M) {
