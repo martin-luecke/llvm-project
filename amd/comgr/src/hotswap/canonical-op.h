@@ -1179,6 +1179,13 @@ enum class CanonicalOp : uint16_t {
   SCRATCH_STORE_DWORDX2,
   SCRATCH_STORE_DWORDX3,
   SCRATCH_STORE_DWORDX4,
+  // Sub-dword scratch (private) accesses. Loads zero/sign-extend the sub-dword
+  // value into the 32-bit VGPR; stores truncate the low byte/short. Mirror the
+  // GLOBAL_{LOAD,STORE}_{U,S}BYTE / SHORT semantics but on the private address
+  // space. Emitted by register spills (e.g. bool accumulators in reduce
+  // kernels) that the gfx1250 compiler placed in scratch.
+  SCRATCH_LOAD_UBYTE, SCRATCH_LOAD_SBYTE, SCRATCH_LOAD_USHORT, SCRATCH_LOAD_SSHORT,
+  SCRATCH_STORE_BYTE, SCRATCH_STORE_SHORT,
 
   // -- FLAT atomics --
   FLAT_ATOMIC_ADD,
