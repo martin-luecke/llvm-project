@@ -36,7 +36,9 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
-          git-clang-format "$BASE_SHA" -- amd/comgr/src/hotswap
+          # git-clang-format exits non-zero when it reformats a file; don't let
+          # `set -e` abort before we can print the diff below.
+          git-clang-format "$BASE_SHA" -- amd/comgr/src/hotswap || true
           if ! git diff --quiet; then
             echo "::group::clang-format diff"
             git --no-pager diff
