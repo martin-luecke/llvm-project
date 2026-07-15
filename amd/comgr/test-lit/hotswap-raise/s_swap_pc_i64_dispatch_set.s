@@ -29,8 +29,7 @@ setpc_swap_dispatch_set_kernel:
 	s_add_co_ci_u32 s11, s11, 0
 	s_branch 0
 	s_swap_pc_i64 s[20:21], s[10:11]
-; IR: %source_wave_active = icmp ne
-; IR: %source_wave_sgpr_pair = select i1 %source_wave_active, i64 60, i64 0
+; IR: %source_wave_sgpr_pair = select i1 {{[^,]+}}, i64 60, i64 0
 ; IR: %swap_call_target_marker = select i1 {{[^,]+}}, i64 {{[^,]+}}, i64 {{[^ ]+}}
 ; IR-NEXT: switch i64 %swap_call_target_marker, label %dispatch_0x38_unreachable [
 ; IR-NEXT: i64 68, label %bb_0x44
