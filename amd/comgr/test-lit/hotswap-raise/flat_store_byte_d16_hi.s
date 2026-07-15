@@ -1,17 +1,17 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco \
 ; RUN:     --target-isa=gfx942 \
-; RUN:     --emit-ir=flat_store_byte_d16_hi_kernel 2>/dev/null \
+; RUN:     --emit-ir=flat_store_byte_d16_hi_kernel 2>&1 \
 ; RUN:   | %FileCheck %s
 
 ; flat_store_d16_hi_b8: D16-hi byte store lowering (lshr 16 / trunc to i8),
 ; the byte-store sibling of flat_store_short_d16_hi. Surfaces bits [23:16].
 ; CHECK-LABEL: define amdgpu_kernel void @flat_store_byte_d16_hi_kernel(
-; CHECK-DAG: %d16hi_shift = lshr i32 %{{.+}}, 16
-; CHECK-DAG: %d16hi_trunc = trunc i32 %d16hi_shift to i8
-; CHECK: store i8 %d16hi_trunc, ptr %{{[^,]+}}
-; CHECK-NOT: store i32 %d16hi_trunc, ptr %
-; CHECK-NOT: store i16 %d16hi_trunc, ptr %
+; CHECK: [[SHIFT:%.+]] = lshr i32 %{{.+}}, 16
+; CHECK: [[TRUNC:%.+]] = trunc i32 [[SHIFT]] to i8
+; CHECK: store i8 [[TRUNC]], ptr %{{.+}}
+; CHECK-NOT: store i32 [[TRUNC]], ptr %
+; CHECK-NOT: store i16 [[TRUNC]], ptr %
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
