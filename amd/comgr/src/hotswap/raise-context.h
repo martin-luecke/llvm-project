@@ -565,6 +565,8 @@ struct RaiseContext {
     }
   }
 
+  // Return true when the source wave containing the current target lane has any
+  // active lane in EXEC.
   llvm::Value *emitCurrentSourceWaveHasActiveLane() {
     llvm::Value *Exec = Regs.loadExec(B);
     if (!Projection.providesFullWaveExecInvariant())
@@ -592,6 +594,8 @@ struct RaiseContext {
                           "source_wave_active");
   }
 
+  // Record an SGPR-pair marker for the currently active source wave, preserving
+  // the old marker for inactive source waves.
   void recordSourceWaveSgprPair(int BaseIdx, llvm::Value *V) {
     if (!Projection.providesFullWaveExecInvariant())
       return;
@@ -607,6 +611,8 @@ struct RaiseContext {
     B.CreateStore(B.getTrue(), SourceWaveSgprPairValidShadow[BaseIdx]);
   }
 
+  // Load the source-wave marker when one was recorded; otherwise use the normal
+  // SGPR-pair value.
   llvm::Value *materializeSourceWaveSgprPair(int BaseIdx,
                                              llvm::Value *Fallback) {
     if (!Projection.providesFullWaveExecInvariant() || BaseIdx < 0 ||
