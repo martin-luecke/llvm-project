@@ -2427,18 +2427,22 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
         }
         return false;
       };
-      // HUNYUAN: C5 predicate-chain refusal -> retry under ThreadLoopProjection.
+      // C5 predicate-chain refusal -> retry under ThreadLoopProjection.
       // TLP iterates the kernel body once per source wave with a synthetic
-      // per-iteration source tid, so a workitem.id.x-derived predicate that
-      // would diverge across MODREP replicas / WaveNative packing is evaluated
-      // correctly per source wave. Eligible for ANY cross-widen C5 refusal
-      // (multiplicative wave ratio) -- e.g. HunyuanVideo RoPE's
-      // `icmp ult tid-derived, W_s-1` needs per-source-wave iteration -- not
-      // just the WaveNative-equality sub-case. Matrix ops still route to
-      // WaveNative; TLP is refused for LDS/barrier kernels below.
-      constexpr bool kEnableThreadLoopC5Retry = true;
+      // per-iteration source tid (see ThreadLoopProjection::emitWorkitemIdX),
+      // so a workitem.id.x-derived predicate that would diverge across MODREP
+      // replicas / WaveNative packing is evaluated correctly per source wave.
+      // TLP's own C5 gate (shouldRefuseC5) returns false when
+      // SuppressThreadLoopC5 is on, precisely because the loop makes the
+      // predicate source-wave-scoped. Eligible for any cross-widen C5 refusal
+      // (multiplicative wave ratio), not just the WaveNative-equality
+      // sub-case: the MODREP multi-warp (>1 source wave) refusal -- e.g. an
+      // `icmp ult tid-derived, W_s-1` predicate -- needs the same
+      // per-source-wave iteration. Matrix ops still route to WaveNative (they
+      // need all target lanes simultaneously); TLP is refused for kernels with
+      // LDS/barriers (barrier hoisting + LDS aliasing are unimplemented) via
+      // threadLoopUnsupportedWorkgroupMemoryOrBarrier below.
       const bool CanRetryThreadLoop =
-          kEnableThreadLoopC5Retry &&
           PredReport.Refused && !ForceThreadLoopProjection &&
           TargetIsa.WaveSize > Isa.WaveSize &&
           (TargetIsa.WaveSize % Isa.WaveSize) == 0 && !HasMatrixOp();

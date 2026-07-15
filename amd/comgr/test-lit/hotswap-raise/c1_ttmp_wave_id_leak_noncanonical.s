@@ -1,5 +1,5 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && not raise_cli %t.hsaco --target-isa=gfx942 \
+; RUN:   && %not raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:      --emit-ir=c1_ttmp_wave_id_leak_noncanonical_kernel 2>&1 \
 ; RUN:   | %FileCheck %s --check-prefix=ERR
 ;
@@ -17,7 +17,8 @@
 	.p2align	8
 	.type	c1_ttmp_wave_id_leak_noncanonical_kernel,@function
 c1_ttmp_wave_id_leak_noncanonical_kernel:
-; ERR: pre-translation abort: cross-wave-lane-id-leak on 's_bfe_u32'
+; ERR: pre-translation abort: cross-wave-lane-id-leak
+; ERR-SAME: s_bfe_u32
 ; ERR: TtmpWaveIdLeak
 	s_bfe_u32 s0, ttmp8, 0x50018
 	s_endpgm
