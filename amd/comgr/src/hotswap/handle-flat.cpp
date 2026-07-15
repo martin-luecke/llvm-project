@@ -143,24 +143,29 @@ Value *emitD16HiHalfTruncI8(RaiseContext &Ctx, Value *Src32) {
   return Ctx.B.CreateTrunc(Shifted, Type::getInt8Ty(Ctx.C), "d16hi_trunc");
 }
 
-// True when a global/flat memory op's cpol scope is device- or system-coherent
-// (SCOPE_DEV / SCOPE_SYS). Such ops participate in cross-workgroup
-// communication -- decoupled-lookback scan state, spin-wait "ready" flags,
-// released aggregates. Model them as *volatile* LLVM accesses so (a) the AMDGPU
-// backend keeps them globally coherent (glc / device-scope cache bypass) rather
-// than reading stale L1, and (b) the optimizer cannot hoist, CSE or eliminate
-// them -- either of which turns a spin-wait into an infinite loop or drops a
-// release store, deadlocking the consumer. CU-scope / default cpol keeps the
-// plain (optimizable) access, so ordinary loads/stores are unaffected.
+// True when a global/flat memory op's cpol scope is coherent beyond the CU,
+// i.e. any of SCOPE_SE / SCOPE_DEV / SCOPE_SYS. The lift models these as
+// *volatile* LLVM accesses so the AMDGPU backend keeps them coherent and the
+// optimizer cannot hoist/CSE/eliminate them; treating a wider-than-CU scope as
+// plain would drop a cross-workgroup handshake (see the commit that added
+// this). Only SCOPE_CU / default cpol keeps the plain, optimizable access. An
+// unknown scope value is impossible (SCOPE is a 2-bit field), so it is
+// asserted.
 bool memScopeIsCoherent(const DecodedInst &Di) {
   std::optional<int64_t> Cpol =
       readNamedImmOperand(Di, llvm::AMDGPU::OpName::cpol);
   if (!Cpol)
     return false;
-  uint64_t Scope =
-      static_cast<uint64_t>(*Cpol) & llvm::AMDGPU::CPol::SCOPE;
-  return Scope == llvm::AMDGPU::CPol::SCOPE_DEV ||
-         Scope == llvm::AMDGPU::CPol::SCOPE_SYS;
+  uint64_t Scope = static_cast<uint64_t>(*Cpol) & llvm::AMDGPU::CPol::SCOPE;
+  switch (Scope) {
+  case llvm::AMDGPU::CPol::SCOPE_CU:
+    return false;
+  case llvm::AMDGPU::CPol::SCOPE_SE:
+  case llvm::AMDGPU::CPol::SCOPE_DEV:
+  case llvm::AMDGPU::CPol::SCOPE_SYS:
+    return true;
+  }
+  llvm_unreachable("SCOPE is a 2-bit field; all four values are enumerated");
 }
 
 int64_t firstScratchImm(const DecodedInst &Di, OpResolver &Op,
