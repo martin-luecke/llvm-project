@@ -815,6 +815,11 @@ bool isDppCtrlRewritable(unsigned Ctrl) {
   // ROW_SHL above.
   if (Ctrl >= ROW_SHR_FIRST && Ctrl <= ROW_SHR_LAST)
     return true;
+  // ROW_ROR:N with N in [1, 15].  Row rotate right stays inside the
+  // current 16-lane row (the wrap is modulo 16), so like ROW_XMASK it is
+  // always in-range and wave-size-oblivious.
+  if (Ctrl >= ROW_ROR_FIRST && Ctrl <= ROW_ROR_LAST)
+    return true;
   // ROW_XMASK:N with N in [0, 15].  The ISA defines this as
   // source lane `(within-row lane) XOR N`, so it never leaves the
   // current 16-lane row.
@@ -860,11 +865,16 @@ struct DppLaneMap {
 //     Target-lane L (within-row W) reads source within-row W - N.
 //     Out-of-range iff W < N.
 //
+//   * ROW_ROR:N          (0x120..0x12F)  -- row rotate right by N.
+//     Target-lane L (within-row W) reads source within-row
+//     (W - N) mod 16.  Always in-range: the wrap keeps the source
+//     lane within the 16-lane row.
+//
 //   * ROW_XMASK:N        (0x160..0x16F)  -- row XOR-mask by N.
 //     Target-lane L (within-row W) reads source within-row W ^ N.
 //     Always in-range: W ^ N stays within the 16-lane row.
 //
-// All four families keep the source lane within the same 16-lane
+// All these families keep the source lane within the same 16-lane
 // row as the target lane.  Since a 16-lane row is a topology
 // invariant of every AMDGPU wave size >= 16, the `rowBase(L) |
 // srcWithinRow` computation produces identical source-lane indices
@@ -874,13 +884,6 @@ struct DppLaneMap {
 // Unsupported families (filtered upstream via
 // `isDppCtrlRewritable`; reaching this function with one returns
 // an error at the trailing default case):
-//
-//   * ROW_ROR:N (row rotate right).  Rotation keeps data within a
-//     16-lane row, but requires modular arithmetic this helper
-//     could easily extend to.  Left off the supported list until a
-//     corpus kernel exercises it -- adding it requires updating
-//     `isDppCtrlRewritable`, adding another case below, and a lit
-//     fixture.
 //
 //   * WAVE_SHL1 / WAVE_ROL1 / WAVE_SHR1 / WAVE_ROR1 (wave-wide
 //     shifts).  These cross 16-lane row boundaries within the source
@@ -962,6 +965,21 @@ Expected<DppLaneMap> buildDppLaneMap(IRBuilder<> &B, Value *WithinRow,
     Value *NVal = ConstantInt::get(I32Ty, N);
     Out.InRange = B.CreateICmpUGE(WithinRow, NVal, "cwd_dpp_sr_inrange");
     Out.SrcWithinRow = B.CreateSub(WithinRow, NVal, "cwd_dpp_sr_src");
+    return Out;
+  }
+
+  if (Ctrl >= ROW_ROR_FIRST && Ctrl <= ROW_ROR_LAST) {
+    // ROW_ROR:N.  Target within-row W reads source within-row
+    // (W - N) mod 16, matching LLVM's matchRowRotatePattern in
+    // AMDGPUInstCombineIntrinsic.cpp.  Compute it as (W + (16 - N)) & 15
+    // to avoid a signed subtract; the wrap keeps the source lane in the
+    // same 16-lane row, so it is always in-range.
+    unsigned N = Ctrl - ROW_ROR0;
+    Value *AddC = ConstantInt::get(I32Ty, 16u - N);
+    Value *Sum = B.CreateAdd(WithinRow, AddC, "cwd_dpp_ror_sum");
+    Out.SrcWithinRow =
+        B.CreateAnd(Sum, ConstantInt::get(I32Ty, 15), "cwd_dpp_ror_src");
+    Out.InRange = ConstantInt::getTrue(B.getContext());
     return Out;
   }
 
@@ -1302,8 +1320,8 @@ rewriteCrossLaneDivergent(Function &F, unsigned SourceWaveSize,
          << "' has an update.dpp site with unsupported "
          << describeDppCtrl(Ctrl)
          << ". The cross-widen rewrite only covers quad_perm, "
-            "row_shl:N, row_shr:N and row_xmask:N today (all stay "
-            "within a single 16-lane row, hence wave-size-oblivious). "
+            "row_shl:N, row_shr:N, row_ror:N and row_xmask:N today (all "
+            "stay within a single 16-lane row, hence wave-size-oblivious). "
             "Extending the supported set requires a per-ctrl "
             "correctness argument in buildDppLaneMap and a new "
             "lit fixture; refusing rather than silently miscompiling. "
