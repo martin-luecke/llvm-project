@@ -97,9 +97,11 @@
 // for the narrow class of pointwise / independent-half kernels where
 // MODREP's "replicas of source wave 0" model is correct AND where
 // the C5 refusal under MODREP is the desired loud-fail signal.
-// No env-var override exists; `HSA_HOTSWAP_WAVE_NATIVE` was a
-// transient test hook during the graduation sweep and has been
-// removed so the opt-out path isn't silently bypassed.
+// The library entry point (amd_comgr_hotswap_transpile) has no command
+// line, so it honors the `HSA_HOTSWAP_DISABLE_WAVE_NATIVE` /
+// `HSA_HOTSWAP_DISABLE_WRITELANE_REWRITE` diagnostic env knobs instead
+// (see comgr-env.h); the always-on `HSA_HOTSWAP_WAVE_NATIVE` opt-in that
+// existed during the graduation sweep is gone.
 //
 // (The earlier `--enable-permlane16-xor3-partner` /
 // `--enable-permlane16-swap-selfpreserve` flags were removed along
@@ -108,6 +110,7 @@
 // `handle-valu-cross-lane.cpp::emitPermLaneSwapEmulation` and
 // matrix-translation.md §12.4.7.)
 
+#include "comgr-env.h"
 #include "comgr-metadata.h"
 #include "comgr.h"
 #include "hotswap/code-object-utils.h"
@@ -346,12 +349,17 @@ int main(int argc, char **argv) {
   std::string writeHsacoPath = WriteHsacoOpt;
   std::string writeHsacoKernel = KernelOpt;
   // Both toggles default on (Triton-corpus / WaveNative graduations; see this
-  // file's top-of-file comment and raiser.hpp). The --disable- forms pin the
-  // pre-rewrite / MODREP paths for the lit fixtures.
-  bool EnableWritelaneRewrite = resolveToggle(
-      true, EnableWritelaneRewriteOpt, DisableWritelaneRewriteOpt);
+  // file's top-of-file comment and raiser.hpp). The `HSA_HOTSWAP_DISABLE_*`
+  // diagnostic env knobs move the default so the same decode the library entry
+  // point uses is covered by lit; an explicit --enable-/--disable- flag still
+  // wins. The --disable- forms pin the pre-rewrite / MODREP paths for the lit
+  // fixtures.
+  bool EnableWritelaneRewrite =
+      resolveToggle(!COMGR::env::shouldDisableWritelaneRewrite(),
+                    EnableWritelaneRewriteOpt, DisableWritelaneRewriteOpt);
   bool EnableWaveNative =
-      resolveToggle(true, EnableWaveNativeOpt, DisableWaveNativeOpt);
+      resolveToggle(!COMGR::env::shouldDisableWaveNative(), EnableWaveNativeOpt,
+                    DisableWaveNativeOpt);
 
   // Read the file up-front so we can fall back to the ELF e_flags
   // ISA when the filename heuristic fails (kerneldex corpora often

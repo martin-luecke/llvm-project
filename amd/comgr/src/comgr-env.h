@@ -46,6 +46,18 @@ llvm::StringRef getCacheDirectory();
 /// space-separated options to append to clang driver invocations.
 llvm::StringRef getDriverOptionsAppend();
 
+/// Return whether the environment requests the WaveNative projection be
+/// disabled for wave32->wave64 cross-widening, forcing ModuloReplication
+/// instead. Diagnostic ablation knob (HSA_HOTSWAP_DISABLE_WAVE_NATIVE); default
+/// false so behavior is unchanged when unset.
+bool shouldDisableWaveNative();
+
+/// Return whether the environment requests the post-raise
+/// cross-lane-divergent writelane/readlane rewrite be disabled. Diagnostic
+/// ablation knob (HSA_HOTSWAP_DISABLE_WRITELANE_REWRITE); default false so
+/// behavior is unchanged when unset.
+bool shouldDisableWritelaneRewrite();
+
 } // namespace env
 } // namespace COMGR
 

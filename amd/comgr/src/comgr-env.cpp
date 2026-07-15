@@ -103,5 +103,15 @@ StringRef getDriverOptionsAppend() {
   return Options ? Options : "";
 }
 
+bool shouldDisableWaveNative() {
+  static char *Disable = getenv("HSA_HOTSWAP_DISABLE_WAVE_NATIVE");
+  return Disable && StringRef(Disable) != "0";
+}
+
+bool shouldDisableWritelaneRewrite() {
+  static char *Disable = getenv("HSA_HOTSWAP_DISABLE_WRITELANE_REWRITE");
+  return Disable && StringRef(Disable) != "0";
+}
+
 } // namespace env
 } // namespace COMGR

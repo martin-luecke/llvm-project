@@ -224,6 +224,13 @@ include:
   appended to all clang driver invocations. This can be used to inject
   additional compiler flags for debugging or experimentation without modifying
   the application code.
+* `HSA_HOTSWAP_DISABLE_WAVE_NATIVE`: If this is set, and is not "0", the hotswap
+  transpile path forces the ModuloReplication projection instead of WaveNative
+  for wave32->wave64 cross-widening. Diagnostic knob for isolating
+  projection-specific miscompiles; not part of the request ABI.
+* `HSA_HOTSWAP_DISABLE_WRITELANE_REWRITE`: If this is set, and is not "0", the
+  hotswap transpile path disables the post-raise cross-lane-divergent
+  writelane/readlane rewrite. Diagnostic knob; not part of the request ABI.
 
 ### VFS
 Comgr implements support for an in-memory, virtual filesystem (VFS) for storing
