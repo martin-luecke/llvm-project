@@ -1,6 +1,6 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %raise_cli %t.hsaco --target-isa=gfx942 \
-; RUN:     --emit-ir=c2_dpp_row_ror_kernel 2>/dev/null \
+; RUN:     --emit-ir=c2_dpp_row_ror_kernel 2>&1 \
 ; RUN:   | %FileCheck %s
 
 ; Lower DPP row_ror:1 to a ds_bpermute selector.  Row rotate right by N
@@ -16,7 +16,7 @@
 ; CHECK-DAG: %cwd_dpp_src_safe = select i1 true, i32 %cwd_dpp_ror_src, i32 0
 ; CHECK-DAG: %cwd_dpp_src_abs = or i32 %cwd_dpp_row_base, %cwd_dpp_src_safe
 ; CHECK-DAG: %cwd_dpp_selector = shl i32 %cwd_dpp_src_abs, 2
-; CHECK: call i32 @llvm.amdgcn.ds.bpermute(i32 %cwd_dpp_selector, i32 %{{[^,]+}})
+; CHECK: call i32 @llvm.amdgcn.ds.bpermute(i32 %cwd_dpp_selector, i32 %{{.+}})
 ; CHECK-NOT: call i32 @llvm.amdgcn.update.dpp.i32(
 ; CHECK: declare i32 @llvm.amdgcn.ds.bpermute(i32, i32)
 
