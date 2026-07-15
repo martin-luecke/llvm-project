@@ -840,6 +840,12 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
     TargetSti = std::move(*StiOrErr);
     TargetIsa = ISAProfile::fromSubtarget(*TargetSti);
   }
+  if (Isa.WaveSize == 0)
+    return RaiseFailure::internalFailure(
+        "transpiler: source ISA profile has zero wave size");
+  if (TargetIsa.WaveSize == 0)
+    return RaiseFailure::internalFailure(
+        "transpiler: target ISA profile has zero wave size");
 
   // LLVMContext + common IR types are created here (earlier than they used
   // to be) so the WaveProjection has access to i32/i64 before the cross-

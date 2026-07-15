@@ -28,7 +28,6 @@
 #include "llvm/IR/Module.h"
 #include "llvm/MC/MCRegister.h"
 #include "llvm/Support/Error.h"
-#include "llvm/Support/ErrorHandling.h"
 
 #include <cassert>
 #include <map>
@@ -571,8 +570,7 @@ struct RaiseContext {
     if (!Projection.providesFullWaveExecInvariant())
       return emitLaneActiveBit();
     unsigned SourceBits = Isa.WaveSize;
-    if (SourceBits == 0)
-      llvm::report_fatal_error("source wave size must be non-zero");
+    assert(SourceBits != 0 && "source wave size must be non-zero");
     if (SourceBits >= 64)
       return B.CreateICmpNE(Exec, llvm::ConstantInt::get(Exec->getType(), 0),
                             "source_wave_active");
