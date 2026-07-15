@@ -577,6 +577,15 @@ amd_comgr_status_t hotswapTranspileWithResolvedOptions(
   CacheRequest.CacheReadonly = Options.CacheReadonly;
   CacheRequest.CollectTimings = CollectTimings;
   CacheRequest.OptLevel = Options.OptLevel;
+  // Diagnostic ablation knob: force the ModuloReplication projection instead of
+  // WaveNative for wave32->wave64 cross-widening, to isolate projection-specific
+  // miscompiles (e.g. cross-lane prefix scans). Not part of the request ABI.
+  if (::getenv("HSA_HOTSWAP_DISABLE_WAVE_NATIVE"))
+    CacheRequest.EnableWaveNative = false;
+  // Diagnostic ablation knob: disable the post-raise cross-lane-divergent
+  // rewrite pass, to isolate whether it miscompiles cross-lane scans.
+  if (::getenv("HSA_HOTSWAP_DISABLE_WRITELANE_REWRITE"))
+    CacheRequest.EnableWritelaneRewrite = false;
 
   std::string SkippedKernel;
   if (!CacheRequest.KernelName.empty()) {
