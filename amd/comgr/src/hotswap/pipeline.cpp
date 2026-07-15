@@ -14,6 +14,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/AMDHSAKernelDescriptor.h"
@@ -30,6 +31,7 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/Transforms/Utils/LowerSwitch.h"
 
 #include <algorithm>
 #include <chrono>
@@ -173,6 +175,35 @@ void runOptPipeline(llvm::Module &M, llvm::TargetMachine &TM,
                                     ? PB.buildO0DefaultPipeline(OL)
                                     : PB.buildPerModuleDefaultPipeline(OL);
   MPM.run(M, MAM);
+}
+
+void lowerSwitchesToBranches(llvm::Module &M) {
+  llvm::FunctionAnalysisManager FAM;
+  llvm::PassBuilder PB;
+  PB.registerFunctionAnalyses(FAM);
+
+  llvm::FunctionPassManager FPM;
+  FPM.addPass(llvm::LowerSwitchPass());
+  for (llvm::Function &F : M) {
+    if (!F.isDeclaration())
+      FPM.run(F, FAM);
+  }
+}
+
+llvm::Error checkNoSwitchTerminators(const llvm::Module &M,
+                                     llvm::StringRef KernelName) {
+  for (const llvm::Function &F : M) {
+    for (const llvm::BasicBlock &BB : F) {
+      if (!llvm::isa<llvm::SwitchInst>(BB.getTerminator()))
+        continue;
+      return llvm::createStringError(
+          llvm::Twine("setpc dispatch switch remained after LowerSwitch for "
+                      "kernel '") +
+          KernelName + "' in function '" + F.getName() + "', block '" +
+          BB.getName() + "'");
+    }
+  }
+  return llvm::Error::success();
 }
 
 // In-process `llc`: run codegen for `M` and emit `FileType` to `OS`.
@@ -449,6 +480,19 @@ static bool raiseAndCompileKernel(
 
   auto OptStart = timingStart(Options.CollectTimings);
   runOptPipeline(M, *TM, Options.OptLevel);
+  if (Raised.HasEnumeratedSetpcDispatch) {
+    lowerSwitchesToBranches(M);
+    if (llvm::Error Err = checkNoSwitchTerminators(M, KernelName)) {
+      std::string Detail = llvm::toString(std::move(Err));
+      llvm::errs() << "transpiler: " << Detail << "\n";
+      Result.FailKernel = KernelName;
+      Result.FailReason = reasonString(RaiseFailureReason::InternalError);
+      Result.FailDetail = Detail;
+      Result.Timings.optSeconds +=
+          timingElapsed(Options.CollectTimings, OptStart);
+      return false;
+    }
+  }
   Result.Timings.optSeconds += timingElapsed(Options.CollectTimings, OptStart);
 
   // Object codegen consumes the module, so clone it first when a debug
