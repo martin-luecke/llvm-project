@@ -6,6 +6,15 @@
 ; RUN:   --emit-ir=buffer_load_wave_native_exec_gate_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s --check-prefixes=MR,BOTH
 ;
+; The HSA_HOTSWAP_DISABLE_WAVE_NATIVE diagnostic env knob moves the default to
+; modulo-replication with no explicit flag, exercising the same decode the
+; library entry point uses (comgr-env.h). Absence of init.whole.wave (ENV-NOT)
+; is the observable projection switch.
+; RUN: env HSA_HOTSWAP_DISABLE_WAVE_NATIVE=1 raise_cli %t.hsaco \
+; RUN:   --target-isa=gfx942 \
+; RUN:   --emit-ir=buffer_load_wave_native_exec_gate_kernel 2>&1 \
+; RUN:   | %FileCheck %s --check-prefixes=ENV,BOTH
+;
 ; MUBUF load EXEC-gating under WaveNative and modulo-replication (rocm-systems#148).
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
@@ -17,6 +26,8 @@
 ; WN-LABEL: define amdgpu_kernel void @buffer_load_wave_native_exec_gate_kernel(
 ; WN: call i1 @llvm.amdgcn.init.whole.wave()
 ; MR-LABEL: define amdgpu_kernel void @buffer_load_wave_native_exec_gate_kernel(
+; ENV-LABEL: define amdgpu_kernel void @buffer_load_wave_native_exec_gate_kernel(
+; ENV-NOT: call i1 @llvm.amdgcn.init.whole.wave()
 buffer_load_wave_native_exec_gate_kernel:
 	s_setreg_imm32_b32 hwreg(HW_REG_WAVE_MODE, 25, 1), 1
 	s_load_b64 s[0:1], s[0:1], 0x0

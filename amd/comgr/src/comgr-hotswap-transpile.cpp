@@ -24,6 +24,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "amd_comgr.h"
+#include "comgr-env.h"
 #include "comgr.h"
 
 #include "hotswap/code-object-utils.h"
@@ -577,14 +578,13 @@ amd_comgr_status_t hotswapTranspileWithResolvedOptions(
   CacheRequest.CacheReadonly = Options.CacheReadonly;
   CacheRequest.CollectTimings = CollectTimings;
   CacheRequest.OptLevel = Options.OptLevel;
-  // Diagnostic ablation knob: force the ModuloReplication projection instead of
-  // WaveNative for wave32->wave64 cross-widening, to isolate projection-specific
-  // miscompiles (e.g. cross-lane prefix scans). Not part of the request ABI.
-  if (::getenv("HSA_HOTSWAP_DISABLE_WAVE_NATIVE"))
+  // Diagnostic ablation knobs, honored on the library path where no CLI flags
+  // exist (raise_cli exposes the same choices as --disable-wave-native /
+  // --disable-writelane-rewrite). Neither is part of the request ABI; both
+  // default off, leaving behavior unchanged.
+  if (COMGR::env::shouldDisableWaveNative())
     CacheRequest.EnableWaveNative = false;
-  // Diagnostic ablation knob: disable the post-raise cross-lane-divergent
-  // rewrite pass, to isolate whether it miscompiles cross-lane scans.
-  if (::getenv("HSA_HOTSWAP_DISABLE_WRITELANE_REWRITE"))
+  if (COMGR::env::shouldDisableWritelaneRewrite())
     CacheRequest.EnableWritelaneRewrite = false;
 
   std::string SkippedKernel;
