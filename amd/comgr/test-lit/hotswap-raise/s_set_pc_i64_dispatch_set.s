@@ -5,7 +5,7 @@
 ; CHECK-LABEL: define amdgpu_kernel void @setpc_set_dispatch_set_kernel(
 ; CHECK-DAG: 60, %bb_0x18
 ; CHECK-DAG: 68, %bb_0x28
-; CHECK: %ret_pc_marker = or i64 %{{[^ ]+}}, %{{[^ ]+}}
+; CHECK: %ret_pc_marker = select i1 {{[^,]+}}, i64 {{[^,]+}}, i64 {{[^ ]+}}
 ; CHECK-NEXT: %dispatch_0x38_cmp_0 = icmp eq i64 %ret_pc_marker, 60
 ; CHECK-NEXT: br i1 %dispatch_0x38_cmp_0, label %bb_0x3C, label %dispatch_0x38_1
 ; CHECK: dispatch_0x38_unreachable:

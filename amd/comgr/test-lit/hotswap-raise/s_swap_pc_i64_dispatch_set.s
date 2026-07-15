@@ -5,7 +5,9 @@
 ; CHECK-LABEL: define amdgpu_kernel void @setpc_swap_dispatch_set_kernel(
 ; CHECK-DAG: 68, %bb_0x18
 ; CHECK-DAG: 76, %bb_0x28
-; CHECK: %swap_call_target_marker = or i64 %{{[^ ]+}}, %{{[^ ]+}}
+; CHECK: %source_wave_active = icmp ne
+; CHECK: %source_wave_sgpr_pair = select i1 %source_wave_active, i64 60, i64 0
+; CHECK: %swap_call_target_marker = select i1 {{[^,]+}}, i64 {{[^,]+}}, i64 {{[^ ]+}}
 ; CHECK-NEXT: %dispatch_0x38_cmp_0 = icmp eq i64 %swap_call_target_marker, 68
 ; CHECK-NEXT: br i1 %dispatch_0x38_cmp_0, label %bb_0x44, label %dispatch_0x38_1
 ; CHECK: dispatch_0x38_unreachable:

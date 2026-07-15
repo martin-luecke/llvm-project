@@ -6,7 +6,7 @@
 ; CHECK: bb_0x0:
 ; CHECK: br label %bb_0x38
 ; CHECK: bb_0x30:
-; CHECK: %ret_pc_marker = or i64 %{{[^ ]+}}, %{{[^ ]+}}
+; CHECK: %ret_pc_marker = select i1 {{[^,]+}}, i64 {{[^,]+}}, i64 {{[^ ]+}}
 ; CHECK-NEXT: %dispatch_0x40_cmp_0 = icmp eq i64 %ret_pc_marker, 48
 ; CHECK-NEXT: br i1 %dispatch_0x40_cmp_0, label %bb_0x30, label %dispatch_0x40_unreachable
 ; CHECK: dispatch_0x40_unreachable:

@@ -1770,15 +1770,26 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
   // carrying non-dominating SSA values in `lastSgprWaveMaskI1`.
   Ctx.SgprWaveMaskExecShadow.reserve(Regs.Sgpr.size());
   Ctx.SgprWaveMaskValidShadow.reserve(Regs.Sgpr.size());
+  Ctx.SourceWaveSgprPairShadow.reserve(Regs.Sgpr.size());
+  Ctx.SourceWaveSgprPairValidShadow.reserve(Regs.Sgpr.size());
   for (unsigned I = 0; I < Regs.Sgpr.size(); ++I) {
     auto *MaskA = B.CreateAlloca(Regs.ExecTy, nullptr,
                                  "sgpr_mask_shadow_" + std::to_string(I));
     auto *ValidA =
         B.CreateAlloca(I1Ty, nullptr, "sgpr_mask_valid_" + std::to_string(I));
+    auto *PairA = B.CreateAlloca(
+        I64Ty, nullptr, "source_wave_sgpr_pair_" + std::to_string(I));
+    auto *PairValidA = B.CreateAlloca(
+        I1Ty, nullptr,
+        "source_wave_sgpr_pair_valid_" + std::to_string(I));
     B.CreateStore(ConstantInt::get(Regs.ExecTy, 0), MaskA);
     B.CreateStore(B.getFalse(), ValidA);
+    B.CreateStore(ConstantInt::get(I64Ty, 0), PairA);
+    B.CreateStore(B.getFalse(), PairValidA);
     Ctx.SgprWaveMaskExecShadow.push_back(MaskA);
     Ctx.SgprWaveMaskValidShadow.push_back(ValidA);
+    Ctx.SourceWaveSgprPairShadow.push_back(PairA);
+    Ctx.SourceWaveSgprPairValidShadow.push_back(PairValidA);
   }
 
   llvm::Error RaiseReadFailure = llvm::Error::success();
@@ -1841,6 +1852,8 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
       return Err;
 
     for (auto *ValidA : Ctx.SgprWaveMaskValidShadow)
+      B.CreateStore(B.getFalse(), ValidA);
+    for (auto *ValidA : Ctx.SourceWaveSgprPairValidShadow)
       B.CreateStore(B.getFalse(), ValidA);
 
     B.CreateCondBr(EnterBody, OffsetToBb[KernelOffset], LatchBb);
@@ -2060,7 +2073,8 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
     // codegen pattern), sidestepping the ISel crash entirely.
     // See setpc-analysis.h + canonical-op.h's S_SET_PC_I64 doc +
     // `emitEnumeratedDispatch` in handle-sop1.cpp.
-    if (Di.CanonOp == CanonicalOp::S_ADDC_U32) {
+    if (Di.CanonOp == CanonicalOp::S_ADDC_U32 ||
+        Di.CanonOp == CanonicalOp::S_ADD_NC_U64) {
       auto It = SetpcAnalysis.ChainTerminators.find(Di.Offset);
       if (It != SetpcAnalysis.ChainTerminators.end()) {
         // Force the BB to exist so the downstream cascade's
