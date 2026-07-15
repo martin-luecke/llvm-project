@@ -1781,12 +1781,11 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
   Ctx.SourceWaveSgprPairShadow.reserve(Regs.Sgpr.size());
   Ctx.SourceWaveSgprPairValidShadow.reserve(Regs.Sgpr.size());
   for (unsigned I = 0; I < Regs.Sgpr.size(); ++I) {
-    auto *MaskA = B.CreateAlloca(Regs.ExecTy, nullptr,
-                                 "sgpr_mask_shadow_" + Twine(I));
-    auto *ValidA =
-        B.CreateAlloca(I1Ty, nullptr, "sgpr_mask_valid_" + Twine(I));
-    auto *PairA = B.CreateAlloca(
-        I64Ty, nullptr, "source_wave_sgpr_pair_" + Twine(I));
+    auto *MaskA =
+        B.CreateAlloca(Regs.ExecTy, nullptr, "sgpr_mask_shadow_" + Twine(I));
+    auto *ValidA = B.CreateAlloca(I1Ty, nullptr, "sgpr_mask_valid_" + Twine(I));
+    auto *PairA =
+        B.CreateAlloca(I64Ty, nullptr, "source_wave_sgpr_pair_" + Twine(I));
     auto *PairValidA = B.CreateAlloca(
         I1Ty, nullptr, "source_wave_sgpr_pair_valid_" + Twine(I));
     B.CreateStore(ConstantInt::get(Regs.ExecTy, 0), MaskA);

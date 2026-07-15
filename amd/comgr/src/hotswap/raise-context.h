@@ -579,17 +579,14 @@ struct RaiseContext {
     llvm::Type *ExecTy = Exec->getType();
     llvm::Value *Lane =
         B.CreateZExtOrTrunc(emitLaneIdx(), ExecTy, "source_wave_lane");
-    llvm::Value *Group =
-        B.CreateUDiv(Lane, llvm::ConstantInt::get(ExecTy, SourceBits),
-                     "source_wave_group");
-    llvm::Value *Shift =
-        B.CreateMul(Group, llvm::ConstantInt::get(ExecTy, SourceBits),
-                    "source_wave_shift");
+    llvm::Value *Group = B.CreateUDiv(
+        Lane, llvm::ConstantInt::get(ExecTy, SourceBits), "source_wave_group");
+    llvm::Value *Shift = B.CreateMul(
+        Group, llvm::ConstantInt::get(ExecTy, SourceBits), "source_wave_shift");
     llvm::Value *Shifted = B.CreateLShr(Exec, Shift, "source_wave_exec");
     uint64_t Mask = (uint64_t{1} << SourceBits) - 1;
-    llvm::Value *GroupMask =
-        B.CreateAnd(Shifted, llvm::ConstantInt::get(ExecTy, Mask),
-                    "source_wave_mask");
+    llvm::Value *GroupMask = B.CreateAnd(
+        Shifted, llvm::ConstantInt::get(ExecTy, Mask), "source_wave_mask");
     return B.CreateICmpNE(GroupMask, llvm::ConstantInt::get(ExecTy, 0),
                           "source_wave_active");
   }
@@ -602,9 +599,8 @@ struct RaiseContext {
     if (BaseIdx < 0 ||
         static_cast<size_t>(BaseIdx) >= SourceWaveSgprPairShadow.size())
       return;
-    llvm::Value *Old =
-        B.CreateLoad(I64Ty, SourceWaveSgprPairShadow[BaseIdx],
-                     "source_wave_sgpr_pair_old");
+    llvm::Value *Old = B.CreateLoad(I64Ty, SourceWaveSgprPairShadow[BaseIdx],
+                                    "source_wave_sgpr_pair_old");
     llvm::Value *Merged = B.CreateSelect(emitCurrentSourceWaveHasActiveLane(),
                                          V, Old, "source_wave_sgpr_pair");
     B.CreateStore(Merged, SourceWaveSgprPairShadow[BaseIdx]);
@@ -618,14 +614,12 @@ struct RaiseContext {
     if (!Projection.providesFullWaveExecInvariant() || BaseIdx < 0 ||
         static_cast<size_t>(BaseIdx) >= SourceWaveSgprPairShadow.size())
       return Fallback;
-    llvm::Value *Shadow =
-        B.CreateLoad(I64Ty, SourceWaveSgprPairShadow[BaseIdx],
-                     "source_wave_sgpr_pair");
+    llvm::Value *Shadow = B.CreateLoad(I64Ty, SourceWaveSgprPairShadow[BaseIdx],
+                                       "source_wave_sgpr_pair");
     llvm::Value *Valid =
         B.CreateLoad(I1Ty, SourceWaveSgprPairValidShadow[BaseIdx],
                      "source_wave_sgpr_pair_valid");
-    return B.CreateSelect(Valid, Shadow, Fallback,
-                          "source_wave_sgpr_pair_sel");
+    return B.CreateSelect(Valid, Shadow, Fallback, "source_wave_sgpr_pair_sel");
   }
 
   // Look up the cached per-lane i1 for SGPR baseIdx in the current
@@ -689,8 +683,7 @@ struct RaiseContext {
       }
       if (static_cast<size_t>(BaseIdx - 1) <
           SourceWaveSgprPairValidShadow.size())
-        B.CreateStore(B.getFalse(),
-                      SourceWaveSgprPairValidShadow[BaseIdx - 1]);
+        B.CreateStore(B.getFalse(), SourceWaveSgprPairValidShadow[BaseIdx - 1]);
     }
   }
 
