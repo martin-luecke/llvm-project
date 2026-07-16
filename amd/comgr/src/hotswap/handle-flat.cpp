@@ -289,20 +289,18 @@ Expected<Value *> decodeScratchOffset(RaiseContext &Ctx, const DecodedInst &Di,
 // fence and SYS to a system-scoped fence; SE has no gfx942 representation.
 Expected<HandlerResult> lowerFlatCacheControlFence(RaiseContext &Ctx,
                                                    const DecodedInst &Di,
-                                                   StringRef Mnemonic,
                                                    AtomicOrdering Ordering) {
   HandlerResult Hr;
   std::optional<int64_t> Cpol = readNamedImmOperand(Di, AMDGPU::OpName::cpol);
   if (!Cpol) {
     return RaiseFailure::unsupportedInstructionForm(
-        Di, "FLAT", Mnemonic + " missing immediate cpol/scope operand");
+        Di, "FLAT", "missing immediate cpol/scope operand");
   }
 
   uint64_t RawCpol = static_cast<uint64_t>(*Cpol);
   if ((RawCpol & ~static_cast<uint64_t>(AMDGPU::CPol::SCOPE)) != 0) {
     return RaiseFailure::unsupportedInstructionForm(
-        Di, "FLAT",
-        Mnemonic + " cache-policy bits outside SCOPE are not modelled");
+        Di, "FLAT", "cache-policy bits outside SCOPE are not modelled");
   }
 
   switch (RawCpol & AMDGPU::CPol::SCOPE) {
@@ -316,8 +314,7 @@ Expected<HandlerResult> lowerFlatCacheControlFence(RaiseContext &Ctx,
     break;
   case AMDGPU::CPol::SCOPE_SE:
     return RaiseFailure::unsupportedInstructionForm(
-        Di, "FLAT",
-        Mnemonic + " SCOPE_SE cannot be represented by gfx942 fences");
+        Di, "FLAT", "SCOPE_SE cannot be represented by gfx942 fences");
   default:
     llvm_unreachable("CPol SCOPE field has only four encodings");
   }
@@ -335,12 +332,10 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
   CanonicalOp Sop = Di.CanonOp;
 
   if (Sop == CanonicalOp::GLOBAL_WB)
-    return lowerFlatCacheControlFence(Ctx, Di, "global_wb",
-                                      AtomicOrdering::Release);
+    return lowerFlatCacheControlFence(Ctx, Di, AtomicOrdering::Release);
 
   if (Sop == CanonicalOp::GLOBAL_INV)
-    return lowerFlatCacheControlFence(Ctx, Di, "global_inv",
-                                      AtomicOrdering::Acquire);
+    return lowerFlatCacheControlFence(Ctx, Di, AtomicOrdering::Acquire);
 
   // ---------------------------------------------------------------------
   // FLAT scratch family (`scratch_load_*`, `scratch_store_*`).
