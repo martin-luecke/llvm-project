@@ -30,19 +30,6 @@
 
 namespace COMGR::hotswap {
 
-llvm::Error readRequiredVOP3F16SrcMods(const DecodedInst &Di, unsigned SrcIndex,
-                                       llvm::StringRef OpName, unsigned &Mods);
-// Read an F16 source selected by the required VOP3 modifier operand.
-llvm::Expected<llvm::Value *> readOpSelF16(RaiseContext &Ctx,
-                                           const DecodedInst &Di,
-                                           OpResolver &Op, unsigned SrcIndex,
-                                           llvm::StringRef OpName);
-
-// Decode src0's true16 destination-half selector from the required VOP3
-// modifier operand.
-llvm::Error readVOP3F16DstHigh(const DecodedInst &Di, llvm::StringRef OpName,
-                               bool &DstHigh);
-
 // Merge a raw i16 result into the selected destination half using the same IR
 // name for either half. The unselected half is preserved by reading the old
 // destination VGPR value.
@@ -54,12 +41,6 @@ void writeSelectedI16Bits(RaiseContext &Ctx, ParsedReg Dst, llvm::Value *Result,
 void writeSelectedI16Bits(RaiseContext &Ctx, ParsedReg Dst, llvm::Value *Result,
                           bool DstHigh, llvm::StringRef MergeLoName,
                           llvm::StringRef MergeHiName);
-
-// Merge the F16 result into the selected destination half. The unselected half
-// is preserved by reading the old destination VGPR value.
-void writeOpSelF16(RaiseContext &Ctx, OpResolver &Op, llvm::Value *Result,
-                   bool DstHigh, llvm::StringRef MergeLoName = "f16_merge_lo",
-                   llvm::StringRef MergeHiName = "f16_merge_hi");
 
 } // namespace COMGR::hotswap
 
