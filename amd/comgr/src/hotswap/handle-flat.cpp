@@ -390,8 +390,8 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
                        Sop == CanonicalOp::SCRATCH_LOAD_SSHORT);
       Type *MemTy = IsByte ? Ctx.I8Ty : Type::getInt16Ty(Ctx.C);
       Ctx.emitUnderExec([&] {
-        Value *Loaded = Ctx.B.CreateAlignedLoad(
-            MemTy, Addr, Align(AccessBytes), "scratch_load");
+        Value *Loaded = Ctx.B.CreateAlignedLoad(MemTy, Addr, Align(AccessBytes),
+                                                "scratch_load");
         Value *Ext = IsSigned
                          ? Ctx.B.CreateSExt(Loaded, Ctx.I32Ty, "scratch_sext")
                          : Ctx.B.CreateZExt(Loaded, Ctx.I32Ty, "scratch_zext");
