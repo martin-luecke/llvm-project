@@ -56,20 +56,6 @@ Error readRequiredVOP3F16SrcMods(const DecodedInst &Di, unsigned SrcIndex,
   return Error::success();
 }
 
-Error readOptionalVOP3F16SrcMods(const DecodedInst &Di, unsigned SrcIndex,
-                                 StringRef OpName, unsigned &Mods) {
-  Mods = 0;
-  if (SrcIndex >= Di.NumSrcs)
-    return RaiseFailure::unsupportedInstructionForm(
-        Di, "VOP3", OpName + " missing f16 source operand");
-
-  unsigned ModIdx = Di.ModMap[SrcIndex];
-  if (ModIdx == UINT_MAX)
-    return Error::success();
-
-  return readRequiredVOP3F16SrcMods(Di, SrcIndex, OpName, Mods);
-}
-
 Value *readOpSelF16FromMods(RaiseContext &Ctx, OpResolver &Op,
                             unsigned SrcIndex, unsigned Mods) {
   // Modifier layout for decoded VOP3 F16 operands:

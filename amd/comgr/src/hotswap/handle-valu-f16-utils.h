@@ -32,13 +32,6 @@ namespace COMGR::hotswap {
 
 llvm::Error readRequiredVOP3F16SrcMods(const DecodedInst &Di, unsigned SrcIndex,
                                        llvm::StringRef OpName, unsigned &Mods);
-
-// Like `readRequiredVOP3F16SrcMods`, but accepts an absent modifier operand as
-// the default VOP1/e32 shape (`Mods = 0`). This is for CanonicalOps that share
-// a handler across e32 and e64 encodings.
-llvm::Error readOptionalVOP3F16SrcMods(const DecodedInst &Di, unsigned SrcIndex,
-                                       llvm::StringRef OpName, unsigned &Mods);
-
 // Read an F16 source selected by the required VOP3 modifier operand.
 llvm::Expected<llvm::Value *> readOpSelF16(RaiseContext &Ctx,
                                            const DecodedInst &Di,
