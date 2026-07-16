@@ -1411,93 +1411,6 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Hr.Handled = true;
     return Hr;
   }
-  // v_madmk_f16 dst, src0, K, src2: dst = src0 * K + src2
-  // v_madak_f16 dst, src0, src1, K: dst = src0 * src1 + K
-  // F16 mirror of V_FMAMK_F32 / V_FMAAK_F32. Same operand ordering
-  // convention: srcF(0..2) follow the disassembler's order, and the
-  // 16-bit literal K lives in the slot named in the mnemonic. Both
-  // lower to llvm.fma.f16 (no rounding of the intermediate product),
-  // matching VOP2Instructions.td:1206-1210.
-  if (Sop == CanonicalOp::V_MADMK_F16 || Sop == CanonicalOp::V_MADAK_F16) {
-    Type *F16Ty = Type::getHalfTy(Ctx.C);
-    Type *I16Ty = Type::getInt16Ty(Ctx.C);
-    auto ToF16 = [&](Value *V) -> Value * {
-      Value *Truncated = Ctx.B.CreateTrunc(V, I16Ty);
-      return Ctx.B.CreateBitCast(Truncated, F16Ty);
-    };
-    Value *S0 = ToF16(Op.srcF(0));
-    Value *S1 = ToF16(Op.srcF(1));
-    Value *S2 = ToF16(Op.srcF(2));
-    Function *Fma =
-        Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::fma, {F16Ty});
-    Value *Res = Ctx.B.CreateCall(
-        Fma, {S0, S1, S2},
-        Sop == CanonicalOp::V_MADMK_F16 ? "madmk_f16" : "madak_f16");
-    Value *Bits = Ctx.B.CreateBitCast(Res, I16Ty);
-    Ctx.writeReg32(Op.dst(), Ctx.B.CreateZExt(Bits, Ctx.I32Ty));
-    Hr.Handled = true;
-    return Hr;
-  }
-
-  // v_fma_f16 dst, src0, src1, src2: dst = fma(src0, src1, src2).
-  // VOP3 explicit-source F16 fused multiply-add. The gfx9+ pseudo
-  // (V_FMA_F16_gfx9_e64 and its t16/fake16 collapses) carries per-source
-  // op_sel (low/high half of the 32-bit VGPR), the usual VOP3 neg/abs
-  // source modifiers, and a destination op_sel for half-write placement.
-  // Lowers to llvm.fma.f16 to keep the fused-multiply-add semantics.
-  if (Sop == CanonicalOp::V_FMA_F16) {
-    StringRef OpName = "v_fma_f16";
-    bool DstHigh = false;
-    if (Error Err = requireDefaultVOP3FpValuOutputMods(Di, OpName))
-      return Err;
-
-    if (Error Err = readVOP3F16DstHigh(Di, OpName, DstHigh))
-      return Err;
-
-    SmallVector<Value *, 3> Srcs;
-    for (unsigned I = 0; I < 3; ++I) {
-      Expected<Value *> SrcOrErr = readOpSelF16(Ctx, Di, Op, I, OpName);
-      if (!SrcOrErr)
-        return SrcOrErr.takeError();
-
-      Srcs.push_back(*SrcOrErr);
-    }
-
-    Function *Fma =
-        Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::fma, {Ctx.F16Ty});
-    Value *R = Ctx.B.CreateCall(Fma, {Srcs[0], Srcs[1], Srcs[2]}, "fma_f16");
-    writeOpSelF16(Ctx, Op, R, DstHigh);
-    Hr.Handled = true;
-    return Hr;
-  }
-
-  // v_div_fixup_f16 dst, src0, src1, src2 -- final IEEE fixup step of the
-  // f16 divide sequence. Same true16 half-select shape as V_FMA_F16; lifts
-  // to llvm.amdgcn.div.fixup on f16.
-  if (Sop == CanonicalOp::V_DIV_FIXUP_F16) {
-    StringRef OpName = "v_div_fixup_f16";
-    bool DstHigh = false;
-    if (Error Err = requireDefaultVOP3FpValuOutputMods(Di, OpName))
-      return Err;
-
-    if (Error Err = readVOP3F16DstHigh(Di, OpName, DstHigh))
-      return Err;
-
-    SmallVector<Value *, 3> Srcs;
-    for (unsigned I = 0; I < 3; ++I) {
-      Expected<Value *> SrcOrErr = readOpSelF16(Ctx, Di, Op, I, OpName);
-      if (!SrcOrErr)
-        return SrcOrErr.takeError();
-      Srcs.push_back(*SrcOrErr);
-    }
-
-    Function *Fn = Intrinsic::getOrInsertDeclaration(
-        &Ctx.M, Intrinsic::amdgcn_div_fixup, {Ctx.F16Ty});
-    Value *R = Ctx.B.CreateCall(Fn, {Srcs[0], Srcs[1], Srcs[2]}, "divfixup_f16");
-    writeOpSelF16(Ctx, Op, R, DstHigh);
-    Hr.Handled = true;
-    return Hr;
-  }
 
   // ---- Division helpers (VOP3) ----
   if (Sop == CanonicalOp::V_DIV_SCALE_F32) {
@@ -2648,43 +2561,6 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Hr.Handled = true;
     return Hr;
   }
-  // v_cvt_pkrtz_f16_f32: pack two f32 into <2 x f16> with round-to-zero.
-  // Maps directly onto the dedicated hardware intrinsic so the backend
-  // keeps the RTZ rounding mode (a plain FPTrunc uses round-to-nearest).
-  if (Sop == CanonicalOp::V_CVT_PKRTZ_F16_F32) {
-    Value *S0 = Op.srcF(0), *S1 = Op.srcF(1);
-    if (S0->getType() != Ctx.F32Ty)
-      S0 = Ctx.B.CreateBitCast(S0, Ctx.F32Ty);
-    if (S1->getType() != Ctx.F32Ty)
-      S1 = Ctx.B.CreateBitCast(S1, Ctx.F32Ty);
-    Function *Fn =
-        Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::amdgcn_cvt_pkrtz);
-    Value *V2h = Ctx.B.CreateCall(Fn, {S0, S1}, "pkrtz");
-    Ctx.writeReg32(Op.dst(), Ctx.B.CreateBitCast(V2h, Ctx.I32Ty));
-    Hr.Handled = true;
-    return Hr;
-  }
-  // v_cvt_pk_f16_f32: pack two f32 into <2 x f16> with round-to-nearest-even
-  // (the default IEEE rounding). No dedicated intrinsic exists; a pair of
-  // FPTrunc operations followed by a packed i32 assembly is the canonical
-  // lowering and the backend recognises the pattern.
-  if (Sop == CanonicalOp::V_CVT_PK_F16_F32) {
-    Value *S0 = Op.srcF(0), *S1 = Op.srcF(1);
-    if (S0->getType() != Ctx.F32Ty)
-      S0 = Ctx.B.CreateBitCast(S0, Ctx.F32Ty);
-    if (S1->getType() != Ctx.F32Ty)
-      S1 = Ctx.B.CreateBitCast(S1, Ctx.F32Ty);
-    Type *HalfTy = Type::getHalfTy(Ctx.C);
-    Type *I16Ty = Type::getInt16Ty(Ctx.C);
-    Value *H0 = Ctx.B.CreateFPTrunc(S0, HalfTy, "pk_h0");
-    Value *H1 = Ctx.B.CreateFPTrunc(S1, HalfTy, "pk_h1");
-    Value *B0 = Ctx.B.CreateZExt(Ctx.B.CreateBitCast(H0, I16Ty), Ctx.I32Ty);
-    Value *B1 = Ctx.B.CreateZExt(Ctx.B.CreateBitCast(H1, I16Ty), Ctx.I32Ty);
-    Ctx.writeReg32(Op.dst(),
-                   Ctx.B.CreateOr(B0, Ctx.B.CreateShl(B1, 16), "pk_f16"));
-    Hr.Handled = true;
-    return Hr;
-  }
   // v_cvt_scalef32_pk_fp4_f32 vdst, src0_f32, src1_f32, scale_f32 op_sel:[..]
   //
   // Converts two f32 sources to FP4 and packs them into one of the four 8-bit
@@ -2760,17 +2636,6 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Hr.Handled = true;
     return Hr;
   }
-  // v_cvt_f32_bf16: low 16 bits of src are interpreted as bfloat16.
-  if (Sop == CanonicalOp::V_CVT_F32_BF16) {
-    Type *BfTy = Type::getBFloatTy(Ctx.C);
-    Type *I16Ty = Type::getInt16Ty(Ctx.C);
-    Value *Bits = Ctx.B.CreateTrunc(Op.src(0), I16Ty);
-    Value *Bf = Ctx.B.CreateBitCast(Bits, BfTy);
-    Value *F = Ctx.B.CreateFPExt(Bf, Ctx.F32Ty, "cvt_bf16");
-    Ctx.writeReg32(Op.dst(), Ctx.B.CreateBitCast(F, Ctx.I32Ty));
-    Hr.Handled = true;
-    return Hr;
-  }
   // v_bfm_b32: D = ((1 << src0[4:0]) - 1) << src1[4:0]
   if (Sop == CanonicalOp::V_BFM_B32) {
     Value *Width =
@@ -2786,24 +2651,6 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Value *IsZero = Ctx.B.CreateICmpEQ(Width, ConstantInt::get(Ctx.I32Ty, 0));
     Ones = Ctx.B.CreateSelect(IsZero, ConstantInt::get(Ctx.I32Ty, 0), Ones);
     Ctx.writeReg32(Op.dst(), Ctx.B.CreateShl(Ones, Offset, "bfm"));
-    Hr.Handled = true;
-    return Hr;
-  }
-  if (Sop == CanonicalOp::V_CVT_PK_BF16_F32) {
-    Value *S0 = Op.srcF(0), *S1 = Op.srcF(1);
-    if (S0->getType() != Ctx.F32Ty)
-      S0 = Ctx.B.CreateBitCast(S0, Ctx.F32Ty);
-    if (S1->getType() != Ctx.F32Ty)
-      S1 = Ctx.B.CreateBitCast(S1, Ctx.F32Ty);
-    auto *BfTy = Type::getBFloatTy(Ctx.C);
-    Value *Bf0 = Ctx.B.CreateFPTrunc(S0, BfTy, "tobf16_0");
-    Value *Bf1 = Ctx.B.CreateFPTrunc(S1, BfTy, "tobf16_1");
-    Value *Bits0 = Ctx.B.CreateZExt(
-        Ctx.B.CreateBitCast(Bf0, Type::getInt16Ty(Ctx.C)), Ctx.I32Ty);
-    Value *Bits1 = Ctx.B.CreateZExt(
-        Ctx.B.CreateBitCast(Bf1, Type::getInt16Ty(Ctx.C)), Ctx.I32Ty);
-    Ctx.writeReg32(
-        Op.dst(), Ctx.B.CreateOr(Bits0, Ctx.B.CreateShl(Bits1, 16), "pk_bf16"));
     Hr.Handled = true;
     return Hr;
   }

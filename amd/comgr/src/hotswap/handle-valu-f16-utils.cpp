@@ -103,16 +103,6 @@ Expected<Value *> readOpSelF16(RaiseContext &Ctx, const DecodedInst &Di,
   return readOpSelF16FromMods(Ctx, Op, SrcIndex, Mods);
 }
 
-Expected<Value *> readOptionalOpSelF16(RaiseContext &Ctx, const DecodedInst &Di,
-                                       OpResolver &Op, unsigned SrcIndex,
-                                       StringRef OpName) {
-  unsigned Mods = 0;
-  if (Error Err = readOptionalVOP3F16SrcMods(Di, SrcIndex, OpName, Mods))
-    return Err;
-
-  return readOpSelF16FromMods(Ctx, Op, SrcIndex, Mods);
-}
-
 Error readVOP3F16DstHigh(const DecodedInst &Di, StringRef OpName,
                          bool &DstHigh) {
   unsigned Mods = 0;
