@@ -17,6 +17,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
+#include "llvm/Support/Endian.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
@@ -99,6 +100,35 @@ Value *alignDwordAddress64(RaiseContext &Ctx, Value *Addr, const Twine &Name) {
 Value *alignDwordOffset32(RaiseContext &Ctx, Value *Offset, const Twine &Name) {
   return Ctx.B.CreateAnd(Offset, ConstantInt::get(Ctx.I32Ty, ~uint32_t(3)),
                          Name);
+}
+
+// Read a little-endian dword from `.text` using a text-relative byte offset.
+// Kept as the fallback for older callers that only carried the text image.
+uint32_t readSourceTextDword(RaiseContext &Ctx, uint64_t ByteOffset) {
+  assert(ByteOffset + 4 <= Ctx.SourceTextBytes.size() &&
+         "source text dword read must be bounds-checked first");
+  return support::endian::read32le(Ctx.SourceTextBytes.data() + ByteOffset);
+}
+
+// Read a dword from the captured source code-object image by source VMA.
+// PC-relative literal tables in clang/rocPRIM live in allocatable sections
+// such as .rodata, not necessarily in .text.
+std::optional<uint32_t> readSourceImageDword(RaiseContext &Ctx,
+                                             uint64_t Address) {
+  for (const TextSection::ImageSection &Section : Ctx.SourceImageSections) {
+    if (Address < Section.Address)
+      continue;
+    uint64_t Offset = Address - Section.Address;
+    if (Offset + 4 > Section.Bytes.size())
+      continue;
+    return support::endian::read32le(Section.Bytes.data() + Offset);
+  }
+  if (Address >= Ctx.SourceTextBaseAddress) {
+    uint64_t Offset = Address - Ctx.SourceTextBaseAddress;
+    if (Offset + 4 <= Ctx.SourceTextBytes.size())
+      return readSourceTextDword(Ctx, Offset);
+  }
+  return std::nullopt;
 }
 
 // Emit a branch to llvm.trap when a dynamic translation contract is violated.
@@ -392,6 +422,49 @@ Expected<HandlerResult> handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
     // memory path from the pointer value's uniformity and provenance.
     {
       Value *BaseAddr = Ctx.Regs.loadSGPR64(Ctx.B, Base.BaseIdx);
+      std::optional<uint64_t> SourceImageBase =
+          Ctx.lookupSourceImageSgprPairAddr(Base.BaseIdx);
+      if (SourceImageBase) {
+        if (!ImmOffset) {
+          return RaiseFailure::unsupportedInstructionForm(
+              Di, "SMEM",
+              "source-image SMEM base with dynamic offset cannot be resolved "
+              "at raise time");
+        }
+
+        uint64_t SourceAddr = *SourceImageBase;
+        if (ByteOffset < 0) {
+          uint64_t Magnitude = static_cast<uint64_t>(-ByteOffset);
+          if (SourceAddr < Magnitude) {
+            return RaiseFailure::unsupportedInstructionForm(
+                Di, "SMEM",
+                "constant SMEM source-text address underflows its signed "
+                "static offset");
+          }
+          SourceAddr -= Magnitude;
+        } else {
+          SourceAddr += static_cast<uint64_t>(ByteOffset);
+        }
+
+        // Source PC-relative literal tables are not target GPU memory.
+        // Resolve proven source-image loads here; otherwise the backend would
+        // turn the source VMA into a target VMEM access.
+        for (int D = 0; D < LoadDwords; D++) {
+          uint64_t DwordAddr = SourceAddr + static_cast<uint64_t>(D * 4);
+          std::optional<uint32_t> Dword = readSourceImageDword(Ctx, DwordAddr);
+          if (!Dword) {
+            return RaiseFailure::unsupportedInstructionForm(
+                Di, "SMEM",
+                "constant SMEM address does not point inside a supported "
+                "source code-object section");
+          }
+          Ctx.Regs.storeSGPR32(Ctx.B, Dest.BaseIdx + D,
+                               ConstantInt::get(Ctx.I32Ty, *Dword));
+        }
+        Ctx.noteSgprMemoryLoadForKernargProvenance(Dest.BaseIdx, LoadDwords);
+        Hr.Handled = true;
+        return Hr;
+      }
       Value *Ptr = Ctx.B.CreateIntToPtr(BaseAddr, Ctx.PtrGlobalTy);
       if (ImmOffset) {
         if (ByteOffset != 0)

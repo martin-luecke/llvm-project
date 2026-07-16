@@ -604,10 +604,30 @@ Expected<HandlerResult> handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
         }
       }
     }
+    auto SrcPairConst = [&](unsigned I) -> std::optional<uint64_t> {
+      if (Op.isSrcReg(I)) {
+        ParsedReg SrcPr = Op.srcReg(I);
+        if (SrcPr.RegKind == ParsedReg::SGPR && SrcPr.BaseIdx >= 0)
+          return Ctx.lookupSourceImageSgprPairAddr(SrcPr.BaseIdx);
+        return std::nullopt;
+      }
+      if (std::optional<int64_t> C = evalOperandAsConst(Di.Inst, Op.srcIdx(I)))
+        return static_cast<uint64_t>(*C);
+      return std::nullopt;
+    };
+    std::optional<uint64_t> Src0Const = SrcPairConst(0);
+    std::optional<uint64_t> Src1Const = SrcPairConst(1);
     Value *Result = Sop == CanonicalOp::S_ADD_NC_U64
                         ? Ctx.B.CreateAdd(Op.src64(0), Op.src64(1), "sadd64")
                         : Ctx.B.CreateSub(Op.src64(0), Op.src64(1), "ssub64");
-    Ctx.Regs.writeReg64(Ctx.B, Op.dst(), Result);
+    ParsedReg Dst = Op.dst();
+    Ctx.Regs.writeReg64(Ctx.B, Dst, Result);
+    if (Src0Const && Src1Const) {
+      uint64_t ConstResult = Sop == CanonicalOp::S_ADD_NC_U64
+                                 ? (*Src0Const + *Src1Const)
+                                 : (*Src0Const - *Src1Const);
+      Ctx.recordSourceImageSgprPairAddr(Dst.BaseIdx, ConstResult);
+    }
     if (UpdatesEntryKernargOffset)
       Ctx.setKernargPtrLiveEntryByteOffset(NewEntryKernargOffset);
     else if (PreservesNonEntryKernarg)
