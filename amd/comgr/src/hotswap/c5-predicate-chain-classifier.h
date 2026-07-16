@@ -155,7 +155,6 @@ namespace COMGR::hotswap {
 enum class PredicateChainProjection {
   ModuloReplication,
   WaveNative,
-  ThreadLoop,
 };
 
 struct PredicateChainClassifierReport {
@@ -294,16 +293,11 @@ struct PredicateChainClassifierReport {
 // defensive phantom-lane refusal and by MODREP's active-replica-lane
 // proof above.
 //
-// `suppressThreadLoopC5` is meaningful only with
-// `PredicateChainProjection::ThreadLoop`. Callers must set it only for a
-// separately-proven ThreadLoop route; raiser.cpp does so only for the
-// SGPR-forced readlane/writelane -> explicit-readfirstlane retry. It is
-// not a blanket "ThreadLoop solves C5" assertion.
 PredicateChainClassifierReport classifyPredicateChain(
     llvm::Function &F, unsigned SourceWaveSize, unsigned TargetWaveSize,
     PredicateChainProjection Projection =
         PredicateChainProjection::ModuloReplication,
-    unsigned MaxFlatWorkgroupSize = 0, bool SuppressThreadLoopC5 = false);
+    unsigned MaxFlatWorkgroupSize = 0);
 
 } // namespace COMGR::hotswap
 

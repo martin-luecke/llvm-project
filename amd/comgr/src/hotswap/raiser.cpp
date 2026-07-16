@@ -1575,7 +1575,6 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
                    Kernargs,
                    &UserSgprLayout,
                    F,
-                   nullptr,
                    OffsetToBb,
                    KernelOffset,
                    KernelEndOffset};
@@ -1886,10 +1885,7 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
     if (!BB.hasTerminator()) {
       B.SetInsertPoint(&BB);
       if (!pred_empty(&BB) || &BB == &F->getEntryBlock()) {
-        if (Ctx.ThreadLoopLatch)
-          B.CreateBr(Ctx.ThreadLoopLatch);
-        else
-          B.CreateRetVoid();
+        B.CreateRetVoid();
       } else {
         B.CreateUnreachable();
       }
@@ -2096,8 +2092,7 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
         /*maxFlatWorkgroupSize=*/
         Meta.MaxFlatWorkgroupSize > 0
             ? static_cast<unsigned>(Meta.MaxFlatWorkgroupSize)
-            : 0u,
-        /*suppressC5=*/false);
+            : 0u);
 
     if (!PredReport.Refused && !PredReport.ObservedSites.empty()) {
       Result.C5SuppressedCount +=

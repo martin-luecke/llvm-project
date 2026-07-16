@@ -61,10 +61,7 @@ Expected<HandlerResult> handleSOPP(RaiseContext &Ctx, const DecodedInst &Di,
   CanonicalOp Sop = Di.CanonOp;
 
   if (Sop == CanonicalOp::S_ENDPGM) {
-    if (Ctx.ThreadLoopLatch)
-      Ctx.B.CreateBr(Ctx.ThreadLoopLatch);
-    else
-      Ctx.B.CreateRetVoid();
+    Ctx.B.CreateRetVoid();
     Hr.Handled = true;
     return Hr;
   }

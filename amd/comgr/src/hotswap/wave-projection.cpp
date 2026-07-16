@@ -354,9 +354,8 @@ WaveNativeProjection::WaveNativeProjection(const ISAProfile &SrcIsa,
   assert((SrcIsa.isWave32() && !TgtIsa.isWave32()) &&
          "WaveNativeProjection is defined only for wave32 source -> "
          "wave64 target cross-widening; other directions must use "
-         "ModuloReplicationProjection (same-wave / narrowing) or a "
-         "future ThreadLoopProjection implementation. See hotswap/"
-         "docs/wave-size-translation.md 2.2 for the projection "
+         "ModuloReplicationProjection (same-wave / narrowing). See "
+         "hotswap/docs/wave-size-translation.md 2.2 for the projection "
          "ladder.");
 }
 

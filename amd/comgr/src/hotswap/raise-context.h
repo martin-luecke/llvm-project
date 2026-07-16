@@ -98,7 +98,6 @@ struct RaiseContext {
   // the context.
   const UserSgprLayout *Layout = nullptr;
   llvm::Function *Kernel;
-  llvm::BasicBlock *ThreadLoopLatch = nullptr;
 
   llvm::IntegerType *I1Ty;
   llvm::IntegerType *I8Ty;
@@ -119,7 +118,6 @@ struct RaiseContext {
                const MCState &Mc, const ISAProfile &Isa, ISAProfile TargetIsa,
                unsigned TargetCodeObjectVersion, KernargLayout &Kernargs,
                const UserSgprLayout *Layout, llvm::Function *Kernel,
-               llvm::BasicBlock *ThreadLoopLatch,
                llvm::DenseMap<uint64_t, llvm::BasicBlock *> &OffsetToBb,
                uint64_t KernelStartOffset, uint64_t KernelEndOffset);
 

@@ -1240,9 +1240,6 @@ rewriteCrossLaneDivergent(Function &F, unsigned SourceWaveSize,
           "chain constraint).";
     Report.SgprForcedDetail = Os.str();
     Report.SgprForcedKind = ConsumerKind;
-    Report.SgprForcedThreadLoopEligible =
-        ConsumerKind == SgprForcedConsumerKind::ExplicitReadFirstLane &&
-        (StringRef(Kind) == "writelane" || StringRef(Kind) == "readlane");
     return false;
   };
 

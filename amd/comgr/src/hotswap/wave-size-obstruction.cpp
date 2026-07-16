@@ -1121,8 +1121,7 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
       Site.Detail =
           "source reads ttmp8 under cross-widening -- bits [29:25] carry "
           "wave_id_in_workgroup, which is a function of the target's "
-          "absolute lane position (not of lane_id mod W_s). Kernel also "
-          "contains WMMA, so ThreadLoopProjection is not available -- refuse.";
+          "absolute lane position (not of lane_id mod W_s) -- refuse.";
       Report.Sites.push_back(std::move(Site));
     }
   }
@@ -1201,9 +1200,7 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
           "divergent result is scalarised by the backend on entry to "
           "this cross-lane primitive's scalar source operand, "
           "collapsing source_wave[0]'s and source_wave[1]'s distinct "
-          "values into a single uniform. WMMA forecloses the "
-          "ThreadLoopProjection escape hatch (sec. 5.2 requires the full "
-          "target wave simultaneously), so no correct projection is "
+          "values into a single uniform, so no correct projection is "
           "available.";
       Report.Sites.push_back(std::move(Site));
     }

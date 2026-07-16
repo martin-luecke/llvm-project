@@ -208,7 +208,6 @@ struct CrossLaneDivergentRewriteReport {
   // the next investigation knows where to start.
   std::string SgprForcedDetail;
   SgprForcedConsumerKind SgprForcedKind = SgprForcedConsumerKind::None;
-  bool SgprForcedThreadLoopEligible = false;
 
   // Non-empty iff the DPP-rewrite encountered a `dpp_ctrl` value
   // outside the supported family (quad_perm / row_shl / row_shr).

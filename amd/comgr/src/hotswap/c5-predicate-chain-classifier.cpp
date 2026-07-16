@@ -284,14 +284,12 @@ bool modrepCanHaveActiveReplicaLane(unsigned SourceWaveSize,
 
 bool shouldRefuseC5(PredicateChainProjection Projection,
                     unsigned SourceWaveSize, unsigned TargetWaveSize,
-                    unsigned MaxFlatWorkgroupSize, bool SuppressThreadLoopC5) {
+                    unsigned MaxFlatWorkgroupSize) {
   switch (Projection) {
   case PredicateChainProjection::ModuloReplication:
     return modrepCanHaveActiveReplicaLane(SourceWaveSize, MaxFlatWorkgroupSize);
   case PredicateChainProjection::WaveNative:
     return MaxFlatWorkgroupSize > 0 && MaxFlatWorkgroupSize < TargetWaveSize;
-  case PredicateChainProjection::ThreadLoop:
-    return !SuppressThreadLoopC5;
   }
   llvm_unreachable("unknown PredicateChainProjection");
 }
@@ -306,8 +304,7 @@ bool isWaveNativePhantomRefusal(PredicateChainProjection Projection,
 std::string formatSuppressionReason(PredicateChainProjection Projection,
                                     unsigned SourceWaveSize,
                                     unsigned TargetWaveSize,
-                                    unsigned MaxFlatWorkgroupSize,
-                                    bool SuppressThreadLoopC5) {
+                                    unsigned MaxFlatWorkgroupSize) {
   switch (Projection) {
   case PredicateChainProjection::ModuloReplication:
     if (MaxFlatWorkgroupSize > 0 && MaxFlatWorkgroupSize <= SourceWaveSize)
@@ -331,12 +328,6 @@ std::string formatSuppressionReason(PredicateChainProjection Projection,
                      MaxFlatWorkgroupSize, TargetWaveSize)
           .str();
     break;
-  case PredicateChainProjection::ThreadLoop:
-    if (SuppressThreadLoopC5)
-      return "selected ThreadLoopProjection via an analysis-triggered "
-             "cross-widen retry; source-wave-scoped lane ops and banked "
-             "predicate masks own the C5 boundary for this narrowed route";
-    break;
   }
   return "";
 }
@@ -345,8 +336,7 @@ std::string formatSuppressionReason(PredicateChainProjection Projection,
 
 PredicateChainClassifierReport classifyPredicateChain(
     Function &F, unsigned SourceWaveSize, unsigned TargetWaveSize,
-    PredicateChainProjection Projection, unsigned MaxFlatWorkgroupSize,
-    bool SuppressThreadLoopC5) {
+    PredicateChainProjection Projection, unsigned MaxFlatWorkgroupSize) {
   PredicateChainClassifierReport Report;
 
   // Direction gate: no predicate-chain risk at same-wave or narrowing,
@@ -356,9 +346,8 @@ PredicateChainClassifierReport classifyPredicateChain(
   if (SourceWaveSize < 2)
     return Report;
 
-  const bool RefuseObservedC5 =
-      shouldRefuseC5(Projection, SourceWaveSize, TargetWaveSize,
-                     MaxFlatWorkgroupSize, SuppressThreadLoopC5);
+  const bool RefuseObservedC5 = shouldRefuseC5(
+      Projection, SourceWaveSize, TargetWaveSize, MaxFlatWorkgroupSize);
   const bool WaveNativePhantomRefusal = isWaveNativePhantomRefusal(
       Projection, TargetWaveSize, MaxFlatWorkgroupSize);
 
@@ -568,9 +557,8 @@ PredicateChainClassifierReport classifyPredicateChain(
         "for eq/ne C5 predicates; source-width SGPR stores are preserved while "
         "mask consumers use the shadow when proven valid";
   else if (!Report.Refused && !Report.ObservedSites.empty())
-    Report.SuppressionReason =
-        formatSuppressionReason(Projection, SourceWaveSize, TargetWaveSize,
-                                MaxFlatWorkgroupSize, SuppressThreadLoopC5);
+    Report.SuppressionReason = formatSuppressionReason(
+        Projection, SourceWaveSize, TargetWaveSize, MaxFlatWorkgroupSize);
 
   return Report;
 }
