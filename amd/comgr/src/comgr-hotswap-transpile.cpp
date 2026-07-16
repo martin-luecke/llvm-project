@@ -24,6 +24,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "amd_comgr.h"
+#include "comgr-env.h"
 #include "comgr.h"
 
 #include "hotswap/code-object-utils.h"
@@ -577,6 +578,14 @@ amd_comgr_status_t hotswapTranspileWithResolvedOptions(
   CacheRequest.CacheReadonly = Options.CacheReadonly;
   CacheRequest.CollectTimings = CollectTimings;
   CacheRequest.OptLevel = Options.OptLevel;
+  // Diagnostic ablation knobs, honored on the library path where no CLI flags
+  // exist (raise_cli exposes the same choices as --disable-wave-native /
+  // --disable-writelane-rewrite). Neither is part of the request ABI; both
+  // default off, leaving behavior unchanged.
+  if (COMGR::env::shouldDisableWaveNative())
+    CacheRequest.EnableWaveNative = false;
+  if (COMGR::env::shouldDisableWritelaneRewrite())
+    CacheRequest.EnableWritelaneRewrite = false;
 
   std::string SkippedKernel;
   if (!CacheRequest.KernelName.empty()) {
