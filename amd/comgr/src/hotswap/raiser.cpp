@@ -113,60 +113,6 @@ void mergeDecodeResult(DecodeResult &Base, DecodeResult &&Extra) {
   Base.BlockStarts.insert(Extra.BlockStarts.begin(), Extra.BlockStarts.end());
 }
 
-enum class ThreadLoopDecision {
-  NotApplicable,
-  EligibleButGateOff,
-  EligibleAndGateOn,
-  Ineligible,
-};
-
-struct ThreadLoopDecisionResult {
-  ThreadLoopDecision Decision = ThreadLoopDecision::NotApplicable;
-  std::string Reason;
-};
-
-ThreadLoopDecisionResult decideThreadLoopFallback(unsigned SourceWaveSize,
-                                                  unsigned TargetWaveSize,
-                                                  bool SgprForcedRefusal,
-                                                  bool ThreadLoopEligible) {
-  if (!SgprForcedRefusal)
-    return {ThreadLoopDecision::NotApplicable, "no SGPR-forced refusal"};
-  if (!ThreadLoopEligible) {
-    return {ThreadLoopDecision::Ineligible,
-            "SGPR-forced sink is outside the proven readlane/writelane -> "
-            "explicit readfirstlane ThreadLoop class"};
-  }
-  if (TargetWaveSize <= SourceWaveSize) {
-    return {ThreadLoopDecision::Ineligible,
-            "thread-loop fallback is cross-widen-only"};
-  }
-  if ((TargetWaveSize % SourceWaveSize) != 0) {
-    return {ThreadLoopDecision::Ineligible,
-            "target wave size is not an integer multiple of source wave size"};
-  }
-  // Graduation gate for the narrow SGPR-forced post-raise refusal class.
-  //
-  // Objective trigger:
-  //   * the SSA use-chain classifier has already refused a cross-widening
-  //     writelane/readlane rewrite because the value flows into an explicit
-  //     `llvm.amdgcn.readfirstlane` consumer; and
-  //   * the target wave size is an integer multiple of the source wave size.
-  //
-  // This does not widen the rewrite allow-list. The original refusal remains
-  // the proof obligation: only after the classifier names the proven
-  // readfirstlane sink do we retry under ThreadLoopProjection, with the
-  // rewrite disabled so source-wave-scoped readlane / writelane /
-  // readfirstlane lowering owns the boundary. Other SGPR-forced sinks
-  // (scalar memory operands, inline asm, unknown calls) still refuse loudly.
-  constexpr bool kThreadLoopAutoActivateSgprForcedCrossWiden = true;
-  if (kThreadLoopAutoActivateSgprForcedCrossWiden)
-    return {
-        ThreadLoopDecision::EligibleAndGateOn,
-        "SGPR-forced cross-widen refusal is covered by ThreadLoopProjection"};
-  return {ThreadLoopDecision::EligibleButGateOff,
-          "eligible but graduation gate is off"};
-}
-
 static bool isSemOpInRange(CanonicalOp Op, CanonicalOp First,
                            CanonicalOp Last) {
   auto V = static_cast<uint16_t>(Op);
@@ -701,52 +647,6 @@ static Error computeKernargPtrProvenance(
   return Error::success();
 }
 
-static bool
-threadLoopUnsupportedWorkgroupMemoryOrBarrier(ArrayRef<DecodedInst> Insts,
-                                              std::string &Detail) {
-  for (const DecodedInst &Di : Insts) {
-    StringRef Kind;
-    switch (Di.CanonOp) {
-    case CanonicalOp::S_BARRIER:
-    case CanonicalOp::S_BARRIER_WAIT:
-    case CanonicalOp::S_BARRIER_SIGNAL:
-      Kind = "workgroup barrier";
-      break;
-    case CanonicalOp::BUFFER_LOAD_DWORD_LDS:
-    case CanonicalOp::BUFFER_LOAD_DWORDX4_LDS:
-    case CanonicalOp::TENSOR_LOAD_TO_LDS:
-    case CanonicalOp::TENSOR_STORE_FROM_LDS:
-    case CanonicalOp::GLOBAL_LOAD_ASYNC_TO_LDS_B8:
-    case CanonicalOp::GLOBAL_LOAD_ASYNC_TO_LDS_B32:
-    case CanonicalOp::GLOBAL_LOAD_ASYNC_TO_LDS_B64:
-    case CanonicalOp::GLOBAL_LOAD_ASYNC_TO_LDS_B128:
-      Kind = "LDS access";
-      break;
-    default:
-      if (isSemOpInRange(Di.CanonOp, CanonicalOp::DS_LOAD_TR16_B128,
-                         CanonicalOp::DS_SWIZZLE_B32))
-        Kind = "LDS access";
-      else if (isSemOpInRange(Di.CanonOp, CanonicalOp::GLOBAL_LOAD_TR_FIRST,
-                              CanonicalOp::GLOBAL_LOAD_TR_LAST))
-        Kind = "cross-lane transpose load";
-      break;
-    }
-
-    if (!Kind.empty()) {
-      Detail = (Twine("ThreadLoopProjection is not yet safe for kernels "
-                      "containing ") +
-                Kind + " (" + canonicalOpName(Di.CanonOp) + " at offset 0x" +
-                Twine::utohexstr(Di.Offset) +
-                "); barrier hoisting and LDS aliasing checks are still "
-                "unimplemented, so refusing is safer than launching a "
-                "translated kernel that can fault or miscompile.")
-                   .str();
-      return true;
-    }
-  }
-  return false;
-}
-
 } // namespace
 
 // parseReg, readOp32/64/ExecWidth, and OpResolver are in raise-context.h/cpp
@@ -762,8 +662,7 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
               llvm::StringRef KernelName, const KernelMeta &Meta,
               uint64_t KernelOffset, uint64_t KernelSize,
               llvm::StringRef CompilationTargetIsa, bool EnableWritelaneRewrite,
-              bool EnableWaveNative, bool ForceThreadLoopProjection,
-              bool SuppressC5ForThreadLoopRoute, bool AssumeHipGlobalOffsetZero,
+              bool EnableWaveNative, bool AssumeHipGlobalOffsetZero,
               llvm::ArrayRef<KernelSymbolExtent> FunctionExtents,
               RaiseStats *Stats) {
   RaiseResult Result;
@@ -924,19 +823,10 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
   const bool PhantomLaneRegime =
       Meta.MaxFlatWorkgroupSize > 0 &&
       static_cast<unsigned>(Meta.MaxFlatWorkgroupSize) < TargetIsa.WaveSize;
-  const bool UseThreadLoop = ForceThreadLoopProjection;
-  const bool UseWaveNative = !UseThreadLoop && EnableWaveNative &&
-                             Isa.isWave32() && !TargetIsa.isWave32() &&
-                             !PhantomLaneRegime;
+  const bool UseWaveNative = EnableWaveNative && Isa.isWave32() &&
+                             !TargetIsa.isWave32() && !PhantomLaneRegime;
   std::unique_ptr<WaveProjection> ProjectionPtr;
-  if (UseThreadLoop) {
-    ProjectionPtr =
-        std::make_unique<ThreadLoopProjection>(Isa, TargetIsa, I32Ty, I64Ty);
-    errs() << "transpiler: kernel '" << KernelName
-           << "' selected ThreadLoopProjection (analysis-triggered "
-              "cross-widen route; writelane/readlane rewrite may be "
-              "disabled by the retry caller)\n";
-  } else if (UseWaveNative) {
+  if (UseWaveNative) {
     ProjectionPtr =
         std::make_unique<WaveNativeProjection>(Isa, TargetIsa, I32Ty, I64Ty);
   } else {
@@ -946,8 +836,8 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
   ProjectionPtr->setMaxFlatWorkgroupSize(Meta.MaxFlatWorkgroupSize);
   WaveProjection &Projection = *ProjectionPtr;
 
-  if (!UseThreadLoop && EnableWaveNative && PhantomLaneRegime &&
-      Isa.isWave32() && !TargetIsa.isWave32()) {
+  if (EnableWaveNative && PhantomLaneRegime && Isa.isWave32() &&
+      !TargetIsa.isWave32()) {
     // Log the fallback so operators can trace which kernels moved to
     // MODREP and why.  A regression that silently flips WaveNative's
     // selection on a phantom-lane kernel would then (re-)produce the
@@ -1480,7 +1370,7 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
   // dedicated "entry" block inserted before all body blocks and branch it to
   // KernelOffset, so the seeding is separate from -- and never mis-merged into
   // -- the body blocks.
-  bool UseDedicatedEntry = UseThreadLoop || FollowedOutOfExtentCallee;
+  bool UseDedicatedEntry = FollowedOutOfExtentCallee;
   BasicBlock *EntryBb = UseDedicatedEntry
                             ? BasicBlock::Create(C, "entry", F, FirstBodyBb)
                             : OffsetToBb[KernelOffset];
@@ -1599,8 +1489,7 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
                      Projection.emitPackedWorkitemId(SeedB, NumWorkitemDims));
   };
 
-  if (!UseThreadLoop)
-    SeedWorkitemId(B);
+  SeedWorkitemId(B);
 
   // On gfx12+ the hardware command processor uses TTMP registers for
   // workgroup scheduling (RDNA4+ / CDNA-next layout):
@@ -1666,76 +1555,8 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
           SeedB.CreateShl(WaveId, SeedB.getInt32(25), "ttmp8_val");
       SeedB.CreateStore(Ttmp8Val, Regs.Ttmp[8]);
     };
-    if (!UseThreadLoop)
-      SeedTtmp8(B);
+    SeedTtmp8(B);
   }
-
-  auto SeedThreadLoopIterationState = [&](IRBuilder<> &SeedB) -> Error {
-    for (auto *Slot : Regs.Sgpr)
-      SeedB.CreateStore(ConstantInt::get(I32Ty, 0), Slot);
-    for (auto *Slot : Regs.Vgpr)
-      SeedB.CreateStore(ConstantInt::get(I32Ty, 0), Slot);
-    for (auto *Slot : Regs.Agpr)
-      SeedB.CreateStore(ConstantInt::get(I32Ty, 0), Slot);
-    for (auto *Slot : Regs.Ttmp)
-      SeedB.CreateStore(ConstantInt::get(I32Ty, 0), Slot);
-    SeedB.CreateStore(ConstantInt::get(I32Ty, 0), Regs.M0);
-    SeedB.CreateStore(ConstantInt::get(I32Ty, 0), Regs.FlatScr[0]);
-    SeedB.CreateStore(ConstantInt::get(I32Ty, 0), Regs.FlatScr[1]);
-
-    // Mirror the entry-BB user-SGPR seeding above so the thread-loop body sees
-    // the same source ABI state as a normal source wave.
-    if (UserSgprLayout.DispatchPtrSgpr >= 0) {
-      Regs.storeSGPR64(SeedB, UserSgprLayout.DispatchPtrSgpr,
-                       SeedB.CreateCall(FnDispatchPtr, {}, "dispatch_ptr"));
-    }
-    if (UserSgprLayout.KernargSegmentPtrSgpr >= 0) {
-      Regs.storeSGPR64(SeedB, UserSgprLayout.KernargSegmentPtrSgpr,
-                       SeedB.CreateCall(FnKargPtr, {}, "kernarg_ptr"));
-    }
-    if (UserSgprLayout.WorkgroupIdXSgpr >= 0) {
-      Regs.storeSGPR32(SeedB, UserSgprLayout.WorkgroupIdXSgpr,
-                       SeedB.CreateCall(FnWorkgroupIdX, {}, "wg_id_x"));
-    }
-    if (UserSgprLayout.WorkgroupIdYSgpr >= 0) {
-      Regs.storeSGPR32(SeedB, UserSgprLayout.WorkgroupIdYSgpr,
-                       SeedB.CreateCall(FnWorkgroupIdY, {}, "wg_id_y"));
-    }
-    for (size_t SgprIdx = 0; SgprIdx < UserSgprLayout.Entries.size();
-         ++SgprIdx) {
-      const auto &Entry = UserSgprLayout.Entries[SgprIdx];
-      if (Entry.SrcKind != UserSgprLayout::Source::PreloadedKernarg)
-        continue;
-      Expected<Value *> DwOrErr =
-          EmitPreloadedKernargDword(SeedB, Entry.KernargByteOffset);
-      if (!DwOrErr)
-        return DwOrErr.takeError();
-
-      Regs.storeSGPR32(SeedB, static_cast<int>(SgprIdx), *DwOrErr);
-    }
-
-    if (AMDGPU::isGFX12Plus(*Mc.SubtargetInfo)) {
-      SeedB.CreateStore(SeedB.CreateCall(FnWorkgroupIdX, {}, "ttmp9_wg_id"),
-                        Regs.Ttmp[9]);
-      Value *WgIdY = SeedB.CreateCall(FnWorkgroupIdY, {}, "ttmp7_wg_id_y");
-      Function *FnWorkgroupIdZ = Intrinsic::getOrInsertDeclaration(
-          &M, Intrinsic::amdgcn_workgroup_id_z);
-      Value *WgIdZ = SeedB.CreateCall(FnWorkgroupIdZ, {}, "ttmp7_wg_id_z");
-      Value *WgIdYLo =
-          SeedB.CreateAnd(WgIdY, SeedB.getInt32(0xFFFF), "wg_id_y_lo16");
-      Value *WgIdZHi =
-          SeedB.CreateShl(WgIdZ, SeedB.getInt32(16), "wg_id_z_hi16");
-      Value *Ttmp7Val = SeedB.CreateOr(WgIdYLo, WgIdZHi, "ttmp7_val");
-      SeedB.CreateStore(Ttmp7Val, Regs.Ttmp[7]);
-      SeedTtmp8(SeedB);
-    }
-
-    SeedWorkitemId(SeedB);
-    Regs.storeVCC(SeedB, ConstantInt::getFalse(I1Ty));
-    Regs.storeSCC(SeedB, ConstantInt::getFalse(I1Ty));
-    Regs.storeExec(SeedB, Projection.emitInitialExec(SeedB));
-    return Error::success();
-  };
 
   // ==== Phase 5: Raise each instruction; collect all failures in allFailures.
   // ====
@@ -1840,55 +1661,10 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
   // `Ctx.getM0Const()` to resolve the M0-relative VGPR index statically.
   Regs.OnM0Written = [&Ctx](llvm::Value *V) { Ctx.updateM0Const(V); };
 
-  if (UseThreadLoop) {
-    auto *IterA = B.CreateAlloca(I32Ty, nullptr, "tl_iter_alloca");
-    B.CreateStore(B.getInt32(0), IterA);
-    static_cast<ThreadLoopProjection *>(ProjectionPtr.get())
-        ->setIterationAlloca(IterA);
-
-    BasicBlock *CondBb = BasicBlock::Create(C, "tl_cond", F);
-    BasicBlock *LatchBb = BasicBlock::Create(C, "tl_latch", F);
-    BasicBlock *DoneBb = BasicBlock::Create(C, "tl_done", F);
-    Ctx.ThreadLoopLatch = LatchBb;
-
-    B.CreateBr(CondBb);
-    B.SetInsertPoint(CondBb);
-
-    Value *Iter = B.CreateLoad(I32Ty, IterA, "tl_iter_val");
-    Value *IterOk = B.CreateICmpULT(
-        Iter, B.getInt32(TargetIsa.WaveSize / Isa.WaveSize), "tl_iter_ok");
-    Value *Lane = Projection.emitLaneIdx(B);
-    Value *LaneOk =
-        B.CreateICmpULT(Lane, B.getInt32(Isa.WaveSize), "tl_lane_ok");
-    Value *EnterBody = B.CreateAnd(IterOk, LaneOk, "tl_enter_body");
-
-    if (Error Err = SeedThreadLoopIterationState(B))
-      return Err;
-
-    for (auto *ValidA : Ctx.SgprWaveMaskValidShadow)
-      B.CreateStore(B.getFalse(), ValidA);
-    for (auto *ValidA : Ctx.SourceWaveSgprPairValidShadow)
-      B.CreateStore(B.getFalse(), ValidA);
-
-    B.CreateCondBr(EnterBody, OffsetToBb[KernelOffset], LatchBb);
-
-    B.SetInsertPoint(LatchBb);
-    Value *OldIter = B.CreateLoad(I32Ty, IterA, "tl_iter_old");
-    Value *NextIter = B.CreateAdd(OldIter, B.getInt32(1), "tl_iter_next");
-    B.CreateStore(NextIter, IterA);
-    Value *More = B.CreateICmpULT(
-        NextIter, B.getInt32(TargetIsa.WaveSize / Isa.WaveSize), "tl_more");
-    B.CreateCondBr(More, CondBb, DoneBb);
-
-    B.SetInsertPoint(DoneBb);
-    B.CreateRetVoid();
-  }
-
-  // Non-thread-loop dedicated entry (out-of-extent callee merged): the seeding
-  // lives in a standalone "entry" block; terminate it with a branch to the
-  // kernel's real start so the body blocks are reached only via real edges.
-  // (The thread-loop path wired its own entry->body edge above.)
-  if (UseDedicatedEntry && !UseThreadLoop)
+  // Dedicated entry (out-of-extent callee merged): the seeding lives in a
+  // standalone "entry" block; terminate it with a branch to the kernel's real
+  // start so the body blocks are reached only via real edges.
+  if (UseDedicatedEntry)
     B.CreateBr(OffsetToBb[KernelOffset]);
 
   if (RaiseReadFailure) {
@@ -2217,48 +1993,6 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
     CrossLaneDivergentRewriteReport RewriteReport = *RewriteReportOrErr;
 
     if (RewriteReport.refusedSgprForced()) {
-      ThreadLoopDecisionResult TlDecision = decideThreadLoopFallback(
-          Isa.WaveSize, TargetIsa.WaveSize, /*sgprForcedRefusal=*/true,
-          RewriteReport.SgprForcedThreadLoopEligible);
-      if (!ForceThreadLoopProjection &&
-          TlDecision.Decision == ThreadLoopDecision::EligibleAndGateOn) {
-        std::string ThreadLoopUnsupportedDetail;
-        if (threadLoopUnsupportedWorkgroupMemoryOrBarrier(
-                Insts, ThreadLoopUnsupportedDetail)) {
-          errs() << "transpiler: thread-loop fallback not eligible for kernel '"
-                 << KernelName << "': " << ThreadLoopUnsupportedDetail << "\n";
-          llvm::Error F = RaiseFailure::crossWaveRewriteOracleDisagreement(
-              KernelName, ThreadLoopUnsupportedDetail);
-          errs() << "transpiler: post-raise abort: "
-                 << llvm::toStringWithoutConsuming(F) << "\n";
-          return std::move(F);
-        }
-        errs() << "transpiler: post-raise fallback: retrying kernel '"
-               << KernelName
-               << "' under ThreadLoopProjection after SGPR-forced cross-lane "
-                  "rewrite refusal (analysis-triggered, no user opt-in)\n";
-        errs() << "transpiler: thread-loop fallback trigger: "
-               << RewriteReport.SgprForcedDetail << "\n";
-        return raiseToIRImpl(TextBytes, SourceIsa, KernelName, Meta,
-                             KernelOffset, KernelSize, CompilationTargetIsa,
-                             /*enableWritelaneRewrite=*/false,
-                             /*enableWaveNative=*/false,
-                             /*forceThreadLoopProjection=*/true,
-                             /*suppressC5ForThreadLoopRoute=*/true,
-                             AssumeHipGlobalOffsetZero, FunctionExtents, Stats);
-      }
-      if (!ForceThreadLoopProjection &&
-          TlDecision.Decision == ThreadLoopDecision::EligibleButGateOff) {
-        errs() << "transpiler: thread-loop fallback candidate for kernel '"
-               << KernelName << "' not activated: " << TlDecision.Reason
-               << ". Keeping principled loud refusal.\n";
-      }
-      if (!ForceThreadLoopProjection &&
-          TlDecision.Decision == ThreadLoopDecision::Ineligible) {
-        errs() << "transpiler: thread-loop fallback not eligible for kernel '"
-               << KernelName << "': " << TlDecision.Reason
-               << ". Keeping principled loud refusal.\n";
-      }
       llvm::Error F = RaiseFailure::crossWaveRewriteOracleDisagreement(
           KernelName, RewriteReport.SgprForcedDetail);
       errs() << "transpiler: post-raise abort: "
@@ -2355,17 +2089,15 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
     // the classifier then decides whether that MODREP instance can have an
     // active replica lane before turning an observed C5 site into a refusal.
     PredicateChainProjection PredProjection =
-        UseThreadLoop
-            ? PredicateChainProjection::ThreadLoop
-            : (UseWaveNative ? PredicateChainProjection::WaveNative
-                             : PredicateChainProjection::ModuloReplication);
+        UseWaveNative ? PredicateChainProjection::WaveNative
+                      : PredicateChainProjection::ModuloReplication;
     PredicateChainClassifierReport PredReport = classifyPredicateChain(
         *F, Isa.WaveSize, TargetIsa.WaveSize, PredProjection,
         /*maxFlatWorkgroupSize=*/
         Meta.MaxFlatWorkgroupSize > 0
             ? static_cast<unsigned>(Meta.MaxFlatWorkgroupSize)
             : 0u,
-        UseThreadLoop && SuppressC5ForThreadLoopRoute);
+        /*suppressC5=*/false);
 
     if (!PredReport.Refused && !PredReport.ObservedSites.empty()) {
       Result.C5SuppressedCount +=
@@ -2374,11 +2106,9 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
         Result.C5SuppressionReason = PredReport.SuppressionReason;
       LLVM_DEBUG({
         const char *ProjectionName =
-            PredProjection == PredicateChainProjection::ThreadLoop
-                ? "ThreadLoopProjection"
-                : (PredProjection == PredicateChainProjection::WaveNative
-                       ? "WaveNativeProjection"
-                       : "ModuloReplicationProjection");
+            PredProjection == PredicateChainProjection::WaveNative
+                ? "WaveNativeProjection"
+                : "ModuloReplicationProjection";
         dbgs() << "c5-predicate-chain: observed "
                << PredReport.ObservedSites.size() << " C5-shape site(s) in '"
                << KernelName << "' under " << ProjectionName
@@ -2391,33 +2121,6 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
     }
 
     if (PredReport.Refused) {
-      auto HasMatrixOp = [&]() {
-        for (const DecodedInst &Inst : Insts) {
-          if (isMatrixCanonicalOp(Inst.CanonOp))
-            return true;
-        }
-        return false;
-      };
-      constexpr bool kEnableThreadLoopC5Retry = false;
-      const bool CanRetryThreadLoop =
-          kEnableThreadLoopC5Retry && PredReport.WaveNativeEqualityRefusal &&
-          !ForceThreadLoopProjection && TargetIsa.WaveSize > Isa.WaveSize &&
-          (TargetIsa.WaveSize % Isa.WaveSize) == 0 && !HasMatrixOp();
-      if (CanRetryThreadLoop) {
-        errs() << "transpiler: post-raise fallback: retrying kernel '"
-               << KernelName
-               << "' under ThreadLoopProjection after WaveNative C5 equality "
-                  "refusal (analysis-triggered, no user opt-in)\n";
-        errs() << "transpiler: thread-loop fallback trigger: "
-               << PredReport.RefusalDetail << "\n";
-        return raiseToIRImpl(TextBytes, SourceIsa, KernelName, Meta,
-                             KernelOffset, KernelSize, CompilationTargetIsa,
-                             /*enableWritelaneRewrite=*/false,
-                             /*enableWaveNative=*/false,
-                             /*forceThreadLoopProjection=*/true,
-                             /*suppressC5ForThreadLoopRoute=*/true,
-                             AssumeHipGlobalOffsetZero, FunctionExtents, Stats);
-      }
       errs() << "transpiler: pre-translation abort: "
              << reasonString(RaiseFailureReason::CrossWavePredicateChain)
              << " on 'workitem.id.x-predicate-chain-classifier' -- "
@@ -2471,9 +2174,7 @@ raiseToIR(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
   return raiseToIRImpl(
       TextBytes, SourceIsa, KernelName, Meta, KernelOffset, KernelSize,
       CompilationTargetIsa, EnableWritelaneRewrite, EnableWaveNative,
-      /*forceThreadLoopProjection=*/false,
-      /*suppressC5ForThreadLoopRoute=*/false, AssumeHipGlobalOffsetZero,
-      FunctionExtents, Stats);
+      AssumeHipGlobalOffsetZero, FunctionExtents, Stats);
 }
 
 } // namespace COMGR::hotswap
