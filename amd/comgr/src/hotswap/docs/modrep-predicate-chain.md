@@ -454,6 +454,55 @@ refusal or an attribution breadcrumb.
 
 **Regression guards.** See §7.
 
+### 6.1.1 WaveNative barrier-refusal sub-case (issue #130)
+
+The §6.1 WaveNative suppression rests on "each target lane's `tid` IS its
+own source-wave tid, so `tid < K` evaluates the way the source HW would."
+That argument is about *numeric* correctness of the predicate's value and it
+holds. It does **not** cover a second, structural hazard: a workgroup
+**barrier** downstream of the EXEC-gated region the C5 predicate controls.
+
+Issue #130 (StripedHyena `triton_red_fused_..._16`, `num_warps = N`
+reduction shape) is the confirmed instance. The `workitem.id.x() < K`
+(`K ≤ W_s − 1`) predicate is folded into an EXEC mask; a wave-uniform
+scalar branch on that per-wave-varying mask
+(`br i1 (icmp eq (exec & ballot(tid<K)), 0)`) gates a region that reaches an
+`s_barrier`. The raiser collapses the gfx12 split barrier
+(`s_barrier_signal` → no-op, `s_barrier_wait` → unified
+`@llvm.amdgcn.s.barrier()`). Under wave32 → wave64 WaveNative widening the
+branch resolves differently across the widened wave64 waves, so they take
+different-length paths to the workgroup barrier and never rendezvous → the
+hardware `s_barrier` hangs → the completion signal never fires → the host
+spins in `BusyWaitSignal::WaitRelaxed` (the #130 whole-model symptom).
+
+This is a *deadlock* class, not a numeric-divergence class, so the §6.1
+"only numeric, those reductions work" suppression rationale does not apply.
+Crucially it is **independent of `max_flat_workgroup_size`**: the k16 shape
+has `MaxFlat = 256 ≥ TargetWave = 64`, so the §6.1 phantom-lane arm does
+**not** fire — that was the gap. MODREP already refuses the exact kernel via
+the §5 narrow-O1 classifier; WaveNative lacked the equivalent guard.
+
+**Landed fix (Option 1, refuse-don't-miscompile).** The classifier detects a
+workgroup barrier in the function (`hasWorkgroupBarrier` — matches
+`llvm.amdgcn.s.barrier` and the split / named-barrier family). Under
+`WaveNativeProjection`, if an observed C5 lane-position site (Pass-2's
+`tid < K` unmasked-predicate + small-K site) coexists with a workgroup
+barrier, the report sets `Refused = true` and a new
+`WaveNativeBarrierRefusal` bit, with a `RefusalDetail` that names the
+barrier-divergence deadlock. `raiser.cpp` turns `Refused` into a
+`RaiseFailure::crossWavePredicateChain` refusal and the outcome line names
+the "workgroup-barrier-divergence sub-case (issue #130)". The refusal is
+**narrow**: it requires BOTH the C5 `tid < K` unmasked-predicate site AND a
+workgroup barrier — a barrier alone, or a masked / AND'd predicate alone,
+does not refuse. It does NOT feed the ThreadLoop C5-equality retry (a
+deadlock cannot be made safe by that retry). Lit fence:
+`lit_tests`/`hotswap-raise/c5_wavenative_barrier_refuse.s`.
+
+The proper long-term fix (preserve split-barrier membership / hoist the
+barrier above the divergent EXEC-gated region so every wave arrives
+uniformly) is deferred; refuse is the confirmed-safe stopgap and matches the
+project's refuse-don't-miscompile invariant.
+
 ### 6.2 O2 deferred indefinitely
 
 The proposed `tid AND (W_s − 1)` mask rewrite is semantically

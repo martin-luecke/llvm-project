@@ -2453,6 +2453,9 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
           << "  outcome: (c) refuse -- WorkitemIdPredicateChain (sec. 3 Class 5"
           << (PredReport.WaveNativePhantomRefusal ? " phantom-lane sub-case"
                                                   : "")
+          << (PredReport.WaveNativeBarrierRefusal
+                  ? " workgroup-barrier-divergence sub-case (issue #130)"
+                  : "")
           << ")\n";
       return RaiseFailure::crossWavePredicateChain(KernelName,
                                                    PredReport.RefusalDetail);

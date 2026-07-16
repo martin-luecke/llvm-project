@@ -182,6 +182,26 @@ struct PredicateChainClassifierReport {
   // distinct instead of truncating them through a single source-width SGPR.
   bool WaveNativeEqualityRefusal = false;
 
+  // True iff WaveNative refused specifically because an observed C5
+  // lane-position predicate site coexists with a WORKGROUP BARRIER in the same
+  // function (the issue #130 deadlock class). This is NARROWER than the
+  // phantom-lane arm and INDEPENDENT of `max_flat_workgroup_size`: it fires
+  // even when every target lane has a source-lane mapping (MaxFlat >=
+  // TargetWave), because the hazard is not phantom-lane divergence but
+  // BARRIER divergence. A `tid < K` (K <= W_s-1) predicate feeds an EXEC mask
+  // that gates a region reaching an `s_barrier`; under wave32->wave64 widening
+  // the widened wave64 waves resolve the EXEC-gated control flow differently,
+  // so the collapsed `s_barrier_signal`->no-op / `s_barrier_wait`->unified
+  // `@llvm.amdgcn.s.barrier()` lowering drops the split-barrier membership and
+  // the hardware workgroup barrier never rendezvouses -> GPU deadlock (the
+  // #130 StripedHyena k16 num_warps=N reduction shape). Refuse-don't-
+  // miscompile: turn the silent deadlock into a clean refusal. This bit lets
+  // callers and the lit fixtures discriminate the barrier-deadlock refusal
+  // path from the plain phantom-lane / equality paths without string-matching
+  // the detail. See hotswap/docs/modrep-predicate-chain.md sec. 6.1.1 (the
+  // WaveNative barrier-refusal sub-case).
+  bool WaveNativeBarrierRefusal = false;
+
   // True iff a WaveNative equality (`eq`/`ne`) C5 site was observed. These
   // sites are accepted only by the target-width mask-shadow contract; callers
   // surface the count/reason in proof logs so acceptance is explicit.

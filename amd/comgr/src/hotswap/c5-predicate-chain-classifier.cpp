@@ -273,6 +273,38 @@ std::string formatRefusalDetail(const ICmpInst *Cmp, unsigned SourceWaveSize,
   return S;
 }
 
+// True iff `F` contains a WORKGROUP BARRIER intrinsic call. Covers the
+// unified `@llvm.amdgcn.s.barrier()` the raiser lowers gfx12
+// `s_barrier_wait` to, plus the split-barrier / named-barrier family in
+// case a future lowering preserves them (`s.barrier.signal`,
+// `s.barrier.wait`, `s.barrier.signal.var`, `s.barrier.signal.isfirst`,
+// `s.barrier.init`, `s.barrier.join`, `s.barrier.leave`). A workgroup
+// barrier is a wave-collective rendezvous: EVERY wave in the workgroup must
+// arrive at it uniformly, so it must never sit downstream of control flow
+// made non-uniform by a `tid < K` lane-position predicate under wave
+// widening (issue #130).
+bool hasWorkgroupBarrier(const Function &F) {
+  for (const Instruction &I : instructions(F)) {
+    const auto *II = dyn_cast<IntrinsicInst>(&I);
+    if (!II)
+      continue;
+    switch (II->getIntrinsicID()) {
+    case Intrinsic::amdgcn_s_barrier:
+    case Intrinsic::amdgcn_s_barrier_signal:
+    case Intrinsic::amdgcn_s_barrier_signal_var:
+    case Intrinsic::amdgcn_s_barrier_signal_isfirst:
+    case Intrinsic::amdgcn_s_barrier_init:
+    case Intrinsic::amdgcn_s_barrier_join:
+    case Intrinsic::amdgcn_s_barrier_wait:
+    case Intrinsic::amdgcn_s_barrier_leave:
+      return true;
+    default:
+      break;
+    }
+  }
+  return false;
+}
+
 bool modrepCanHaveActiveReplicaLane(unsigned SourceWaveSize,
                                     unsigned MaxFlatWorkgroupSize) {
   // Unknown metadata cannot prove the no-replica-lane case, so keep the
@@ -361,6 +393,20 @@ PredicateChainClassifierReport classifyPredicateChain(
                      MaxFlatWorkgroupSize, SuppressThreadLoopC5);
   const bool WaveNativePhantomRefusal = isWaveNativePhantomRefusal(
       Projection, TargetWaveSize, MaxFlatWorkgroupSize);
+
+  // Issue #130: under WaveNative, a C5 lane-position predicate site that
+  // coexists with a workgroup barrier is a DEADLOCK hazard, independent of
+  // MaxFlatWorkgroupSize (the phantom-lane arm above does NOT fire when
+  // MaxFlat >= TargetWave, which is exactly the k16 num_warps=N reduction
+  // shape). The `tid < K` predicate gates an EXEC region that reaches an
+  // `s_barrier`; the widened wave64 waves resolve the EXEC-gated branch
+  // differently, so they arrive at the collapsed unified `s.barrier`
+  // inconsistently and the hardware workgroup barrier never rendezvouses.
+  // Detect the barrier once here; the Pass-2 scan combines it with an
+  // observed C5 site to drive the refusal.
+  const bool HasWorkgroupBarrier =
+      Projection == PredicateChainProjection::WaveNative &&
+      hasWorkgroupBarrier(F);
 
   // ===== Pass 0: collect `@llvm.amdgcn.workitem.id.x()` call sites. =====
   SmallVector<CallInst *> Sites;
@@ -527,7 +573,23 @@ PredicateChainClassifierReport classifyPredicateChain(
         Projection == PredicateChainProjection::WaveNative && Cmp->isEquality();
     if (WaveNativeEqualitySite)
       Report.WaveNativeEqualityObserved = true;
-    const bool SiteRefuses = RefuseObservedC5;
+
+    // Issue #130 WaveNative barrier-deadlock arm. A C5 lane-position site
+    // co-located with a workgroup barrier is refused under WaveNative even
+    // when the normal projection gate would suppress the C5 refusal (i.e.
+    // even when MaxFlat >= TargetWave, so the phantom-lane arm does not
+    // fire). This is the confirmed #130 shape: the EXEC-gated region the
+    // predicate controls reaches an `s_barrier`, and the widened wave64
+    // waves would arrive at it non-uniformly -> workgroup-barrier deadlock.
+    // Narrowness: it requires BOTH an unmasked `tid < K` (K <= W_s-1)
+    // C5 site AND a workgroup barrier. A barrier alone, or a masked / AND'd
+    // predicate alone, does NOT reach this arm (the Pass-2 `HasUnmaskedOp &&
+    // SmallK` gate already excludes those before we get here).
+    const bool WaveNativeBarrierSite =
+        Projection == PredicateChainProjection::WaveNative &&
+        HasWorkgroupBarrier;
+
+    const bool SiteRefuses = RefuseObservedC5 || WaveNativeBarrierSite;
 
     // `!report.refused` avoids rewriting `refusalDetail` with later sites
     // so the diagnostic names the first failing icmp deterministically.
@@ -535,7 +597,25 @@ PredicateChainClassifierReport classifyPredicateChain(
       Report.Refused = true;
       Report.WaveNativePhantomRefusal = WaveNativePhantomRefusal;
       Report.WaveNativeEqualityRefusal = false;
-      if (WaveNativePhantomRefusal) {
+      Report.WaveNativeBarrierRefusal =
+          WaveNativeBarrierSite && !WaveNativePhantomRefusal;
+      if (Report.WaveNativeBarrierRefusal) {
+        // Prepend the barrier-deadlock explanation so the diagnostic names
+        // the #130 hazard directly.
+        std::string Prefix;
+        raw_string_ostream Os(Prefix);
+        Os << "workgroup-barrier divergence (issue #130): this kernel "
+              "contains a workgroup barrier (`s_barrier`) downstream of an "
+              "EXEC region gated by a `workitem.id.x()` lane-position "
+              "predicate. Under WaveNativeProjection wave32->wave64 widening, "
+              "the widened wave64 waves resolve the EXEC-gated control flow "
+              "differently, so they arrive at the collapsed unified "
+              "`@llvm.amdgcn.s.barrier()` non-uniformly and the hardware "
+              "workgroup barrier never rendezvouses (GPU deadlock). Refusing "
+              "rather than emit a silently-deadlocking kernel "
+              "(refuse-don't-miscompile). ";
+        Report.RefusalDetail = Prefix + Detail;
+      } else if (WaveNativePhantomRefusal) {
         // Prepend the phantom-lane explanation so the diagnostic
         // names the distinguishing evidence the operator needs:
         // "WaveNative would normally let this through; the
