@@ -193,23 +193,6 @@ handleValuCrossLane(RaiseContext &Ctx, const DecodedInst &Di, OpResolver &Op) {
     return Hr;
   }
 
-  // ---- v_permlane64_b32 ----
-  // KNOWN LIMITATION -- see the v_permlane64_b32 row in the
-  // unrewritable table of hotswap/docs/wave-size-translation.md sec. 7:
-  // no wave32 analogue, so
-  // the Phase 1.4.5 classifier refuses this op in any cross-wave
-  // lift (it is taxonomised as FullWaveRotate / unrewritable). The
-  // same-lane fallback here only runs in same-wave (wave64 -> wave64)
-  // translation, where a gfx1250 binary would not contain the op
-  // anyway (gfx942 and earlier do not emit it). Keeping the stub
-  // prevents a silent raise failure on the theoretical case.
-  case CanonicalOp::V_PERMLANE64_B32: {
-    if (Di.NumDefs >= 1 && Di.NumSrcs >= 1)
-      Ctx.writeReg32(Op.dst(), Op.src(0));
-    Hr.Handled = true;
-    return Hr;
-  }
-
   // ---- v_readfirstlane_b32 sDST, vSRC ----
   // Broadcast the value of vSRC from the lowest-numbered active source lane
   // (or lane 0 if EXEC==0) to sDST.  Same-wave lowering can use the native
@@ -264,54 +247,6 @@ handleValuCrossLane(RaiseContext &Ctx, const DecodedInst &Di, OpResolver &Op) {
     return Hr;
   }
 
-  // ---- v_writelane_b32 ----
-  // Write `val` into lane `lane` of vDst. Cross-lane: cannot be
-  // emulated via per-thread private scratch nor via a single scalar
-  // SSA value. `llvm.amdgcn.writelane(val, lane, old)` lowers to the
-  // hardware primitive; the intrinsic returns the new per-lane scalar
-  // (either `val` when lane_id==lane, else `old`), so the VGPR's
-  // SSA slot carries the correct value for whichever lane we are.
-  //
-  // First-write pattern: if writelane is the first assignment to
-  // vDst, non-selected lanes legitimately hold whatever vDst
-  // contained before (hardware semantics). `readReg32` on the
-  // never-stored alloca returns LLVM `undef`, which is the right
-  // "unobservable" encoding -- any downstream use of those lanes
-  // before they are written is itself undefined on hardware.
-  case CanonicalOp::V_WRITELANE_B32: {
-    ParsedReg Dst = Op.dst();
-    Value *Val = Op.src(0);
-    Value *Lane = Op.src(1);
-    Lane = Ctx.B.CreateZExtOrTrunc(Lane, Ctx.I32Ty, "wrlane_idx");
-    Value *OldVal = Ctx.Regs.readReg32(Ctx.B, Dst);
-    Value *NewVal = nullptr;
-    // ThreadLoopProjection is the only projection that scopes lane ops to the
-    // source wave inside the handler (`sourceWaveScopedLaneOps()`); the wider
-    // ModuloReplicationProjection path leaves the native intrinsic here and
-    // relies on the default-on post-raise `rewriteCrossLaneDivergent` pass to
-    // rebase it symmetrically (with the SGPR-forced use-chain safety net), or
-    // on the TLP re-raise fallback when that pass refuses.  See issue #146 and
-    // wave-size-translation.md §5.6.3.
-    if (Ctx.Projection.sourceWaveScopedLaneOps()) {
-      Value *LaneId = Ctx.emitLaneIdx();
-      Value *SourceLane = Ctx.B.CreateAnd(
-          LaneId, Ctx.B.getInt32(Ctx.Isa.WaveSize - 1), "wrlane_source_lane");
-      Value *WantedLane = Ctx.B.CreateAnd(
-          Lane, Ctx.B.getInt32(Ctx.Isa.WaveSize - 1), "wrlane_wanted_lane");
-      Value *IsTargetLane =
-          Ctx.B.CreateICmpEQ(SourceLane, WantedLane, "wrlane_is_target_lane");
-      NewVal =
-          Ctx.B.CreateSelect(IsTargetLane, Val, OldVal, "writelane_srcwave");
-    } else {
-      Function *Wl = Intrinsic::getOrInsertDeclaration(
-          &Ctx.M, Intrinsic::amdgcn_writelane, {Ctx.I32Ty});
-      NewVal = Ctx.B.CreateCall(Wl, {Val, Lane, OldVal}, "writelane");
-    }
-    Ctx.writeReg32(Dst, NewVal);
-    Hr.Handled = true;
-    return Hr;
-  }
-
   // ---- v_readlane_b32 sDST, vSRC, lane ----
   // Read a specific lane of vSRC into an SGPR. Reverse of writelane.
   case CanonicalOp::V_READLANE_B32: {
@@ -319,83 +254,13 @@ handleValuCrossLane(RaiseContext &Ctx, const DecodedInst &Di, OpResolver &Op) {
     Value *Lane = Op.src(1);
     Lane = Ctx.B.CreateZExtOrTrunc(Lane, Ctx.I32Ty, "rdlane_idx");
     Value *Src = Ctx.Regs.readReg32(Ctx.B, SrcReg);
-    Value *Val = nullptr;
-    // See the parallel note on V_WRITELANE_B32: the source-wave rebase here is
-    // the ThreadLoopProjection path; under ModuloReplicationProjection the
-    // native intrinsic is left for the default-on `rewriteCrossLaneDivergent`
-    // pass (or the TLP re-raise fallback) to rebase.  Issue #146.
-    if (Ctx.Projection.sourceWaveScopedLaneOps()) {
-      Value *LaneId = Ctx.emitLaneIdx();
-      uint32_t SourceMask = Ctx.Isa.WaveSize - 1;
-      Value *GroupBase = Ctx.B.CreateAnd(LaneId, Ctx.B.getInt32(~SourceMask),
-                                         "rdlane_source_wave_base");
-      Value *SourceLane = Ctx.B.CreateAnd(Lane, Ctx.B.getInt32(SourceMask),
-                                          "rdlane_source_lane");
-      Value *TargetLane =
-          Ctx.B.CreateOr(GroupBase, SourceLane, "rdlane_target_lane");
-      Value *Addr =
-          Ctx.B.CreateShl(TargetLane, Ctx.B.getInt32(2), "rdlane_bperm_addr");
-      Function *Bperm = Intrinsic::getOrInsertDeclaration(
-          &Ctx.M, Intrinsic::amdgcn_ds_bpermute);
-      Val = Ctx.B.CreateCall(Bperm, {Addr, Src}, "readlane_srcwave");
-    } else {
-      Function *Rl = Intrinsic::getOrInsertDeclaration(
-          &Ctx.M, Intrinsic::amdgcn_readlane, {Ctx.I32Ty});
-      Val = Ctx.B.CreateCall(Rl, {Src, Lane}, "readlane");
-    }
+    // The native intrinsic is left for the default-on
+    // `rewriteCrossLaneDivergent` pass to rebase per source wave under
+    // cross-widening.  Issue #146.
+    Function *Rl = Intrinsic::getOrInsertDeclaration(
+        &Ctx.M, Intrinsic::amdgcn_readlane, {Ctx.I32Ty});
+    Value *Val = Ctx.B.CreateCall(Rl, {Src, Lane}, "readlane");
     Ctx.writeReg32(Op.dst(), Val);
-    Hr.Handled = true;
-    return Hr;
-  }
-
-  // ---- v_mbcnt_lo_u32_b32 / v_mbcnt_hi_u32_b32 ----
-  // Count set bits in src0 below the current lane.  For same-wave lifts the
-  // raw intrinsic is exact.  For wave32 source -> wave64 target, however,
-  // raw target `mbcnt.lo` would return popcount(src0[0:31]) for target lanes
-  // 32..63, while the source instruction's lane id restarts at 0 in the
-  // second modeled source wave.  Recompute the source-wave-local low-half
-  // count from `lane_id mod W_s` in that case.
-  case CanonicalOp::V_MBCNT_LO_U32_B32: {
-    Value *Result = nullptr;
-    if (Ctx.Isa.isWave32() && Ctx.TargetIsa.WaveSize > Ctx.Isa.WaveSize) {
-      Value *LaneId = Ctx.emitLaneIdx();
-      Value *SourceLane = Ctx.B.CreateAnd(
-          LaneId, Ctx.B.getInt32(Ctx.Isa.WaveSize - 1), "mbcnt_source_lane");
-      Value *LaneBit =
-          Ctx.B.CreateShl(Ctx.B.getInt32(1), SourceLane, "mbcnt_lane_bit");
-      Value *BelowMask =
-          Ctx.B.CreateSub(LaneBit, Ctx.B.getInt32(1), "mbcnt_below_mask");
-      Value *SrcMask = Ctx.readOpSourceWaveMask32(Di, Op.srcIdx(0));
-      Value *Masked = Ctx.B.CreateAnd(SrcMask, BelowMask, "mbcnt_masked");
-      Function *Ctpop = Intrinsic::getOrInsertDeclaration(
-          &Ctx.M, Intrinsic::ctpop, {Ctx.I32Ty});
-      Result = Ctx.B.CreateAdd(Ctx.B.CreateCall(Ctpop, {Masked}, "mbcnt_pop"),
-                               Op.src(1), "mbcnt_lo_srcwave");
-    } else {
-      Function *Mbcnt = Intrinsic::getOrInsertDeclaration(
-          &Ctx.M, Intrinsic::amdgcn_mbcnt_lo, {});
-      Result = Ctx.B.CreateCall(Mbcnt, {Op.src(0), Op.src(1)}, "mbcnt_lo");
-    }
-    Ctx.writeReg32(Op.dst(), Result);
-    Hr.Handled = true;
-    return Hr;
-  }
-  case CanonicalOp::V_MBCNT_HI_U32_B32: {
-    // For wave32 source, mbcnt_hi is always a pass-through of src1: the
-    // hi-half mask is `(1 << (lane_id - 32)) - 1`, which is 0 for every
-    // source lane (0..31). When widened to wave64, the raw target
-    // intrinsic would compute popcount(src0 & non_empty_mask) + src1 on
-    // lanes 32..63, corrupting source-wave-1 results. Emit src1 directly
-    // in the widening case.
-    Value *Result = nullptr;
-    if (Ctx.Isa.isWave32() && Ctx.TargetIsa.WaveSize > Ctx.Isa.WaveSize) {
-      Result = Op.src(1);
-    } else {
-      Function *Mbcnt = Intrinsic::getOrInsertDeclaration(
-          &Ctx.M, Intrinsic::amdgcn_mbcnt_hi, {});
-      Result = Ctx.B.CreateCall(Mbcnt, {Op.src(0), Op.src(1)}, "mbcnt_hi");
-    }
-    Ctx.writeReg32(Op.dst(), Result);
     Hr.Handled = true;
     return Hr;
   }

@@ -390,16 +390,6 @@ Value *RaiseContext::readOp32(const DecodedInst &Di, unsigned OpIdx) {
   if (Di.isReg(OpIdx)) {
     ParsedReg Pr = parseReg(Di.getReg(OpIdx), OpIdx);
     if (Pr.RegKind == ParsedReg::VCC) {
-      if (Projection.sourceWaveScopedLaneOps()) {
-        Value *Mask = Regs.readVCCAsWaveMask(B, Regs.ExecTy);
-        Value *Lo = B.CreateTrunc(Mask, I32Ty, "vcc_src_wave_lo");
-        Value *Hi = B.CreateTrunc(B.CreateLShr(Mask, Isa.WaveSize), I32Ty,
-                                  "vcc_src_wave_hi");
-        Value *Lane = Projection.emitLaneIdx(B);
-        Value *Upper = B.CreateICmpUGE(
-            Lane, ConstantInt::get(I32Ty, Isa.WaveSize), "vcc_src_wave_upper");
-        return B.CreateSelect(Upper, Hi, Lo, "vcc_src_wave_mask");
-      }
       // Reading VCC as an i32 (wave32 wave-mask, or low 32 bits on
       // wave64) is a cross-lane collection: emit amdgcn.ballot so each
       // lane gets the same bit-mask assembled from all lanes' per-lane
@@ -777,11 +767,8 @@ Value *RaiseContext::readOpExecWidth(const DecodedInst &Di, unsigned OpIdx) {
       // Wave32 vcc_hi / exec_hi are scratch scalars, not the wave mask.
       return WidenToExec(Regs.readReg32(B, Pr));
     if (Pr.RegKind == ParsedReg::SGPR) {
-      Value *Narrow =
-          (Projection.sourceWaveScopedLaneOps() && Pr.WidthInDwords >= 2)
-              ? Regs.loadSGPR64(B, Pr.BaseIdx)
-              : (Isa.isWave32() ? Regs.loadSGPR32(B, Pr.BaseIdx)
-                                : Regs.loadSGPR64(B, Pr.BaseIdx));
+      Value *Narrow = Isa.isWave32() ? Regs.loadSGPR32(B, Pr.BaseIdx)
+                                     : Regs.loadSGPR64(B, Pr.BaseIdx);
       Value *Fallback = WidenToExec(Narrow);
       if (Value *ShadowValid = loadSgprWaveMaskValid(Pr.BaseIdx)) {
         Value *ShadowExec = loadSgprWaveMaskExec(Pr.BaseIdx);

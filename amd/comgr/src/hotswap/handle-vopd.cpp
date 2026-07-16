@@ -48,17 +48,6 @@ ParsedReg applyVopdVGPRMsb(const RaiseContext &Ctx, ParsedReg Pr,
 }
 
 Value *readVopdVCCAsSource(RaiseContext &Ctx) {
-  if (Ctx.Projection.sourceWaveScopedLaneOps()) {
-    Value *Mask = Ctx.Regs.readVCCAsWaveMask(Ctx.B, Ctx.Regs.ExecTy);
-    Value *Lo = Ctx.B.CreateTrunc(Mask, Ctx.I32Ty, "vopd_vcc_lo_src");
-    Value *Hi = Ctx.B.CreateTrunc(Ctx.B.CreateLShr(Mask, Ctx.Isa.WaveSize),
-                                  Ctx.I32Ty, "vopd_vcc_hi_src");
-    Value *Lane = Ctx.Projection.emitLaneIdx(Ctx.B);
-    Value *Upper =
-        Ctx.B.CreateICmpUGE(Lane, ConstantInt::get(Ctx.I32Ty, Ctx.Isa.WaveSize),
-                            "vopd_vcc_upper_src_wave");
-    return Ctx.B.CreateSelect(Upper, Hi, Lo, "vopd_vcc_src_wave_mask");
-  }
   return Ctx.Regs.readVCCAsWaveMask(Ctx.B, Ctx.I32Ty);
 }
 

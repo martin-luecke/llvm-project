@@ -487,15 +487,12 @@ findLanePredicatedExecSites(ArrayRef<DecodedInst> Insts,
                "v_mbcnt_*; WaveNative projects the preceding v_cmp's ballot "
                "into target-width EXEC storage (per-lane shadow), so the "
                "saveexec combine and old-EXEC save run at target width"});
-        } else if (Projection.numSourceWavesPerTarget() == 1 ||
-                   Projection.sourceWaveScopedLaneOps()) {
+        } else if (Projection.numSourceWavesPerTarget() == 1) {
           // A single source wave per target wave (MODREP redundant-replica /
-          // phantom-lane regime) or a source-wave-scoped iteration
-          // (ThreadLoop, one source wave per pass). mbcnt lifting already
-          // makes the lane id source-wave-relative (handle-valu-cross-lane:
-          // mbcnt_hi pass-through + mbcnt_lo mod W_s), so a lane-derived
-          // saveexec mask is already correct per source wave and needs no
-          // target-width projection.
+          // phantom-lane regime). mbcnt lifting already makes the lane id
+          // source-wave-relative (handle-valu-cross-lane: mbcnt_hi pass-through
+          // + mbcnt_lo mod W_s), so a lane-derived saveexec mask is already
+          // correct per source wave and needs no target-width projection.
           Sites.push_back(
               {&Di, ObstructionKind::SaveExecFromLaneId,
                RewriteId::SaveExecLaneRelative, /*RewriteImplemented=*/true,

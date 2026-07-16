@@ -639,10 +639,7 @@ void AllocaRegFile::writeRegExecWidth(IRBuilder<> &B, ParsedReg Pr, Value *V) {
     // replication done when the value was first read via
     // `readOpExecWidth` or computed by the `V_CMP -> SGPR` ballot.
     Type *SourceWidthTy =
-        (Projection && Projection->sourceWaveScopedLaneOps() &&
-         Pr.WidthInDwords >= 2)
-            ? B.getInt64Ty()
-            : (Projection ? Projection->sourceWaveMaskTy() : ExecTy);
+        Projection ? Projection->sourceWaveMaskTy() : ExecTy;
     if (V->getType() != SourceWidthTy) {
       unsigned Have = V->getType()->getPrimitiveSizeInBits();
       unsigned Want = SourceWidthTy->getPrimitiveSizeInBits();

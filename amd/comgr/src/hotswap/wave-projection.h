@@ -230,14 +230,6 @@ public:
   // to set HW EXEC=-1 for the kernel body.
   virtual bool providesFullWaveExecInvariant() const { return false; }
 
-  // True iff handlers should lower source-ISA lane-indexed primitives
-  // (`readlane`, `writelane`, `readfirstlane`) as source-wave-scoped
-  // operations instead of target-wave-native AMDGPU intrinsics.  The
-  // ThreadLoop route needs this because each target wave contains multiple
-  // source-wave instances; a native target-wave `readlane(31)` or
-  // `readfirstlane` would collapse those instances together.
-  virtual bool sourceWaveScopedLaneOps() const { return false; }
-
   // True when mbcnt-derived V_CMPX predicates remain independent for each
   // packed source wave's EXEC mask.
   virtual bool preservesMbcntDerivedVcmpxExec() const { return false; }
