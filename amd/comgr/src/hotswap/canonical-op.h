@@ -733,6 +733,10 @@ enum class CanonicalOp : uint16_t {
   V_BFE_I32,
   V_BFI_B32,
   V_PERM_B32,
+  // v_bcnt_u32_b32: dst = popcount(src0) + src1 (add_ctpop). A plain
+  // per-lane op, so it is wave-size-oblivious and needs no source-wave
+  // handling, unlike v_mbcnt_*.
+  V_BCNT_U32_B32,
   V_MBCNT_LO_U32_B32,
   V_MBCNT_HI_U32_B32,
   V_READLANE_B32,

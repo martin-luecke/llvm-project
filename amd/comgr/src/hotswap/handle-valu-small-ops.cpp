@@ -747,6 +747,19 @@ handleValuSmallOps(RaiseContext &Ctx, const DecodedInst &Di, OpResolver &Op) {
     return Hr;
   }
 
+  // v_bcnt_u32_b32: dst = ctpop(src0) + src1. It has no clamp/omod, so
+  // refuse if a non-default one appears instead of dropping it.
+  case CanonicalOp::V_BCNT_U32_B32: {
+    if (Error Err = requireDefaultOutputModsIfPresent(Di))
+      return Err;
+    Function *Ctpop = Intrinsic::getOrInsertDeclaration(
+        &Ctx.M, Intrinsic::ctpop, {Ctx.I32Ty});
+    Value *Pop = Ctx.B.CreateCall(Ctpop, {Op.src(0)}, "bcnt_u32");
+    Ctx.writeReg32(Op.dst(), Ctx.B.CreateAdd(Pop, Op.src(1), "bcnt_u32_add"));
+    Hr.Handled = true;
+    return Hr;
+  }
+
   // out = (in << 1) ^ (in[31] ? 197 : 0). Use the intrinsic where it
   // selects (HasPrngInst); expand in IR for targets without a pattern.
   case CanonicalOp::V_PRNG_B32: {

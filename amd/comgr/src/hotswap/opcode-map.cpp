@@ -683,6 +683,9 @@ static const Entry kCanonTable[] = {
     // the handler.
     E(V_BFI_B32_e64, V_BFI_B32),
     E(V_PERM_B32_e64, V_PERM_B32),
+    // VOP3-only on gfx11+, so all encodings collapse to the one `_e64`
+    // pseudo (like the v_mbcnt_* entries below).
+    E(V_BCNT_U32_B32_e64, V_BCNT_U32_B32),
     E(V_MBCNT_LO_U32_B32_e64, V_MBCNT_LO_U32_B32),
     E(V_MBCNT_HI_U32_B32_e64, V_MBCNT_HI_U32_B32),
     E(V_READLANE_B32, V_READLANE_B32),
