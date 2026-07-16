@@ -370,6 +370,8 @@ private:
 
   static bool isScale16(const DecodedInst &Di) {
     switch (Di.CanonOp) {
+    case CanonicalOp::V_WMMA_SCALE16_F32_16x16x128_F8F6F4:
+      return true;
     case CanonicalOp::V_WMMA_SCALE_F32_16x16x128_F8F6F4:
       return false;
     default:
@@ -1401,6 +1403,50 @@ Expected<HandlerResult> handleValuVoP3P(RaiseContext &Ctx,
           "MFMA F8F6F4 via emitWMMAScaleF8F6F4toScaledMFMA), or hasFP8Insts "
           "(gfx942 K-decomposed unscaled FP8 / BF8 MFMA via "
           "emitWMMAScaleF8F6F4toMFMA); this target has none.");
+    }
+
+    Ctx.writeRegVec(In.Dest, ResultVal);
+    Hr.Handled = true;
+    return Hr;
+  }
+
+  case CanonicalOp::V_WMMA_SCALE16_F32_16x16x128_F8F6F4: {
+    // Same mantissa-pair collapse as V_WMMA_SCALE_F32_16x16x128_F8F6F4 but
+    // scale_src0 / scale_src1 are i64 (8 packed bytes / side, K=16 scale
+    // granularity). gfx942 lowers via emitWMMAScale16F8F6F4toMFMA (unscaled
+    // FP8/BF8 MFMA + software scale; no mfma_scale16 hardware).
+    Expected<WmmaScaleInputs> MaybeIn = WmmaScaleInputs::parse(Ctx, Di, Op);
+    if (!MaybeIn)
+      return MaybeIn.takeError();
+    const WmmaScaleInputs &In = *MaybeIn;
+
+    Value *ResultVal = nullptr;
+
+    if (Ctx.TargetIsa.HasTensorOps) {
+      Function *WmmaFn = Intrinsic::getOrInsertDeclaration(
+          &Ctx.M, Intrinsic::amdgcn_wmma_scale16_f32_16x16x128_f8f6f4,
+          {In.CdTy, In.ATy, In.BTy});
+      ResultVal = Ctx.B.CreateCall(
+          WmmaFn,
+          {In.MatrixAFmt, In.A, In.MatrixBFmt, In.B, In.CMod, In.C,
+           In.MatrixAScale, In.MatrixAScaleFmt, In.ScaleSrc0, In.MatrixBScale,
+           In.MatrixBScaleFmt, In.ScaleSrc1, In.MatrixAReuse, In.MatrixBReuse},
+          "wmma_scale16");
+    } else if (Ctx.TargetIsa.HasFP8Insts) {
+      Expected<Value *> RV = emitWMMAScale16F8F6F4toMFMA(
+          Ctx, In.A, In.B, In.C, In.MatrixAFmt, In.MatrixBFmt, In.CMod,
+          In.MatrixAScale, In.MatrixAScaleFmt, In.ScaleSrc0, In.MatrixBScale,
+          In.MatrixBScaleFmt, In.ScaleSrc1, In.ADwords, In.BDwords);
+      if (!RV)
+        return RV.takeError();
+      ResultVal = *RV;
+    } else {
+      return RaiseFailure::unsupportedInstructionForm(
+          Di, "VOP3P",
+          "v_wmma_scale16_f32_16x16x128_f8f6f4 requires one of: hasTensorOps "
+          "(gfx1250 native scaled WMMA), hasGfx950Insts or hasFP8Insts "
+          "(K-decomposed unscaled FP8 / BF8 MFMA via "
+          "emitWMMAScale16F8F6F4toMFMA); this target has none.");
     }
 
     Ctx.writeRegVec(In.Dest, ResultVal);
