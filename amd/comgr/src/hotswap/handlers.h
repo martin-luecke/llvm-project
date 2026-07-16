@@ -13,18 +13,9 @@
 
 #include "llvm/Support/Error.h"
 
-namespace llvm {
-class MCInstrInfo;
-} // namespace llvm
-
 namespace COMGR::hotswap {
 
 class OpcodeMap;
-
-// Asserts every MFMA-format opcode the disassembler can decode has a
-// CanonicalOp handler entry. See `handle-mfma.cpp` for details.
-llvm::Error verifyMFMACoverage(const llvm::MCInstrInfo &MCII,
-                               const OpcodeMap &OpcMap);
 
 llvm::Expected<HandlerResult> handleSOPP(RaiseContext &Ctx,
                                          const DecodedInst &Di, OpResolver &Op);
@@ -46,12 +37,8 @@ llvm::Expected<HandlerResult> handleDS(RaiseContext &Ctx, const DecodedInst &Di,
                                        OpResolver &Op);
 llvm::Expected<HandlerResult>
 handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di, OpResolver &Op);
-llvm::Expected<HandlerResult> handleMFMA(RaiseContext &Ctx,
-                                         const DecodedInst &Di, OpResolver &Op);
 llvm::Expected<HandlerResult> handleVOPD(RaiseContext &Ctx,
                                          const DecodedInst &Di, OpResolver &Op);
-llvm::Expected<HandlerResult>
-handleVIMAGE(RaiseContext &Ctx, const DecodedInst &Di, OpResolver &Op);
 
 } // namespace COMGR::hotswap
 

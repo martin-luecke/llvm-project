@@ -429,25 +429,8 @@ IntrinsicRole classifyIntrinsicUse(CallBase *CB, Value *V,
     return IntrinsicRole::SGPRForced; // indirect / unresolved
 
   Intrinsic::ID Id = Callee->getIntrinsicID();
-  if (Id == Intrinsic::not_intrinsic) {
-    // Salmon TDM emulation helpers are terminal sinks: they consume the
-    // four 20-SGPR descriptor groups (passed as <4 x i32> / <8 x i32> /
-    // <4 x i32> / <4 x i32>) plus the source wave size, then write to
-    // LDS / global memory and return void. The descriptor groups are
-    // uniform per workgroup by construction (the gfx1250 TDM HW reads
-    // them as SGPRs); the helpers do not produce a result that
-    // continues a cross-lane value's per-source-wave identity, so
-    // classifying these calls as VGPRSafeSink is correct -- the use
-    // chain terminates here and there is no SGPR-forced operand at the
-    // emulation level.  See `tdm-runtime.hpp` for the canonical
-    // helper-symbol names; matching by exact name avoids whitelisting
-    // arbitrary user-defined functions that happen to take these
-    // vector types.
-    StringRef name = Callee->getName();
-    if (name == "salmon_tdm_load_to_lds" || name == "salmon_tdm_store_from_lds")
-      return IntrinsicRole::VGPRSafeSink;
-    return IntrinsicRole::SGPRForced; // other ordinary call -- unknown
-  }
+  if (Id == Intrinsic::not_intrinsic)
+    return IntrinsicRole::SGPRForced; // ordinary call -- unknown
 
   if (operandForcesSGPR(Id, OperandIdx))
     return IntrinsicRole::SGPRForced;

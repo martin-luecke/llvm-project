@@ -38,7 +38,6 @@
 #include "rewrite-cross-lane-divergent.h"
 #include "setpc-analysis.h"
 #include "source-hidden-args.h"
-#include "tdm-runtime.h"
 #include "user-sgpr-layout.h"
 #include "wave-projection.h"
 #include "wave-size-obstruction.h"
@@ -968,11 +967,6 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
   // Build opcode -> CanonicalOp map from MCInstrInfo
   OpcodeMap OpcMap;
   OpcMap.build(*Mc.InstrInfo);
-
-  // Fail loudly if any MFMA-format CanonicalOp is missing a handler row. Cheap
-  // startup walk that catches table drift before any kernel is lifted.
-  if (llvm::Error MFMACovErr = verifyMFMACoverage(*Mc.InstrInfo, OpcMap))
-    return MFMACovErr;
 
   // Startup invariant: every MC opcode that implicitly defines EXEC must
   // map to a CanonicalOp that has `routesExecThroughStoreExec` set. Explicit-
@@ -1962,7 +1956,6 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
     // directly, rather than going through a hand-rolled FormatKind enum.
     // Check precedence mirrors LLVM's decoder:
     //   * VOPD first -- it has no TSFlags bit; detect by named-operand id.
-    //   * IsMAI before VOP3 -- MFMA is a VOP3 subclass with its own handler.
     //   * DPP / SDWA / VOPC / VOP3P / VOP3 / VOP2 / VOP1 all route to
     //     handleVALU, so they're collapsed into one mask test; ordering
     //     within the VOP family is therefore irrelevant here.
@@ -1982,8 +1975,6 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
 
       if (AMDGPU::isVOPD(Opc))
         return handleVOPD(Ctx, Di, Op);
-      else if (Flags & SIInstrFlags::IsMAI)
-        return handleMFMA(Ctx, Di, Op);
       else if (Flags & KValu)
         return handleVALU(Ctx, Di, Op);
       else if (Flags & SIInstrFlags::SOPP)
@@ -2004,20 +1995,6 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
         return handleMUBUF(Ctx, Di, Op);
       else if (Flags & SIInstrFlags::DS)
         return handleDS(Ctx, Di, Op);
-      // VIMAGE TENSOR pseudo-instructions (`tensor_load_to_lds_d{2,4}`,
-      // `tensor_store_from_lds_d{2,4}`, MIMGInstructions.td:2049-2113).
-      // The pseudo extends `InstSI` directly and only sets `let VALU =
-      // 1` and `let TENSOR_CNT = 1` (NOT `let VIMAGE = 1`), so the
-      // `SIInstrFlags::VIMAGE` bit stays 0 on these. Dispatch on
-      // `TENSOR_CNT` instead -- the only other carrier of that bit is
-      // `s_wait_tensorcnt` (SOPP), which is already claimed by the
-      // SOPP arm above and never reaches this fallthrough. Routed
-      // late because TENSOR ops are exclusive to the gfx1250
-      // (`isGFX125xOnly`) generation and the handler's only contract
-      // today is a cross-target loud refusal; the same gating applies
-      // when the same-target intrinsic-emit path lands.
-      else if (Flags & SIInstrFlags::TENSOR_CNT)
-        return handleVIMAGE(Ctx, Di, Op);
 
       std::string Format = formatName(Di.TsFlags, Opc);
       return RaiseFailure::unsupportedInstructionForm(Di, Format);
@@ -2457,20 +2434,6 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
 
   // ==== Phase 6.7: Link TDM emulation runtime ====
   // The cross-target VIMAGE handler emits calls to
-  // `hotswap_tdm_load_to_lds` / `hotswap_tdm_store_from_lds` (declared,
-  // no body) when the compilation target lacks the gfx1250 TENSORcnt
-  // unit. Link the embedded HIP-authored runtime bitcode in here so
-  // `verifyModule` sees a self-contained module and `llc` resolves the
-  // calls at codegen time. No-op when the handler did not emit any
-  // helper calls.
-  if (moduleUsesTDMRuntime(M)) {
-    if (Error Err = linkTDMRuntime(M, CompilationTargetIsa)) {
-      errs() << "transpiler: TDM runtime link failed for kernel '" << KernelName
-             << "': " << toStringWithoutConsuming(Err) << "\n";
-      return std::move(Err);
-    }
-  }
-
   // ==== Phase 7: Verify IR ====
   std::string VerifyErr;
   raw_string_ostream VerifyOs(VerifyErr);
