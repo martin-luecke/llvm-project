@@ -112,7 +112,7 @@ llvm::Expected<FileIdentity> statIdentity(llvm::StringRef path) {
   id.mtimeSec = static_cast<int64_t>(st.st_mtime);
   id.mtimeNsec = 0;
 #endif
-  auto hash = hashFile(id.path);
+  llvm::Expected<std::string> hash = hashFile(id.path);
   if (!hash)
     return llvm::createStringError(id.path + ": " +
                                    llvm::toString(hash.takeError()));
@@ -194,7 +194,8 @@ llvm::Expected<KeyData> buildKeyData(const TranslationCacheRequest &request,
   Timings.sourceHashSeconds = timingElapsed(CollectTimings, sourceHashStart);
 
   auto elfHeaderStart = timingStart(CollectTimings);
-  auto elfHeader = readElfHeaderFields(request.SourceObject);
+  llvm::Expected<ElfHeaderFields> elfHeader =
+      readElfHeaderFields(request.SourceObject);
   Timings.elfHeaderSeconds = timingElapsed(CollectTimings, elfHeaderStart);
   if (!elfHeader)
     return elfHeader.takeError();
@@ -203,7 +204,7 @@ llvm::Expected<KeyData> buildKeyData(const TranslationCacheRequest &request,
 
   if (!request.HotswapRulesPath.empty()) {
     auto rulesHashStart = timingStart(CollectTimings);
-    auto rulesHash = hashFile(request.HotswapRulesPath);
+    llvm::Expected<std::string> rulesHash = hashFile(request.HotswapRulesPath);
     Timings.rulesHashSeconds = timingElapsed(CollectTimings, rulesHashStart);
     if (!rulesHash)
       return llvm::createStringError(
