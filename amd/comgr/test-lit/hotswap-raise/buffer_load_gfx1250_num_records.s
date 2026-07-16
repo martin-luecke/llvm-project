@@ -6,7 +6,11 @@
 ; make.buffer.rsrc path. gfx1250 NUM_RECORDS is resource[101:57], split across
 ; word1[31:25] (7 low bits), word2 (32 middle bits) and word3[5:0] (6 high
 ; bits); it must be reconstructed, not read from word2 alone (a 128x-too-small
-; bound). Guards the reconstruction in decodeMubufAddr (mubuf-addr.cpp).
+; bound). The reconstruction is gated on the source ISA carrying a 45-bit
+; num_records field (Has45BitNumRecordsBufferResource); a gfx1250 source hits
+; it here. The reconstructed extent is then clamped to the gfx942 raw-buffer
+; max, which also maps the gfx12 all-ones "OOB disabled" encodings onto it.
+; Guards the reconstruction in decodeMubufAddr (mubuf-addr.cpp).
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
 	.text
@@ -25,10 +29,12 @@ buffer_load_gfx1250_num_records_kernel:
 ; word2 supplies the 32 middle bits (shifted left by the 7 low bits)
 ; CHECK: [[MID:%.+]] = shl i64 %{{.+}}, 7
 ; word3[5:0] -> 6 high bits at field position [44:39]
-; CHECK: and i64 %{{.+}}, 63
+; CHECK: and i32 {{.+}}, 63
 ; CHECK: shl i64 %{{.+}}, 39
 ; CHECK: %{{.+}} = or i64 %{{.+}}, %{{.+}}
-; the gfx1250 "unbounded" sentinel still remaps to the gfx942 max
+; the reconstructed extent is clamped to the gfx942 raw-buffer max (this also
+; folds the gfx12 all-ones "OOB disabled" encodings onto the max)
+; CHECK: icmp ugt i64 %{{.+}}, 2147483646
 ; CHECK: select i1 %{{.+}}, i64 2147483646, i64 %{{.+}}
 ; CHECK: call ptr addrspace(8) @llvm.amdgcn.make.buffer.rsrc.p8.p1(ptr addrspace(1) %{{.+}}, i16 0, i64 %{{.+}}, i32 159744)
 	buffer_load_dword v4, v1, s[0:3], null offen
