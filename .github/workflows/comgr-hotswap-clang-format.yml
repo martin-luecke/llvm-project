@@ -31,7 +31,7 @@ jobs:
 
       - name: Check formatting of changed hotswap files
         run: |
-          git-clang-format HEAD~1 HEAD -- amd/comgr/src/hotswap
+          git-clang-format HEAD~1 -- amd/comgr/src/hotswap
           if ! git diff --quiet; then
             echo "::group::clang-format diff"
             git --no-pager diff
