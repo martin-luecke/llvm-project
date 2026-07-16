@@ -18,7 +18,7 @@
 #include "wave-projection.h"
 
 #include "llvm/ADT/ArrayRef.h"
- #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
