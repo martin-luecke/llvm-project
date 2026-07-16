@@ -471,91 +471,99 @@ llvm::Error validateMetadata(const TranslationCacheRequest &request,
                              const llvm::json::Object &obj,
                              llvm::StringRef objectSha256, size_t objectSize,
                              PipelineResult &Result) {
-  if (auto e = requireEqualInt(obj, "schema_version", kCacheSchemaVersion))
+  if (llvm::Error e =
+          requireEqualInt(obj, "schema_version", kCacheSchemaVersion))
     return e;
-  if (auto e = requireEqualString(obj, "key", keyData.key))
+  if (llvm::Error e = requireEqualString(obj, "key", keyData.key))
     return e;
-  if (auto e =
+  if (llvm::Error e =
           requireEqualString(obj, "source_object_sha256", keyData.sourceSha256))
     return e;
-  if (auto e = requireEqualString(obj, "source_gfx", request.SourceGfx))
+  if (llvm::Error e = requireEqualString(obj, "source_gfx", request.SourceGfx))
     return e;
-  if (auto e = requireEqualString(obj, "target_gfx", request.TargetGfx))
+  if (llvm::Error e = requireEqualString(obj, "target_gfx", request.TargetGfx))
     return e;
-  if (auto e = requireEqualString(obj, "source_isa", request.SourceIsa))
+  if (llvm::Error e = requireEqualString(obj, "source_isa", request.SourceIsa))
     return e;
-  if (auto e = requireEqualString(obj, "target_isa", request.TargetIsa))
+  if (llvm::Error e = requireEqualString(obj, "target_isa", request.TargetIsa))
     return e;
-  if (auto e = requireEqualString(obj, "code_isa", request.CodeIsa))
+  if (llvm::Error e = requireEqualString(obj, "code_isa", request.CodeIsa))
     return e;
-  if (auto e = requireEqualString(obj, "elf_machine", keyData.elfMachineHex))
+  if (llvm::Error e =
+          requireEqualString(obj, "elf_machine", keyData.elfMachineHex))
     return e;
-  if (auto e = requireEqualString(obj, "elf_flags", keyData.elfFlagsHex))
+  if (llvm::Error e = requireEqualString(obj, "elf_flags", keyData.elfFlagsHex))
     return e;
-  if (auto e = requireEqualInt(obj, "orig_mach", request.OrigMach))
+  if (llvm::Error e = requireEqualInt(obj, "orig_mach", request.OrigMach))
     return e;
-  if (auto e = requireEqualInt(obj, "opt_level",
-                               static_cast<int64_t>(request.OptLevel)))
+  if (llvm::Error e = requireEqualInt(obj, "opt_level",
+                                      static_cast<int64_t>(request.OptLevel)))
     return e;
-  if (auto e = requireEqualString(obj, "hotswap_rules_path",
-                                  request.HotswapRulesPath))
+  if (llvm::Error e = requireEqualString(obj, "hotswap_rules_path",
+                                         request.HotswapRulesPath))
     return e;
-  if (auto e =
+  if (llvm::Error e =
           requireEqualString(obj, "hotswap_rules_sha256", keyData.rulesSha256))
     return e;
-  if (auto e = requireEqualBool(obj, "strict_mode", request.StrictMode))
+  if (llvm::Error e = requireEqualBool(obj, "strict_mode", request.StrictMode))
     return e;
-  if (auto e = requireEqualBool(obj, "enable_writelane_rewrite",
-                                request.EnableWritelaneRewrite))
+  if (llvm::Error e = requireEqualBool(obj, "enable_writelane_rewrite",
+                                       request.EnableWritelaneRewrite))
     return e;
-  if (auto e =
+  if (llvm::Error e =
           requireEqualBool(obj, "enable_wave_native", request.EnableWaveNative))
     return e;
-  if (auto e = requireEqualBool(obj, "assume_hip_global_offset_zero",
-                                request.AssumeHipGlobalOffsetZero))
+  if (llvm::Error e = requireEqualBool(obj, "assume_hip_global_offset_zero",
+                                       request.AssumeHipGlobalOffsetZero))
     return e;
-  if (auto e = requireEqualString(obj, "hotswap_build_identity",
-                                  keyData.buildIdentity))
+  if (llvm::Error e = requireEqualString(obj, "hotswap_build_identity",
+                                         keyData.buildIdentity))
     return e;
-  if (auto e = requireEqualString(obj, "device_libraries_identity",
-                                  keyData.deviceLibrariesIdentity))
+  if (llvm::Error e = requireEqualString(obj, "device_libraries_identity",
+                                         keyData.deviceLibrariesIdentity))
     return e;
-  if (auto e = validateKernelNameField(obj, request.KernelName))
+  if (llvm::Error e = validateKernelNameField(obj, request.KernelName))
     return e;
-  if (auto e =
+  if (llvm::Error e =
           requireEqualInt(obj, "kernel_count",
                           static_cast<int64_t>(keyData.kernelNames.size())))
     return e;
-  if (auto e = validateKernelArray(obj, keyData.kernelNames))
+  if (llvm::Error e = validateKernelArray(obj, keyData.kernelNames))
     return e;
-  if (auto e = requireEqualString(obj, "cached_object_sha256", objectSha256))
+  if (llvm::Error e =
+          requireEqualString(obj, "cached_object_sha256", objectSha256))
     return e;
-  if (auto e = requireEqualInt(obj, "cached_object_size",
-                               static_cast<int64_t>(objectSize)))
+  if (llvm::Error e = requireEqualInt(obj, "cached_object_size",
+                                      static_cast<int64_t>(objectSize)))
     return e;
 
-  auto lifted = requireInt(obj, "lifted_count");
+  llvm::Expected<int64_t> lifted = requireInt(obj, "lifted_count");
   if (!lifted)
     return lifted.takeError();
-  auto total = requireInt(obj, "total_count");
+  llvm::Expected<int64_t> total = requireInt(obj, "total_count");
   if (!total)
     return total.takeError();
-  auto c5Count = requireInt(obj, "c5_suppressed_count");
+  llvm::Expected<int64_t> c5Count = requireInt(obj, "c5_suppressed_count");
   if (!c5Count)
     return c5Count.takeError();
-  auto c5Reason = requireString(obj, "c5_suppression_reason");
+  llvm::Expected<std::string> c5Reason =
+      requireString(obj, "c5_suppression_reason");
   if (!c5Reason)
     return c5Reason.takeError();
-  auto usesScratch = requireBool(obj, "uses_scratch_private_segment");
+  llvm::Expected<bool> usesScratch =
+      requireBool(obj, "uses_scratch_private_segment");
   if (!usesScratch)
     return usesScratch.takeError();
-  auto sourceScratch = requireInt(obj, "source_private_segment_fixed_size");
+  llvm::Expected<int64_t> sourceScratch =
+      requireInt(obj, "source_private_segment_fixed_size");
   if (!sourceScratch)
     return sourceScratch.takeError();
-  auto targetScratch = requireInt(obj, "target_private_segment_fixed_size");
+  llvm::Expected<int64_t> targetScratch =
+      requireInt(obj, "target_private_segment_fixed_size");
   if (!targetScratch)
     return targetScratch.takeError();
-  auto targetEnable = requireBool(obj, "target_enable_private_segment");
+  llvm::Expected<bool> targetEnable =
+      requireBool(obj, "target_enable_private_segment");
   if (!targetEnable)
     return targetEnable.takeError();
 
