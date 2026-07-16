@@ -288,15 +288,13 @@ struct WmmaScaleInputs {
     auto unitScalePacked = [&](int64_t ScaleFmt) -> ConstantInt * {
       if (ScaleSrcIsI64) {
         uint64_t Byte = ScaleFmt == 2 /*E4M3*/ ? 0x38u : 0x7fu;
-        return ConstantInt::get(Ctx.I64Ty,
-                                Byte * 0x0101010101010101ULL);
+        return ConstantInt::get(Ctx.I64Ty, Byte * 0x0101010101010101ULL);
       }
       uint32_t Byte = ScaleFmt == 2 /*E4M3*/ ? 0x38u : 0x7fu;
       return ConstantInt::get(Ctx.I32Ty, Byte * 0x01010101U);
     };
 
-    auto readScaleSrc = [&](AMDGPU::OpName Name,
-                            int64_t ScaleFmt) -> Value * {
+    auto readScaleSrc = [&](AMDGPU::OpName Name, int64_t ScaleFmt) -> Value * {
       int Idx = AMDGPU::getNamedOperandIdx(Di.Inst.getOpcode(), Name);
       if (Idx < 0)
         return unitScalePacked(ScaleFmt);
@@ -1338,14 +1336,12 @@ Expected<HandlerResult> handleValuVoP3P(RaiseContext &Ctx,
       Function *WmmaFn = Intrinsic::getOrInsertDeclaration(
           &Ctx.M, Intrinsic::amdgcn_wmma_scale_f32_16x16x128_f8f6f4,
           {In.CdTy, In.ATy, In.BTy});
-      ResultVal = Ctx.B.CreateCall(WmmaFn,
-                                   {In.MatrixAFmt, In.A, In.MatrixBFmt, In.B,
-                                    In.CMod, In.C, In.MatrixAScale,
-                                    In.MatrixAScaleFmt, In.ScaleSrc0,
-                                    In.MatrixBScale, In.MatrixBScaleFmt,
-                                    In.ScaleSrc1, In.MatrixAReuse,
-                                    In.MatrixBReuse},
-                                   "wmma_scale");
+      ResultVal = Ctx.B.CreateCall(
+          WmmaFn,
+          {In.MatrixAFmt, In.A, In.MatrixBFmt, In.B, In.CMod, In.C,
+           In.MatrixAScale, In.MatrixAScaleFmt, In.ScaleSrc0, In.MatrixBScale,
+           In.MatrixBScaleFmt, In.ScaleSrc1, In.MatrixAReuse, In.MatrixBReuse},
+          "wmma_scale");
     } else if (Ctx.TargetIsa.HasGfx950Insts) {
       // Cross-target gfx1250 -> gfx950 path: WMMA-scale -> MFMA-scale.
       //
