@@ -782,6 +782,7 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
     case CanonicalOp::V_WMMA_I32_16x16x64_IU8:
     case CanonicalOp::V_WMMA_SCALE_F32_16x16x128_F8F6F4:
     case CanonicalOp::V_WMMA_SCALE16_F32_16x16x128_F8F6F4:
+    case CanonicalOp::V_WMMA_SCALE16_F32_32x16x128_F4:
       HaveWmma = true;
       break;
     default:

@@ -1641,6 +1641,12 @@ static const Entry kCanonTable[] = {
       V_WMMA_SCALE16_F32_16x16x128_F8F6F4),
     E(V_WMMA_SCALE16_F32_16X16X128_F8F6F4_f8_f8_w32_threeaddr,
       V_WMMA_SCALE16_F32_16x16x128_F8F6F4),
+    E(V_WMMA_SCALE16_F32_32X16X128_F4_w32_gfx1250,
+      V_WMMA_SCALE16_F32_32x16x128_F4),
+    E(V_WMMA_SCALE16_F32_32X16X128_F4_w32_twoaddr,
+      V_WMMA_SCALE16_F32_32x16x128_F4),
+    E(V_WMMA_SCALE16_F32_32X16X128_F4_w32_threeaddr,
+      V_WMMA_SCALE16_F32_32x16x128_F4),
     // ---------------------------------------------------------------------
     // VIMAGE TENSOR (gfx1250 RDNA4 -- VIMAGE 0xc4 / 0xc5).
     // The disassembler's MC opcodes are the `_gfx1250` reals

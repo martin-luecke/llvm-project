@@ -1613,8 +1613,13 @@ enum class CanonicalOp : uint16_t {
   // in software, and running the usual Wave32-to-Wave64 lane redistribution.
   //
   // V_WMMA_SCALE16_F32_16x16x128_F8F6F4 covers the full f8f6f4.
+  //
+  // V_WMMA_SCALE16_F32_32x16x128_F4 is the M=32 FP4 shape. Cross-target
+  // lowering splits the M dimension into two 16x16 SCALE16 passes and
+  // recombines the partial results.
   V_WMMA_SCALE16_F32_16x16x128_F8F6F4,
-  MATRIX_OP_END_SENTINEL = V_WMMA_SCALE16_F32_16x16x128_F8F6F4,
+  V_WMMA_SCALE16_F32_32x16x128_F4,
+  MATRIX_OP_END_SENTINEL = V_WMMA_SCALE16_F32_32x16x128_F4,
 
   // -- VOPD -- (handled via string parsing of fullText, not opcode)
   VOPD_GENERIC,

@@ -276,6 +276,15 @@ llvm::Expected<llvm::Value *> emitWMMAScale16F8F6F4toMFMA(
     llvm::Value *matrixBScaleFmt, llvm::Value *scaleSrc1, unsigned aDwords,
     unsigned bDwords);
 
+/// Cross-target gfx1250 -> gfx942 lowering for
+/// `v_wmma_scale16_f32_32x16x128_f4` (M=32 FP4). Splits the M dimension into
+/// two `emitWMMAScale16F8F6F4toMFMA` passes with fmt=FP4.
+llvm::Expected<llvm::Value *> emitWMMAScale16F32_32x16x128_F4toMFMA(
+    RaiseContext &ctx, llvm::Value *a, llvm::Value *b, llvm::Value *c,
+    llvm::Value *cMod, llvm::Value *matrixAScale, llvm::Value *matrixAScaleFmt,
+    llvm::Value *scaleSrc0, llvm::Value *matrixBScale,
+    llvm::Value *matrixBScaleFmt, llvm::Value *scaleSrc1);
+
 } // namespace COMGR::hotswap
 
 #endif
