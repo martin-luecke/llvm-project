@@ -334,8 +334,33 @@ Expected<MubufAddr> decodeMubufAddr(RaiseContext &Ctx, const DecodedInst &Di,
   Value *TargetMax = ConstantInt::get(Ctx.I32Ty, kGfx942RawBufferMaxRecords);
   Value *IsSourceMax =
       Ctx.B.CreateICmpEQ(Dw.Dw2, SourceMax, "mubuf_raw_is_gfx125_max");
-  Value *NumRecords = Ctx.B.CreateSelect(IsSourceMax, TargetMax, Dw.Dw2,
-                                         "mubuf_raw_num_records");
+  // gfx1250 raw-buffer NUM_RECORDS is resource[101:57]: a 45-bit byte count
+  // (for stride==0) split across three SRSRC words -- the 7 low bits in
+  // word1[31:25], the 32 middle bits in word2, and the 6 high bits in
+  // word3[5:0]. gfx942 NUM_RECORDS is just word2[31:0], so reading word2 alone
+  // drops the 7 low bits: the field shifted right by 7, a 128x-too-small bound.
+  // Reconstruct the full field; make.buffer.rsrc takes it as an i64.
+  llvm::IntegerType *I64 = Ctx.I64Ty;
+  constexpr unsigned kNrLoShift = 25; // resource bit 57 = word1 bit 25
+  constexpr unsigned kNrLoBits = 7;   // word1[31:25]
+  constexpr unsigned kNrHiBits = 6;   // word3[5:0]
+  constexpr unsigned kNrHiShift = kNrLoBits + 32; // field bits [44:39]
+  Value *NrLo =
+      Ctx.B.CreateAnd(Ctx.B.CreateLShr(Dw.Dw1, kNrLoShift),
+                      ConstantInt::get(Ctx.I32Ty, (1u << kNrLoBits) - 1));
+  Value *NrFull =
+      Ctx.B.CreateOr(Ctx.B.CreateZExt(NrLo, I64),
+                     Ctx.B.CreateShl(Ctx.B.CreateZExt(Dw.Dw2, I64),
+                                     ConstantInt::get(I64, kNrLoBits)));
+  Value *NrHi = Ctx.B.CreateAnd(Ctx.B.CreateZExt(Dw.Dw3, I64),
+                                ConstantInt::get(I64, (1u << kNrHiBits) - 1));
+  NrFull = Ctx.B.CreateOr(
+      NrFull, Ctx.B.CreateShl(NrHi, ConstantInt::get(I64, kNrHiShift)),
+      "mubuf_raw_num_records_full");
+  // Preserve the gfx1250 "effectively unbounded" sentinel remap to gfx942 max.
+  Value *NumRecords =
+      Ctx.B.CreateSelect(IsSourceMax, Ctx.B.CreateZExt(TargetMax, I64), NrFull,
+                         "mubuf_raw_num_records");
   Value *CleanDw1 =
       Ctx.B.CreateAnd(Dw.Dw1, ConstantInt::get(Ctx.I32Ty, 0xFFFF));
   Value *BaseLo = Ctx.B.CreateZExt(Dw.Dw0, Ctx.I64Ty);
@@ -349,8 +374,7 @@ Expected<MubufAddr> decodeMubufAddr(RaiseContext &Ctx, const DecodedInst &Di,
   Out.RawPtrRsrc =
       Ctx.B.CreateCall(MakeRsrc,
                        {BasePtr, ConstantInt::get(Type::getInt16Ty(Ctx.C), 0),
-                        Ctx.B.CreateZExt(NumRecords, Ctx.I64Ty),
-                        ConstantInt::get(Ctx.I32Ty, 0x27000)},
+                        NumRecords, ConstantInt::get(Ctx.I32Ty, 0x27000)},
                        "mubuf_raw_ptr_rsrc");
   Out.AuxFlags = ConstantInt::get(Ctx.I32Ty, 0);
   return Out;
