@@ -659,7 +659,10 @@ Expected<HandlerResult> handleDS(RaiseContext &Ctx, const DecodedInst &Di,
       }
     }
 
-    Value *Ptr = Ctx.B.CreateIntToPtr(Addr, PointerType::get(Ctx.C, 3));
+    // Neutralise a cross-widening inactive-lane undef LDS byte address before
+    // the pointer is materialised (see RaiseContext::freezeMemAddr).
+    Value *Ptr =
+        Ctx.B.CreateIntToPtr(Ctx.freezeMemAddr(Addr), PointerType::get(Ctx.C, 3));
 
     if (IsDsRead) {
       ParsedReg Dest = Op.dst();
@@ -742,7 +745,10 @@ Expected<HandlerResult> handleDS(RaiseContext &Ctx, const DecodedInst &Di,
         break;
       }
     }
-    Value *Ptr = Ctx.B.CreateIntToPtr(Addr, PointerType::get(Ctx.C, 3));
+    // Neutralise a cross-widening inactive-lane undef LDS byte address before
+    // the pointer is materialised (see RaiseContext::freezeMemAddr).
+    Value *Ptr =
+        Ctx.B.CreateIntToPtr(Ctx.freezeMemAddr(Addr), PointerType::get(Ctx.C, 3));
 
     ParsedReg StData = Op.srcReg(1);
     Value *Raw = Ctx.Regs.readReg32(Ctx.B, StData);
