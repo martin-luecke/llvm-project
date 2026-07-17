@@ -1,9 +1,9 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --enable-wave-native \
-; RUN:     --emit-ir=global_store_addr_freeze_kernel 2>/dev/null \
+; RUN:     --emit-ir=global_store_addr_freeze_kernel \
 ; RUN:   | %FileCheck %s --check-prefixes=WN,BOTH
 ; RUN: raise_cli %t.hsaco --target-isa=gfx942 --disable-wave-native \
-; RUN:   --emit-ir=global_store_addr_freeze_kernel 2>/dev/null \
+; RUN:   --emit-ir=global_store_addr_freeze_kernel \
 ; RUN:   | %FileCheck %s --check-prefixes=MR,BOTH
 ;
 ; A cross-widening (wave32 -> wave64) global-store address is frozen before the
