@@ -25,6 +25,7 @@
 #include "llvm/Support/AMDHSAKernelDescriptor.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/Process.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
@@ -46,6 +47,60 @@ namespace {
 
 // ds_bpermute addresses its source lane by byte: lane N reads byte N*4.
 constexpr unsigned kBpermuteLaneByteShift = 2;
+
+// Emit a side-effecting memory op body under the per-lane source-EXEC diamond
+// (`emitUnderExec`), hardened against back-end if-conversion when the target
+// wave fuses multiple source waves (wave-native wave32->wave64).
+//
+// Background: `emitUnderExec` lowers a per-lane predicate to `br i1 %active`.
+// For a diamond whose `then` block is a single load feeding a phi, the AMDGPU
+// back-end if-converts the hammock -- it drops the divergent branch and runs
+// the load unconditionally under the ambient wave EXEC (which is `-1` between
+// diamonds because wave-native seeds EXEC with `init_whole_wave`). On a single
+// source wave that is harmless: every lane in the wave is real and its address
+// is in bounds. But when two source waves are packed into one target wave, a
+// partial tail can pair a fully-in-bounds source wave with a source wave whose
+// lanes are past the problem size; those lanes carry intentionally out-of-range
+// addresses (a speculative pre-bounds-check load the source masks off later).
+// Running the if-converted load for them dereferences an OOB global address ->
+// HSA aperture violation, allocation-dependent (benign under a loose heap,
+// fatal under a packed one). See the reduce_kernel RMSNorm-variance case.
+//
+// Fix: when the projection fuses waves, nest the load body inside a second,
+// non-constant-foldable per-lane branch so the back-end cannot collapse the
+// hammock and must keep the EXEC-masking control flow. The inner predicate is
+// `lane_id < wave_size`, which is always true (so no real lane is ever dropped)
+// but is not provably-true to the optimizer, so the branch survives to codegen.
+// On single-source-wave projections this is a no-op (plain `emitUnderExec`).
+void emitMemOpUnderExecHardened(RaiseContext &Ctx,
+                                llvm::function_ref<void()> Body) {
+  // Escape hatch: fall back to the plain per-lane EXEC diamond. Set only for
+  // A/B measurement or if the hardening is ever suspected of a regression.
+  static const bool Disabled =
+      llvm::sys::Process::GetEnv("HSA_HOTSWAP_DISABLE_LOAD_ANTIFLATTEN")
+          .has_value();
+  if (Disabled || Ctx.Projection.numSourceWavesPerTarget() <= 1) {
+    Ctx.emitUnderExec(Body);
+    return;
+  }
+  Ctx.emitUnderExec([&] {
+    Value *Lane = Ctx.B.CreateZExtOrTrunc(Ctx.emitLaneIdx(), Ctx.I32Ty,
+                                          "antiflatten_lane");
+    unsigned TgtWave =
+        Ctx.TargetIsa.hasValidWaveSize() ? Ctx.TargetIsa.WaveSize : 64;
+    Value *Guard = Ctx.B.CreateICmpULT(
+        Lane, ConstantInt::get(Ctx.I32Ty, TgtWave), "antiflatten_guard");
+    BasicBlock *PredBb = Ctx.B.GetInsertBlock();
+    Function *Fn = PredBb->getParent();
+    BasicBlock *DoBb = BasicBlock::Create(Ctx.C, "memop_do", Fn);
+    BasicBlock *ContBb = BasicBlock::Create(Ctx.C, "memop_cont", Fn);
+    Ctx.B.CreateCondBr(Guard, DoBb, ContBb);
+    Ctx.B.SetInsertPoint(DoBb);
+    Body();
+    Ctx.B.CreateBr(ContBb);
+    Ctx.B.SetInsertPoint(ContBb);
+  });
+}
 
 // {lane index within its GroupSize-lane group, lane id of the group's
 // element 0}. GroupSize must be a power of two.
@@ -597,7 +652,7 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     // `ctx.writeReg32` (which would wrap the write in a nested
     // `emitUnderExec` -- harmless but redundant IR).
     bool CoherentSub = memScopeIsCoherent(Di);
-    Ctx.emitUnderExec([&] {
+    emitMemOpUnderExecHardened(Ctx, [&] {
       bool IsUnsigned = Sop == CanonicalOp::GLOBAL_LOAD_UBYTE ||
                         Sop == CanonicalOp::GLOBAL_LOAD_USHORT;
       Value *Loaded = Ctx.B.CreateAlignedLoad(LoadTy, Addr, LoadAlign,
@@ -646,7 +701,7 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     // single load + N extract-write pairs all go inside one
     // emitUnderExec block so inactive lanes skip the whole sequence.
     bool Coherent = memScopeIsCoherent(Di);
-    Ctx.emitUnderExec([&] {
+    emitMemOpUnderExecHardened(Ctx, [&] {
       if (LoadDwords == 1) {
         Ctx.Regs.writeReg32(
             Ctx.B, Dest,

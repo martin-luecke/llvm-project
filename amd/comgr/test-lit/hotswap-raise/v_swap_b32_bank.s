@@ -15,8 +15,14 @@ v_swap_b32_bank_kernel:
 	global_load_b32 v2, v0, s[2:3]
 	s_set_vgpr_msb 0x40
 	v_swap_b32 v1, v2
-	; CHECK: %[[V2LOAD:Vgpr2\.[0-9]+]] = phi i32 [ %{{[0-9]+}}, %spe_do{{[0-9]+}} ]
-	; CHECK: %[[V2SWAP:Vgpr2\.[0-9]+]] = phi i32 {{.*}}[ %[[V2LOAD]], %spe_skip{{[0-9]+}} ]
+	; Cross-widening (wave32->wave64) hardens global loads against back-end
+	; if-conversion by nesting them in a `memop_do`/`memop_cont` diamond inside
+	; the source-EXEC `spe_do` guard (see emitMemOpUnderExecHardened). The v2
+	; load result therefore lands in the memop_cont phi and propagates out
+	; through the spe_skip phi into the v_swap result.
+	; CHECK: %[[V2PROP:Vgpr2\.[0-9]+]] = phi i32 [ %[[V2LOAD:Vgpr2\.[0-9]+]], %memop_cont{{[0-9]+}} ]
+	; CHECK: %[[V2LOAD]] = phi i32 [ %{{[0-9]+}}, %memop_do{{[0-9]+}} ]
+	; CHECK: %[[V2SWAP:Vgpr2\.[0-9]+]] = phi i32 {{.*}}[ %[[V2PROP]], %spe_skip{{[0-9]+}} ]
 	s_set_vgpr_msb 0
 	global_store_b32 v0, v1, s[0:1]
 	global_store_b32 v0, v2, s[2:3]
