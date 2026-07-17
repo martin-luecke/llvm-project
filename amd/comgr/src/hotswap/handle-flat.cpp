@@ -1510,7 +1510,7 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     // stale data. FLAT (plain-VGPR64) loads can legitimately reach
     // LDS / private / global -- an out-of-range phantom-lane pointer
     // will still page-fault in whichever aperture it lands in.
-    Ctx.emitUnderExec([&] {
+    emitMemOpUnderExecHardened(Ctx, [&] {
       Value *Loaded = Ctx.B.CreateLoad(LoadTy, Addr, "flat_load_sub");
       bool IsUnsigned = Sop == CanonicalOp::FLAT_LOAD_UBYTE ||
                         Sop == CanonicalOp::FLAT_LOAD_USHORT;
@@ -1595,8 +1595,10 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     // load + N element-extract writes all live inside one
     // `emitUnderExec` block so inactive lanes skip the whole
     // sequence and the store phase's VGPR consumers observe the
-    // alloca state from the most recent active write.
-    Ctx.emitUnderExec([&] {
+    // alloca state from the most recent active write. A flat load can
+    // resolve to global memory, so it shares the GLOBAL_LOAD
+    // if-conversion hazard under wave fusion -- harden it the same way.
+    emitMemOpUnderExecHardened(Ctx, [&] {
       if (LoadDwords == 1) {
         Ctx.Regs.writeReg32(
             Ctx.B, Dest,
