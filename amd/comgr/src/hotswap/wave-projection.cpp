@@ -104,6 +104,28 @@ Value *ModuloReplicationProjection::emitWorkitemIdX(IRBuilder<> &B) const {
   return Raw;
 }
 
+Value *ModuloReplicationProjection::neutralizePhantomLaneValue(
+    IRBuilder<> &B, Value *V, const Twine &Name) const {
+  // Only the cross-widening phantom-lane regime has undispatched lanes to
+  // neutralise (see emitWorkitemIdX for the identical gate). Same-wave and
+  // fully-dispatched instantiations return V unchanged, keeping their codegen
+  // byte-identical.
+  if (!(Tgt.WaveSize > Src.WaveSize && MaxFlatWG > 0 &&
+        MaxFlatWG < Tgt.WaveSize))
+    return V;
+  // A lane is real (dispatched) iff its flat lane id is below the flattened
+  // workgroup size; the undispatched upper lanes [MaxFlatWG, WaveSize) hold
+  // undef VGPRs. Force those to 0 with a plain per-lane select -- no WWM, no
+  // EXEC scaffolding -- so the convergent swizzle can only ever read a benign
+  // 0 from a phantom lane. Value sibling of emitWorkitemIdX's phantom clamp.
+  Value *Limit = ConstantInt::get(I32Ty, MaxFlatWG);
+  Value *FlatLaneId = emitLaneIdx(B);
+  Value *IsRealLane =
+      B.CreateICmpULT(FlatLaneId, Limit, "phantom_neut_is_real_lane");
+  Value *Zero = ConstantInt::get(V->getType(), 0);
+  return B.CreateSelect(IsRealLane, V, Zero, Name);
+}
+
 // Bit offsets of the Y/Z fields in the packed kernel-entry v0 workitem id
 // (x[0:9] | y[10:19] | z[20:29])
 static constexpr unsigned WorkitemIdYBitOffset = 10;

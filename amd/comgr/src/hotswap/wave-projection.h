@@ -324,6 +324,27 @@ public:
   llvm::Value *wrapAsWWMValue(llvm::IRBuilder<> &B, llvm::Value *V,
                               const llvm::Twine &Name = "wwm") const;
 
+  // Neutralise the value carried by undispatched phantom lanes to a
+  // benign 0 before it feeds a *convergent* cross-lane op whose result
+  // can reach an observable value (an address in particular). The
+  // default (base / WaveNative) is the identity: WaveNative forces HW
+  // EXEC=-1 kernel-wide via `init_whole_wave`, so there are no phantom
+  // lanes, and same-wave raises have no upper half either.
+  // `ModuloReplicationProjection` overrides this in the cross-widening
+  // phantom-lane regime (`max_flat_workgroup_size < targetWaveSize`) to
+  // emit `select(lane_id < max_flat_workgroup_size, v, 0)` -- the value
+  // sibling of `emitWorkitemIdX`'s phantom clamp, a plain per-lane
+  // v_cndmask with no WWM / EXEC scaffolding. Convergent ops
+  // (`ds_swizzle`) run on all hardware lanes regardless of EXEC, so an
+  // undef phantom-lane input can otherwise fold into an active lane's
+  // reduction result and form a wild pointer (rocm-systems#156). See the
+  // ds_swizzle handler in handle-ds.cpp for the full rationale.
+  virtual llvm::Value *
+  neutralizePhantomLaneValue(llvm::IRBuilder<> &B, llvm::Value *V,
+                             const llvm::Twine &Name = "phantom_neut") const {
+    return V;
+  }
+
 protected:
   // Combine an already-projected workitem-id-x value with the native Y/Z
   // workitem-id fields into AMDGPU's packed `v0` layout
@@ -384,6 +405,12 @@ public:
   // rather than getting a stray non-zero Y/Z.
   llvm::Value *emitPackedWorkitemId(llvm::IRBuilder<> &B,
                                     unsigned NumDims) const override;
+
+  // Zero the value on undispatched phantom lanes before a convergent
+  // cross-lane op (rocm-systems#156). See the base declaration.
+  llvm::Value *neutralizePhantomLaneValue(
+      llvm::IRBuilder<> &B, llvm::Value *V,
+      const llvm::Twine &Name = "phantom_neut") const override;
 
   // MODREP in the cross-widening direction only instantiates when
   // `raiser.cpp` routes phantom-lane kernels here as the fallback,

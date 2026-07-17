@@ -1029,9 +1029,62 @@ Expected<HandlerResult> handleDS(RaiseContext &Ctx, const DecodedInst &Di,
     // EXEC gating: `amdgcn.ds.swizzle` is convergent (`isConvergent`
     // in DSInstructions.td); same convergence reasoning as the
     // `ds_bpermute` handler above applies -- emit OUTSIDE
-    // `emitUnderExec` so all hardware lanes participate, and trust
-    // that inactive-lane reads of the result do not feed any
-    // observable side effect under a correct source kernel.
+    // `emitUnderExec` so all hardware lanes participate.
+    //
+    // Phantom-lane input neutralisation (rocm-systems#156). The
+    // "trust that inactive-lane reads are harmless" assumption the
+    // `ds_bpermute` handler makes does NOT hold for `ds_swizzle` under
+    // the phantom-lane `ModuloReplicationProjection` fallback. There
+    // the upper target lanes (32..63 for a wave32 source WG on a
+    // wave64 target) carry NO source workitem: MODREP keeps them
+    // hardware-inactive kernel-wide (`providesFullWaveExecInvariant()
+    // == false`, see raiser.cpp's phantom-lane block), but their VGPRs
+    // hold undef / dispatcher state. `ds_swizzle` runs on all 64
+    // physical lanes regardless of EXEC, and while bit-5 preservation
+    // keeps the PERMUTATION within each 32-lane half (an active lane
+    // 0..31 only reads the value of another lane 0..31), a BITMASK_PERM
+    // butterfly REDUCTION XORs partner lanes together across the half.
+    // When the source WG is a full 32 (`max_flat_workgroup_size == 32`)
+    // every active lane's partner is itself active, so the permutation
+    // is safe; but the same undef-VGPR contamination the `ds_bpermute`
+    // /`ds_permute` selector rebases already guard against here reaches
+    // the swizzle DATA input, not a selector -- so a partial active
+    // mask (or any reduction that folds an inactive lane into an active
+    // one) lets an undef phantom value flow into an active lane's
+    // result, and if that result feeds a data-dependent global address
+    // the load faults (the pinned rocm-systems#120 Wan layer-norm
+    // reduction: undef -> `tl.where` -> `global_load_dwordx4` OOB).
+    //
+    // Fix: on the cross-widening MODREP path, force the swizzle input to
+    // a benign 0 on the undispatched phantom lanes (hardware lane id
+    // >= max_flat_workgroup_size) via `Projection.neutralizePhantom
+    // LaneValue` before the convergent swizzle. That helper is the value
+    // sibling of the `emitWorkitemIdX` phantom clamp already applied to
+    // undispatched lanes: a plain per-lane `select(lane_id <
+    // max_flat_workgroup_size, v, 0)` (no WWM / EXEC scaffolding), so a
+    // phantom lane can only ever contribute 0 -- a benign, deterministic
+    // value that cannot form a wild pointer -- through the butterfly,
+    // never undef. On WaveNative (and the base projection) the helper is
+    // the identity, so that path (which forces HW EXEC=-1 via
+    // `init_whole_wave`, leaving no phantom lanes) and the same-wave path
+    // keep byte-identical codegen.
+    //
+    // Why the flat-lane-id clamp and not an EXEC-mask predicate: under
+    // MODREP `emitLaneActiveBit` maps a phantom lane onto bit
+    // `lane_id mod W_src` of the source EXEC, so a phantom lane whose
+    // modulo-source lane is active would test *active* -- it does not
+    // identify phantom lanes. The undispatched-lane test
+    // (`lane_id >= max_flat_workgroup_size`) does, and matches the
+    // existing `emitWorkitemIdX` / modrep-predicate-chain.md contract.
+    // (An `llvm.amdgcn.set.inactive(v, 0)` would also zero the phantom
+    // lanes -- they are HW-inactive kernel-wide under MODREP -- but it
+    // forces every swizzle input into a `strict.wwm` bracket, and a
+    // reduction kernel has one swizzle per butterfly stage per element;
+    // the resulting hundreds of WWM regions make SIWholeQuadMode /
+    // SIPreAllocateWWMRegs codegen pathologically slow, the same
+    // failure mode `WaveProjection::emitInitialExec` documents for
+    // per-op WWM. The plain select avoids WWM entirely.)
+    //
     // The 16-bit imm is extracted once at decode time into
     // `di.dsSwizzleImm` (see `decode.cpp::decodeDsSwizzleImm`); the
     // decoder enforces the unsigned 16-bit range and refuses to
@@ -1070,6 +1123,11 @@ Expected<HandlerResult> handleDS(RaiseContext &Ctx, const DecodedInst &Di,
           "table mismatch");
     }
     Value *Src = Ctx.readOp32(Di, static_cast<unsigned>(AddrIdx));
+    // Neutralise phantom-lane input under cross-widening MODREP (see the
+    // block comment above): zero the undispatched upper lanes so their
+    // undef VGPR state cannot flow through the convergent swizzle into an
+    // active lane's result. Identity on WaveNative / same-wave.
+    Src = Ctx.Projection.neutralizePhantomLaneValue(Ctx.B, Src, "ds_swiz_neut");
     Function *Swiz =
         Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::amdgcn_ds_swizzle);
     Value *Result = Ctx.B.CreateCall(
