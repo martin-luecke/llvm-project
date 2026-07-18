@@ -69,6 +69,15 @@ struct AllocaRegFile {
   llvm::SmallVector<llvm::AllocaInst *> Agpr;
   llvm::SmallVector<llvm::AllocaInst *> Ttmp;
   llvm::AllocaInst *Vcc = nullptr;
+  // Full 64-bit shadow for VCC used as a general-purpose scalar. The register
+  // allocator can spill an ordinary 64-bit uniform value (e.g. a computed
+  // global address) into the VCC SGPR pair via `s_add_nc_u64 vcc, ...` /
+  // `s_lshl_b64 vcc, ...` and then consume it as a SADDR base in a
+  // `global_load_* vdst, vaddr, vcc`. The i1 `Vcc` mask model cannot hold
+  // those 64 bits, so 64-bit writes to VCC also record the raw value here and
+  // the flat/global address decoders read it back. Zero-initialised in init()
+  // so PromoteMemToReg can lift it (see getPromotableAllocas).
+  llvm::AllocaInst *VccScalar = nullptr;
   // Wave32-source scratch slot for the VCC_HI register (see ParsedReg::
   // VCC_HI_SCRATCH). Only used when the source ISA is wave32; on wave64
   // sources VCC_HI is a real half of the VCC mask and routes through Vcc.
@@ -168,6 +177,10 @@ struct AllocaRegFile {
 
   void storeVCC(llvm::IRBuilder<> &B, llvm::Value *V);
   llvm::Value *loadVCC(llvm::IRBuilder<> &B);
+  // Store/load the full 64-bit VCC-as-scalar shadow (see VccScalar). Used only
+  // for the general-purpose-scalar idiom, not for wave-mask semantics.
+  void storeVccScalar64(llvm::IRBuilder<> &B, llvm::Value *V);
+  llvm::Value *loadVccScalar64(llvm::IRBuilder<> &B);
   void storeSCC(llvm::IRBuilder<> &B, llvm::Value *V);
   llvm::Value *loadSCC(llvm::IRBuilder<> &B);
   llvm::Value *loadExec(llvm::IRBuilder<> &B);
