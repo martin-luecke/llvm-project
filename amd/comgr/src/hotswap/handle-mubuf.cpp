@@ -17,6 +17,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
+#include "llvm/Support/Process.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <cstring>
@@ -27,6 +28,69 @@
 using namespace llvm;
 
 namespace COMGR::hotswap {
+
+namespace {
+
+// Emit a MUBUF load body under the per-lane source-EXEC diamond
+// (`emitUnderExec`), hardened against back-end if-conversion when the target
+// wave fuses multiple source waves (wave-native wave32->wave64). This mirrors
+// the global/flat load hardening (`emitMemOpUnderExecHardened` in
+// handle-flat.cpp) for the buffer path.
+//
+// Background (rocgdb-pinned on the gemma vLLM prefill `_fwd_kernel`, gfx1250:32
+// -> gfx950): `emitUnderExec` lowers a per-lane predicate to `br i1 %active`.
+// For a diamond whose `then` block is a single buffer_load feeding a phi, the
+// AMDGPU back-end if-converts the hammock -- it drops the divergent branch and
+// runs the load unconditionally under the ambient wave EXEC, which is `-1`
+// between diamonds because wave-native seeds EXEC with `init_whole_wave`. On a
+// single source wave that is harmless. But when two source waves are packed
+// into one target wave, a partial tail pairs an in-bounds source wave with a
+// source wave whose lanes are past the problem size; those lanes carry
+// intentionally out-of-range offsets (a speculative pre-bounds-check load the
+// source masks off later, e.g. Triton attention K/V loads). Running the
+// if-converted load for them dereferences an out-of-bounds buffer address ->
+// HSA aperture / memory-access fault (rocgdb pin: `buffer_load_dwordx4 ...
+// offen`, exec = -1, all 64 lanes, per-lane offset 0x3fe0000). The gfx942
+// buffer NUM_RECORDS is large enough (~2 GiB after the gfx1250 45-bit
+// reconstruction) that the hardware OOB clamp does not catch this offset, so
+// the divergent branch must be preserved instead.
+//
+// Fix: when the projection fuses waves, nest the load body inside a second,
+// non-constant-foldable per-lane branch (`lane_id < wave_size`, always true but
+// not provably-true to the optimizer) so the back-end cannot collapse the
+// hammock and must keep the EXEC-masking control flow. On single-source-wave
+// projections this is a no-op (plain `emitUnderExec`).
+void emitMubufLoadUnderExecHardened(RaiseContext &Ctx,
+                                    llvm::function_ref<void()> Body) {
+  // Escape hatch shared with the flat-load hardening for A/B measurement.
+  static const bool Disabled =
+      llvm::sys::Process::GetEnv("HSA_HOTSWAP_DISABLE_LOAD_ANTIFLATTEN")
+          .has_value();
+  if (Disabled || Ctx.Projection.numSourceWavesPerTarget() <= 1) {
+    Ctx.emitUnderExec(Body);
+    return;
+  }
+  Ctx.emitUnderExec([&] {
+    Value *Lane = Ctx.B.CreateZExtOrTrunc(Ctx.emitLaneIdx(), Ctx.I32Ty,
+                                          "antiflatten_lane");
+    unsigned TgtWave =
+        Ctx.TargetIsa.hasValidWaveSize() ? Ctx.TargetIsa.WaveSize : 64;
+    Value *Guard = Ctx.B.CreateICmpULT(
+        Lane, ConstantInt::get(Ctx.I32Ty, TgtWave), "antiflatten_guard");
+    BasicBlock *PredBb = Ctx.B.GetInsertBlock();
+    Function *Fn = PredBb->getParent();
+    BasicBlock *DoBb = BasicBlock::Create(Ctx.C, "mubuf_memop_do", Fn);
+    BasicBlock *ContBb = BasicBlock::Create(Ctx.C, "mubuf_memop_cont", Fn);
+    Ctx.B.CreateCondBr(Guard, DoBb, ContBb);
+    Ctx.B.SetInsertPoint(DoBb);
+    Body();
+    Ctx.B.CreateBr(ContBb);
+    Ctx.B.SetInsertPoint(ContBb);
+  });
+}
+
+} // namespace
+
 Expected<HandlerResult> handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
                                     OpResolver &Op) {
   HandlerResult Hr;
@@ -128,7 +192,15 @@ Expected<HandlerResult> handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
       // Write the destination with `Ctx.Regs.write*` (the low-level
       // reg-file path) inside the body; `Ctx.writeReg*` would wrap it in a
       // second, redundant `emitUnderExec` diamond.
-      Ctx.emitUnderExec([&] {
+      //
+      // Use the if-conversion-hardened diamond (not a plain `emitUnderExec`):
+      // under wave-native wave32->wave64 the back-end otherwise if-converts a
+      // single-load hammock and runs the buffer_load under EXEC=-1, so a
+      // masked/out-of-range source lane's speculative offset dereferences an
+      // out-of-bounds buffer address -> memory-access fault (rocgdb-pinned on
+      // the gemma prefill `_fwd_kernel` on gfx950). See
+      // emitMubufLoadUnderExecHardened above and the flat/global sibling.
+      emitMubufLoadUnderExecHardened(Ctx, [&] {
         if (isSubDword) {
           // Load the sub-dword datum and zero/sign-extend to i32. For
           // plain ushort/sbyte/etc. (`d16Half == 0`) we then write the

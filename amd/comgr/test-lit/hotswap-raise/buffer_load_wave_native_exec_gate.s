@@ -28,7 +28,13 @@ buffer_load_wave_native_exec_gate_kernel:
 	s_mov_b32 s3, 0x27000
 	s_wait_kmcnt 0x0
 	; BOTH: [[LD:%.+]] = call i32 @llvm.amdgcn.raw.ptr.buffer.load.i32(
-	; BOTH: = phi i32 [ [[LD]], %spe_do{{.+}} ], [ undef, %spe_skip{{.+}} ]
+	; Under WaveNative the load is nested in the anti-if-conversion
+	; mubuf_memop_do/cont hammock (see handle-mubuf.cpp
+	; emitMubufLoadUnderExecHardened); under modulo-replication (no wave
+	; fusion) the anti-flatten is a no-op and the plain EXEC diamond
+	; (spe_do/spe_skip) is kept.
+	; WN: = phi i32 [ [[LD]], %mubuf_memop_do{{.*}} ], [ undef, %{{.+}} ]
+	; MR: = phi i32 [ [[LD]], %spe_do{{.+}} ], [ undef, %spe_skip{{.+}} ]
 	buffer_load_dword v4, v1, s[0:3], null offen
 	s_wait_loadcnt 0
 	buffer_store_dword v4, v1, s[0:3], null offen
