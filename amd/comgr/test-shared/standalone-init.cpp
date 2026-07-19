@@ -28,8 +28,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "comgr.h"
 #include "comgr-metadata.h"
+#include "comgr.h"
 
 #include "llvm/Support/TargetSelect.h"
 

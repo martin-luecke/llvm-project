@@ -7,13 +7,15 @@
 //===----------------------------------------------------------------------===//
 
 #include "user-sgpr-layout.h"
-#include "hotswap/raise-failure.h"
+#include "code-object-utils.h"
+#include "isa-profile.h"
+#include "raise-failure.h"
 
 #include "llvm/ADT/StringExtras.h"
-#include "llvm/ADT/Twine.h"
 #include "llvm/Support/AMDHSAKernelDescriptor.h"
-#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
+
+#include <cstddef>
 
 namespace COMGR::hotswap {
 

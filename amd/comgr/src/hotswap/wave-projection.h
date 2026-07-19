@@ -9,19 +9,22 @@
 #ifndef HOTSWAP_TRANSPILER_WAVE_PROJECTION_H
 #define HOTSWAP_TRANSPILER_WAVE_PROJECTION_H
 
-#include "decoded-inst.h"
 #include "isa-profile.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/IR/IRBuilder.h"
-#include "llvm/IR/Instructions.h"
-#include "llvm/IR/Type.h"
-#include "llvm/IR/Value.h"
+
+namespace llvm {
+class AllocaInst;
+class Type;
+class Value;
+} // namespace llvm
 
 namespace COMGR::hotswap {
 
+struct DecodedInst;
 struct MCState;
 
 // ============================================================================

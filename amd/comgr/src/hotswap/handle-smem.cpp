@@ -10,17 +10,45 @@
 #include "pipeline.h" // isStrictMode()
 #include "source-hidden-args.h"
 
+#include "canonical-op.h"
+#include "decoded-inst.h"
+#include "isa-profile.h"
+#include "kernarg-layout.h"
+#include "mc-state.h"
+#include "parsed-reg.h"
+#include "raise-context.h"
+#include "raise-failure.h"
+#include "reg-file.h"
+
 #include "Utils/AMDGPUBaseInfo.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
+#include "llvm/IR/Type.h"
+#include "llvm/IR/Value.h"
+#include "llvm/MC/MCInstrDesc.h"
+#include "llvm/MC/MCInstrInfo.h"
+#include "llvm/MC/MCRegisterInfo.h"
+#include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/Support/Alignment.h"
+#include "llvm/Support/AtomicOrdering.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
 #include <cassert>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
 #include <optional>
 
 #define DEBUG_TYPE "transpiler"

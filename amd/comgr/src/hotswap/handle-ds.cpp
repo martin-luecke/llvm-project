@@ -10,18 +10,29 @@
 
 #include "Utils/AMDGPUBaseInfo.h" // AMDGPU::getNamedOperandIdx
 #include "canonical-op.h"
+#include "decoded-inst.h"
+#include "isa-profile.h"
+#include "parsed-reg.h"
+#include "raise-context.h"
+#include "raise-failure.h"
+#include "reg-file.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
-#include "llvm/IR/Module.h"
-#include "llvm/Support/raw_ostream.h"
-#include <cstring>
-#include <map>
-#include <optional>
+#include "llvm/IR/Type.h"
+#include "llvm/MC/MCInst.h"
+#include "llvm/Support/Alignment.h"
+#include "llvm/Support/AtomicOrdering.h"
+#include "llvm/Support/Error.h"
+#include <cassert>
+#include <cstdint>
 #include <tuple>
 
 using namespace llvm;

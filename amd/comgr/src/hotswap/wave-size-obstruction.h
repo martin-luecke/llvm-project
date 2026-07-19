@@ -9,12 +9,9 @@
 #ifndef HOTSWAP_TRANSPILER_WAVE_SIZE_OBSTRUCTION_H
 #define HOTSWAP_TRANSPILER_WAVE_SIZE_OBSTRUCTION_H
 
-#include "decoded-inst.h"
-#include "isa-profile.h"
-#include "raise-failure.h"
-
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
 
 #include <cstdint>
@@ -22,6 +19,7 @@
 
 namespace COMGR::hotswap {
 
+struct DecodedInst;
 struct MCState;
 class WaveProjection;
 
@@ -205,7 +203,6 @@ enum class ObstructionKind : uint8_t {
 // Identifier for the rewrite rule that would discharge an obstruction
 // site. See the cross-lane rewrite table at
 // hotswap/docs/wave-size-translation.md.
-class WaveProjection;
 
 enum class RewriteId : uint8_t {
   None = 0,      // no rewrite available (outcome-c class).

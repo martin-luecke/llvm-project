@@ -88,13 +88,21 @@
 #include "reg-file.h"
 #include "tdm-runtime.h"
 
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
+#include "llvm/IR/Value.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/raw_ostream.h"
+
+#include <cstdint>
 
 using namespace llvm;
 

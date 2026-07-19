@@ -8,24 +8,32 @@
 
 #include "handlers.h"
 
+#include "SIDefines.h"
 #include "Utils/AMDGPUBaseInfo.h" // AMDGPU::getNamedOperandIdx, AMDGPU::OpName
-#include "amdgpu-formats.h"       // SIInstrFlags
 #include "canonical-op.h"
-#include "hotswap/raise-failure.h"
+#include "decoded-inst.h"
 #include "opcode-map.h"
+#include "parsed-reg.h"
+#include "raise-context.h"
+#include "raise-failure.h"
+#include "reg-file.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/FPEnv.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCInstrInfo.h"
-#include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/Error.h"
+
+#include <cstdint>
 
 using namespace llvm;
 

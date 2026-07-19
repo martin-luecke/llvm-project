@@ -6,6 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "hotswap/code-object-utils.h"
 #include "hotswap/kernarg-layout.h"
 
 #include "gtest/gtest.h"

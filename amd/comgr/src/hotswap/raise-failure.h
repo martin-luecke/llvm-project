@@ -15,6 +15,8 @@
 
 #include <cstdint>
 #include <string>
+#include <system_error>
+#include <utility>
 
 namespace llvm {
 class raw_ostream;

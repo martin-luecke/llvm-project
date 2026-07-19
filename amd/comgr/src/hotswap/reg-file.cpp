@@ -9,19 +9,24 @@
 #include "reg-file.h"
 
 #include "isa-profile.h"
+#include "parsed-reg.h"
 #include "wave-projection.h"
 
 #include "MCTargetDesc/AMDGPUMCTargetDesc.h" // AMDGPU::SGPR_32RegClassID, TTMP_32RegClassID
 
 #include "llvm/ADT/Twine.h"
-#include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Type.h"
+#include "llvm/IR/Value.h"
 #include "llvm/MC/MCRegisterInfo.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/TypeSize.h"
 
 #include <cassert>
+#include <cstddef>
 #include <string>
 
 using namespace llvm;

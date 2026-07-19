@@ -227,16 +227,35 @@ llvm_update_compile_flags(hotswap-transpiler)
 # these paths to compile against us.
 get_filename_component(HOTSWAP_COMGR_BINARY_DIR
   "${CMAKE_CURRENT_BINARY_DIR}/../.." ABSOLUTE)
+
+# Hotswap calls into comgr-metadata/comgr-symbol helpers, which transitively
+# include `comgr.h` -> `amd_comgr.h`. `amd_comgr.h` is generated from
+# `amd/comgr/include/amd_comgr.h.in`. In an in-tree / add_subdirectory build
+# the parent Comgr build configures it into `<comgr-binary>/include`; in a
+# standalone hotswap build (case 3) that step never runs, so generate it here
+# from the checked-in template.
+set(HOTSWAP_COMGR_INCLUDE_DIR "${HOTSWAP_COMGR_BINARY_DIR}/include")
+if(NOT EXISTS "${HOTSWAP_COMGR_INCLUDE_DIR}/amd_comgr.h")
+  get_filename_component(HOTSWAP_COMGR_SRC_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+  file(READ "${HOTSWAP_COMGR_SRC_DIR}/VERSION.txt" _comgr_ver_file)
+  string(REGEX MATCH "#COMGR_VERSION_MAJOR\n([0-9]*)" _ "${_comgr_ver_file}")
+  set(amd_comgr_VERSION_MAJOR "${CMAKE_MATCH_1}")
+  string(REGEX MATCH "#COMGR_VERSION_MINOR\n([0-9]*)" _ "${_comgr_ver_file}")
+  set(amd_comgr_VERSION_MINOR "${CMAKE_MATCH_1}")
+  set(amd_comgr_NAME "amd_comgr")
+  set(HOTSWAP_COMGR_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/comgr-include")
+  configure_file(
+    "${HOTSWAP_COMGR_SRC_DIR}/include/amd_comgr.h.in"
+    "${HOTSWAP_COMGR_INCLUDE_DIR}/amd_comgr.h" @ONLY)
+endif()
+
 target_include_directories(hotswap-transpiler PRIVATE
   "${LLVM_BUILD_MAIN_SRC_DIR}/lib/Target/AMDGPU"
   "${LLVM_BUILD_MAIN_SRC_DIR}/lib/Target/AMDGPU/Utils"
   "${LLVM_BINARY_DIR}/lib/Target/AMDGPU"
-  # Hotswap calls into comgr-metadata helpers (`metadata::walkElfMetadataIntoDoc`,
-  # `metadata::getElfIsaNameFromBuffer`), which transitively include
-  # `comgr.h` -> `amd_comgr.h`. The latter is configured from
-  # `amd/comgr/include/amd_comgr.h.in` into Comgr's binary `include/` dir.
   "${CMAKE_CURRENT_SOURCE_DIR}/.."
-  "${HOTSWAP_COMGR_BINARY_DIR}/include"
+  "${HOTSWAP_COMGR_INCLUDE_DIR}"
 )
 
 # Allow this static library to be linked into a shared library

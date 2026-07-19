@@ -15,9 +15,10 @@
 #define HOTSWAP_TRANSPILER_HANDLE_VALU_OUTPUT_MODS_H
 
 #include "canonical-op.h"
-#include "handlers.h"
+#include "decoded-inst.h"
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Error.h"
 
 namespace COMGR::hotswap {
 

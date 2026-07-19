@@ -8,18 +8,27 @@
 
 #include "tdm-runtime.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/Twine.h"
+#include "llvm/Analysis/InlineCost.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/IR/DerivedTypes.h"
-#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
+#include "llvm/IR/User.h"
+#include "llvm/IR/Value.h"
 #include "llvm/Linker/Linker.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/Cloning.h"
+
+#include <memory>
+#include <utility>
 
 // HOTSWAP_HAVE_TDM_RUNTIME is set to 1 by `CMakeLists.txt` when hipcc is
 // available at configure time and the embedded bitcode blob is generated

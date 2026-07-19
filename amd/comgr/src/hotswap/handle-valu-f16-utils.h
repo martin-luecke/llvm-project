@@ -24,11 +24,17 @@
 #ifndef HOTSWAP_TRANSPILER_HANDLE_VALU_F16_UTILS_H
 #define HOTSWAP_TRANSPILER_HANDLE_VALU_F16_UTILS_H
 
-#include "handle-valu-internal.h"
+#include "parsed-reg.h"
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/IR/Value.h"
+#include "llvm/Support/Error.h"
 
 namespace COMGR::hotswap {
+
+struct DecodedInst;
+struct OpResolver;
+struct RaiseContext;
 
 llvm::Error readRequiredVOP3F16SrcMods(const DecodedInst &Di, unsigned SrcIndex,
                                        llvm::StringRef OpName, unsigned &Mods);

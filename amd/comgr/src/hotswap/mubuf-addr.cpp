@@ -9,15 +9,27 @@
 #include "mubuf-addr.h"
 
 #include "Utils/AMDGPUBaseInfo.h" // AMDGPU::getNamedOperandIdx, AMDGPU::OpName::offset
+#include "decoded-inst.h"
+#include "isa-profile.h"
+#include "parsed-reg.h"
+#include "raise-context.h"
+#include "reg-file.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
+#include "llvm/IR/Type.h"
+#include "llvm/MC/MCInst.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <cstdint>
 #include <string>
 
 using namespace llvm;

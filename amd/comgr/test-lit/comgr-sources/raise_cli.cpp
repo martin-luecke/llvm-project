@@ -118,10 +118,10 @@
 // raiser.hpp forward-declares llvm::LLVMContext and llvm::Module but
 // RaiseResult holds them by unique_ptr, so the destructor synthesized in
 // main() needs the complete types.
+#include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/ScopeExit.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
@@ -130,8 +130,8 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
-#include <cerrno>
 #include <cctype>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -139,8 +139,8 @@
 #include <string>
 #include <sys/mman.h>
 #include <sys/wait.h>
-#include <utility>
 #include <unistd.h>
+#include <utility>
 
 namespace {
 

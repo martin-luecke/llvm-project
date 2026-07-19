@@ -22,16 +22,19 @@
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCDisassembler/MCDisassembler.h"
-#include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstPrinter.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSubtargetInfo.h"
-#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Error.h"
 
 #include <memory>
 #include <string>
+
+namespace llvm {
+class MCInst;
+class Target;
+} // namespace llvm
 
 namespace COMGR::hotswap {
 
