@@ -758,15 +758,15 @@ threadLoopUnsupportedWorkgroupMemoryOrBarrier(ArrayRef<DecodedInst> Insts,
 // Main raising function
 // ============================================================================
 
-static Expected<RaiseResult>
-raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
-              llvm::StringRef KernelName, const KernelMeta &Meta,
-              uint64_t KernelOffset, uint64_t KernelSize,
-              llvm::StringRef CompilationTargetIsa, bool EnableWritelaneRewrite,
-              bool EnableWaveNative, bool ForceThreadLoopProjection,
-              bool SuppressC5ForThreadLoopRoute, bool AssumeHipGlobalOffsetZero,
-              llvm::ArrayRef<KernelSymbolExtent> FunctionExtents,
-              RaiseStats *Stats) {
+static Expected<RaiseResult> raiseToIRImpl(
+    llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
+    llvm::StringRef KernelName, const KernelMeta &Meta, uint64_t KernelOffset,
+    uint64_t KernelSize, uint64_t TextBaseAddress,
+    llvm::ArrayRef<TextSection::ImageSection> SourceImageSections,
+    llvm::StringRef CompilationTargetIsa, bool EnableWritelaneRewrite,
+    bool EnableWaveNative, bool ForceThreadLoopProjection,
+    bool SuppressC5ForThreadLoopRoute, bool AssumeHipGlobalOffsetZero,
+    llvm::ArrayRef<KernelSymbolExtent> FunctionExtents, RaiseStats *Stats) {
   RaiseResult Result;
 
   // Reject obviously-bad ISA inputs before reaching the MC stack -- an
@@ -840,6 +840,14 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
     TargetSti = std::move(*StiOrErr);
     TargetIsa = ISAProfile::fromSubtarget(*TargetSti);
   }
+  if (!Isa.hasValidWaveSize())
+    return RaiseFailure::internalFailure(
+        "transpiler: source ISA profile has unsupported wave size " +
+        Twine(Isa.WaveSize));
+  if (!TargetIsa.hasValidWaveSize())
+    return RaiseFailure::internalFailure(
+        "transpiler: target ISA profile has unsupported wave size " +
+        Twine(TargetIsa.WaveSize));
 
   // LLVMContext + common IR types are created here (earlier than they used
   // to be) so the WaveProjection has access to i32/i64 before the cross-
@@ -1067,7 +1075,8 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
       // Decode from Addr up to the end of whichever region it belongs to: its
       // own already-known region if in-extent, otherwise the callee function
       // extent that contains it.
-      std::optional<std::pair<uint64_t, uint64_t>> Region = RegionContaining(Addr);
+      std::optional<std::pair<uint64_t, uint64_t>> Region =
+          RegionContaining(Addr);
       bool NewCallee = false;
       if (!Region) {
         Region = FunctionExtentContaining(Addr);
@@ -1079,10 +1088,9 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
             "s_set_pc_i64 analysis discovered a target outside the selected "
             "kernel extent and any known function symbol");
       }
-      Expected<DecodeResult> HelperDecodedOrErr =
-          decodeKernel(Mc, OpcMap,
-                       ArrayRef<uint8_t>(TextBytes.data(), TextBytes.size()),
-                       Addr, Region->second, Region->first);
+      Expected<DecodeResult> HelperDecodedOrErr = decodeKernel(
+          Mc, OpcMap, ArrayRef<uint8_t>(TextBytes.data(), TextBytes.size()),
+          Addr, Region->second, Region->first);
       if (!HelperDecodedOrErr)
         return HelperDecodedOrErr.takeError();
       DecodeResult HelperDecoded = std::move(*HelperDecodedOrErr);
@@ -1110,6 +1118,14 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
           "selected kernel extent and any known function symbol");
     }
     BlockStarts.insert(Addr);
+  }
+  for (const auto &Site : SetpcAnalysis.SetpcSites) {
+    const SetPcSiteInfo::Kind Kind = Site.second.SiteKind;
+    if (Kind == SetPcSiteInfo::Kind::IndirectB ||
+        Kind == SetPcSiteInfo::Kind::DispatchSet) {
+      Result.HasEnumeratedSetpcDispatch = true;
+      break;
+    }
   }
 
   if (Stats)
@@ -1183,12 +1199,12 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
       // `detail` so diagnostics can carry the per-site context forward without
       // re-invoking the classifier.
       errs() << "transpiler: pre-translation abort: "
-             << llvm::toStringWithoutConsuming(F) << " \u2014 "
+             << llvm::toStringWithoutConsuming(F) << " -- "
              << (Report.firstUnrewritable()
                      ? "no rewrite in wave-size-translation.md "
-                       "\u00a77's unrewritable table"
+                       "sec. 7's unrewritable table"
                      : "rewrite pending (wave-size-translation.md "
-                       "\u00a77's pending-rewrite table)")
+                       "sec. 7's pending-rewrite table)")
              << "\n"
              << Trace;
       return std::move(F);
@@ -1740,6 +1756,9 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
                    F,
                    nullptr,
                    OffsetToBb,
+                   ArrayRef<uint8_t>(TextBytes.data(), TextBytes.size()),
+                   TextBaseAddress,
+                   SourceImageSections,
                    KernelOffset,
                    KernelEndOffset};
   Ctx.SetpcAnalysis = &SetpcAnalysis;
@@ -1764,15 +1783,24 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
   // carrying non-dominating SSA values in `lastSgprWaveMaskI1`.
   Ctx.SgprWaveMaskExecShadow.reserve(Regs.Sgpr.size());
   Ctx.SgprWaveMaskValidShadow.reserve(Regs.Sgpr.size());
+  Ctx.SourceWaveSgprPairShadow.reserve(Regs.Sgpr.size());
+  Ctx.SourceWaveSgprPairValidShadow.reserve(Regs.Sgpr.size());
   for (unsigned I = 0; I < Regs.Sgpr.size(); ++I) {
-    auto *MaskA = B.CreateAlloca(Regs.ExecTy, nullptr,
-                                 "sgpr_mask_shadow_" + std::to_string(I));
-    auto *ValidA =
-        B.CreateAlloca(I1Ty, nullptr, "sgpr_mask_valid_" + std::to_string(I));
+    auto *MaskA =
+        B.CreateAlloca(Regs.ExecTy, nullptr, "sgpr_mask_shadow_" + Twine(I));
+    auto *ValidA = B.CreateAlloca(I1Ty, nullptr, "sgpr_mask_valid_" + Twine(I));
+    auto *PairA =
+        B.CreateAlloca(I64Ty, nullptr, "source_wave_sgpr_pair_" + Twine(I));
+    auto *PairValidA = B.CreateAlloca(
+        I1Ty, nullptr, "source_wave_sgpr_pair_valid_" + Twine(I));
     B.CreateStore(ConstantInt::get(Regs.ExecTy, 0), MaskA);
     B.CreateStore(B.getFalse(), ValidA);
+    B.CreateStore(ConstantInt::get(I64Ty, 0), PairA);
+    B.CreateStore(B.getFalse(), PairValidA);
     Ctx.SgprWaveMaskExecShadow.push_back(MaskA);
     Ctx.SgprWaveMaskValidShadow.push_back(ValidA);
+    Ctx.SourceWaveSgprPairShadow.push_back(PairA);
+    Ctx.SourceWaveSgprPairValidShadow.push_back(PairValidA);
   }
 
   llvm::Error RaiseReadFailure = llvm::Error::success();
@@ -1809,6 +1837,12 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
   // wave-mask-translation.md section 3.1 for the full contract.
   Regs.OnSgprWritten = [&Ctx](int Idx) { Ctx.invalidateSgprWaveMaskI1(Idx); };
 
+  // Wire the reg-file's M0-write hook to ctx's raise-time M0 constant
+  // shadow. Fires on every M0 store; a constant store records the value,
+  // any other store clears it. The v_movrel* handlers consult
+  // `Ctx.getM0Const()` to resolve the M0-relative VGPR index statically.
+  Regs.OnM0Written = [&Ctx](llvm::Value *V) { Ctx.updateM0Const(V); };
+
   if (UseThreadLoop) {
     auto *IterA = B.CreateAlloca(I32Ty, nullptr, "tl_iter_alloca");
     B.CreateStore(B.getInt32(0), IterA);
@@ -1835,6 +1869,8 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
       return Err;
 
     for (auto *ValidA : Ctx.SgprWaveMaskValidShadow)
+      B.CreateStore(B.getFalse(), ValidA);
+    for (auto *ValidA : Ctx.SourceWaveSgprPairValidShadow)
       B.CreateStore(B.getFalse(), ValidA);
 
     B.CreateCondBr(EnterBody, OffsetToBb[KernelOffset], LatchBb);
@@ -1901,6 +1937,8 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
       // to a proper per-BB merge (see sgpr-wave-mask-translation.md
       // section 7 evolution path).
       Ctx.clearSgprWaveMaskShadow();
+      // M0's raise-time constant shadow only dominates within its BB.
+      Ctx.clearM0Const();
     }
 
     if (Error E = Ctx.computeVGPRAdjust(Di))
@@ -2023,18 +2061,13 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
       Result.HasDivergentExec = true;
     // Pattern B call-site post-processing: if this s_add_co_ci_u32
     // is the high-half terminator of a getpc+add chain that feeds
-    // a Pattern B `s_set_pc_i64` enumerated-dispatch cascade (i.e.
+    // a Pattern B `s_set_pc_i64` enumerated dispatch (i.e.
     // some downstream s_set_pc_i64 reads the same ret-pair this
     // chain populated), overwrite the ret-pair SGPR with the plain
     // i64 marker `resolvedReturnAddr` -- i.e. the source-MC byte
     // offset of the BB this chain meant to return to. The
-    // downstream cascade compares against the same offsets via
-    // `icmp eq i64 %marker, <offset_k>` for each enumerated
-    // target; when this predecessor's marker matches one of the
-    // enumerated offsets, mem2reg + SCCP + InstCombine fold the
-    // compare to `i1 true` across the phi join and SimplifyCFG
-    // collapses the cmp+br cascade into a direct
-    // `br label %BB_<offset>`. The SOP2 handler has already done
+    // downstream switch compares against the same offsets for each
+    // enumerated target. The SOP2 handler has already done
     // its (binary-PC-producing) arithmetic above; this commit
     // happens *after* and clobbers that result on purpose -- that
     // value was an opaque runtime PC we never want to see
@@ -2042,7 +2075,7 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
     //
     // An earlier revision of this hook wrote
     // `ptrtoint(blockaddress(@kernel, %BB_returnAddr)) to i64`
-    // here so the cascade could compare against a `blockaddress`
+    // here so the dispatch could compare against a `blockaddress`
     // constant. That form survived mem2reg + SCCP unfolded in
     // irreducible tensilelite-shaped CFGs (the `storeSGPR64`
     // hi/lo split prevented the cross-phi fold), leaving a
@@ -2054,12 +2087,12 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
     // codegen pattern), sidestepping the ISel crash entirely.
     // See setpc-analysis.h + canonical-op.h's S_SET_PC_I64 doc +
     // `emitEnumeratedDispatch` in handle-sop1.cpp.
-    if (Di.CanonOp == CanonicalOp::S_ADDC_U32) {
+    if (Di.CanonOp == CanonicalOp::S_ADDC_U32 ||
+        Di.CanonOp == CanonicalOp::S_ADD_NC_U64) {
       auto It = SetpcAnalysis.ChainTerminators.find(Di.Offset);
       if (It != SetpcAnalysis.ChainTerminators.end()) {
-        // Force the BB to exist so the downstream cascade's
-        // direct branch has a destination; we don't use the
-        // pointer here.
+        // Force the BB to exist so the downstream switch case has a
+        // destination; we don't use the pointer here.
         (void)Ctx.lookupBB(It->second.ResolvedReturnAddr);
         Value *RetMarker =
             ConstantInt::get(Ctx.I64Ty, It->second.ResolvedReturnAddr);
@@ -2196,8 +2229,12 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
     // refinement. See the rewrite's header comment for the contract
     // (nullable -- null disables the gate and falls back to the
     // conservative pre-UA refusal behaviour).
+    // `providesFullWaveExecInvariant()` governs whether the readlane /
+    // readfirstlane `ds_bpermute` gathers are forced whole-wave; see the
+    // rewrite's header comment for the ignore-EXEC rationale.
     Expected<CrossLaneDivergentRewriteReport> RewriteReportOrErr =
         rewriteCrossLaneDivergent(*F, Isa.WaveSize, TargetIsa.WaveSize,
+                                  Projection.providesFullWaveExecInvariant(),
                                   Tm.get());
     if (!RewriteReportOrErr)
       return RewriteReportOrErr.takeError();
@@ -2227,7 +2264,8 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
         errs() << "transpiler: thread-loop fallback trigger: "
                << RewriteReport.SgprForcedDetail << "\n";
         return raiseToIRImpl(TextBytes, SourceIsa, KernelName, Meta,
-                             KernelOffset, KernelSize, CompilationTargetIsa,
+                             KernelOffset, KernelSize, TextBaseAddress,
+                             SourceImageSections, CompilationTargetIsa,
                              /*enableWritelaneRewrite=*/false,
                              /*enableWaveNative=*/false,
                              /*forceThreadLoopProjection=*/true,
@@ -2254,8 +2292,8 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
     }
 
     // Unsupported `dpp_ctrl` on an i32 update.dpp site -- the rewrite
-    // family covers quad_perm / row_shl / row_shr / row_xmask today
-    // (all stay within a single 16-lane row).  Any ctrl outside that
+    // family covers quad_perm / row_shl / row_shr / row_xmask / row_ror
+    // today (all stay within a single 16-lane row).  Any ctrl outside that
     // set is either wave-size-dependent (wave_* shifts / rotations)
     // or hasn't been audited yet (row_mirror / row_half_mirror /
     // row_share).  Refusing loudly surfaces the demand so the next
@@ -2289,12 +2327,12 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
           KernelName,
           "classifier matched WaveIdLiftScalarized on " +
               Twine(ClassifierWaveIdLiftScalarizedSites) +
-              " site(s) but rewriteCrossLaneDivergent rewrote 0 \u2014 the "
+              " site(s) but rewriteCrossLaneDivergent rewrote 0 -- the "
               "raised IR is missing the writelane/readlane intrinsic(s) "
               "that the decoded instruction stream contained. This is a "
               "handler-emission regression, not a classifier/rewrite "
               "disagreement. Refusing rather than risk a silent "
-              "miscompile (see wave-size-translation.md \u00a75.6.3).");
+              "miscompile (see wave-size-translation.md sec. 5.6.3).");
       errs() << "transpiler: post-raise abort: "
              << llvm::toStringWithoutConsuming(F) << "\n";
       return std::move(F);
@@ -2420,7 +2458,8 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
           errs() << "transpiler: thread-loop fallback trigger: "
                  << PredReport.RefusalDetail << "\n";
           return raiseToIRImpl(TextBytes, SourceIsa, KernelName, Meta,
-                               KernelOffset, KernelSize, CompilationTargetIsa,
+                               KernelOffset, KernelSize, TextBaseAddress,
+                               SourceImageSections, CompilationTargetIsa,
                                /*enableWritelaneRewrite=*/false,
                                /*enableWaveNative=*/false,
                                /*forceThreadLoopProjection=*/true,
@@ -2475,29 +2514,32 @@ llvm::Expected<RaiseResult>
 raiseToIR(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
           llvm::StringRef KernelName, const KernelMeta &Meta,
           llvm::StringRef CompilationTargetIsa, bool EnableWritelaneRewrite,
-          bool EnableWaveNative, RaiseStats *Stats) {
+          bool EnableWaveNative, uint64_t TextBaseAddress,
+          llvm::ArrayRef<TextSection::ImageSection> SourceImageSections,
+          RaiseStats *Stats) {
   return raiseToIR(TextBytes, SourceIsa, KernelName, Meta,
                    /*KernelOffset=*/0,
                    /*KernelSize=*/0, CompilationTargetIsa,
                    EnableWritelaneRewrite, EnableWaveNative,
-                   /*AssumeHipGlobalOffsetZero=*/false, /*FunctionExtents=*/{},
-                   Stats);
+                   /*AssumeHipGlobalOffsetZero=*/false, TextBaseAddress,
+                   SourceImageSections, /*FunctionExtents=*/{}, Stats);
 }
 
-llvm::Expected<RaiseResult>
-raiseToIR(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
-          llvm::StringRef KernelName, const KernelMeta &Meta,
-          uint64_t KernelOffset, uint64_t KernelSize,
-          llvm::StringRef CompilationTargetIsa, bool EnableWritelaneRewrite,
-          bool EnableWaveNative, bool AssumeHipGlobalOffsetZero,
-          llvm::ArrayRef<KernelSymbolExtent> FunctionExtents,
-          RaiseStats *Stats) {
-  return raiseToIRImpl(
-      TextBytes, SourceIsa, KernelName, Meta, KernelOffset, KernelSize,
-      CompilationTargetIsa, EnableWritelaneRewrite, EnableWaveNative,
-      /*forceThreadLoopProjection=*/false,
-      /*suppressC5ForThreadLoopRoute=*/false, AssumeHipGlobalOffsetZero,
-      FunctionExtents, Stats);
+llvm::Expected<RaiseResult> raiseToIR(
+    llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
+    llvm::StringRef KernelName, const KernelMeta &Meta, uint64_t KernelOffset,
+    uint64_t KernelSize, llvm::StringRef CompilationTargetIsa,
+    bool EnableWritelaneRewrite, bool EnableWaveNative,
+    bool AssumeHipGlobalOffsetZero, uint64_t TextBaseAddress,
+    llvm::ArrayRef<TextSection::ImageSection> SourceImageSections,
+    llvm::ArrayRef<KernelSymbolExtent> FunctionExtents, RaiseStats *Stats) {
+  return raiseToIRImpl(TextBytes, SourceIsa, KernelName, Meta, KernelOffset,
+                       KernelSize, TextBaseAddress, SourceImageSections,
+                       CompilationTargetIsa, EnableWritelaneRewrite,
+                       EnableWaveNative,
+                       /*forceThreadLoopProjection=*/false,
+                       /*suppressC5ForThreadLoopRoute=*/false,
+                       AssumeHipGlobalOffsetZero, FunctionExtents, Stats);
 }
 
 } // namespace COMGR::hotswap

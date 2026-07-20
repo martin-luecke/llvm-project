@@ -143,6 +143,31 @@ Value *emitD16HiHalfTruncI8(RaiseContext &Ctx, Value *Src32) {
   return Ctx.B.CreateTrunc(Shifted, Type::getInt8Ty(Ctx.C), "d16hi_trunc");
 }
 
+// True when a global/flat memory op's cpol scope is coherent beyond the CU,
+// i.e. any of SCOPE_SE / SCOPE_DEV / SCOPE_SYS. The lift models these as
+// *volatile* LLVM accesses so the AMDGPU backend keeps them coherent and the
+// optimizer cannot hoist/CSE/eliminate them; treating a wider-than-CU scope as
+// plain would drop a cross-workgroup handshake (see the commit that added
+// this). Only SCOPE_CU / default cpol keeps the plain, optimizable access. An
+// unknown scope value is impossible (SCOPE is a 2-bit field), so it is
+// asserted.
+bool memScopeIsCoherent(const DecodedInst &Di) {
+  std::optional<int64_t> Cpol =
+      readNamedImmOperand(Di, llvm::AMDGPU::OpName::cpol);
+  if (!Cpol)
+    return false;
+  uint64_t Scope = static_cast<uint64_t>(*Cpol) & llvm::AMDGPU::CPol::SCOPE;
+  switch (Scope) {
+  case llvm::AMDGPU::CPol::SCOPE_CU:
+    return false;
+  case llvm::AMDGPU::CPol::SCOPE_SE:
+  case llvm::AMDGPU::CPol::SCOPE_DEV:
+  case llvm::AMDGPU::CPol::SCOPE_SYS:
+    return true;
+  }
+  llvm_unreachable("SCOPE is a 2-bit field; all four values are enumerated");
+}
+
 int64_t firstScratchImm(const DecodedInst &Di, OpResolver &Op,
                         unsigned ImmStart) {
   for (unsigned K = ImmStart; K < Op.nSrcs(); ++K) {
@@ -258,6 +283,46 @@ Expected<Value *> decodeScratchOffset(RaiseContext &Ctx, const DecodedInst &Di,
   return Ctx.B.CreateGEP(Ctx.I8Ty, *Frame, Offset, "scratch_ptr");
 }
 
+// Lower a FLAT cache-control op (global_wb / global_inv) to a scoped fence.
+// Writeback carries release ordering, invalidate carries acquire.  CU scope
+// has no cross-wave cache level and is a no-op; DEV maps to an agent-scoped
+// fence and SYS to a system-scoped fence; SE has no gfx942 representation.
+Expected<HandlerResult> lowerFlatCacheControlFence(RaiseContext &Ctx,
+                                                   const DecodedInst &Di,
+                                                   AtomicOrdering Ordering) {
+  HandlerResult Hr;
+  std::optional<int64_t> Cpol = readNamedImmOperand(Di, AMDGPU::OpName::cpol);
+  if (!Cpol) {
+    return RaiseFailure::unsupportedInstructionForm(
+        Di, "FLAT", "missing immediate cpol/scope operand");
+  }
+
+  uint64_t RawCpol = static_cast<uint64_t>(*Cpol);
+  if ((RawCpol & ~static_cast<uint64_t>(AMDGPU::CPol::SCOPE)) != 0) {
+    return RaiseFailure::unsupportedInstructionForm(
+        Di, "FLAT", "cache-policy bits outside SCOPE are not modelled");
+  }
+
+  switch (RawCpol & AMDGPU::CPol::SCOPE) {
+  case AMDGPU::CPol::SCOPE_CU:
+    break;
+  case AMDGPU::CPol::SCOPE_DEV:
+    Ctx.B.CreateFence(Ordering, Ctx.C.getOrInsertSyncScopeID("agent"));
+    break;
+  case AMDGPU::CPol::SCOPE_SYS:
+    Ctx.B.CreateFence(Ordering, SyncScope::System);
+    break;
+  case AMDGPU::CPol::SCOPE_SE:
+    return RaiseFailure::unsupportedInstructionForm(
+        Di, "FLAT", "SCOPE_SE cannot be represented by gfx942 fences");
+  default:
+    llvm_unreachable("CPol SCOPE field has only four encodings");
+  }
+
+  Hr.Handled = true;
+  return Hr;
+}
+
 } // namespace
 
 Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
@@ -266,45 +331,11 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
   StringRef Mn(Di.Mnemonic);
   CanonicalOp Sop = Di.CanonOp;
 
-  if (Sop == CanonicalOp::GLOBAL_WB) {
-    std::optional<int64_t> Cpol = readNamedImmOperand(Di, AMDGPU::OpName::cpol);
-    if (!Cpol) {
-      return RaiseFailure::unsupportedInstructionForm(
-          Di, "FLAT", "global_wb missing immediate cpol/scope operand");
-    }
+  if (Sop == CanonicalOp::GLOBAL_WB)
+    return lowerFlatCacheControlFence(Ctx, Di, AtomicOrdering::Release);
 
-    uint64_t RawCpol = static_cast<uint64_t>(*Cpol);
-    uint64_t Scope = RawCpol & AMDGPU::CPol::SCOPE;
-    if ((RawCpol & ~static_cast<uint64_t>(AMDGPU::CPol::SCOPE)) != 0) {
-      return RaiseFailure::unsupportedInstructionForm(
-          Di, "FLAT",
-          "global_wb cache-policy bits outside SCOPE are not modelled");
-    }
-
-    // CU-scope writeback is a no-op that still returns "done"; there is no
-    // target cache operation to preserve.
-    if (Scope == AMDGPU::CPol::SCOPE_CU) {
-      Hr.Handled = true;
-      return Hr;
-    }
-
-    if (Scope == AMDGPU::CPol::SCOPE_DEV) {
-      SyncScope::ID AgentScope = Ctx.C.getOrInsertSyncScopeID("agent");
-      Ctx.B.CreateFence(AtomicOrdering::Release, AgentScope);
-      Hr.Handled = true;
-      return Hr;
-    }
-
-    if (Scope == AMDGPU::CPol::SCOPE_SYS) {
-      Ctx.B.CreateFence(AtomicOrdering::Release, SyncScope::System);
-      Hr.Handled = true;
-      return Hr;
-    }
-
-    return RaiseFailure::unsupportedInstructionForm(
-        Di, "FLAT",
-        "global_wb SCOPE_SE cannot be represented by gfx942 writeback fences");
-  }
+  if (Sop == CanonicalOp::GLOBAL_INV)
+    return lowerFlatCacheControlFence(Ctx, Di, AtomicOrdering::Acquire);
 
   // ---------------------------------------------------------------------
   // FLAT scratch family (`scratch_load_*`, `scratch_store_*`).
@@ -326,6 +357,14 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
   if (Di.TsFlags & SIInstrFlags::FlatScratch) {
     auto ScratchAccessBytes = [&]() -> unsigned {
       switch (Sop) {
+      case CanonicalOp::SCRATCH_LOAD_UBYTE:
+      case CanonicalOp::SCRATCH_LOAD_SBYTE:
+      case CanonicalOp::SCRATCH_STORE_BYTE:
+        return 1;
+      case CanonicalOp::SCRATCH_LOAD_USHORT:
+      case CanonicalOp::SCRATCH_LOAD_SSHORT:
+      case CanonicalOp::SCRATCH_STORE_SHORT:
+        return 2;
       case CanonicalOp::SCRATCH_LOAD_DWORD:
       case CanonicalOp::SCRATCH_STORE_DWORD:
         return 4;
@@ -357,6 +396,71 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
               Ctx, "scratch_* opcode is not a load/store shape Hotswap "
                    "models yet: " +
                        Di.Mnemonic));
+    }
+
+    // Sub-dword scratch loads: load i8/i16 from private memory and zero/sign
+    // extend into the 32-bit VGPR, mirroring GLOBAL_LOAD_{U,S}BYTE / SHORT.
+    if (Sop == CanonicalOp::SCRATCH_LOAD_UBYTE ||
+        Sop == CanonicalOp::SCRATCH_LOAD_SBYTE ||
+        Sop == CanonicalOp::SCRATCH_LOAD_USHORT ||
+        Sop == CanonicalOp::SCRATCH_LOAD_SSHORT) {
+      if (Op.nSrcs() < 2) {
+        return RaiseFailure::unsupportedInstructionForm(
+            Di, "FLAT", "scratch_load_* expected address/cpol operands");
+      }
+      Expected<Value *> AddrOr = decodeScratchOffset(
+          Ctx, Di, Op, /*addrStart=*/0, AccessBytes, "scratch_load");
+      if (!AddrOr)
+        return AddrOr.takeError();
+
+      Value *Addr = *AddrOr;
+      ParsedReg Dest = Op.dst();
+      bool IsByte = (Sop == CanonicalOp::SCRATCH_LOAD_UBYTE ||
+                     Sop == CanonicalOp::SCRATCH_LOAD_SBYTE);
+      bool IsSigned = (Sop == CanonicalOp::SCRATCH_LOAD_SBYTE ||
+                       Sop == CanonicalOp::SCRATCH_LOAD_SSHORT);
+      Type *MemTy = IsByte ? Ctx.I8Ty : Type::getInt16Ty(Ctx.C);
+      Ctx.emitUnderExec([&] {
+        Value *Loaded = Ctx.B.CreateAlignedLoad(MemTy, Addr, Align(AccessBytes),
+                                                "scratch_load");
+        Value *Ext = IsSigned
+                         ? Ctx.B.CreateSExt(Loaded, Ctx.I32Ty, "scratch_sext")
+                         : Ctx.B.CreateZExt(Loaded, Ctx.I32Ty, "scratch_zext");
+        Ctx.Regs.writeReg32(Ctx.B, Dest, Ext);
+      });
+      Hr.Handled = true;
+      return Hr;
+    }
+
+    // Sub-dword scratch stores: truncate the low byte/short of the VGPR and
+    // store to private memory, mirroring GLOBAL_STORE_{BYTE,SHORT}.
+    if (Sop == CanonicalOp::SCRATCH_STORE_BYTE ||
+        Sop == CanonicalOp::SCRATCH_STORE_SHORT) {
+      if (Op.nSrcs() < 3) {
+        return RaiseFailure::unsupportedInstructionForm(
+            Di, "FLAT",
+            "scratch_store_* expected data plus address/cpol operands");
+      }
+      Expected<Value *> AddrOr = decodeScratchOffset(
+          Ctx, Di, Op, /*addrStart=*/1, AccessBytes, "scratch_store");
+      if (!AddrOr)
+        return AddrOr.takeError();
+
+      Value *Addr = *AddrOr;
+      ParsedReg StData = Op.srcReg(0);
+      if (StData.RegKind != ParsedReg::VGPR) {
+        return RaiseFailure::unsupportedInstructionForm(
+            Di, "FLAT", "scratch_store_* expected VGPR data operand");
+      }
+      bool IsByte = (Sop == CanonicalOp::SCRATCH_STORE_BYTE);
+      Type *MemTy = IsByte ? Ctx.I8Ty : Type::getInt16Ty(Ctx.C);
+      Ctx.emitUnderExec([&] {
+        Value *Src32 = Ctx.Regs.readReg32(Ctx.B, StData);
+        Value *Val = Ctx.B.CreateTrunc(Src32, MemTy, "scratch_store_trunc");
+        Ctx.B.CreateAlignedStore(Val, Addr, Align(AccessBytes));
+      });
+      Hr.Handled = true;
+      return Hr;
     }
 
     if (Sop == CanonicalOp::SCRATCH_LOAD_DWORD ||
@@ -492,11 +596,12 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     // low-level alloca path) is called inside the body rather than
     // `ctx.writeReg32` (which would wrap the write in a nested
     // `emitUnderExec` -- harmless but redundant IR).
+    bool CoherentSub = memScopeIsCoherent(Di);
     Ctx.emitUnderExec([&] {
       bool IsUnsigned = Sop == CanonicalOp::GLOBAL_LOAD_UBYTE ||
                         Sop == CanonicalOp::GLOBAL_LOAD_USHORT;
-      Value *Loaded =
-          Ctx.B.CreateAlignedLoad(LoadTy, Addr, LoadAlign, "gload_sub");
+      Value *Loaded = Ctx.B.CreateAlignedLoad(LoadTy, Addr, LoadAlign,
+                                              CoherentSub, "gload_sub");
       Value *Ext = IsUnsigned ? Ctx.B.CreateZExt(Loaded, Ctx.I32Ty)
                               : Ctx.B.CreateSExt(Loaded, Ctx.I32Ty);
       if (Sop == CanonicalOp::GLOBAL_LOAD_SHORT_D16_HI) {
@@ -540,15 +645,17 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     // error 700).  For the vector-load case (`DWORDX{2,3,4}`), the
     // single load + N extract-write pairs all go inside one
     // emitUnderExec block so inactive lanes skip the whole sequence.
+    bool Coherent = memScopeIsCoherent(Di);
     Ctx.emitUnderExec([&] {
       if (LoadDwords == 1) {
         Ctx.Regs.writeReg32(
             Ctx.B, Dest,
-            Ctx.B.CreateBitCast(Ctx.B.CreateLoad(Ctx.F32Ty, Addr, "gload"),
-                                Ctx.I32Ty));
+            Ctx.B.CreateBitCast(
+                Ctx.B.CreateLoad(Ctx.F32Ty, Addr, Coherent, "gload"),
+                Ctx.I32Ty));
       } else {
         Type *VecTy = FixedVectorType::get(Ctx.I32Ty, LoadDwords);
-        Value *Loaded = Ctx.B.CreateLoad(VecTy, Addr, "gload");
+        Value *Loaded = Ctx.B.CreateLoad(VecTy, Addr, Coherent, "gload");
         for (int D = 0; D < LoadDwords; D++) {
           ParsedReg Sub = Dest;
           Sub.BaseIdx = Dest.BaseIdx + D;
@@ -624,6 +731,7 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     FlatAddr Fa = *FaOrErr;
     Value *Addr = Fa.Ptr;
     ParsedReg StData = Fa.StData;
+    bool Coherent = memScopeIsCoherent(Di);
 
     if (StoreDwords == 0) {
       Value *Src32 = Ctx.Regs.readReg32(Ctx.B, StData);
@@ -639,14 +747,14 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
       } else {
         Val = Ctx.B.CreateTrunc(Src32, Type::getIntNTy(Ctx.C, StoreBits));
       }
-      Ctx.emitUnderExec([&] { Ctx.B.CreateStore(Val, Addr); });
+      Ctx.emitUnderExec([&] { Ctx.B.CreateStore(Val, Addr, Coherent); });
     } else if (StoreDwords == 1) {
       Value *Val = Ctx.Regs.readReg32(Ctx.B, StData);
-      Ctx.emitUnderExec([&] { Ctx.B.CreateStore(Val, Addr); });
+      Ctx.emitUnderExec([&] { Ctx.B.CreateStore(Val, Addr, Coherent); });
     } else {
       auto *VecTy = FixedVectorType::get(Ctx.I32Ty, StoreDwords);
       Value *Val = Ctx.Regs.readRegVec(Ctx.B, StData, VecTy);
-      Ctx.emitUnderExec([&] { Ctx.B.CreateStore(Val, Addr); });
+      Ctx.emitUnderExec([&] { Ctx.B.CreateStore(Val, Addr, Coherent); });
     }
     Hr.Handled = true;
     return Hr;
@@ -1461,13 +1569,15 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
       Sop == CanonicalOp::FLAT_STORE_DWORDX3 ||
       Sop == CanonicalOp::FLAT_STORE_DWORDX4 ||
       Sop == CanonicalOp::FLAT_STORE_BYTE ||
+      Sop == CanonicalOp::FLAT_STORE_BYTE_D16_HI ||
       Sop == CanonicalOp::FLAT_STORE_SHORT ||
       Sop == CanonicalOp::FLAT_STORE_SHORT_D16_HI) {
     int StoreDwords = 1;
     int StoreBits = 32;
-    // `FLAT_STORE_SHORT_D16_HI` stores bits [31:16] of the source
-    // VGPR, not [15:0] -- same half-register selector as
-    // `GLOBAL_STORE_SHORT_D16_HI` above; see the comment block on
+    // `FLAT_STORE_{SHORT,BYTE}_D16_HI` store the high half of the source
+    // VGPR (bits [31:16] for the short form, bits [23:16] for the byte
+    // form) rather than the low bits -- same half-register selector as
+    // `GLOBAL_STORE_{SHORT,BYTE}_D16_HI` above; see the comment block on
     // the GLOBAL_STORE_ branch for the full rationale (bf16 RNE
     // epilogue, pre-fix miscompile shape, etc.).
     bool StoreHiHalf = false;
@@ -1484,9 +1594,11 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
       StoreBits = 16;
       StoreDwords = 0;
       StoreHiHalf = (Sop == CanonicalOp::FLAT_STORE_SHORT_D16_HI);
-    } else if (Sop == CanonicalOp::FLAT_STORE_BYTE) {
+    } else if (Sop == CanonicalOp::FLAT_STORE_BYTE ||
+               Sop == CanonicalOp::FLAT_STORE_BYTE_D16_HI) {
       StoreBits = 8;
       StoreDwords = 0;
+      StoreHiHalf = (Sop == CanonicalOp::FLAT_STORE_BYTE_D16_HI);
     }
 
     // Two operand-shape variants with distinct AS semantics; mirror
@@ -1531,11 +1643,15 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
       // See emitD16HiHalfTruncI16's doc block for the shared-helper
       // rationale; this branch mirrors the GLOBAL_STORE path above
       // so both FLAT and GLOBAL `_D16_HI` variants graduate through
-      // the same emission shape.
-      Value *Val =
-          StoreHiHalf
-              ? emitD16HiHalfTruncI16(Ctx, Src32)
-              : Ctx.B.CreateTrunc(Src32, Type::getIntNTy(Ctx.C, StoreBits));
+      // the same emission shape. The b8 hi form surfaces bits [23:16]
+      // (the low byte of the high half); the b16 hi form bits [31:16].
+      Value *Val;
+      if (StoreHiHalf) {
+        Val = (StoreBits == 8) ? emitD16HiHalfTruncI8(Ctx, Src32)
+                               : emitD16HiHalfTruncI16(Ctx, Src32);
+      } else {
+        Val = Ctx.B.CreateTrunc(Src32, Type::getIntNTy(Ctx.C, StoreBits));
+      }
       Ctx.emitUnderExec([&] { Ctx.B.CreateStore(Val, Addr); });
     } else if (StoreDwords == 1) {
       Value *Val = Ctx.Regs.readReg32(Ctx.B, StData);

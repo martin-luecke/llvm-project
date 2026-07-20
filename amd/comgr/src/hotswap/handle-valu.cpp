@@ -633,6 +633,15 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Hr.Handled = true;
     return Hr;
   }
+  // v_bcnt_u32_b32 dst, src0, src1: dst = popcount(src0) + src1.
+  if (Sop == CanonicalOp::V_BCNT_U32_B32) {
+    Function *Ctpop = Intrinsic::getOrInsertDeclaration(
+        &Ctx.M, Intrinsic::ctpop, {Ctx.I32Ty});
+    Value *Pop = Ctx.B.CreateCall(Ctpop, {Op.src(0)}, "vbcnt");
+    Ctx.writeReg32(Op.dst(), Ctx.B.CreateAdd(Pop, Op.src(1), "vbcnt_add"));
+    Hr.Handled = true;
+    return Hr;
+  }
   // GFX9 VOP3-only v_add_i32 / v_sub_i32: plain add/sub when clamp=0,
   // signed saturation (saddsat/ssubsat) when clamp=1.
   if (Sop == CanonicalOp::V_ADD_I32 || Sop == CanonicalOp::V_SUB_I32) {
@@ -1164,10 +1173,10 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
   // v_mbcnt_{lo,hi}_u32_b32 are handled in handle-valu-cross-lane.cpp.
   // ---- 64-bit float ops ----
   if (Sop == CanonicalOp::V_ADD_F64) {
-    Value *S0 = Op.src64(0), *S1 = Op.src64(1);
     auto *F64Ty = Type::getDoubleTy(Ctx.C);
-    S0 = Ctx.B.CreateBitCast(S0, F64Ty);
-    S1 = Ctx.B.CreateBitCast(S1, F64Ty);
+    // src64() is raw (no applyMods) -- apply VOP3 neg/abs source modifiers.
+    Value *S0 = Op.applyMods(0, Ctx.B.CreateBitCast(Op.src64(0), F64Ty));
+    Value *S1 = Op.applyMods(1, Ctx.B.CreateBitCast(Op.src64(1), F64Ty));
     Ctx.writeReg64(
         Op.dst(),
         Ctx.B.CreateBitCast(Ctx.B.CreateFAdd(S0, S1, "vadd_f64"), Ctx.I64Ty));
@@ -1175,10 +1184,10 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
   if (Sop == CanonicalOp::V_MUL_F64) {
-    Value *S0 = Op.src64(0), *S1 = Op.src64(1);
     auto *F64Ty = Type::getDoubleTy(Ctx.C);
-    S0 = Ctx.B.CreateBitCast(S0, F64Ty);
-    S1 = Ctx.B.CreateBitCast(S1, F64Ty);
+    // src64() is raw (no applyMods) -- apply VOP3 neg/abs source modifiers.
+    Value *S0 = Op.applyMods(0, Ctx.B.CreateBitCast(Op.src64(0), F64Ty));
+    Value *S1 = Op.applyMods(1, Ctx.B.CreateBitCast(Op.src64(1), F64Ty));
     Ctx.writeReg64(
         Op.dst(),
         Ctx.B.CreateBitCast(Ctx.B.CreateFMul(S0, S1, "vmul_f64"), Ctx.I64Ty));
@@ -1186,10 +1195,10 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
   if (Sop == CanonicalOp::V_MAX_NUM_F64 || Sop == CanonicalOp::V_MIN_NUM_F64) {
-    Value *S0 = Op.src64(0), *S1 = Op.src64(1);
     auto *F64Ty = Type::getDoubleTy(Ctx.C);
-    S0 = Ctx.B.CreateBitCast(S0, F64Ty);
-    S1 = Ctx.B.CreateBitCast(S1, F64Ty);
+    // src64() is raw (no applyMods) -- apply VOP3 neg/abs source modifiers.
+    Value *S0 = Op.applyMods(0, Ctx.B.CreateBitCast(Op.src64(0), F64Ty));
+    Value *S1 = Op.applyMods(1, Ctx.B.CreateBitCast(Op.src64(1), F64Ty));
     Intrinsic::ID Id = Sop == CanonicalOp::V_MAX_NUM_F64
                            ? Intrinsic::maximumnum
                            : Intrinsic::minimumnum;
@@ -1245,7 +1254,7 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
   // CanonicalOp comment in canonical-op.h for the rationale.
   if (Sop == CanonicalOp::V_RCP_F64) {
     auto *F64Ty = Type::getDoubleTy(Ctx.C);
-    Value *S = Ctx.B.CreateBitCast(Op.src64(0), F64Ty);
+    Value *S = Op.applyMods(0, Ctx.B.CreateBitCast(Op.src64(0), F64Ty));
     Function *Rcp = Intrinsic::getOrInsertDeclaration(
         &Ctx.M, Intrinsic::amdgcn_rcp, {F64Ty});
     Value *R = Ctx.B.CreateCall(Rcp, {S}, "vrcp_f64");
@@ -1327,19 +1336,19 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
   if (Sop == CanonicalOp::V_FMA_F64 || Sop == CanonicalOp::V_FMAC_F64) {
     auto *F64Ty = Type::getDoubleTy(Ctx.C);
     Value *S0, *S1, *S2;
+    // src64() returns the raw operand -- unlike srcF(), it does NOT route
+    // through applyMods -- so the VOP3 neg/abs source modifiers must be
+    // applied explicitly here. Dropping them silently miscompiles the f64
+    // rcp/rsqrt/sqrt Newton-Raphson refinement (whose steps are
+    // `fma(-D, x, 1.0)`), turning the divide into a divergent recurrence.
+    S0 = Op.applyMods(0, Ctx.B.CreateBitCast(Op.src64(0), F64Ty));
+    S1 = Op.applyMods(1, Ctx.B.CreateBitCast(Op.src64(1), F64Ty));
     if (Sop == CanonicalOp::V_FMA_F64) {
-      S0 = Op.src64(0);
-      S1 = Op.src64(1);
-      S2 = Op.src64(2);
+      S2 = Op.applyMods(2, Ctx.B.CreateBitCast(Op.src64(2), F64Ty));
     } else {
-      S0 = Op.src64(0);
-      S1 = Op.src64(1);
+      // v_fmac_f64: src2 is the destination accumulator (no source modifier).
       S2 = Ctx.B.CreateBitCast(Ctx.Regs.readReg64(Ctx.B, Op.dst()), F64Ty);
     }
-    S0 = Ctx.B.CreateBitCast(S0, F64Ty);
-    S1 = Ctx.B.CreateBitCast(S1, F64Ty);
-    if (S2->getType() != F64Ty)
-      S2 = Ctx.B.CreateBitCast(S2, F64Ty);
     Function *Fma =
         Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::fma, {F64Ty});
     Ctx.writeReg64(
@@ -1409,7 +1418,7 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     // Saturates out-of-range f64 to 0/UINT_MAX and maps NaN to 0, so lower to
     // fptoui.sat rather than plain fptoui (which is UB on overflow).
     auto *F64Ty = Type::getDoubleTy(Ctx.C);
-    Value *V = Ctx.B.CreateBitCast(Op.src64(0), F64Ty);
+    Value *V = Op.applyMods(0, Ctx.B.CreateBitCast(Op.src64(0), F64Ty));
     Function *SatFn = Intrinsic::getOrInsertDeclaration(
         &Ctx.M, Intrinsic::fptoui_sat, {Ctx.I32Ty, F64Ty});
     Ctx.writeReg32(Op.dst(), Ctx.B.CreateCall(SatFn, {V}, "cvt_u32_f64"));
@@ -1676,6 +1685,35 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Function *Fma =
         Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::fma, {Ctx.F16Ty});
     Value *R = Ctx.B.CreateCall(Fma, {Srcs[0], Srcs[1], Srcs[2]}, "fma_f16");
+    writeOpSelF16(Ctx, Op, R, DstHigh);
+    Hr.Handled = true;
+    return Hr;
+  }
+
+  // v_div_fixup_f16 dst, src0, src1, src2 -- final IEEE fixup step of the
+  // f16 divide sequence. Same true16 half-select shape as V_FMA_F16; lifts
+  // to llvm.amdgcn.div.fixup on f16.
+  if (Sop == CanonicalOp::V_DIV_FIXUP_F16) {
+    StringRef OpName = "v_div_fixup_f16";
+    bool DstHigh = false;
+    if (Error Err = requireDefaultVOP3FpValuOutputMods(Di, OpName))
+      return Err;
+
+    if (Error Err = readVOP3F16DstHigh(Di, OpName, DstHigh))
+      return Err;
+
+    SmallVector<Value *, 3> Srcs;
+    for (unsigned I = 0; I < 3; ++I) {
+      Expected<Value *> SrcOrErr = readOpSelF16(Ctx, Di, Op, I, OpName);
+      if (!SrcOrErr)
+        return SrcOrErr.takeError();
+      Srcs.push_back(*SrcOrErr);
+    }
+
+    Function *Fn = Intrinsic::getOrInsertDeclaration(
+        &Ctx.M, Intrinsic::amdgcn_div_fixup, {Ctx.F16Ty});
+    Value *R =
+        Ctx.B.CreateCall(Fn, {Srcs[0], Srcs[1], Srcs[2]}, "divfixup_f16");
     writeOpSelF16(Ctx, Op, R, DstHigh);
     Hr.Handled = true;
     return Hr;

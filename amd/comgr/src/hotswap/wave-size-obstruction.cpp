@@ -49,42 +49,44 @@ const char *obstructionKindName(ObstructionKind K) {
   case ObstructionKind::None:
     return "None";
   case ObstructionKind::MbcntHiLaneIdLeak:
-    return "MbcntHiLaneIdLeak (\u00a73 Class 1: absolute lane-ID leak via "
+    return "MbcntHiLaneIdLeak (sec. 3 Class 1: absolute lane-ID leak via "
            "v_mbcnt_hi)";
   case ObstructionKind::OutOfRangeLaneOperand:
-    return "OutOfRangeLaneOperand (\u00a73 Class 1: readlane/writelane operand "
+    return "OutOfRangeLaneOperand (sec. 3 Class 1: readlane/writelane operand "
            ">= W_s)";
   case ObstructionKind::TtmpWaveIdLeak:
-    return "TtmpWaveIdLeak (\u00a73 Class 1: source read of ttmp8 under "
+    return "TtmpWaveIdLeak (sec. 3 Class 1: source read of ttmp8 under "
            "cross-widening -- wave_id_in_wg field)";
   case ObstructionKind::WaveIdLiftScalarized:
-    return "WaveIdLiftScalarized (\u00a73 Class 1: canonical wave_id BFE lift "
+    return "WaveIdLiftScalarized (sec. 3 Class 1: canonical wave_id BFE lift "
            "+ v_writelane/v_readlane + WMMA -- cross-lane primitive scalarises "
            "the divergent lift, collapsing per-source-wave distinction)";
   case ObstructionKind::WorkitemIdPredicateChain:
     // see hotswap/docs/modrep-predicate-chain.md sec. 5 (narrow-O1 classifier)
-    return "WorkitemIdPredicateChain (\u00a73 Class 5: workitem.id.x() feeds a "
-           "lane-position-scoped icmp against compile-time constant K \u2264 "
-           "W_s-1, gating a side effect \u2014 wave-size-sensitive predicate "
+    return "WorkitemIdPredicateChain (sec. 3 Class 5: workitem.id.x() feeds a "
+           "lane-position-scoped icmp against compile-time constant K <= "
+           "W_s-1, gating a side effect -- wave-size-sensitive predicate "
            "chain under modulo-replication)";
   case ObstructionKind::FullWaveRotate:
-    return "FullWaveRotate (\u00a73 Class 2: unrewritable v_permlane64)";
+    return "FullWaveRotate (sec. 3 Class 2: unrewritable v_permlane64)";
   case ObstructionKind::LaneGroupShuffle:
-    return "LaneGroupShuffle (\u00a73 Class 2: permlane16 / permlanex16 / "
+    return "LaneGroupShuffle (sec. 3 Class 2: permlane16 / permlanex16 / "
            "permlane*_swap)";
   case ObstructionKind::DsSwizzle:
-    return "DsSwizzle (\u00a73 Class 2: ds_swizzle_b32)";
+    return "DsSwizzle (sec. 3 Class 2: ds_swizzle_b32)";
   case ObstructionKind::DppCrossLane:
-    return "DppCrossLane (\u00a73 Class 2: DPP modifier)";
+    return "DppCrossLane (sec. 3 Class 2: DPP modifier)";
   case ObstructionKind::DsBpermuteGather:
-    return "DsBpermuteGather (\u00a73 Class 2: ds_bpermute_b32)";
+    return "DsBpermuteGather (sec. 3 Class 2: ds_bpermute_b32)";
+  case ObstructionKind::DsPermuteScatter:
+    return "DsPermuteScatter (sec. 3 Class 2: ds_permute_b32)";
   case ObstructionKind::NonCommutativeAtomic:
-    return "NonCommutativeAtomic (\u00a73 Class 3: cmpswap/swap/xchg, replica "
+    return "NonCommutativeAtomic (sec. 3 Class 3: cmpswap/swap/xchg, replica "
            "race)";
   case ObstructionKind::CmpxFromLaneId:
-    return "CmpxFromLaneId (\u00a73 Class 4: lane-predicated v_cmpx)";
+    return "CmpxFromLaneId (sec. 3 Class 4: lane-predicated v_cmpx)";
   case ObstructionKind::SaveExecFromLaneId:
-    return "SaveExecFromLaneId (\u00a73 Class 4: lane-predicated "
+    return "SaveExecFromLaneId (sec. 3 Class 4: lane-predicated "
            "s_*_saveexec_b32)";
   }
   return "UnknownObstructionKind";
@@ -96,6 +98,8 @@ const char *rewriteIdName(RewriteId R) {
     return "none";
   case RewriteId::P1_DsBpermute:
     return "P1 (llvm.amdgcn.ds.bpermute)";
+  case RewriteId::P1_DsPermute:
+    return "P1 (llvm.amdgcn.ds.permute)";
   case RewriteId::P2_PermLane16:
     return "P2 (llvm.amdgcn.permlane16)";
   case RewriteId::P3_PermLane64:
@@ -117,6 +121,8 @@ const char *rewriteIdName(RewriteId R) {
            "readlane -> ds.bpermute)";
   case RewriteId::WaveNativeMbcntCmpx:
     return "WaveNative source-wave mbcnt -> V_CMPX EXEC projection";
+  case RewriteId::WaveNativeMbcntSaveExec:
+    return "WaveNative source-wave mbcnt -> s_*_saveexec_b32 EXEC projection";
   }
   return "UnknownRewriteId";
 }
@@ -473,12 +479,46 @@ findLanePredicatedExecSites(ArrayRef<DecodedInst> Insts,
       SccTainted = false;
     } else if (isSaveExecB32(Sop)) {
       if (SourceTainted) {
-        Sites.push_back(
-            {&Di, ObstructionKind::SaveExecFromLaneId, RewriteId::None,
-             /*RewriteImplemented=*/false,
-             "s_*_saveexec_b32 source mask dataflow is derived from "
-             "v_mbcnt_*; no target-width source-wave mask projection is "
-             "implemented for scalar saveexec masks"});
+        if (Projection.preservesMbcntDerivedSaveExec()) {
+          // WaveNative packs two DISTINCT source waves into one target wave
+          // (lanes L and L+W_s carry different work), so the saveexec mask
+          // needs an independent target-width EXEC mask. Project the
+          // preceding v_cmp's ballot into target-width EXEC storage.
+          Sites.push_back(
+              {&Di, ObstructionKind::SaveExecFromLaneId,
+               RewriteId::WaveNativeMbcntSaveExec, /*RewriteImplemented=*/true,
+               "s_*_saveexec_b32 source mask dataflow is derived from "
+               "v_mbcnt_*; WaveNative projects the preceding v_cmp's ballot "
+               "into target-width EXEC storage (per-lane shadow), so the "
+               "saveexec combine and old-EXEC save run at target width"});
+        } else if (Projection.numSourceWavesPerTarget() == 1 ||
+                   Projection.sourceWaveScopedLaneOps()) {
+          // A single source wave per target wave (MODREP redundant-replica /
+          // phantom-lane regime) or a source-wave-scoped iteration
+          // (ThreadLoop, one source wave per pass). mbcnt lifting already
+          // makes the lane id source-wave-relative (handle-valu-cross-lane:
+          // mbcnt_hi pass-through + mbcnt_lo mod W_s), so a lane-derived
+          // saveexec mask is already correct per source wave and needs no
+          // target-width projection.
+          Sites.push_back(
+              {&Di, ObstructionKind::SaveExecFromLaneId,
+               RewriteId::SaveExecLaneRelative, /*RewriteImplemented=*/true,
+               "s_*_saveexec_b32 source mask dataflow is derived from "
+               "v_mbcnt_*; the lane id is already source-wave-relative and "
+               "one source wave maps to each target wave, so the mask is "
+               "correct per source wave without a target-width projection"});
+        } else {
+          // A projection that packs DISTINCT source waves into lanes L and
+          // L+W_s but offers no target-width saveexec projection: one
+          // source-width mask cannot represent both waves' EXEC independently.
+          Sites.push_back(
+              {&Di, ObstructionKind::SaveExecFromLaneId, RewriteId::None,
+               /*RewriteImplemented=*/false,
+               "s_*_saveexec_b32 source mask dataflow is derived from "
+               "v_mbcnt_*; the selected projection aliases target lanes L and "
+               "L+W_s through one source-width EXEC mask, so no independent "
+               "source-wave mask projection is representable"});
+        }
       }
       ExplicitDefsTainted = OldExecTainted;
       VccTainted = false;
@@ -959,6 +999,21 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
       Report.Sites.push_back(std::move(Site));
       continue;
     }
+    if (Sop == CanonicalOp::DS_PERMUTE_B32) {
+      // Forward/PUSH mirror of DS_BPERMUTE_B32 above. The handler in
+      // handle-ds.cpp lifts through llvm.amdgcn.ds.permute with the
+      // same source-wave selector rebase (see lit_tests/ds_permute_b32
+      // and ds_permute_b32_wave32_rebase). Record the site so the
+      // trace shows it, and mark rewriteImplemented = true so the
+      // decider treats it as outcome (a)/(b) rather than refusal.
+      ObstructionSite Site;
+      Site.Inst = &Di;
+      Site.Kind = ObstructionKind::DsPermuteScatter;
+      Site.Rewrite = RewriteId::P1_DsPermute;
+      Site.RewriteImplemented = true;
+      Report.Sites.push_back(std::move(Site));
+      continue;
+    }
 
     // --- sec. 3 Class 3: replica races on shared state ------------------
     // The CanonicalOp set here is the complete enumeration of
@@ -1175,24 +1230,18 @@ ObstructionReport buildObstructionReport(ArrayRef<DecodedInst> Insts,
     }
   }
 
-  // Second pass: emit Class-4 EXEC writers whose predicate/mask was
-  // actually proven to depend on a v_mbcnt_* result by the decoded-
-  // register provenance pre-walk. WaveNative marks mbcnt-fed V_CMPX
-  // as implemented; MODREP and scalar saveexec masks still refuse.
+  // Second pass: emit Class-4 EXEC writers whose predicate/mask was actually
+  // proven to depend on a v_mbcnt_* result by the decoded-register provenance
+  // pre-walk. findLanePredicatedExecSites already picks the projection-aware
+  // rewrite for each site (WaveNative target-width projection, lane-relative
+  // lift for single-source-wave / source-wave-scoped projections, or refuse
+  // when neither applies), so the decision is copied verbatim here.
   for (const auto &Pw : LanePredicatedExecSites) {
     ObstructionSite Site;
     Site.Inst = Pw.Inst;
     Site.Kind = Pw.Kind;
     Site.Rewrite = Pw.Rewrite;
     Site.RewriteImplemented = Pw.RewriteImplemented;
-    // mbcnt lifting already makes lane-id source-wave-relative
-    // (handle-valu-cross-lane.cpp: mbcnt_hi pass-through + mbcnt_lo mod W_s),
-    // so a saveexec mask derived from lane-id is already correct per MODREP
-    // replica and needs no further rewrite.
-    if (Pw.Kind == ObstructionKind::SaveExecFromLaneId) {
-      Site.Rewrite = RewriteId::SaveExecLaneRelative;
-      Site.RewriteImplemented = true;
-    }
     Site.Detail = Pw.Detail;
     Report.Sites.push_back(std::move(Site));
   }
@@ -1239,11 +1288,11 @@ std::string renderObstructionTrace(const ObstructionReport &Report,
 
   if (Report.hasUnrewritable()) {
     Os << "  outcome: (c) refuse -- at least one obstruction has no rewrite "
-          "in wave-size-translation.md \u00a77's unrewritable table\n";
+          "in wave-size-translation.md sec. 7's unrewritable table\n";
   } else if (Report.hasPendingRewrite()) {
     Os << "  outcome: (c) refuse -- rewrite(s) exist on paper but the "
           "matching handler(s) have not yet landed "
-          "(wave-size-translation.md \u00a77's pending-rewrite table)\n";
+          "(wave-size-translation.md sec. 7's pending-rewrite table)\n";
   } else {
     Os << "  outcome: (b) rewrite-then-emit -- all obstruction sites have "
           "an implemented rewrite/projection; emit selected projection\n";
@@ -1300,6 +1349,7 @@ llvm::Error selectFailureFromReport(const ObstructionReport &Report) {
     case ObstructionKind::DsSwizzle:
     case ObstructionKind::DppCrossLane:
     case ObstructionKind::DsBpermuteGather:
+    case ObstructionKind::DsPermuteScatter:
     case ObstructionKind::None:
       llvm_unreachable("ObstructionKind classified as unrewritable but "
                        "buildObstructionReport never tags it that way");

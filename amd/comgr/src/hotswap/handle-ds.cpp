@@ -27,6 +27,45 @@
 using namespace llvm;
 
 namespace COMGR::hotswap {
+
+// Rebase a wave32-source ds_permute/ds_bpermute lane selector onto the target
+// wave64 layout. A wave32 selector is a source-wave-local byte offset; under
+// any wave32->wave64 cross-widening one wave64 target wave carries two source
+// wave32 instances (lanes 0..31 and 32..63), so lane 32's selector 0 must name
+// hardware lane 32 ("lane 0 of THIS source wave"), not hardware lane 0. Clamp
+// the selector to the source-wave byte range and OR in the current source-wave
+// byte base. Correct under WaveNative *and* MODREP (lane L behaves as source
+// lane L mod 32), which is why callers gate on the cross-widening direction,
+// not the source-wave count (see rocm-systems#195). `NamePrefix` selects the IR
+// value-name family ("bperm" / "perm") the fixtures pin.
+static Value *rebaseSourceWaveLaneSelector(RaiseContext &Ctx, Value *Selector,
+                                           StringRef NamePrefix) {
+  constexpr uint32_t kSourceWaveLanes = 32;
+  constexpr uint32_t kDwordBytes = 4;
+  constexpr uint32_t kSourceWaveBytes = kSourceWaveLanes * kDwordBytes;
+  Value *LocalIndex =
+      Ctx.B.CreateAnd(Selector, Ctx.B.getInt32(kSourceWaveBytes - 1),
+                      NamePrefix + "_local_addr");
+  Value *LaneId = Ctx.emitLaneIdx();
+  Value *SourceWaveLaneBase =
+      Ctx.B.CreateAnd(LaneId, Ctx.B.getInt32(~(kSourceWaveLanes - 1)),
+                      NamePrefix + "_srcwave_lane_base");
+  Value *SourceWaveByteBase = Ctx.B.CreateShl(
+      SourceWaveLaneBase, Ctx.B.getInt32(2), NamePrefix + "_srcwave_byte_base");
+  return Ctx.B.CreateOr(LocalIndex, SourceWaveByteBase,
+                        NamePrefix + "_srcwave_addr");
+}
+
+// Materialise an addrspace(3) LDS pointer from an integer byte address,
+// freezing it first so a cross-widening inactive-lane undef address cannot
+// reach the memory op as poison (see RaiseContext::freezeMemAddr). Every LDS
+// pointer that feeds an emitUnderExec-gated load/store/atomic goes through
+// here.
+static Value *toLdsPtr(RaiseContext &Ctx, Value *Addr, const Twine &Name = "") {
+  return Ctx.B.CreateIntToPtr(Ctx.freezeMemAddr(Addr),
+                              PointerType::get(Ctx.C, 3), Name);
+}
+
 Expected<HandlerResult> handleDS(RaiseContext &Ctx, const DecodedInst &Di,
                                  OpResolver &Op) {
   HandlerResult Hr;
@@ -515,14 +554,13 @@ Expected<HandlerResult> handleDS(RaiseContext &Ctx, const DecodedInst &Di,
       int64_t ByteOff1 = RawOff1 * ds2UnitBytes;
 
       Value *Vaddr = Ctx.B.CreateZExt(Op.src(0), Ctx.I64Ty, "ds2_addr");
-      auto *LdsPtrTy = PointerType::get(Ctx.C, 3);
       auto MakePtr = [&](int64_t ByteOff, const char *Name) -> Value * {
         Value *A =
             ByteOff == 0
                 ? Vaddr
                 : Ctx.B.CreateAdd(Vaddr, ConstantInt::get(Ctx.I64Ty, ByteOff),
                                   "ds2_off");
-        return Ctx.B.CreateIntToPtr(A, LdsPtrTy, Name);
+        return toLdsPtr(Ctx, A, Name);
       };
       Value *Ptr0 = MakePtr(ByteOff0, "ds2_p0");
       Value *Ptr1 = MakePtr(ByteOff1, "ds2_p1");
@@ -630,7 +668,7 @@ Expected<HandlerResult> handleDS(RaiseContext &Ctx, const DecodedInst &Di,
       }
     }
 
-    Value *Ptr = Ctx.B.CreateIntToPtr(Addr, PointerType::get(Ctx.C, 3));
+    Value *Ptr = toLdsPtr(Ctx, Addr);
 
     if (IsDsRead) {
       ParsedReg Dest = Op.dst();
@@ -713,7 +751,7 @@ Expected<HandlerResult> handleDS(RaiseContext &Ctx, const DecodedInst &Di,
         break;
       }
     }
-    Value *Ptr = Ctx.B.CreateIntToPtr(Addr, PointerType::get(Ctx.C, 3));
+    Value *Ptr = toLdsPtr(Ctx, Addr);
 
     ParsedReg StData = Op.srcReg(1);
     Value *Raw = Ctx.Regs.readReg32(Ctx.B, StData);
@@ -753,7 +791,7 @@ Expected<HandlerResult> handleDS(RaiseContext &Ctx, const DecodedInst &Di,
         break;
       }
     }
-    Value *Ptr = Ctx.B.CreateIntToPtr(Addr, PointerType::get(Ctx.C, 3));
+    Value *Ptr = toLdsPtr(Ctx, Addr);
     // vdata is a 2-VGPR pair; read as i64, bitcast to f64 for the FP
     // atomic.
     ParsedReg StData = Op.srcReg(1);
@@ -766,6 +804,36 @@ Expected<HandlerResult> handleDS(RaiseContext &Ctx, const DecodedInst &Di,
       if (Di.NumDefs > 0)
         Ctx.Regs.writeReg64(Ctx.B, Op.dst(),
                             Ctx.B.CreateBitCast(Rmw, Ctx.I64Ty));
+    });
+    Hr.Handled = true;
+    return Hr;
+  }
+
+  // ds_add_u32 / ds_add_rtn_u32: LDS 32-bit integer atomic add. `_RTN`
+  // publishes the pre-add value to a dst VGPR (Di.NumDefs > 0); non-RTN
+  // discards it. Mirrors DS_ADD_F64 with an integer add.
+  if (Sop == CanonicalOp::DS_ADD_U32) {
+    assert(((Di.TsFlags & SIInstrFlags::IsAtomicRet) != 0) ==
+               (Di.NumDefs > 0) &&
+           "ds_add_u32: IsAtomicRet disagrees with numDefs");
+    Value *Addr = Ctx.B.CreateZExt(Op.src(0), Ctx.I64Ty, "ds_addr");
+    for (unsigned K = 1; K < Op.nSrcs(); K++) {
+      if (Di.isImm(Op.srcIdx(K))) {
+        int64_t Imm = Di.getImm(Op.srcIdx(K));
+        if (Imm != 0)
+          Addr =
+              Ctx.B.CreateAdd(Addr, ConstantInt::get(Ctx.I64Ty, Imm), "ds_off");
+        break;
+      }
+    }
+    Value *Ptr = toLdsPtr(Ctx, Addr);
+    Value *Data = Op.src(1);
+    Ctx.emitUnderExec([&] {
+      auto *Rmw =
+          Ctx.B.CreateAtomicRMW(AtomicRMWInst::Add, Ptr, Data, MaybeAlign(),
+                                AtomicOrdering::SequentiallyConsistent);
+      if (Di.NumDefs > 0)
+        Ctx.Regs.writeReg32(Ctx.B, Op.dst(), Rmw);
     });
     Hr.Handled = true;
     return Hr;
@@ -817,26 +885,42 @@ Expected<HandlerResult> handleDS(RaiseContext &Ctx, const DecodedInst &Di,
     // `readfirstlane` / explicit VGPR move outside the diamond,
     // otherwise the cross-lane read will pick up `undef`.
     Value *Index = Op.src(0);
-    if (Ctx.Isa.isWave32() && !Ctx.TargetIsa.isWave32()) {
-      constexpr uint32_t kSourceWaveLanes = 32;
-      constexpr uint32_t kDwordBytes = 4;
-      constexpr uint32_t kSourceWaveBytes = kSourceWaveLanes * kDwordBytes;
-      Value *LocalIndex = Ctx.B.CreateAnd(
-          Index, Ctx.B.getInt32(kSourceWaveBytes - 1), "bperm_local_addr");
-      Value *LaneId = Ctx.emitLaneIdx();
-      Value *SourceWaveLaneBase =
-          Ctx.B.CreateAnd(LaneId, Ctx.B.getInt32(~(kSourceWaveLanes - 1)),
-                          "bperm_srcwave_lane_base");
-      Value *SourceWaveByteBase = Ctx.B.CreateShl(
-          SourceWaveLaneBase, Ctx.B.getInt32(2), "bperm_srcwave_byte_base");
-      Index =
-          Ctx.B.CreateOr(LocalIndex, SourceWaveByteBase, "bperm_srcwave_addr");
-    }
+    if (Ctx.Isa.isWave32() && !Ctx.TargetIsa.isWave32())
+      Index = rebaseSourceWaveLaneSelector(Ctx, Index, "bperm");
     Value *Src = Op.src(1);
     Function *Bperm = Intrinsic::getOrInsertDeclaration(
         &Ctx.M, Intrinsic::amdgcn_ds_bpermute);
     Value *Gathered = Ctx.B.CreateCall(Bperm, {Index, Src}, "bperm");
     Ctx.writeReg32(Op.dst(), Gathered);
+    Hr.Handled = true;
+    return Hr;
+  }
+  if (Sop == CanonicalOp::DS_PERMUTE_B32) {
+    // Forward/PUSH mirror of DS_BPERMUTE_B32 above: each active lane i
+    // scatters src1 to destination lane (src0 >> 2); the selector is a
+    // thread id pre-multiplied by 4, same encoding as ds_bpermute_b32. We
+    // lift through the native llvm.amdgcn.ds.permute rather than a same-lane
+    // copy, which would collapse the scatter to identity. If several lanes
+    // target the same destination the highest-numbered source wins; the
+    // rebase below keeps every collision inside one source-wave, so this
+    // resolves exactly as it did on the source wave.
+    //
+    // Inactive lanes are harmless: an inactive source scatters nothing, and
+    // any destination no active source writes reads 0 (the hardware zeroes
+    // untargeted lanes), so they cannot perturb an active lane's result.
+    //
+    // Selector rebase is shared with the bpermute handler
+    // (rebaseSourceWaveLaneSelector): a push destination lives in the
+    // writer's own source-wave just as a pull source lives in the reader's,
+    // so the same rebase is correct for both.
+    Value *Index = Op.src(0);
+    if (Ctx.Isa.isWave32() && !Ctx.TargetIsa.isWave32())
+      Index = rebaseSourceWaveLaneSelector(Ctx, Index, "perm");
+    Value *Src = Op.src(1);
+    Function *Perm =
+        Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::amdgcn_ds_permute);
+    Value *Scattered = Ctx.B.CreateCall(Perm, {Index, Src}, "perm");
+    Ctx.writeReg32(Op.dst(), Scattered);
     Hr.Handled = true;
     return Hr;
   }

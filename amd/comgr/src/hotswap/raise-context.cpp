@@ -36,11 +36,16 @@ RaiseContext::RaiseContext(
     ISAProfile TargetIsa, unsigned TargetCodeObjectVersion,
     KernargLayout &Kernargs, const UserSgprLayout *Layout, Function *Kernel,
     BasicBlock *ThreadLoopLatch, DenseMap<uint64_t, BasicBlock *> &OffsetToBb,
+    ArrayRef<uint8_t> SourceTextBytes, uint64_t SourceTextBaseAddress,
+    ArrayRef<TextSection::ImageSection> SourceImageSections,
     uint64_t KernelStartOffset, uint64_t KernelEndOffset)
     : C(C), M(M), B(B), Regs(Regs), Projection(Projection), Mc(Mc), Isa(Isa),
       TargetIsa(TargetIsa), TargetCodeObjectVersion(TargetCodeObjectVersion),
       Kernargs(Kernargs), Layout(Layout), Kernel(Kernel),
       ThreadLoopLatch(ThreadLoopLatch), OffsetToBb(OffsetToBb),
+      SourceTextBytes(SourceTextBytes),
+      SourceTextBaseAddress(SourceTextBaseAddress),
+      SourceImageSections(SourceImageSections),
       KernelStartOffset(KernelStartOffset), KernelEndOffset(KernelEndOffset) {
   I1Ty = Type::getInt1Ty(C);
   I8Ty = Type::getInt8Ty(C);
@@ -613,6 +618,15 @@ Value *RaiseContext::emitUpdateDpp(Value *OldVal, Value *Src, uint16_t Ctrl,
 Value *RaiseContext::emitLaneIdx() {
   // Lane id is function-invariant; the projection emits it once and caches.
   return Projection.emitLaneIdx(B);
+}
+
+Value *RaiseContext::freezeMemAddr(Value *Addr) {
+  // See the header for the correctness argument. Only cross-widening
+  // wave32 -> wave64 lifts can leak an undef address into a memory op via
+  // the reg-file first-def phi; other directions keep byte-identical IR.
+  if (!Isa.isWave32() || TargetIsa.isWave32())
+    return Addr;
+  return B.CreateFreeze(Addr, "mem_addr_frozen");
 }
 
 Value *RaiseContext::emitLaneActiveBit() {
