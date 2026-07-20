@@ -913,29 +913,33 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
       Meta.MaxFlatWorkgroupSize > 0 &&
       static_cast<unsigned>(Meta.MaxFlatWorkgroupSize) < TargetIsa.WaveSize;
   const bool UseThreadLoop = ForceThreadLoopProjection;
-  // WaveNative-vs-MODREP choice for a multi-warp workgroup depends on
-  // whether the kernel contains WMMA, so eligibility is computed here but the
-  // projection is CONSTRUCTED AFTER decode (below). WaveNative packs two source
-  // wave32 warps into one target wave64, which breaks kernels that derive a
-  // subgroup id from `tid >> log2(W_src)` (ttmp8[29:25]) and use it in address
-  // arithmetic -> out-of-bounds addresses (silent miscompile -> GPU memory
-  // fault). MODREP preserves the source wave32 layout and is correct for those
-  // kernels. WaveNative is only *required* for WMMA->MFMA layout transposes
-  // that need all 64 target lanes simultaneously, so restrict it to kernels
-  // that actually contain WMMA.
-  const bool WaveNativeEligible = !UseThreadLoop && EnableWaveNative &&
-                                  Isa.isWave32() && !TargetIsa.isWave32() &&
-                                  !PhantomLaneRegime;
-  // The projection is constructed after decode (below) because the
-  // WaveNative-vs-MODREP choice depends on the instruction stream. MODREP is
-  // the default; WaveNative is only required for WMMA->MFMA layout transposes
-  // that need all 64 target lanes simultaneously, so it is restricted to
-  // kernels that contain WMMA. The wave_id-in-workgroup hazard (a subgroup id
-  // read via ttmp8[29:25] whose value depends on the absolute target-lane
-  // position, not lane_id mod W_src) is detected and refused separately by the
-  // obstruction analysis (ObstructionKind::TtmpWaveIdLeak in
-  // wave-size-obstruction.cpp), not by this selector.
+  // WaveNative is the default cross-widen projection for wave32 source ->
+  // wave64 target (outside the phantom-lane regime, which falls back to
+  // MODREP above). The wave_id-in-workgroup hazard -- a subgroup id read via
+  // ttmp8[29:25] whose value depends on the absolute target-lane position,
+  // not lane_id mod W_src -- is detected and refused by the obstruction
+  // analysis (ObstructionKind::TtmpWaveIdLeak in wave-size-obstruction.cpp),
+  // not by this selector, so it needs no WMMA proxy here.
+  const bool UseWaveNative = !UseThreadLoop && EnableWaveNative &&
+                             Isa.isWave32() && !TargetIsa.isWave32() &&
+                             !PhantomLaneRegime;
   std::unique_ptr<WaveProjection> ProjectionPtr;
+  if (UseThreadLoop) {
+    ProjectionPtr =
+        std::make_unique<ThreadLoopProjection>(Isa, TargetIsa, I32Ty, I64Ty);
+    errs() << "transpiler: kernel '" << KernelName
+           << "' selected ThreadLoopProjection (analysis-triggered "
+              "cross-widen route; writelane/readlane rewrite may be "
+              "disabled by the retry caller)\n";
+  } else if (UseWaveNative) {
+    ProjectionPtr =
+        std::make_unique<WaveNativeProjection>(Isa, TargetIsa, I32Ty, I64Ty);
+  } else {
+    ProjectionPtr = std::make_unique<ModuloReplicationProjection>(
+        Isa, TargetIsa, I32Ty, I64Ty);
+  }
+  ProjectionPtr->setMaxFlatWorkgroupSize(Meta.MaxFlatWorkgroupSize);
+  WaveProjection &Projection = *ProjectionPtr;
 
   if (!UseThreadLoop && EnableWaveNative && PhantomLaneRegime &&
       Isa.isWave32() && !TargetIsa.isWave32()) {
@@ -993,52 +997,6 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
     return DecodedOrErr.takeError();
   DecodeResult Decoded = std::move(*DecodedOrErr);
   auto &Insts = Decoded.Insts;
-
-  // Projection selection is deferred from above so it can inspect the decoded
-  // stream. WaveNative is used only for WMMA kernels; every other kernel uses
-  // MODREP. See the WaveNativeEligible comment above.
-  bool HasWMMA = false;
-  for (const DecodedInst &Di : Insts) {
-    switch (Di.CanonOp) {
-    case CanonicalOp::V_WMMA_F32_16x16x32_F16:
-    case CanonicalOp::V_WMMA_F32_16x16x32_BF16:
-    case CanonicalOp::V_WMMA_F32_16x16x4_F32:
-    case CanonicalOp::V_WMMA_F32_16x16x64_FP8_FP8:
-    case CanonicalOp::V_WMMA_F32_16x16x64_FP8_BF8:
-    case CanonicalOp::V_WMMA_F32_16x16x64_BF8_FP8:
-    case CanonicalOp::V_WMMA_F32_16x16x64_BF8_BF8:
-    case CanonicalOp::V_WMMA_I32_16x16x64_IU8:
-    case CanonicalOp::V_WMMA_SCALE_F32_16x16x128_F8F6F4:
-      HasWMMA = true;
-      break;
-    default:
-      break;
-    }
-    if (HasWMMA)
-      break;
-  }
-  const bool UseWaveNative = WaveNativeEligible && HasWMMA;
-  if (UseThreadLoop) {
-    ProjectionPtr = std::make_unique<ThreadLoopProjection>(
-        Isa, TargetIsa, I32Ty, I64Ty);
-    errs() << "transpiler: kernel '" << KernelName
-           << "' selected ThreadLoopProjection (analysis-triggered "
-              "cross-widen route; writelane/readlane rewrite may be "
-              "disabled by the retry caller)\n";
-  } else if (UseWaveNative) {
-    ProjectionPtr = std::make_unique<WaveNativeProjection>(Isa, TargetIsa,
-                                                             I32Ty, I64Ty);
-  } else {
-    ProjectionPtr = std::make_unique<ModuloReplicationProjection>(
-        Isa, TargetIsa, I32Ty, I64Ty);
-    if (WaveNativeEligible && !HasWMMA)
-      errs() << "transpiler: kernel '" << KernelName
-             << "' has no WMMA; using ModuloReplicationProjection "
-                "(WaveNative is only required for WMMA->MFMA layout "
-                "transposes).\n";
-  }
-  ProjectionPtr->setMaxFlatWorkgroupSize(Meta.MaxFlatWorkgroupSize);
-  WaveProjection &Projection = *ProjectionPtr;
   auto &BlockStarts = Decoded.BlockStarts;
 
   // ==== Phase 1.1: s_set_pc_i64 analysis ====
