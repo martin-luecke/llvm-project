@@ -1,4 +1,4 @@
-//===- source-image-address.cpp - Source image address arithmetic ----------===//
+//===- source-image-address.cpp -------------------------------------------===//
 //
 // Part of Comgr, under the Apache License v2.0 with LLVM Exceptions. See
 // amd/comgr/LICENSE.TXT in this repository for license information.
@@ -65,8 +65,7 @@ Expected<uint64_t> subtractSourceImageByteOffset(const DecodedInst &Di,
                                                  int64_t ByteOffset) {
   if (ByteOffset < 0) {
     uint64_t Magnitude = signedOffsetMagnitude(ByteOffset);
-    if (std::optional<uint64_t> Sum =
-            checkedAddUnsigned(SourceAddr, Magnitude))
+    if (std::optional<uint64_t> Sum = checkedAddUnsigned(SourceAddr, Magnitude))
       return *Sum;
     return sourceImageAddressFailure(
         Di, Format, "overflows its negative constant subtrahend");

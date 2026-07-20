@@ -8,8 +8,8 @@
 
 #include "handlers.h"
 #include "pipeline.h" // isStrictMode()
-#include "source-image-address.h"
 #include "source-hidden-args.h"
+#include "source-image-address.h"
 
 #include "Utils/AMDGPUBaseInfo.h"
 #include "llvm/IR/BasicBlock.h"
@@ -439,9 +439,8 @@ Expected<HandlerResult> handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
               "at raise time");
         }
 
-        Expected<uint64_t> SourceAddr =
-            applySourceImageByteOffset(Di, "SMEM", *SourceImageBase,
-                                       ByteOffset);
+        Expected<uint64_t> SourceAddr = applySourceImageByteOffset(
+            Di, "SMEM", *SourceImageBase, ByteOffset);
         if (!SourceAddr)
           return SourceAddr.takeError();
 
@@ -456,8 +455,7 @@ Expected<HandlerResult> handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
                 Di, "SMEM",
                 "source-image SMEM dword address overflows while "
                 "materialising a multi-dword load");
-          std::optional<uint32_t> Dword =
-              readSourceImageDword(Ctx, *DwordAddr);
+          std::optional<uint32_t> Dword = readSourceImageDword(Ctx, *DwordAddr);
           if (!Dword) {
             return RaiseFailure::unsupportedInstructionForm(
                 Di, "SMEM",
