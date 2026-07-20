@@ -1814,23 +1814,13 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     bool AllEqual = Src0EqSrc2 && Src0EqSrc1;
     bool ScaleNumerator;
     if (AllEqual) {
-      // Degenerate self-divide `x/x`: src0 == src1 == src2, so the
-      // numerator and denominator name the *same* operand.  This is a
-      // real shape -- Triton's gfx1250 backend emits it for a masked
-      // reciprocal (e.g. `sel(m,1.0,0.0) / sel(m,1.0,0.0)` inside a fused
-      // layer-norm), where the denominator-scaling and numerator-scaling
-      // calls of the fdiv expansion collapse to the identical (v, v, v)
-      // encoding and CSE keeps one copy.  The scale flag is numerically
-      // irrelevant when numer == denom: `v_div_fixup` yields the same
-      // correctly-rounded result (1.0 for finite non-zero x, NaN for 0/0)
-      // regardless of which aliased operand the scale unit nudges.  Decode
-      // as scale-denominator (flag = 0), matching the role this call plays
-      // in the divide protocol -- its output feeds `v_rcp_f32`.  Because
-      // all three slots alias one operand, any per-slot FP modifier
-      // asymmetry would make the lift ambiguous, so require all three
-      // modifier sets to agree (they do in practice: the emitter uses a
-      // plain `(v, v, v)` with default mods) rather than silently dropping
-      // one.
+      // Self-divide `x/x`: src0 == src1 == src2, so the numerator and
+      // denominator are the same operand.  The scale flag is then
+      // numerically irrelevant -- v_div_fixup yields the same
+      // correctly-rounded result regardless of which operand is scaled --
+      // so decode as scale-denominator (flag = 0).  Refuse if the FP
+      // modifiers differ across the three aliased slots, since the
+      // (numer, denom) lift can only carry one modifier set.
       if (Op.srcMod(0) != Op.srcMod(1) || Op.srcMod(0) != Op.srcMod(2)) {
         return RaiseFailure::unsupportedInstructionForm(
             Di, "VOP3",

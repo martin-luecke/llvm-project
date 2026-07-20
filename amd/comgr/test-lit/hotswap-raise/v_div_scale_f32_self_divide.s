@@ -1,24 +1,7 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 \
-; RUN:     --emit-ir=v_div_scale_f32_self_divide_kernel 2>/dev/null \
+; RUN:     --emit-ir=v_div_scale_f32_self_divide_kernel \
 ; RUN:   | %FileCheck %s
-
-; Masked self-divide `x / x`: v_div_scale_f32 with src0 == src1 == src2.
-; Triton's gfx1250 backend emits this for a masked reciprocal
-; (`sel(m,1.0,0.0) / sel(m,1.0,0.0)`) inside a fused layer-norm, where the
-; denominator- and numerator-scaling calls of the fdiv expansion collapse
-; to the identical (v, v, v) encoding.  Because numer == denom the scale
-; flag is numerically irrelevant, so the raiser must decode the all-equal
-; shape as div.scale(x, x, i1 false) instead of refusing it.
-;
-; The lifted numer and denom are two bitcasts of the *same* register value
-; (`%[[V]]` back-reference), and the scale flag is decoded as false
-; (scale-denominator) rather than the instruction being refused.
-; CHECK-LABEL: define amdgpu_kernel void @v_div_scale_f32_self_divide_kernel(
-; CHECK: %[[N:[0-9]+]] = bitcast i32 %[[V:[A-Za-z0-9_.]+]] to float
-; CHECK: %[[D:[0-9]+]] = bitcast i32 %[[V]] to float
-; CHECK: call { float, i1 } @llvm.amdgcn.div.scale.f32(float %[[N]], float %[[D]], i1 false)
-; CHECK: call float @llvm.amdgcn.div.fixup.f32(
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
@@ -26,12 +9,16 @@
 	.globl	v_div_scale_f32_self_divide_kernel
 	.p2align	8
 	.type	v_div_scale_f32_self_divide_kernel,@function
+; CHECK-LABEL: define amdgpu_kernel void @v_div_scale_f32_self_divide_kernel(
 v_div_scale_f32_self_divide_kernel:
 	s_load_b128 s[4:7], s[0:1], 0x0
 	s_wait_kmcnt 0x0
 	flat_load_b32 v2, v0, s[6:7] scope:SCOPE_SYS
 	s_wait_loadcnt_dscnt 0x0
 	v_div_scale_f32 v3, s2, v2, v2, v2
+	; CHECK: %[[N:[0-9]+]] = bitcast i32 %[[V:[A-Za-z0-9_.]+]] to float
+	; CHECK: %[[D:[0-9]+]] = bitcast i32 %[[V]] to float
+	; CHECK: call { float, i1 } @llvm.amdgcn.div.scale.f32(float %[[N]], float %[[D]], i1 false)
 	v_div_scale_f32 v4, s3, v2, v2, v2
 	v_rcp_f32_e32 v5, v3
 	v_nop
@@ -44,6 +31,7 @@ v_div_scale_f32_self_divide_kernel:
 	s_mov_b32 vcc_lo, s3
 	v_div_fmas_f32 v3, v3, v5, v7
 	v_div_fixup_f32 v1, v3, v2, v2
+	; CHECK: call float @llvm.amdgcn.div.fixup.f32(
 	global_store_b32 v0, v1, s[4:5]
 	s_endpgm
 	.section	.rodata,"a",@progbits
