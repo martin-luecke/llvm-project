@@ -1814,13 +1814,6 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     bool AllEqual = Src0EqSrc2 && Src0EqSrc1;
     bool ScaleNumerator;
     if (AllEqual) {
-      // Self-divide `x/x`: src0 == src1 == src2, so the numerator and
-      // denominator are the same operand.  The scale flag is then
-      // numerically irrelevant -- v_div_fixup yields the same
-      // correctly-rounded result regardless of which operand is scaled --
-      // so decode as scale-denominator (flag = 0).  Refuse if the FP
-      // modifiers differ across the three aliased slots, since the
-      // (numer, denom) lift can only carry one modifier set.
       if (Op.srcMod(0) != Op.srcMod(1) || Op.srcMod(0) != Op.srcMod(2)) {
         return RaiseFailure::unsupportedInstructionForm(
             Di, "VOP3",
