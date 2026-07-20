@@ -9,13 +9,11 @@
 #include "canonical-op-attrs.h"
 #include "handlers.h"
 #include "hotswap/raise-failure.h"
+#include "source-image-address.h"
 
 #include "llvm/ADT/Twine.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
-#include "llvm/Support/CheckedArithmetic.h"
-
-#include <cassert>
 
 using namespace llvm;
 
@@ -98,66 +96,6 @@ ArrayRef<CanonicalOpAttrSpec> getHandlerSOP2Attrs() {
       {CanonicalOp::S_MAX_U32, {/*routesExecThroughStoreExec=*/true}},
   };
   return kAttrs;
-}
-
-/// Return `abs(Offset)` for a negative offset without evaluating
-/// `-INT64_MIN`, which would overflow before conversion to uint64_t.
-static uint64_t signedOffsetMagnitude(int64_t Offset) {
-  assert(Offset < 0 && "expected a negative offset");
-  return static_cast<uint64_t>(-(Offset + 1)) + 1;
-}
-
-/// Apply a signed immediate addend to a proven source code-object address.
-/// This models `s_add_nc_u64 source_addr, imm`; wrapping means this source
-/// PC-relative address chain cannot be materialised safely.
-static Expected<uint64_t> applySourceImageByteOffset(const DecodedInst &Di,
-                                                     uint64_t SourceAddr,
-                                                     int64_t ByteOffset) {
-  if (ByteOffset < 0) {
-    uint64_t Magnitude = signedOffsetMagnitude(ByteOffset);
-    if (SourceAddr < Magnitude)
-      return RaiseFailure::unsupportedInstructionForm(
-          Di, "SOP2",
-          "source-image SOP2 address underflows its signed "
-          "constant offset");
-    return SourceAddr - Magnitude;
-  }
-
-  if (std::optional<uint64_t> Sum =
-          checkedAddUnsigned(SourceAddr, static_cast<uint64_t>(ByteOffset)))
-    return *Sum;
-
-  return RaiseFailure::unsupportedInstructionForm(
-      Di, "SOP2",
-      "source-image SOP2 address overflows its signed constant "
-      "offset");
-}
-
-/// Apply a signed immediate subtrahend to a proven source code-object address.
-/// This models `s_sub_nc_u64 source_addr, imm`; a negative subtrahend becomes
-/// addition, and any wrap means this source PC-relative address chain cannot be
-/// materialised safely.
-static Expected<uint64_t> subtractSourceImageByteOffset(const DecodedInst &Di,
-                                                        uint64_t SourceAddr,
-                                                        int64_t ByteOffset) {
-  if (ByteOffset < 0) {
-    uint64_t Magnitude = signedOffsetMagnitude(ByteOffset);
-    if (std::optional<uint64_t> Sum =
-            checkedAddUnsigned(SourceAddr, Magnitude))
-      return *Sum;
-    return RaiseFailure::unsupportedInstructionForm(
-        Di, "SOP2",
-        "source-image SOP2 address overflows its negative "
-        "constant subtrahend");
-  }
-
-  uint64_t Magnitude = static_cast<uint64_t>(ByteOffset);
-  if (SourceAddr < Magnitude)
-    return RaiseFailure::unsupportedInstructionForm(
-        Di, "SOP2",
-        "source-image SOP2 address underflows its constant "
-        "subtrahend");
-  return SourceAddr - Magnitude;
 }
 
 // Look up the per-lane wave-width i1 for source operand `i`, covering
@@ -692,14 +630,16 @@ Expected<HandlerResult> handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
     if (Src0SourceAddr && Src1Imm) {
       Expected<uint64_t> NewSourceAddr =
           Sop == CanonicalOp::S_ADD_NC_U64
-              ? applySourceImageByteOffset(Di, *Src0SourceAddr, *Src1Imm)
-              : subtractSourceImageByteOffset(Di, *Src0SourceAddr, *Src1Imm);
+              ? applySourceImageByteOffset(Di, "SOP2", *Src0SourceAddr,
+                                           *Src1Imm)
+              : subtractSourceImageByteOffset(Di, "SOP2", *Src0SourceAddr,
+                                              *Src1Imm);
       if (!NewSourceAddr)
         return NewSourceAddr.takeError();
       SourceImageResult = *NewSourceAddr;
     } else if (Sop == CanonicalOp::S_ADD_NC_U64 && Src1SourceAddr && Src0Imm) {
       Expected<uint64_t> NewSourceAddr =
-          applySourceImageByteOffset(Di, *Src1SourceAddr, *Src0Imm);
+          applySourceImageByteOffset(Di, "SOP2", *Src1SourceAddr, *Src0Imm);
       if (!NewSourceAddr)
         return NewSourceAddr.takeError();
       SourceImageResult = *NewSourceAddr;

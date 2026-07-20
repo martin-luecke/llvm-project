@@ -8,6 +8,7 @@
 
 #include "handlers.h"
 #include "pipeline.h" // isStrictMode()
+#include "source-image-address.h"
 #include "source-hidden-args.h"
 
 #include "Utils/AMDGPUBaseInfo.h"
@@ -135,38 +136,6 @@ std::optional<uint32_t> readSourceImageDword(RaiseContext &Ctx,
       return readSourceTextDword(Ctx, Offset);
   }
   return std::nullopt;
-}
-
-/// Return `abs(Offset)` for a negative offset without evaluating
-/// `-INT64_MIN`, which would overflow before conversion to uint64_t.
-uint64_t signedOffsetMagnitude(int64_t Offset) {
-  assert(Offset < 0 && "expected a negative offset");
-  return static_cast<uint64_t>(-(Offset + 1)) + 1;
-}
-
-/// Apply an SMEM static byte offset to a proven source code-object address. If
-/// the arithmetic would wrap, refuse the source-image materialisation instead
-/// of falling back to a target-memory load at the wrong address.
-Expected<uint64_t> applySourceImageByteOffset(const DecodedInst &Di,
-                                              uint64_t SourceAddr,
-                                              int64_t ByteOffset) {
-  if (ByteOffset < 0) {
-    uint64_t Magnitude = signedOffsetMagnitude(ByteOffset);
-    if (SourceAddr < Magnitude)
-      return RaiseFailure::unsupportedInstructionForm(
-          Di, "SMEM",
-          "source-image SMEM address underflows its signed "
-          "static offset");
-    return SourceAddr - Magnitude;
-  }
-
-  if (std::optional<uint64_t> Sum =
-          checkedAddUnsigned(SourceAddr, static_cast<uint64_t>(ByteOffset)))
-    return *Sum;
-
-  return RaiseFailure::unsupportedInstructionForm(
-      Di, "SMEM",
-      "source-image SMEM address overflows its signed static offset");
 }
 
 // Emit a branch to llvm.trap when a dynamic translation contract is violated.
@@ -471,7 +440,8 @@ Expected<HandlerResult> handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
         }
 
         Expected<uint64_t> SourceAddr =
-            applySourceImageByteOffset(Di, *SourceImageBase, ByteOffset);
+            applySourceImageByteOffset(Di, "SMEM", *SourceImageBase,
+                                       ByteOffset);
         if (!SourceAddr)
           return SourceAddr.takeError();
 
