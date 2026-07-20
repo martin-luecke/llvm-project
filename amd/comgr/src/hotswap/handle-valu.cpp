@@ -1829,12 +1829,6 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     } else if (Src0EqSrc1) {
       ScaleNumerator = false; // (d, d, n)
     } else {
-      // src2 matches neither src0 nor src1: this breaks the hardware's
-      // own divide-protocol (src2 must duplicate one of the numer/denom
-      // slots to name the scaling target) and is unreachable from any
-      // known codegen emitter.  Refuse loudly rather than guess --
-      // consistent with the "refuse when uncertain" rule in
-      // hotswap/docs/wave-size-translation.md.
       return RaiseFailure::unsupportedInstructionForm(
           Di, "VOP3",
           "v_div_scale_f32 operand triple does not match a known "
