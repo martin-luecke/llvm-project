@@ -1811,18 +1811,46 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
 
     bool Src0EqSrc2 = SameOperand(0, 2);
     bool Src0EqSrc1 = SameOperand(0, 1);
+    bool AllEqual = Src0EqSrc2 && Src0EqSrc1;
     bool ScaleNumerator;
-    if (Src0EqSrc2 && !Src0EqSrc1) {
+    if (AllEqual) {
+      // Degenerate self-divide `x/x`: src0 == src1 == src2, so the
+      // numerator and denominator name the *same* operand.  This is a
+      // real shape -- Triton's gfx1250 backend emits it for a masked
+      // reciprocal (e.g. `sel(m,1.0,0.0) / sel(m,1.0,0.0)` inside a fused
+      // layer-norm), where the denominator-scaling and numerator-scaling
+      // calls of the fdiv expansion collapse to the identical (v, v, v)
+      // encoding and CSE keeps one copy.  The scale flag is numerically
+      // irrelevant when numer == denom: `v_div_fixup` yields the same
+      // correctly-rounded result (1.0 for finite non-zero x, NaN for 0/0)
+      // regardless of which aliased operand the scale unit nudges.  Decode
+      // as scale-denominator (flag = 0), matching the role this call plays
+      // in the divide protocol -- its output feeds `v_rcp_f32`.  Because
+      // all three slots alias one operand, any per-slot FP modifier
+      // asymmetry would make the lift ambiguous, so require all three
+      // modifier sets to agree (they do in practice: the emitter uses a
+      // plain `(v, v, v)` with default mods) rather than silently dropping
+      // one.
+      if (Op.srcMod(0) != Op.srcMod(1) || Op.srcMod(0) != Op.srcMod(2)) {
+        return RaiseFailure::unsupportedInstructionForm(
+            Di, "VOP3",
+            "v_div_scale_f32 self-divide shape (src0 == src1 == src2) has "
+            "asymmetric FP modifiers across the aliased operand slots; the "
+            "lifted IR can only carry one (numer, denom) modifier set.  No "
+            "known codegen emitter produces this shape; refusing rather "
+            "than dropping a modifier silently.");
+      }
+      ScaleNumerator = false; // treat as (d, d, n) with numer == denom
+    } else if (Src0EqSrc2) {
       ScaleNumerator = true; // (n, d, n)
-    } else if (Src0EqSrc1 && !Src0EqSrc2) {
+    } else if (Src0EqSrc1) {
       ScaleNumerator = false; // (d, d, n)
     } else {
-      // All three sources matching is the degenerate `x/x` shape
-      // (ambiguous between scale-numer and scale-denom); src2 not
-      // matching either of src0/src1 would break the hardware's own
-      // divide-protocol and is unreachable from any known codegen
-      // emitter.  Refuse loudly rather than guess -- consistent with
-      // the "refuse when uncertain" rule in
+      // src2 matches neither src0 nor src1: this breaks the hardware's
+      // own divide-protocol (src2 must duplicate one of the numer/denom
+      // slots to name the scaling target) and is unreachable from any
+      // known codegen emitter.  Refuse loudly rather than guess --
+      // consistent with the "refuse when uncertain" rule in
       // hotswap/docs/wave-size-translation.md.
       return RaiseFailure::unsupportedInstructionForm(
           Di, "VOP3",
