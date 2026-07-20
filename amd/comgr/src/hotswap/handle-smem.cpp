@@ -17,7 +17,9 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
+#include "llvm/Support/CheckedArithmetic.h"
 #include "llvm/Support/Endian.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
@@ -31,6 +33,8 @@ using namespace llvm;
 namespace COMGR::hotswap {
 
 namespace {
+
+constexpr uint64_t kSourceDwordBytes = sizeof(uint32_t);
 
 // Add the decoded static SMEM byte immediate to an already 64-bit dynamic
 // offset, preserving `Offset` when the instruction has no non-zero immediate.
@@ -105,12 +109,13 @@ Value *alignDwordOffset32(RaiseContext &Ctx, Value *Offset, const Twine &Name) {
 // Read a little-endian dword from `.text` using a text-relative byte offset.
 // Kept as the fallback for older callers that only carried the text image.
 uint32_t readSourceTextDword(RaiseContext &Ctx, uint64_t ByteOffset) {
-  assert(ByteOffset + 4 <= Ctx.SourceTextBytes.size() &&
+  assert(ByteOffset <= Ctx.SourceTextBytes.size() &&
+         kSourceDwordBytes <= Ctx.SourceTextBytes.size() - ByteOffset &&
          "source text dword read must be bounds-checked first");
   return support::endian::read32le(Ctx.SourceTextBytes.data() + ByteOffset);
 }
 
-// Read a dword from the captured source code-object image by source VMA.
+// Read a dword from the captured source code-object image by source address.
 // PC-relative literal tables in clang/rocPRIM live in allocatable sections
 // such as .rodata, not necessarily in .text.
 std::optional<uint32_t> readSourceImageDword(RaiseContext &Ctx,
@@ -119,16 +124,47 @@ std::optional<uint32_t> readSourceImageDword(RaiseContext &Ctx,
     if (Address < Section.Address)
       continue;
     uint64_t Offset = Address - Section.Address;
-    if (Offset + 4 > Section.Bytes.size())
+    uint64_t SectionSize = static_cast<uint64_t>(Section.Bytes.size());
+    if (Offset > SectionSize || kSourceDwordBytes > SectionSize - Offset)
       continue;
     return support::endian::read32le(Section.Bytes.data() + Offset);
   }
   if (Address >= Ctx.SourceTextBaseAddress) {
     uint64_t Offset = Address - Ctx.SourceTextBaseAddress;
-    if (Offset + 4 <= Ctx.SourceTextBytes.size())
+    uint64_t TextSize = static_cast<uint64_t>(Ctx.SourceTextBytes.size());
+    if (Offset <= TextSize && kSourceDwordBytes <= TextSize - Offset)
       return readSourceTextDword(Ctx, Offset);
   }
   return std::nullopt;
+}
+
+/// Return `abs(Offset)` for a negative offset without evaluating
+/// `-INT64_MIN`, which would overflow before conversion to uint64_t.
+uint64_t signedOffsetMagnitude(int64_t Offset) {
+  assert(Offset < 0 && "expected a negative offset");
+  return static_cast<uint64_t>(-(Offset + 1)) + 1;
+}
+
+/// Apply an SMEM static byte offset to a proven source code-object address.
+/// Wrapping would corrupt the source-image address fact, so treat it as a
+/// compiler-model invariant failure instead of materialising the wrong load.
+uint64_t applySourceImageByteOffset(uint64_t SourceAddr, int64_t ByteOffset) {
+  if (ByteOffset < 0) {
+    uint64_t Magnitude = signedOffsetMagnitude(ByteOffset);
+    if (SourceAddr < Magnitude)
+      report_fatal_error(
+          "transpiler: SMEM source-image address underflows its signed "
+          "static offset");
+    return SourceAddr - Magnitude;
+  }
+
+  if (std::optional<uint64_t> Sum =
+          checkedAddUnsigned(SourceAddr, static_cast<uint64_t>(ByteOffset)))
+    return *Sum;
+
+  report_fatal_error(
+      "transpiler: SMEM source-image address overflows its signed static "
+      "offset");
 }
 
 // Emit a branch to llvm.trap when a dynamic translation contract is violated.
@@ -432,26 +468,20 @@ Expected<HandlerResult> handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
               "at raise time");
         }
 
-        uint64_t SourceAddr = *SourceImageBase;
-        if (ByteOffset < 0) {
-          uint64_t Magnitude = static_cast<uint64_t>(-ByteOffset);
-          if (SourceAddr < Magnitude) {
-            return RaiseFailure::unsupportedInstructionForm(
-                Di, "SMEM",
-                "constant SMEM source-text address underflows its signed "
-                "static offset");
-          }
-          SourceAddr -= Magnitude;
-        } else {
-          SourceAddr += static_cast<uint64_t>(ByteOffset);
-        }
+        uint64_t SourceAddr =
+            applySourceImageByteOffset(*SourceImageBase, ByteOffset);
 
         // Source PC-relative literal tables are not target GPU memory.
         // Resolve proven source-image loads here; otherwise the backend would
-        // turn the source VMA into a target VMEM access.
+        // turn the source code-object address into a target VMEM access.
         for (int D = 0; D < LoadDwords; D++) {
-          uint64_t DwordAddr = SourceAddr + static_cast<uint64_t>(D * 4);
-          std::optional<uint32_t> Dword = readSourceImageDword(Ctx, DwordAddr);
+          std::optional<uint64_t> DwordAddr = checkedMulAddUnsigned<uint64_t>(
+              static_cast<uint64_t>(D), kSourceDwordBytes, SourceAddr);
+          if (!DwordAddr)
+            report_fatal_error(
+                "transpiler: SMEM source-image dword address overflows");
+          std::optional<uint32_t> Dword =
+              readSourceImageDword(Ctx, *DwordAddr);
           if (!Dword) {
             return RaiseFailure::unsupportedInstructionForm(
                 Di, "SMEM",

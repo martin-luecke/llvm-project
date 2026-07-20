@@ -38,19 +38,20 @@ namespace COMGR::hotswap {
 struct TextSection {
   /// Raw `.text` bytes, indexed by text-relative decoded instruction offsets.
   llvm::SmallVector<uint8_t> Bytes;
-  /// Runtime VMA of `.text`; PC-relative instructions use this address domain.
+  /// Runtime address of `.text`; PC-relative instructions use this source
+  /// code-object address domain.
   uint64_t Address = 0;
 
   /// Allocated source sections whose bytes may be read through PC-relative
   /// SMEM.
   struct ImageSection {
-    /// Section bytes, indexed by `source_vma - Address`.
+    /// Section bytes, indexed by source code-object address minus `Address`.
     llvm::SmallVector<uint8_t> Bytes;
-    /// Runtime VMA of this source code-object section.
+    /// Runtime address of this source code-object section.
     uint64_t Address = 0;
   };
   /// Minimal source image used for literal-table materialisation.
-  llvm::SmallVector<ImageSection, 4> ImageSections;
+  llvm::SmallVector<ImageSection> ImageSections;
 };
 
 /// Resolved text-section extent for a kernel symbol. `Offset` is relative to

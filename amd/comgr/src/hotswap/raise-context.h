@@ -29,6 +29,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/MC/MCRegister.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/ErrorHandling.h"
 
 #include <cassert>
 #include <map>
@@ -114,7 +115,7 @@ struct RaiseContext {
   llvm::DenseMap<uint64_t, llvm::BasicBlock *> &OffsetToBb;
   // Source code-object bytes used to materialise proven PC-relative literals.
   // `SourceTextBytes` remains the disassembly image; `SourceImageSections`
-  // carries allocated sections addressable by source VMAs.
+  // carries allocated sections addressable by source code-object address.
   llvm::ArrayRef<uint8_t> SourceTextBytes;
   uint64_t SourceTextBaseAddress = 0;
   llvm::ArrayRef<TextSection::ImageSection> SourceImageSections;
@@ -726,7 +727,8 @@ struct RaiseContext {
   // overlapping SGPR write or BB boundary.
   void recordSourceImageSgprPairAddr(int BaseIdx, uint64_t Value) {
     if (BaseIdx < 0)
-      return;
+      llvm::report_fatal_error(
+          "transpiler: source-image SGPR pair record has invalid base index");
     SourceImageSgprPairAddrShadow[BaseIdx] = Value;
   }
 

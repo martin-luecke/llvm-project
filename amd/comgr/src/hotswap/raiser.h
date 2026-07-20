@@ -54,7 +54,8 @@ struct RaiseResult {
 
 // Raise one kernel from extracted source code-object sections. `TextBytes`
 // remains the disassembly image; `TextBaseAddress` and `SourceImageSections`
-// let PC-relative SMEM literal loads resolve source VMAs at raise time.
+// let PC-relative SMEM literal loads resolve source code-object addresses at
+// raise time.
 llvm::Expected<RaiseResult>
 raiseToIR(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
           llvm::StringRef KernelName, const KernelMeta &Meta,

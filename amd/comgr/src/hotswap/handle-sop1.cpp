@@ -358,8 +358,9 @@ Expected<HandlerResult> handleSOP1(RaiseContext &Ctx, const DecodedInst &Di,
   }
   if (Sop == CanonicalOp::S_GETPC_B64) {
     // ISA: s_get_pc_i64 writes the next instruction's byte address. Keep that
-    // source VMA so PC-relative SMEM literal loads can be materialised from the
-    // source image rather than emitted as target memory accesses.
+    // source code-object address so PC-relative SMEM literal loads can be
+    // materialised from the source image rather than emitted as target memory
+    // accesses.
     ParsedReg Dst = Op.dst();
     uint64_t NextPc = Ctx.SourceTextBaseAddress + Di.Offset + Di.Size;
     Ctx.Regs.writeReg64(Ctx.B, Dst, ConstantInt::get(Ctx.I64Ty, NextPc));
