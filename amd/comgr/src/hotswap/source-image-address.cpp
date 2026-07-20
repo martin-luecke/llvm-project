@@ -43,6 +43,8 @@ Expected<uint64_t> applySourceImageByteOffset(const DecodedInst &Di,
                                               int64_t ByteOffset) {
   if (ByteOffset < 0) {
     uint64_t Magnitude = signedOffsetMagnitude(ByteOffset);
+    assert(SourceAddr >= Magnitude &&
+           "source-image address must not underflow signed offset");
     if (SourceAddr < Magnitude)
       return sourceImageAddressFailure(Di, Format,
                                        "underflows its signed constant offset");
@@ -71,6 +73,8 @@ Expected<uint64_t> subtractSourceImageByteOffset(const DecodedInst &Di,
   }
 
   uint64_t Magnitude = static_cast<uint64_t>(ByteOffset);
+  assert(SourceAddr >= Magnitude &&
+         "source-image address must not underflow constant subtrahend");
   if (SourceAddr < Magnitude)
     return sourceImageAddressFailure(Di, Format,
                                      "underflows its constant subtrahend");
