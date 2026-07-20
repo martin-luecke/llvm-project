@@ -19,7 +19,6 @@
 #include "llvm/IR/IntrinsicsAMDGPU.h"
 #include "llvm/Support/CheckedArithmetic.h"
 #include "llvm/Support/Endian.h"
-#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
@@ -145,15 +144,18 @@ uint64_t signedOffsetMagnitude(int64_t Offset) {
   return static_cast<uint64_t>(-(Offset + 1)) + 1;
 }
 
-/// Apply an SMEM static byte offset to a proven source code-object address.
-/// Wrapping would corrupt the source-image address fact, so treat it as a
-/// compiler-model invariant failure instead of materialising the wrong load.
-uint64_t applySourceImageByteOffset(uint64_t SourceAddr, int64_t ByteOffset) {
+/// Apply an SMEM static byte offset to a proven source code-object address. If
+/// the arithmetic would wrap, refuse the source-image materialisation instead
+/// of falling back to a target-memory load at the wrong address.
+Expected<uint64_t> applySourceImageByteOffset(const DecodedInst &Di,
+                                              uint64_t SourceAddr,
+                                              int64_t ByteOffset) {
   if (ByteOffset < 0) {
     uint64_t Magnitude = signedOffsetMagnitude(ByteOffset);
     if (SourceAddr < Magnitude)
-      report_fatal_error(
-          "transpiler: SMEM source-image address underflows its signed "
+      return RaiseFailure::unsupportedInstructionForm(
+          Di, "SMEM",
+          "source-image SMEM address underflows its signed "
           "static offset");
     return SourceAddr - Magnitude;
   }
@@ -162,9 +164,9 @@ uint64_t applySourceImageByteOffset(uint64_t SourceAddr, int64_t ByteOffset) {
           checkedAddUnsigned(SourceAddr, static_cast<uint64_t>(ByteOffset)))
     return *Sum;
 
-  report_fatal_error(
-      "transpiler: SMEM source-image address overflows its signed static "
-      "offset");
+  return RaiseFailure::unsupportedInstructionForm(
+      Di, "SMEM",
+      "source-image SMEM address overflows its signed static offset");
 }
 
 // Emit a branch to llvm.trap when a dynamic translation contract is violated.
@@ -468,18 +470,22 @@ Expected<HandlerResult> handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
               "at raise time");
         }
 
-        uint64_t SourceAddr =
-            applySourceImageByteOffset(*SourceImageBase, ByteOffset);
+        Expected<uint64_t> SourceAddr =
+            applySourceImageByteOffset(Di, *SourceImageBase, ByteOffset);
+        if (!SourceAddr)
+          return SourceAddr.takeError();
 
         // Source PC-relative literal tables are not target GPU memory.
         // Resolve proven source-image loads here; otherwise the backend would
         // turn the source code-object address into a target VMEM access.
         for (int D = 0; D < LoadDwords; D++) {
           std::optional<uint64_t> DwordAddr = checkedMulAddUnsigned<uint64_t>(
-              static_cast<uint64_t>(D), kSourceDwordBytes, SourceAddr);
+              static_cast<uint64_t>(D), kSourceDwordBytes, *SourceAddr);
           if (!DwordAddr)
-            report_fatal_error(
-                "transpiler: SMEM source-image dword address overflows");
+            return RaiseFailure::unsupportedInstructionForm(
+                Di, "SMEM",
+                "source-image SMEM dword address overflows while "
+                "materialising a multi-dword load");
           std::optional<uint32_t> Dword =
               readSourceImageDword(Ctx, *DwordAddr);
           if (!Dword) {
