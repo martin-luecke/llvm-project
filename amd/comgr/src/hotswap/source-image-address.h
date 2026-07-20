@@ -19,8 +19,8 @@ namespace COMGR::hotswap {
 struct DecodedInst;
 
 /// Apply a signed immediate addend to a proven source code-object address. If
-/// the arithmetic would wrap, refuse the source-image materialisation instead
-/// of falling back to a target-memory load at the wrong address.
+/// the arithmetic would wrap, refuse the translation rather than preserving an
+/// invalid PC-relative source-address fact.
 llvm::Expected<uint64_t> applySourceImageByteOffset(const DecodedInst &Di,
                                                     llvm::StringRef Format,
                                                     uint64_t SourceAddr,
