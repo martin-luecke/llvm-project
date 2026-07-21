@@ -132,12 +132,16 @@ void AllocaRegFile::init(IRBuilder<> &B, Type *I32Ty, Type *I1Ty,
   // subsequent `emitLaneActiveBit` call.
   Vcc = B.CreateAlloca(I1Ty, nullptr, "Vcc");
   B.CreateStore(ConstantInt::getFalse(I1Ty), Vcc);
-  // Full 64-bit VCC-as-scalar shadow (see AllocaRegFile::VccScalar). Zero-init
-  // gives a dominating store so PromoteMemToReg can lift it, mirroring the
-  // other condition scalars.
+  // Full 64-bit VCC-as-scalar shadow + its coherence flag (see
+  // AllocaRegFile::VccScalar / VccScalarValid). Zero/false-init gives a
+  // dominating store so PromoteMemToReg can lift them. The flag starts false:
+  // an entry-state read of VCC as a SADDR base (before any scalar write) has
+  // no known register-pair value and must refuse.
   Type *I64Ty = B.getInt64Ty();
   VccScalar = B.CreateAlloca(I64Ty, nullptr, "VccScalar");
   B.CreateStore(ConstantInt::get(I64Ty, 0), VccScalar);
+  VccScalarValid = B.CreateAlloca(I1Ty, nullptr, "VccScalarValid");
+  B.CreateStore(ConstantInt::getFalse(I1Ty), VccScalarValid);
   // Wave32-source VCC_HI scratch scalar (see ParsedReg::VCC_HI_SCRATCH).
   // Zero-initialised like the other condition scalars.
   VccHiScratch = B.CreateAlloca(I32Ty, nullptr, "VccHiScratch");
@@ -312,6 +316,12 @@ void AllocaRegFile::storeVCC(IRBuilder<> &B, Value *V) {
   if (V->getType() != B.getInt1Ty())
     V = B.CreateICmpNE(V, Constant::getNullValue(V->getType()));
   B.CreateStore(V, Vcc);
+  // A mask-only write (v_cmp, carry-out, s_and_b64 vcc,exec,..) deposits no
+  // known register-pair value, so the raw scalar shadow is now stale: mark it
+  // invalid. writeReg64(VCC) re-validates by calling storeVccScalar64 after
+  // this. Guard on VccScalarValid being present so pre-init callers are safe.
+  if (VccScalarValid)
+    B.CreateStore(ConstantInt::getFalse(B.getInt1Ty()), VccScalarValid);
 }
 
 Value *AllocaRegFile::loadVCC(IRBuilder<> &B) {
@@ -322,10 +332,17 @@ void AllocaRegFile::storeVccScalar64(IRBuilder<> &B, Value *V) {
   if (V->getType() != B.getInt64Ty())
     V = B.CreateZExtOrTrunc(V, B.getInt64Ty());
   B.CreateStore(V, VccScalar);
+  // A full 64-bit register-pair write makes the raw shadow authoritative.
+  if (VccScalarValid)
+    B.CreateStore(ConstantInt::getTrue(B.getInt1Ty()), VccScalarValid);
 }
 
 Value *AllocaRegFile::loadVccScalar64(IRBuilder<> &B) {
   return B.CreateLoad(B.getInt64Ty(), VccScalar);
+}
+
+Value *AllocaRegFile::loadVccScalarValid(IRBuilder<> &B) {
+  return B.CreateLoad(B.getInt1Ty(), VccScalarValid);
 }
 
 void AllocaRegFile::storeSCC(IRBuilder<> &B, Value *V) {
@@ -613,8 +630,10 @@ void AllocaRegFile::writeReg64(IRBuilder<> &B, ParsedReg Pr, Value *V) {
     // consumed as a SADDR base. Keep the i1 mask model coherent AND record the
     // raw 64 bits so the flat/global address decoders can read the scalar back
     // (readReg64(VCC) still returns the ballot mask for mask consumers).
-    storeVccScalar64(B, V);
+    // Order matters: storeVCC() clears VccScalarValid, so run it FIRST, then
+    // storeVccScalar64() re-validates -- a full register-pair write ends VALID.
     storeVCC(B, Projection->extractLaneBitFromWaveMask(B, V));
+    storeVccScalar64(B, V);
     return;
   }
   if (Pr.RegKind == ParsedReg::EXEC) {
@@ -785,6 +804,11 @@ void AllocaRegFile::collectAllocas(SmallVectorImpl<AllocaInst *> &Out) {
   // dominating entry store (init()) lets PromoteMemToReg lift it.
   if (VccScalar)
     Out.push_back(VccScalar);
+  // VccScalarValid (the i1 coherence flag for the shadow above) is promoted for
+  // the same reason; its dominating entry store (init()) lets PromoteMemToReg
+  // lift it so the flag folds away in straight-line code.
+  if (VccScalarValid)
+    Out.push_back(VccScalarValid);
   // VccHiScratch (the wave32-source VCC_HI scratch scalar) must be promoted
   // too. As with the ttmps below, a surviving private alloca is moved to local
   // data share (LDS) by the AMDGPU backend's AMDGPUPromoteAllocaToLDS, where it
