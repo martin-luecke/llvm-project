@@ -1,5 +1,5 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco
-; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=vcc_saddr_load_kernel,vcc_saddr_store_kernel 2>/dev/null | %FileCheck %s
+; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=vcc_saddr_load_kernel,vcc_saddr_store_kernel | %FileCheck %s
 
 ; VCC used as a general-purpose 64-bit scalar SADDR base. The allocator computes
 ; a global address into the VCC register pair (s_lshl_b64 / s_add_nc_u64 vcc,..)
