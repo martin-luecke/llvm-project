@@ -62,19 +62,24 @@ namespace {
 // projections this is a no-op (plain `emitUnderExec`).
 void emitMubufLoadUnderExecHardened(RaiseContext &Ctx,
                                     llvm::function_ref<void()> Body) {
-  // Escape hatch shared with the flat-load hardening for A/B measurement.
-  static const bool Disabled =
-      llvm::sys::Process::GetEnv("HSA_HOTSWAP_DISABLE_LOAD_ANTIFLATTEN")
-          .has_value();
-  if (Disabled || Ctx.Projection.numSourceWavesPerTarget() <= 1) {
+  // No runtime escape hatch: a global env bypass would silently re-enable the
+  // OOB miscompile this guard exists to prevent, and there is no legitimate
+  // production use for it. A/B measurement is done offline, not via a runtime
+  // env flag.
+  if (Ctx.Projection.numSourceWavesPerTarget() <= 1) {
     Ctx.emitUnderExec(Body);
     return;
   }
   Ctx.emitUnderExec([&] {
     Value *Lane = Ctx.B.CreateZExtOrTrunc(Ctx.emitLaneIdx(), Ctx.I32Ty,
                                           "antiflatten_lane");
-    unsigned TgtWave =
-        Ctx.TargetIsa.hasValidWaveSize() ? Ctx.TargetIsa.WaveSize : 64;
+    // Fail loud on an invalid wave size rather than defaulting to 64. The
+    // target wave size is validated at raiser entry (only 32/64 reach a
+    // handler); defaulting would hide a broken compiler-model invariant and
+    // could emit a guard for the wrong target shape.
+    assert(Ctx.TargetIsa.hasValidWaveSize() &&
+           "target wave size must be validated (32/64) before handler dispatch");
+    unsigned TgtWave = Ctx.TargetIsa.WaveSize;
     Value *Guard = Ctx.B.CreateICmpULT(
         Lane, ConstantInt::get(Ctx.I32Ty, TgtWave), "antiflatten_guard");
     BasicBlock *PredBb = Ctx.B.GetInsertBlock();
