@@ -7,8 +7,19 @@
 ; RUN:   | %FileCheck %s --check-prefix=MR
 
 ; Buffer store OOB-lane masking under wave-native vs modulo-replication.
+;
+; rocm-systems#159 store hardening: under wave-native the store is no longer
+; emitted unconditionally at EXEC = -1. It is nested in a
+; `source_lane_active && lane_id < wave_size` anti-if-conversion diamond
+; (`mubuf_store_do` / `mubuf_store_cont`) so partial-tail source-inactive lanes
+; carrying a stale wild address do not execute the store (see
+; buffer_store_wave_fusion_antiflatten.s and emitMubufStoreUnderExecHardened).
 ; WN-LABEL: define amdgpu_kernel void @buffer_store_wave_native_oob_mask_kernel(
 ; WN: call i1 @llvm.amdgcn.init.whole.wave()
+; Option 1: WaveNative store guards on the dispatch-active predicate and
+; routes through emitGuardedMemOp -> gmo_do/gmo_cont.
+; WN: dispatch_bit
+; WN: gmo_do{{[0-9]*}}:
 ; WN: call void @llvm.amdgcn.raw.buffer.store.i32(
 ; MR-LABEL: define amdgpu_kernel void @buffer_store_wave_native_oob_mask_kernel(
 ; MR: br i1 %{{[^,]+}}, label %spe_do{{[0-9]*}}, label %spe_skip{{[0-9]*}}

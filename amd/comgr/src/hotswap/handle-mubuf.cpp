@@ -91,6 +91,62 @@ void emitMubufLoadUnderExecHardened(RaiseContext &Ctx,
   Ctx.emitGuardedMemOp(Active, Body);
 }
 
+// Emit a MUBUF store body hardened against a partial-tail wild-offset OOB
+// fault under wave-native wave32->wave64 (rocm-systems#159, store-side sibling
+// of the #158 load hardening `emitMubufLoadUnderExecHardened` above).
+//
+// Background (rocgdb-pinned on the gemma vLLM prefill `_fwd_kernel`, gfx1250:32
+// -> gfx950): under WaveNative the attention output-write store is emitted
+// WHOLE-WAVE (the `providesFullWaveExecInvariant` branch runs it at ambient
+// EXEC=-1), deliberately, to preserve the source packet's "full-wave issue +
+// per-lane OOB suppression" contract (`get_num_kv_splits_triton` regressed when
+// the store was wrapped in a plain per-lane `emitUnderExec` diamond -- the extra
+// IR gate over-masked and dropped valid lanes). But at a *partial tail* a
+// target wave fuses an in-bounds source wave with a source wave whose lanes are
+// past the problem size; the store-address VGPR is an EXEC-gated phi whose
+// inactive arm carries a STALE prior real offset (a live wild ~4.28 GB per-lane
+// offset, NOT the 0x80000000 OOB sentinel that would be clamped). NUM_RECORDS
+// on the target descriptor is ~2 GB, so base+offset wraps into an unmapped page
+// -> the whole-wave store faults on those partial-tail lanes.
+//
+// Fix (Option 1, Martin review): guard the store on the DISPATCH-TIME active
+// bit through the projection-owned `emitGuardedMemOp` primitive. This is the
+// principled replacement for the rejected `lane_id < wave_size` tautology, and
+// it fixes the store predicate at the root (see below). On single-source-wave
+// projections this is a no-op (whole-wave store, exactly as before).
+void emitMubufStoreUnderExecHardened(RaiseContext &Ctx,
+                                     llvm::function_ref<void()> Body) {
+  // Only harden the WaveNative whole-wave store path. Off WaveNative the store
+  // already goes through `emitUnderExec` at the caller (per-lane gated), and on
+  // a single source wave per target there is no partial-tail pairing, so the
+  // whole-wave store is correct and this is a no-op.
+  if (Ctx.Projection.numSourceWavesPerTarget() <= 1) {
+    Body();
+    return;
+  }
+  // Per-lane source-EXEC bit: source-inactive lanes (including partial-tail
+  // lanes carrying a stale wild address) must NOT execute the store.
+  //
+  // Option 1 store predicate (Martin review resolution): gate on the
+  // DISPATCH-TIME active bit (`emitDispatchLaneActiveBit`), NOT the modeled
+  // EXEC (`emitLaneActiveBit`). The modeled EXEC is narrowed by the kernel's
+  // own data-dependent `v_cmpx`, and gating on it over-masked
+  // `get_num_kv_splits_triton` -- dropping valid lanes the source packet
+  // intended to store full-wave. The dispatch mask is the ORIGINAL per-lane
+  // active bit captured by `init_whole_wave` at entry: it is true for EVERY
+  // genuinely-dispatched lane (so get_num_kv_splits is NOT over-masked) and
+  // false ONLY for phantom partial-tail lanes with no source workitem (whose
+  // address phi holds the stale wild offset that faults). This masks exactly
+  // the faulting lanes and no valid ones.
+  //
+  // The guard is lowered through `emitGuardedMemOp` (backend-respected divergent
+  // EXEC diamond), so the store's EXEC masking survives to final ISA and is
+  // never if-converted to an unconditional exec=-1 store -- the principled
+  // replacement for the `lane_id < wave_size` tautology.
+  Value *Guard = Ctx.emitDispatchLaneActiveBit();
+  Ctx.emitGuardedMemOp(Guard, Body);
+}
+
 } // namespace
 
 Expected<HandlerResult> handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
@@ -353,7 +409,15 @@ Expected<HandlerResult> handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
         Ctx.B.CreateCall(BufSt, {Val, Srd, Voffset, Soffset, AuxFlags});
       };
       if (Ctx.Projection.providesFullWaveExecInvariant())
-        EmitStore();
+        // rocm-systems#159 store-side hardening (Option 1): under WaveNative the
+        // store is otherwise emitted whole-wave (exec=-1). At a partial tail the
+        // store-address phi's inactive arm holds a stale wild per-lane offset
+        // that wraps past NUM_RECORDS -> OOB fault (rocgdb-pinned). Guard the
+        // store on the DISPATCH-TIME active bit through the projection-owned
+        // emitGuardedMemOp primitive so phantom partial-tail lanes skip it,
+        // without the get_num_kv_splits over-masking a full emitUnderExec caused
+        // (see the helper above). No-op on single-source-wave.
+        emitMubufStoreUnderExecHardened(Ctx, EmitStore);
       else
         Ctx.emitUnderExec(EmitStore);
       Hr.Handled = true;
