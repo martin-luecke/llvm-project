@@ -57,6 +57,10 @@ struct TranslationCacheRequest {
   unsigned OptLevel = 0;
   bool EnableWritelaneRewrite = true;
   bool EnableWaveNative = true;
+  // Unconditionally select ModRepDoubledDispatchProjection for wave32->wave64
+  // cross-widening (testing knob). The normal WaveNative y/z-refusal ->
+  // doubled-dispatch upgrade is automatic and needs no flag.
+  bool ForceModrepDoubled = false;
   bool AssumeHipGlobalOffsetZero = false;
   bool StrictMode = false;
   bool CacheDisabled = true;
