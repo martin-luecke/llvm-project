@@ -11,8 +11,6 @@
 #include "Utils/AMDGPUBaseInfo.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
-#include "llvm/IR/IntrinsicInst.h"
-#include "llvm/IR/Intrinsics.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
@@ -44,20 +42,6 @@ Value *toGlobalPtr(RaiseContext &Ctx, Value *Addr, int64_t MemOffset) {
   if (MemOffset != 0)
     Addr = Ctx.B.CreateGEP(Ctx.I8Ty, Addr, Ctx.B.getInt64(MemOffset));
   return Addr;
-}
-
-// Emit `llvm.assume(cond)`. Used to encode the VCC-as-SADDR provenance
-// invariant: when the raiser reads the VCC-as-scalar shadow as a global
-// address, the last VCC write must have been a full register-pair scalar
-// write (VccScalarValid). In the real straight-line shape
-// (`s_add_nc_u64 vcc, ...; global_load ..., vcc`) mem2reg constant-folds the
-// flag to true and the assume is discarded; if a raiser bug ever fed a
-// mask-provenance VCC here, the assume marks the stale-address read as UB
-// (verifiable) instead of a silent miscompile.
-void emitAssume(RaiseContext &Ctx, Value *Cond) {
-  Function *Assume =
-      Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::assume);
-  Ctx.B.CreateCall(Assume, {Cond});
 }
 
 } // namespace
@@ -96,17 +80,9 @@ Expected<FlatAddr> decodeGlobalLoadAddr(RaiseContext &Ctx,
        Op.srcReg(0).RegKind == ParsedReg::VCC) &&
       Op.srcReg(1).RegKind == ParsedReg::VGPR) {
     Out.HasSaddr = true;
-    Value *Saddr;
-    if (Op.srcReg(0).RegKind == ParsedReg::VCC) {
-      // Provenance guard: only the raw register-pair value is a valid address.
-      // Assume the last VCC write was a scalar-pair write (VccScalarValid); see
-      // emitAssume. A mask-provenance VCC feeding SADDR is a raiser bug, not a
-      // legal source shape.
-      emitAssume(Ctx, Ctx.Regs.loadVccScalarValid(Ctx.B));
-      Saddr = Ctx.Regs.loadVccScalar64(Ctx.B);
-    } else {
-      Saddr = Ctx.Regs.readReg64(Ctx.B, Op.srcReg(0));
-    }
+    Value *Saddr = Op.srcReg(0).RegKind == ParsedReg::VCC
+                       ? Ctx.Regs.loadVccScalar64(Ctx.B)
+                       : Ctx.Regs.readReg64(Ctx.B, Op.srcReg(0));
     Value *Vaddr = Ctx.B.CreateSExt(Ctx.Regs.readReg32(Ctx.B, Op.srcReg(1)),
                                     Ctx.I64Ty, "voff_sext");
     if (Di.HasScaleOffset)
@@ -153,14 +129,9 @@ Expected<FlatAddr> decodeGlobalStoreAddr(RaiseContext &Ctx,
       (Op.srcReg(2).RegKind == ParsedReg::SGPR ||
        Op.srcReg(2).RegKind == ParsedReg::VCC)) {
     Out.HasSaddr = true;
-    Value *Saddr;
-    if (Op.srcReg(2).RegKind == ParsedReg::VCC) {
-      // Provenance guard, same contract as the load decoder above.
-      emitAssume(Ctx, Ctx.Regs.loadVccScalarValid(Ctx.B));
-      Saddr = Ctx.Regs.loadVccScalar64(Ctx.B);
-    } else {
-      Saddr = Ctx.Regs.readReg64(Ctx.B, Op.srcReg(2));
-    }
+    Value *Saddr = Op.srcReg(2).RegKind == ParsedReg::VCC
+                       ? Ctx.Regs.loadVccScalar64(Ctx.B)
+                       : Ctx.Regs.readReg64(Ctx.B, Op.srcReg(2));
     Value *Vaddr = Ctx.B.CreateSExt(Ctx.Regs.readReg32(Ctx.B, Op.srcReg(0)),
                                     Ctx.I64Ty, "st_voff_sext");
     if (Di.HasScaleOffset)

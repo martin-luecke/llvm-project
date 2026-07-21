@@ -69,26 +69,13 @@ struct AllocaRegFile {
   llvm::SmallVector<llvm::AllocaInst *> Agpr;
   llvm::SmallVector<llvm::AllocaInst *> Ttmp;
   llvm::AllocaInst *Vcc = nullptr;
-  // VCC has two architectural views the raiser must keep straight:
-  //   * a per-lane wave MASK (v_cmp results, carry-out, s_and_b64 vcc,exec,..)
-  //     -- modeled by the i1 `Vcc` predicate above; and
-  //   * the raw 64-bit REGISTER-PAIR value, which the register allocator may
-  //     use as a general-purpose scalar (e.g. `s_add_nc_u64 vcc, ...` /
-  //     `s_lshl_b64 vcc, ...` computing a global address) and then feed as a
-  //     SADDR base in `global_load_*/store_* ..., vcc`.
-  // `VccScalar` holds the raw architectural VCC bits for consumers that need
-  // the register-pair value (the SADDR base decoders). It is NOT
-  // scalar-provenance-only: EVERY architectural VCC write funnels through
-  // storeVCC()/storeVccScalar64() and updates the coherence flag below, so a
-  // mask write (s_and_b64 vcc,...) INVALIDATES the raw shadow and a full
-  // scalar-pair write (writeReg64(VCC)) re-VALIDATES it. `VccScalarValid`
-  // records which view last wrote VCC: true iff the last write deposited a
-  // known 64-bit register-pair value (safe to read as a SADDR address);
-  // false after a mask-only write (raw bits unknown -> decoders must refuse
-  // rather than fabricate an address). Both zero/false-initialised in init()
-  // so PromoteMemToReg can lift them (see getPromotableAllocas).
+  // Full 64-bit shadow for VCC used as a general-purpose scalar. The register
+  // allocator can compute an address into the VCC pair (e.g. `s_add_nc_u64
+  // vcc, ...`) and then feed it as a SADDR base in `global_load_*/store_*
+  // ..., vcc`; `VccScalar` holds those raw bits for the SADDR decoders, while
+  // the i1 `Vcc` above holds the wave-mask view. Zero-initialised in init()
+  // and collected by collectAllocas for PromoteMemToReg to lift.
   llvm::AllocaInst *VccScalar = nullptr;
-  llvm::AllocaInst *VccScalarValid = nullptr;
   // Wave32-source scratch slot for the VCC_HI register (see ParsedReg::
   // VCC_HI_SCRATCH). Only used when the source ISA is wave32; on wave64
   // sources VCC_HI is a real half of the VCC mask and routes through Vcc.
@@ -186,19 +173,13 @@ struct AllocaRegFile {
   void storeAGPR32(llvm::IRBuilder<> &B, int Idx, llvm::Value *V);
   llvm::Value *loadAGPR32(llvm::IRBuilder<> &B, int Idx);
 
-  // storeVCC writes the per-lane wave-MASK view of VCC (i1). Because a bare
-  // mask write leaves the raw register-pair bits unknown, it also marks the
-  // VccScalar shadow INVALID (see VccScalar / VccScalarValid).
+  // storeVCC writes the per-lane wave-MASK view of VCC (i1).
   void storeVCC(llvm::IRBuilder<> &B, llvm::Value *V);
   llvm::Value *loadVCC(llvm::IRBuilder<> &B);
-  // Store/load the raw 64-bit architectural VCC register-pair value (see
-  // VccScalar). storeVccScalar64 marks the shadow VALID; loadVccScalarValid
-  // reports whether the last VCC write deposited a known register-pair value
-  // (true) or a mask (false). SADDR-base decoders must consult the validity
-  // flag and refuse when it is false rather than read stale bits.
+  // Store/load the raw 64-bit VCC register-pair value used when VCC holds a
+  // general-purpose scalar (see VccScalar), e.g. a SADDR base.
   void storeVccScalar64(llvm::IRBuilder<> &B, llvm::Value *V);
   llvm::Value *loadVccScalar64(llvm::IRBuilder<> &B);
-  llvm::Value *loadVccScalarValid(llvm::IRBuilder<> &B);
   void storeSCC(llvm::IRBuilder<> &B, llvm::Value *V);
   llvm::Value *loadSCC(llvm::IRBuilder<> &B);
   llvm::Value *loadExec(llvm::IRBuilder<> &B);

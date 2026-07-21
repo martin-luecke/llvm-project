@@ -1,19 +1,11 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco
-; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=vcc_saddr_load_kernel,vcc_saddr_store_kernel | %FileCheck %s
+; RUN: %raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=vcc_saddr_load_kernel,vcc_saddr_store_kernel 2>&1 | %FileCheck %s
 
-; VCC used as a general-purpose 64-bit scalar SADDR base. The allocator computes
-; a global address into the VCC register pair (s_lshl_b64 / s_add_nc_u64 vcc,..)
-; and feeds it as the SADDR base of global_load_u16 / global_store_b16 ..., vcc.
-; The raiser must read the raw 64-bit VCC-as-scalar shadow (a plain inttoptr to
-; addrspace(1)), NOT the wave-mask ballot. A `vcc_ballot` here would mean the
-; address was fabricated from the i1 mask view -- a silent miscompile.
-
-; CHECK-LABEL: define amdgpu_kernel void @vcc_saddr_load_kernel
-; CHECK: inttoptr i64 %{{.*}} to ptr addrspace(1)
-; CHECK-NOT: vcc_ballot
-; CHECK-LABEL: define amdgpu_kernel void @vcc_saddr_store_kernel
-; CHECK: inttoptr i64 %{{.*}} to ptr addrspace(1)
-; CHECK-NOT: vcc_ballot
+; VCC used as a general-purpose 64-bit scalar SADDR base: the allocator computes
+; a global address into the VCC pair (s_add_nc_u64 vcc, ...) and feeds it as the
+; SADDR base of global_load/store. The raiser must read the raw 64-bit VCC value
+; as a plain address, not the wave-mask ballot (a vcc_ballot would mean the
+; address was fabricated from the i1 mask view -- a silent miscompile).
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
@@ -21,6 +13,7 @@
 	.globl	vcc_saddr_load_kernel
 	.p2align	8
 	.type	vcc_saddr_load_kernel,@function
+; CHECK-LABEL: define amdgpu_kernel void @vcc_saddr_load_kernel
 vcc_saddr_load_kernel:
 	s_setreg_imm32_b32 hwreg(HW_REG_WAVE_MODE, 25, 1), 1
 	s_load_b64 s[2:3], s[0:1], 0x0
@@ -28,6 +21,9 @@ vcc_saddr_load_kernel:
 	v_mov_b32_e32 v1, 0
 	s_wait_kmcnt 0x0
 	s_add_nc_u64 vcc, s[2:3], 16
+	; global_load with vcc as SADDR base -> raw 64-bit VCC value, not a ballot.
+	; CHECK: inttoptr i64 %{{.*}} to ptr addrspace(1)
+	; CHECK-NOT: vcc_ballot
 	global_load_u16 v2, v1, vcc
 	s_wait_loadcnt 0x0
 	global_store_b16 v1, v2, s[4:5]
@@ -48,6 +44,7 @@ vcc_saddr_load_kernel:
 	.globl	vcc_saddr_store_kernel
 	.p2align	8
 	.type	vcc_saddr_store_kernel,@function
+; CHECK-LABEL: define amdgpu_kernel void @vcc_saddr_store_kernel
 vcc_saddr_store_kernel:
 	s_setreg_imm32_b32 hwreg(HW_REG_WAVE_MODE, 25, 1), 1
 	s_load_b64 s[2:3], s[0:1], 0x0
@@ -55,6 +52,9 @@ vcc_saddr_store_kernel:
 	v_mov_b32_e32 v2, 0x3c00
 	s_wait_kmcnt 0x0
 	s_add_nc_u64 vcc, s[2:3], 16
+	; global_store with vcc as SADDR base -> raw 64-bit VCC value, not a ballot.
+	; CHECK: inttoptr i64 %{{.*}} to ptr addrspace(1)
+	; CHECK-NOT: vcc_ballot
 	global_store_b16 v1, v2, vcc
 	s_endpgm
 	.section	.rodata,"a",@progbits
