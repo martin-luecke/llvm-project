@@ -446,12 +446,48 @@ struct RaiseContext {
   // topologically the "after" of the wrapped op, exactly like before).
   void emitUnderExec(llvm::function_ref<void()> Body);
 
+  // ==== Option 1: projection-owned guarded whole-wave memory op ==========
+  // Emit `Body` (a single memory op) under a per-lane `Guard`, lowered through
+  // `llvm.amdgcn.if`/`llvm.amdgcn.end.cf`. Those lower to SI_IF/SI_END_CF MIR
+  // pseudos, marked side-effecting so the AMDGPU backend cannot if-convert or
+  // speculate the guarded region away (IntrinsicsAMDGPU.td: "the corresponding
+  // MIR pseudos are marked as having side effects, which is sufficient to
+  // prevent optimizations"). The EXEC mask materialises as s_and_saveexec +
+  // s_cbranch_execz around the mem op and survives to final ISA. This is the
+  // principled, backend-respected replacement for the rejected
+  // `lane_id < wave_size` tautology (which relied on the optimizer FAILING to
+  // fold the branch). On single-source-wave projections (no partial-tail wave
+  // fusion) this degrades to a plain divergent diamond.
+  void emitGuardedMemOp(llvm::Value *Guard, llvm::function_ref<void()> Body);
+
+  // Dispatch-time per-lane active bit: i1 true iff this hardware lane carries a
+  // genuinely dispatched source workitem (the ORIGINAL EXEC captured by
+  // `@llvm.amdgcn.init_whole_wave` at entry), NOT the modeled EXEC the kernel's
+  // data-dependent `v_cmpx` narrows. This is the correct predicate for a
+  // WaveNative whole-wave STORE: it masks only phantom partial-tail lanes (no
+  // source workitem -> stale wild address) while letting EVERY dispatched lane
+  // store, so it does NOT reintroduce the `get_num_kv_splits_triton` over-mask
+  // that came from gating on the narrowed `emitLaneActiveBit`. Returns constant
+  // true on projections without the full-wave-EXEC invariant.
+  llvm::Value *emitDispatchLaneActiveBit();
+
+  // Seed the dispatch-active shadow from the wave-width original active mask.
+  // Called once at entry by the raiser. No-op unless the projection provides
+  // the full-wave-EXEC invariant.
+  void seedDispatchActiveMask(llvm::Value *OrigActiveMask);
+
   // Memoised lane_active for this instruction's emission. Kept as public
   // members (rather than `private:`) so RaiseContext remains an aggregate
   // and can be brace-initialised from the raiser. Mutate only via
   // `resetLaneActiveCache` / `emitLaneActiveBit`.
   llvm::Value *CachedLaneActive = nullptr;
   llvm::BasicBlock *CachedLaneActiveBb = nullptr;
+
+  // Option 1 dispatch-time active mask shadow (wave-width; e.g. i64 on wave64
+  // target), seeded once at entry from `init_whole_wave`. Read by
+  // `emitDispatchLaneActiveBit`. Null on projections without the full-wave-EXEC
+  // invariant.
+  llvm::AllocaInst *DispatchActiveMask = nullptr;
 
   // Per-BB cache of the per-lane i1 compare result produced by the
   // most recent V_CMP_*_e64 writer targeting a given SGPR in this

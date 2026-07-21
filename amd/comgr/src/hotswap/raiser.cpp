@@ -1846,6 +1846,17 @@ raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
   // `Ctx.getM0Const()` to resolve the M0-relative VGPR index statically.
   Regs.OnM0Written = [&Ctx](llvm::Value *V) { Ctx.updateM0Const(V); };
 
+  // Option 1: seed the dispatch-time active mask (WaveNative store predicate)
+  // from the freshly-seeded EXEC alloca. `AllocaRegFile::init` stored
+  // `emitInitialExec()` into EXEC; under WaveNativeProjection that is the ballot
+  // of `init_whole_wave`'s original per-lane active bit -- exactly which
+  // hardware lanes carry a real source workitem at dispatch. Nothing between
+  // `Regs.init` and here writes EXEC, so the alloca still holds that snapshot.
+  // The insertion point is the entry block (the SGPR-shadow allocas above were
+  // just emitted here), so this alloca+store dominates every use. No-op unless
+  // the projection provides the full-wave-EXEC invariant.
+  Ctx.seedDispatchActiveMask(Regs.loadExec(B));
+
   if (UseThreadLoop) {
     auto *IterA = B.CreateAlloca(I32Ty, nullptr, "tl_iter_alloca");
     B.CreateStore(B.getInt32(0), IterA);

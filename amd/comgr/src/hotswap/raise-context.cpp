@@ -740,6 +740,65 @@ void RaiseContext::emitUnderExec(llvm::function_ref<void()> Body) {
   B.SetInsertPoint(SkipBb);
 }
 
+void RaiseContext::emitGuardedMemOp(Value *Guard,
+                                    llvm::function_ref<void()> Body) {
+  // Emit a plain divergent diamond `br i1 %Guard, %gmo_do, %gmo_cont`.
+  //
+  // Why this is backend-respected (and NOT the rejected `lane_id < wave_size`
+  // tautology): `Guard` here is a GENUINE per-lane divergent predicate -- the
+  // load path passes the source-active EXEC bit and the store path passes the
+  // dispatch-time active bit (init_whole_wave's original per-lane mask). LLVM's
+  // divergence analysis sees a data-dependent, non-uniform condition, and the
+  // AMDGPU backend lowers it to `s_and_saveexec` / `s_cbranch_execz` around the
+  // guarded mem op and MUST keep that EXEC masking -- it cannot if-convert a
+  // divergent EXEC-gated hammock to an unconditional EXEC=-1 mem op without
+  // changing which lanes issue the memory access. Verified on final gfx950 ISA
+  // (buffer_load_exec_survives_lowered_isa.s): the save/branch survive at O2
+  // even when the loaded value's consumer sits outside the guard.
+  //
+  // The contrast with the rejected trick is the PREDICATE, not the diamond
+  // shape: the earlier code AND'd in an always-true `lane_id < wave_size` term
+  // purely to defeat the optimizer's constant-folding of a guard that had
+  // become provably-true (EXEC modeled as -1). Option 1 instead guards on the
+  // real per-lane active mask, so keeping the control flow is semantically
+  // required, not an obfuscation. (llvm.amdgcn.if cannot be hand-emitted here:
+  // it is created by SIAnnotateControlFlow from natural CFG and is otherwise
+  // un-selectable -- "Cannot select: intrinsic %llvm.amdgcn.if".)
+  BasicBlock *PreBb = B.GetInsertBlock();
+  Function *F = PreBb->getParent();
+  BasicBlock *DoBb = BasicBlock::Create(C, "gmo_do", F);
+  BasicBlock *ContBb = BasicBlock::Create(C, "gmo_cont", F);
+  B.CreateCondBr(Guard, DoBb, ContBb);
+  B.SetInsertPoint(DoBb);
+  Body();
+  if (!B.GetInsertBlock()->hasTerminator())
+    B.CreateBr(ContBb);
+  B.SetInsertPoint(ContBb);
+}
+
+void RaiseContext::seedDispatchActiveMask(Value *OrigActiveMask) {
+  if (!Projection.providesFullWaveExecInvariant())
+    return;
+  Type *MaskTy = Projection.waveMaskTy();
+  DispatchActiveMask = B.CreateAlloca(MaskTy, nullptr, "dispatch_active_mask");
+  Value *Msk = OrigActiveMask;
+  if (Msk->getType() != MaskTy)
+    Msk = B.CreateZExtOrTrunc(Msk, MaskTy, "dispatch_active_cast");
+  B.CreateStore(Msk, DispatchActiveMask);
+}
+
+Value *RaiseContext::emitDispatchLaneActiveBit() {
+  if (!DispatchActiveMask)
+    return ConstantInt::getTrue(I1Ty);
+  Type *MaskTy = Projection.waveMaskTy();
+  Value *Mask = B.CreateLoad(MaskTy, DispatchActiveMask, "dispatch_active");
+  Value *LaneId = emitLaneIdx();
+  Value *LaneInMask = B.CreateZExtOrTrunc(LaneId, MaskTy, "dispatch_lane_idx");
+  Value *Shifted = B.CreateLShr(Mask, LaneInMask, "dispatch_at_lane");
+  Value *Bit = B.CreateAnd(Shifted, ConstantInt::get(MaskTy, 1), "dispatch_bit");
+  return B.CreateICmpNE(Bit, ConstantInt::get(MaskTy, 0), "dispatch_active_bit");
+}
+
 Value *RaiseContext::readOpExecWidth(const DecodedInst &Di, unsigned OpIdx) {
   // All callers expect the returned value at `regs.execTy` (the EXEC
   // alloca storage width). Under modulo-replication `execTy` matches

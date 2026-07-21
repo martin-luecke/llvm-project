@@ -21,7 +21,13 @@
 ; The fix nests the load in a second, non-constant-foldable
 ; `lane_id < wave_size` branch (`mubuf_memop_do` / `mubuf_memop_cont`) inside the
 ; source-EXEC `spe_do` guard, so the back-end cannot collapse the hammock and
-; must keep EXEC masking. (Escape hatch: HSA_HOTSWAP_DISABLE_LOAD_ANTIFLATTEN.)
+; must keep EXEC masking.
+;
+; Option 1 (Martin review resolution): the guard is now lowered through the
+; projection-owned emitGuardedMemOp primitive, which uses the backend-respected
+; llvm.amdgcn.if / llvm.amdgcn.end.cf pair (SI_IF pseudo, marked side-effecting
+; so the backend CANNOT if-convert it) instead of the earlier
+; `lane_id < wave_size` optimizer-blindness tautology. No env escape hatch.
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
@@ -37,13 +43,15 @@ buffer_load_antiflatten_kernel:
 	s_mov_b32 s3, 0
 	s_mov_b32 s2, 0xffffff
 	s_wait_kmcnt 0x0
-	; The source-EXEC diamond opens, then the buffer load is nested one level
-	; deeper in an anti-if-conversion branch feeding the mubuf_memop_cont phi.
-	; CHECK:      spe_do{{.*}}:
-	; CHECK:        br i1 %{{.+}}, label %mubuf_memop_do{{.*}}, label %mubuf_memop_cont{{.*}}
-	; CHECK:      mubuf_memop_do{{.*}}:
+	; Option 1: the load is guarded through the projection-owned
+	; emitGuardedMemOp primitive on the GENUINE per-lane source-active EXEC bit
+	; (not a lane<wave tautology). The backend keeps this divergent EXEC-gated
+	; diamond as real s_and_saveexec/s_cbranch_execz control flow -- proven on
+	; the final gfx950 ISA in buffer_load_exec_survives_lowered_isa.s.
+	; CHECK:        br i1 %{{.+}}, label %gmo_do{{.*}}, label %gmo_cont{{.*}}
+	; CHECK:      gmo_do{{.*}}:
 	; CHECK:        call <4 x i32> @llvm.amdgcn.raw.ptr.buffer.load.v4i32(
-	; CHECK:      mubuf_memop_cont{{.*}}:
+	; CHECK:      gmo_cont{{.*}}:
 	buffer_load_b128 v[4:7], v0, s[0:3], null offen
 	s_wait_loadcnt 0
 	s_endpgm

@@ -55,10 +55,15 @@ namespace {
 // reconstruction) that the hardware OOB clamp does not catch this offset, so
 // the divergent branch must be preserved instead.
 //
-// Fix: when the projection fuses waves, nest the load body inside a second,
-// non-constant-foldable per-lane branch (`lane_id < wave_size`, always true but
-// not provably-true to the optimizer) so the back-end cannot collapse the
-// hammock and must keep the EXEC-masking control flow. On single-source-wave
+// Fix (Option 1, Martin review): when the projection fuses waves, guard the
+// load through the projection-owned `emitGuardedMemOp` primitive on a GENUINE
+// per-lane divergent predicate (the source-active EXEC bit). The primitive
+// lowers to real s_and_saveexec/s_cbranch_execz EXEC-masking control flow that
+// the back-end MUST keep -- not because we block an optimization, but because
+// the predicate is semantically divergent (verified on final gfx950 ISA in
+// buffer_load_exec_survives_lowered_isa.s). This replaces the earlier
+// `lane_id < wave_size` anti-if-conversion tautology, which relied on the
+// optimizer FAILING to constant-fold an always-true term. On single-source-wave
 // projections this is a no-op (plain `emitUnderExec`).
 void emitMubufLoadUnderExecHardened(RaiseContext &Ctx,
                                     llvm::function_ref<void()> Body) {
@@ -70,28 +75,20 @@ void emitMubufLoadUnderExecHardened(RaiseContext &Ctx,
     Ctx.emitUnderExec(Body);
     return;
   }
-  Ctx.emitUnderExec([&] {
-    Value *Lane = Ctx.B.CreateZExtOrTrunc(Ctx.emitLaneIdx(), Ctx.I32Ty,
-                                          "antiflatten_lane");
-    // Fail loud on an invalid wave size rather than defaulting to 64. The
-    // target wave size is validated at raiser entry (only 32/64 reach a
-    // handler); defaulting would hide a broken compiler-model invariant and
-    // could emit a guard for the wrong target shape.
-    assert(Ctx.TargetIsa.hasValidWaveSize() &&
-           "target wave size must be validated (32/64) before handler dispatch");
-    unsigned TgtWave = Ctx.TargetIsa.WaveSize;
-    Value *Guard = Ctx.B.CreateICmpULT(
-        Lane, ConstantInt::get(Ctx.I32Ty, TgtWave), "antiflatten_guard");
-    BasicBlock *PredBb = Ctx.B.GetInsertBlock();
-    Function *Fn = PredBb->getParent();
-    BasicBlock *DoBb = BasicBlock::Create(Ctx.C, "mubuf_memop_do", Fn);
-    BasicBlock *ContBb = BasicBlock::Create(Ctx.C, "mubuf_memop_cont", Fn);
-    Ctx.B.CreateCondBr(Guard, DoBb, ContBb);
-    Ctx.B.SetInsertPoint(DoBb);
-    Body();
-    Ctx.B.CreateBr(ContBb);
-    Ctx.B.SetInsertPoint(ContBb);
-  });
+  // Option 1 (Martin review): guard the load on the per-lane source-active bit
+  // and lower it through the projection-owned `emitGuardedMemOp` primitive so
+  // the EXEC masking survives codegen and is NEVER if-converted to an
+  // unconditional EXEC=-1 load. `Active` is a GENUINE per-lane divergent
+  // predicate (the source-active EXEC bit), so the AMDGPU backend keeps the
+  // divergent EXEC-gated diamond as real s_and_saveexec/s_cbranch_execz control
+  // flow -- proven on the final gfx950 ISA in
+  // buffer_load_exec_survives_lowered_isa.s. A masked load's result is
+  // discarded, so gating the load is always correct: partial-tail phantom lanes
+  // never dereference their stale out-of-range offset. This replaces the
+  // rejected `lane_id < wave_size` tautology, which relied on the optimizer
+  // FAILING to constant-fold an always-true term.
+  Value *Active = Ctx.emitLaneActiveBit();
+  Ctx.emitGuardedMemOp(Active, Body);
 }
 
 } // namespace

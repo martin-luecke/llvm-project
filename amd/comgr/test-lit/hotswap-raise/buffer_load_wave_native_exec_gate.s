@@ -33,7 +33,10 @@ buffer_load_wave_native_exec_gate_kernel:
 	; emitMubufLoadUnderExecHardened); under modulo-replication (no wave
 	; fusion) the anti-flatten is a no-op and the plain EXEC diamond
 	; (spe_do/spe_skip) is kept.
-	; WN: = phi i32 [ [[LD]], %mubuf_memop_do{{.*}} ], [ undef, %{{.+}} ]
+	; Option 1: both projections route the load through the projection-owned
+	; emitGuardedMemOp primitive -> gmo_do/gmo_cont divergent diamond.
+	; WN: = phi i32 [ [[LD]], %gmo_do{{.*}} ], [ undef, %{{.+}} ]
+	; MR (single source wave): unchanged plain emitUnderExec -> spe_do/spe_skip.
 	; MR: = phi i32 [ [[LD]], %spe_do{{.+}} ], [ undef, %spe_skip{{.+}} ]
 	buffer_load_dword v4, v1, s[0:3], null offen
 	s_wait_loadcnt 0
