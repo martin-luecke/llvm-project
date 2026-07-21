@@ -50,6 +50,14 @@ struct RaiseResult {
   uint32_t SourcePrivateSegmentFixedSize = 0;
   bool HasDivergentExec = false;
   bool HasEnumeratedSetpcDispatch = false;
+  // Set when the kernel was raised under ModRepDoubledDispatchProjection: the
+  // block dimension (0=x,1=y,2=z) the runtime must scale and the factor
+  // (W_t/W_s). Dim is -1 (factor 1) when no doubled dispatch is required. The
+  // launch runtime reads these (threaded through the comgr transpile result and
+  // the loader) to scale exactly the doubled kernels' dispatch. See
+  // amd/comgr/src/hotswap/docs/modrep-predicate-chain.md sec. 10.
+  int DoubledDispatchDim = -1;
+  unsigned DoubledDispatchFactor = 1;
 };
 
 // Raise one kernel from extracted source code-object sections. `TextBytes`
@@ -71,7 +79,13 @@ raiseToIR(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
           uint64_t KernelOffset, uint64_t KernelSize,
           llvm::StringRef CompilationTargetIsa = "",
           bool EnableWritelaneRewrite = true, bool EnableWaveNative = true,
-          bool AssumeHipGlobalOffsetZero = false, uint64_t TextBaseAddress = 0,
+          bool AssumeHipGlobalOffsetZero = false,
+          // Unconditionally select ModRepDoubledDispatchProjection for
+          // wave32->wave64 cross-widening (offline testing of the doubled
+          // in-kernel virtualization independent of a C5 refusal trigger). The
+          // normal path needs no flag: the raiser auto-upgrades the WaveNative
+          // y/z-derived C5 refusal to a doubled dispatch by default.
+          bool ForceModrepDoubled = false, uint64_t TextBaseAddress = 0,
           llvm::ArrayRef<TextSection::ImageSection> SourceImageSections = {},
           // Text-relative extents of all function symbols in the code object
           // (from listTextFunctionExtents). Lets the raiser follow a

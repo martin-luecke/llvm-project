@@ -371,6 +371,12 @@ Expected<HandlerResult> handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
                                        Ctx.Kernargs.Args,
                                        Ctx.AssumeHipGlobalOffsetZero,
                                        Ctx.TargetCodeObjectVersion};
+      if (Ctx.Projection.usesDoubledDispatch()) {
+        HiddenCtx.DoubledDispatchDim =
+            static_cast<int>(Ctx.Projection.doubledDispatchDim());
+        HiddenCtx.DoubledDispatchFactor =
+            Ctx.Projection.doubledDispatchFactor();
+      }
       SourceHiddenArgValue HiddenBase =
           emitSourceHiddenDword(HiddenCtx, SourceByteOffset);
       if (!HiddenBase.Matched) {
@@ -697,6 +703,12 @@ Expected<HandlerResult> handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
                                          Ctx.Kernargs.Args,
                                          Ctx.AssumeHipGlobalOffsetZero,
                                          Ctx.TargetCodeObjectVersion};
+        if (Ctx.Projection.usesDoubledDispatch()) {
+          HiddenCtx.DoubledDispatchDim =
+              static_cast<int>(Ctx.Projection.doubledDispatchDim());
+          HiddenCtx.DoubledDispatchFactor =
+              Ctx.Projection.doubledDispatchFactor();
+        }
         SourceHiddenArgValue Hidden = emitSourceHiddenInteger(
             HiddenCtx, SourceByteOffset, IsHalfWord ? 2 : 1, IsSigned);
         if (Hidden.Matched && Hidden.Value) {

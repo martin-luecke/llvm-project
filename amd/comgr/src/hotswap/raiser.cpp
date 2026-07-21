@@ -93,6 +93,11 @@ namespace COMGR::hotswap {
 
 namespace {
 
+// Hardware threads-per-block maximum for the gfx9/CDNA wave64 targets the
+// doubled dispatch scales up to. A source block that would exceed this once
+// scaled by W_t / W_s cannot be doubled.
+constexpr unsigned kTargetMaxThreadsPerBlock = 1024;
+
 llvm::DenseSet<uint64_t>
 collectInstructionOffsets(ArrayRef<DecodedInst> Insts) {
   llvm::DenseSet<uint64_t> Offsets;
@@ -765,7 +770,8 @@ static Expected<RaiseResult> raiseToIRImpl(
     llvm::ArrayRef<TextSection::ImageSection> SourceImageSections,
     llvm::StringRef CompilationTargetIsa, bool EnableWritelaneRewrite,
     bool EnableWaveNative, bool ForceThreadLoopProjection,
-    bool SuppressC5ForThreadLoopRoute, bool AssumeHipGlobalOffsetZero,
+    bool SuppressC5ForThreadLoopRoute, bool ForceModrepDoubled,
+    bool AssumeHipGlobalOffsetZero,
     llvm::ArrayRef<KernelSymbolExtent> FunctionExtents, RaiseStats *Stats) {
   RaiseResult Result;
 
@@ -921,6 +927,12 @@ static Expected<RaiseResult> raiseToIRImpl(
       Meta.MaxFlatWorkgroupSize > 0 &&
       static_cast<unsigned>(Meta.MaxFlatWorkgroupSize) < TargetIsa.WaveSize;
   const bool UseThreadLoop = ForceThreadLoopProjection;
+  const bool CrossWidenWave32To64 = Isa.isWave32() && !TargetIsa.isWave32();
+  // ModRepDoubledDispatchProjection is selected only via the C5 y/z-refusal
+  // upgrade retry (or an explicit --force-modrep-doubled), so it is a forced
+  // route just like ThreadLoop; it takes precedence over WaveNative.
+  const bool UseModrepDoubled =
+      !UseThreadLoop && ForceModrepDoubled && CrossWidenWave32To64;
   // WaveNative is the default cross-widen projection for wave32 source ->
   // wave64 target (outside the phantom-lane regime, which falls back to
   // MODREP above). The wave_id-in-workgroup hazard -- a subgroup id read via
@@ -928,9 +940,33 @@ static Expected<RaiseResult> raiseToIRImpl(
   // not lane_id mod W_src -- is detected and refused by the obstruction
   // analysis (ObstructionKind::TtmpWaveIdLeak in wave-size-obstruction.cpp),
   // not by this selector, so it needs no WMMA proxy here.
-  const bool UseWaveNative = !UseThreadLoop && EnableWaveNative &&
-                             Isa.isWave32() && !TargetIsa.isWave32() &&
+  const bool UseWaveNative = !UseThreadLoop && !UseModrepDoubled &&
+                             EnableWaveNative && CrossWidenWave32To64 &&
                              !PhantomLaneRegime;
+
+  // Size gate for the doubled dispatch: the runtime scales the block by
+  // W_t / W_s along x, so the scaled flat size must not exceed the target's
+  // hardware threads-per-block maximum.
+  if (UseModrepDoubled) {
+    const unsigned Factor = TargetIsa.WaveSize / Isa.WaveSize;
+    const unsigned SourceFlat =
+        Meta.MaxFlatWorkgroupSize > 0 ? Meta.MaxFlatWorkgroupSize : 1024;
+    if (SourceFlat * Factor > kTargetMaxThreadsPerBlock) {
+      std::string Detail =
+          (Twine("ModRepDoubledDispatchProjection needs to launch ") +
+           Twine(SourceFlat * Factor) +
+           " threads/block (source max_flat_workgroup_size " +
+           Twine(SourceFlat) + " scaled by " + Twine(Factor) +
+           ") but the target hardware limit is " +
+           Twine(kTargetMaxThreadsPerBlock) +
+           "; refuse rather than truncate the block. See "
+           "hotswap/docs/modrep-predicate-chain.md sec. 10.")
+              .str();
+      errs() << "transpiler: pre-translation abort: " << Detail << "\n";
+      return RaiseFailure::crossWavePredicateChain(KernelName, Detail);
+    }
+  }
+
   std::unique_ptr<WaveProjection> ProjectionPtr;
   if (UseThreadLoop) {
     ProjectionPtr =
@@ -939,6 +975,13 @@ static Expected<RaiseResult> raiseToIRImpl(
            << "' selected ThreadLoopProjection (analysis-triggered "
               "cross-widen route; writelane/readlane rewrite may be "
               "disabled by the retry caller)\n";
+  } else if (UseModrepDoubled) {
+    ProjectionPtr = std::make_unique<ModRepDoubledDispatchProjection>(
+        Isa, TargetIsa, I32Ty, I64Ty);
+    errs() << "transpiler: kernel '" << KernelName
+           << "' selected ModRepDoubledDispatchProjection (doubled dispatch "
+              "along x; each target wave hosts one source wave with replica "
+              "upper lanes)\n";
   } else if (UseWaveNative) {
     ProjectionPtr =
         std::make_unique<WaveNativeProjection>(Isa, TargetIsa, I32Ty, I64Ty);
@@ -949,8 +992,17 @@ static Expected<RaiseResult> raiseToIRImpl(
   ProjectionPtr->setMaxFlatWorkgroupSize(Meta.MaxFlatWorkgroupSize);
   WaveProjection &Projection = *ProjectionPtr;
 
-  if (!UseThreadLoop && EnableWaveNative && PhantomLaneRegime &&
-      Isa.isWave32() && !TargetIsa.isWave32()) {
+  // Record the doubled-dispatch requirement so the launch runtime scales
+  // exactly this kernel's dispatch (threaded through the transpile result and
+  // the loader). Non-doubled projections leave dim=-1 / factor=1.
+  if (Projection.usesDoubledDispatch()) {
+    Result.DoubledDispatchDim =
+        static_cast<int>(Projection.doubledDispatchDim());
+    Result.DoubledDispatchFactor = Projection.doubledDispatchFactor();
+  }
+
+  if (!UseThreadLoop && !UseModrepDoubled && EnableWaveNative &&
+      PhantomLaneRegime && Isa.isWave32() && !TargetIsa.isWave32()) {
     // Log the fallback so operators can trace which kernels moved to
     // MODREP and why.  A regression that silently flips WaveNative's
     // selection on a phantom-lane kernel would then (re-)produce the
@@ -1351,6 +1403,27 @@ static Expected<RaiseResult> raiseToIRImpl(
     // gfx1250 binary did.
     int MaxWg =
         Meta.MaxFlatWorkgroupSize > 0 ? Meta.MaxFlatWorkgroupSize : 1024;
+    if (Projection.usesDoubledDispatch()) {
+      // The runtime launches this block scaled by the doubled-dispatch factor
+      // along x. `amdgpu-flat-work-group-size` must advertise the scaled size
+      // or ROCR/HIP would reject the larger launch as exceeding the declared
+      // bound; the in-kernel workgroup-size query is virtualized back to the
+      // source size via source-hidden-args, so kernel logic still sees MaxWg.
+      MaxWg *= static_cast<int>(Projection.doubledDispatchFactor());
+      // IR-level breadcrumb recording the doubled dimension and factor (e.g.
+      // "x2") for offline inspection and the raise_cli lit tests. This is not
+      // the runtime signal: the launch runtime learns the doubled dim/factor
+      // from the transpile result (RaiseResult -> comgr result info fields ->
+      // loader), because this function attribute does not survive to the kernel
+      // descriptor metadata. See hotswap/docs/modrep-predicate-chain.md
+      // sec. 10.
+      assert(Projection.doubledDispatchDim() < 3 &&
+             "doubled dispatch dim must be x/y/z");
+      const char DimChar = "xyz"[Projection.doubledDispatchDim()];
+      F->addFnAttr("hotswap-modrep-doubled-dispatch",
+                   std::string(1, DimChar) +
+                       std::to_string(Projection.doubledDispatchFactor()));
+    }
     F->addFnAttr("amdgpu-flat-work-group-size",
                  std::to_string(MaxWg) + "," + std::to_string(MaxWg));
 
@@ -1538,6 +1611,11 @@ static Expected<RaiseResult> raiseToIRImpl(
                                      Meta.Args,
                                      AssumeHipGlobalOffsetZero,
                                      TargetCodeObjectVersion};
+    if (Projection.usesDoubledDispatch()) {
+      HiddenCtx.DoubledDispatchDim =
+          static_cast<int>(Projection.doubledDispatchDim());
+      HiddenCtx.DoubledDispatchFactor = Projection.doubledDispatchFactor();
+    }
     SourceHiddenArgValue Hidden = emitSourceHiddenDword(HiddenCtx, ByteOffset);
     if (Hidden.Matched && Hidden.Value)
       return Hidden.Value;
@@ -2270,6 +2348,7 @@ static Expected<RaiseResult> raiseToIRImpl(
                              /*enableWaveNative=*/false,
                              /*forceThreadLoopProjection=*/true,
                              /*suppressC5ForThreadLoopRoute=*/true,
+                             /*forceModrepDoubled=*/false,
                              AssumeHipGlobalOffsetZero, FunctionExtents, Stats);
       }
       if (!ForceThreadLoopProjection &&
@@ -2382,8 +2461,31 @@ static Expected<RaiseResult> raiseToIRImpl(
     PredicateChainProjection PredProjection =
         UseThreadLoop
             ? PredicateChainProjection::ThreadLoop
-            : (UseWaveNative ? PredicateChainProjection::WaveNative
-                             : PredicateChainProjection::ModuloReplication);
+            : (UseModrepDoubled
+                   ? PredicateChainProjection::ModuloReplicationDoubled
+                   : (UseWaveNative
+                          ? PredicateChainProjection::WaveNative
+                          : PredicateChainProjection::ModuloReplication));
+
+    // A doubled dispatch cannot feed a matrix fragment: wmma/mfma distribute a
+    // tile across all W_t lanes, but under this projection only W_s lanes carry
+    // logical data (the rest are replicas). Refuse rather than miscompile. The
+    // C5-upgrade retry below already screens matrix kernels out, so this only
+    // fires for an explicit --force-modrep-doubled on a matrix kernel.
+    if (UseModrepDoubled) {
+      for (const DecodedInst &Inst : Insts) {
+        if (isMatrixCanonicalOp(Inst.CanonOp)) {
+          std::string Detail =
+              "ModRepDoubledDispatchProjection cannot lower wmma/mfma: a "
+              "matrix "
+              "fragment spans all target lanes, but a doubled dispatch fills "
+              "the upper lanes with replicas. Refusing. See "
+              "hotswap/docs/modrep-predicate-chain.md sec. 10.";
+          errs() << "transpiler: pre-translation abort: " << Detail << "\n";
+          return RaiseFailure::crossWavePredicateChain(KernelName, Detail);
+        }
+      }
+    }
     PredicateChainClassifierReport PredReport = classifyPredicateChain(
         *F, Isa.WaveSize, TargetIsa.WaveSize, PredProjection,
         /*maxFlatWorkgroupSize=*/
@@ -2403,7 +2505,10 @@ static Expected<RaiseResult> raiseToIRImpl(
                 ? "ThreadLoopProjection"
                 : (PredProjection == PredicateChainProjection::WaveNative
                        ? "WaveNativeProjection"
-                       : "ModuloReplicationProjection");
+                       : (PredProjection == PredicateChainProjection::
+                                                ModuloReplicationDoubled
+                              ? "ModRepDoubledDispatchProjection"
+                              : "ModuloReplicationProjection"));
         dbgs() << "c5-predicate-chain: observed "
                << PredReport.ObservedSites.size() << " C5-shape site(s) in '"
                << KernelName << "' under " << ProjectionName
@@ -2423,6 +2528,46 @@ static Expected<RaiseResult> raiseToIRImpl(
         }
         return false;
       };
+      // Principled upgrade of the WaveNative y/z-derived C5 refusal (the
+      // reduce_kernel RMSNorm aperture class) to a doubled dispatch. A doubled
+      // dispatch makes each target wave uniform in y/z and turns the upper
+      // lanes into replicas, so the divergent early exit that WaveNative cannot
+      // represent simply does not arise. This is the default resolution and is
+      // not gated on any flag or env: the raiser always takes it when the
+      // refusal is eligible -- the y/z refusal specifically, cross-widening
+      // with an integer wave ratio, no matrix ops (they cannot be fed from
+      // replicas), and the scaled block fitting the hardware threads/block max.
+      // When not eligible the refusal stands. The launch runtime honours the
+      // doubled dispatch via the doubled dim/factor threaded through the
+      // transpile result. See hotswap/docs/modrep-predicate-chain.md sec. 10.
+      const unsigned DoubleFactor =
+          Isa.WaveSize ? TargetIsa.WaveSize / Isa.WaveSize : 0;
+      const bool CanUpgradeToDoubled =
+          !ForceModrepDoubled && PredReport.WaveNativeYzRefusal &&
+          Isa.isWave32() && !TargetIsa.isWave32() && DoubleFactor >= 2 &&
+          (TargetIsa.WaveSize % Isa.WaveSize) == 0 && !HasMatrixOp() &&
+          Meta.MaxFlatWorkgroupSize > 0 &&
+          static_cast<unsigned>(Meta.MaxFlatWorkgroupSize) * DoubleFactor <=
+              kTargetMaxThreadsPerBlock;
+      if (CanUpgradeToDoubled) {
+        errs() << "transpiler: post-raise fallback: retrying kernel '"
+               << KernelName
+               << "' under ModRepDoubledDispatchProjection after WaveNative C5 "
+                  "y/z-derived refusal (analysis-triggered, doubled-dispatch "
+                  "route enabled)\n";
+        errs() << "transpiler: modrep-doubled fallback trigger: "
+               << PredReport.RefusalDetail << "\n";
+        return raiseToIRImpl(TextBytes, SourceIsa, KernelName, Meta,
+                             KernelOffset, KernelSize, TextBaseAddress,
+                             SourceImageSections, CompilationTargetIsa,
+                             EnableWritelaneRewrite,
+                             /*enableWaveNative=*/false,
+                             /*forceThreadLoopProjection=*/false,
+                             /*suppressC5ForThreadLoopRoute=*/false,
+                             /*forceModrepDoubled=*/true,
+                             AssumeHipGlobalOffsetZero, FunctionExtents, Stats);
+      }
+
       // C5 predicate-chain refusal -> retry under ThreadLoopProjection.
       // TLP iterates the kernel body once per source wave with a synthetic
       // per-iteration source tid (see ThreadLoopProjection::emitWorkitemIdX),
@@ -2463,7 +2608,8 @@ static Expected<RaiseResult> raiseToIRImpl(
               /*enableWritelaneRewrite=*/false,
               /*enableWaveNative=*/false,
               /*forceThreadLoopProjection=*/true,
-              /*suppressC5ForThreadLoopRoute=*/true, AssumeHipGlobalOffsetZero,
+              /*suppressC5ForThreadLoopRoute=*/true,
+              /*forceModrepDoubled=*/false, AssumeHipGlobalOffsetZero,
               FunctionExtents, Stats);
         }
       }
@@ -2521,25 +2667,28 @@ raiseToIR(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
                    /*KernelOffset=*/0,
                    /*KernelSize=*/0, CompilationTargetIsa,
                    EnableWritelaneRewrite, EnableWaveNative,
-                   /*AssumeHipGlobalOffsetZero=*/false, TextBaseAddress,
+                   /*AssumeHipGlobalOffsetZero=*/false,
+                   /*ForceModrepDoubled=*/false, TextBaseAddress,
                    SourceImageSections, /*FunctionExtents=*/{}, Stats);
 }
 
-llvm::Expected<RaiseResult> raiseToIR(
-    llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
-    llvm::StringRef KernelName, const KernelMeta &Meta, uint64_t KernelOffset,
-    uint64_t KernelSize, llvm::StringRef CompilationTargetIsa,
-    bool EnableWritelaneRewrite, bool EnableWaveNative,
-    bool AssumeHipGlobalOffsetZero, uint64_t TextBaseAddress,
-    llvm::ArrayRef<TextSection::ImageSection> SourceImageSections,
-    llvm::ArrayRef<KernelSymbolExtent> FunctionExtents, RaiseStats *Stats) {
-  return raiseToIRImpl(TextBytes, SourceIsa, KernelName, Meta, KernelOffset,
-                       KernelSize, TextBaseAddress, SourceImageSections,
-                       CompilationTargetIsa, EnableWritelaneRewrite,
-                       EnableWaveNative,
-                       /*forceThreadLoopProjection=*/false,
-                       /*suppressC5ForThreadLoopRoute=*/false,
-                       AssumeHipGlobalOffsetZero, FunctionExtents, Stats);
+llvm::Expected<RaiseResult>
+raiseToIR(llvm::ArrayRef<uint8_t> TextBytes, llvm::StringRef SourceIsa,
+          llvm::StringRef KernelName, const KernelMeta &Meta,
+          uint64_t KernelOffset, uint64_t KernelSize,
+          llvm::StringRef CompilationTargetIsa, bool EnableWritelaneRewrite,
+          bool EnableWaveNative, bool AssumeHipGlobalOffsetZero,
+          bool ForceModrepDoubled, uint64_t TextBaseAddress,
+          llvm::ArrayRef<TextSection::ImageSection> SourceImageSections,
+          llvm::ArrayRef<KernelSymbolExtent> FunctionExtents,
+          RaiseStats *Stats) {
+  return raiseToIRImpl(
+      TextBytes, SourceIsa, KernelName, Meta, KernelOffset, KernelSize,
+      TextBaseAddress, SourceImageSections, CompilationTargetIsa,
+      EnableWritelaneRewrite, EnableWaveNative,
+      /*forceThreadLoopProjection=*/false,
+      /*suppressC5ForThreadLoopRoute=*/false, ForceModrepDoubled,
+      AssumeHipGlobalOffsetZero, FunctionExtents, Stats);
 }
 
 } // namespace COMGR::hotswap

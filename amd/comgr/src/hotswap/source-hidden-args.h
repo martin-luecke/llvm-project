@@ -39,6 +39,16 @@ struct SourceHiddenArgContext {
   llvm::ArrayRef<KernelArgMeta> Args;
   bool AssumeHipGlobalOffsetZero = false;
   unsigned TargetCodeObjectVersion = 6;
+  // Doubled-dispatch virtualization (ModRepDoubledDispatchProjection). When
+  // >= 0, the runtime launches this block with a `DoubledDispatchFactor`-scaled
+  // extent along dimension `DoubledDispatchDim` (0=x,1=y,2=z). The source
+  // kernel's loops and reduction bounds must still observe the un-scaled block
+  // size, so the synthesized `hidden_group_size_*` and grid-size reads for that
+  // dimension are divided by the factor. All derived hidden args
+  // (block_count = grid/group, remainder = grid%group) stay correct because the
+  // factor cancels in the ratio. -1 disables the adjustment.
+  int DoubledDispatchDim = -1;
+  unsigned DoubledDispatchFactor = 1;
 };
 
 // Result of attempting to synthesize a source hidden argument.

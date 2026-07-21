@@ -292,6 +292,10 @@ bool shouldRefuseC5(PredicateChainProjection Projection,
     return MaxFlatWorkgroupSize > 0 && MaxFlatWorkgroupSize < TargetWaveSize;
   case PredicateChainProjection::ThreadLoop:
     return !SuppressThreadLoopC5;
+  case PredicateChainProjection::ModuloReplicationDoubled:
+    // Correct by construction: a lane and its replica share every C5
+    // predicate, and y/z predicates are wave-uniform. Never refuse.
+    return false;
   }
   llvm_unreachable("unknown PredicateChainProjection");
 }
@@ -337,6 +341,12 @@ std::string formatSuppressionReason(PredicateChainProjection Projection,
              "cross-widen retry; source-wave-scoped lane ops and banked "
              "predicate masks own the C5 boundary for this narrowed route";
     break;
+  case PredicateChainProjection::ModuloReplicationDoubled:
+    return "selected ModRepDoubledDispatchProjection: the runtime launches "
+           "the block with a doubled x-extent so each target wave hosts one "
+           "source wave with the upper lanes as exact replicas; a lane and "
+           "its replica share every C5 predicate and y/z predicates are "
+           "wave-uniform, so the predicate-chain divergence cannot arise";
   }
   return "";
 }
@@ -465,6 +475,100 @@ PredicateChainClassifierReport classifyPredicateChain(
       // silent today to preserve the baseline-non-refusal contract
       // (`vecadd_f16` / `rope_fp32` store `tid`-derived values
       // verbatim into global memory -- that is not a C5 shape).
+    }
+  }
+
+  // ===== WaveNative pass: workitem.id.y()/.z()-derived predicates. =====
+  //
+  // Under WaveNative wave32->wave64 packing the two source waves occupy
+  // consecutive linear-tid ranges (target lane L -> source linear tid base+L).
+  // For the common block shape whose x-extent is a multiple of the source wave
+  // size, the wave boundary falls between y/z values, so `workitem.id.y` and
+  // `.z` DIFFER between the two packed source waves (only `workitem.id.x` stays
+  // source-wave-relative, which is why Pass 1/2 above reason about `.x`). A
+  // predicate on a wave-spanning y/z value that gates control flow lets one
+  // packed source wave take a divergent early exit (`s_cbranch_execz`) that the
+  // other does not. WaveNative cannot represent that: the source (wave32) wave
+  // that clears its EXEC would `s_cbranch_execz` and return, but the packed
+  // target wave64 stays alive for the other source wave, so the cleared wave's
+  // lanes are dragged through the skipped region masked -- left holding stale
+  // VGPRs (e.g. an un-broadcast base pointer) -- and are later re-activated
+  // into a global load with a stale / out-of-range address: an
+  // allocation-dependent HSA aperture violation. This is the reduce_kernel
+  // RMSNorm-variance fault (rows not a multiple of the wave size); see
+  // project_aperture_rootcause. No source-wave-local lowering can express the
+  // divergent early exit, so refuse rather than miscompile. (The alternative is
+  // the host padding the problem size to a multiple of the wave so no phantom
+  // row exists.)
+  if (Projection == PredicateChainProjection::WaveNative) {
+    SmallPtrSet<Value *, 32> YzDerived;
+    SmallVector<Value *> YzWork;
+    for (Instruction &I : instructions(F)) {
+      auto *CI = dyn_cast<CallInst>(&I);
+      if (!CI)
+        continue;
+      Function *Callee = CI->getCalledFunction();
+      if (!Callee)
+        continue;
+      Intrinsic::ID Id = Callee->getIntrinsicID();
+      if (Id == Intrinsic::amdgcn_workitem_id_y ||
+          Id == Intrinsic::amdgcn_workitem_id_z)
+        YzWork.push_back(CI);
+    }
+    while (!YzWork.empty()) {
+      Value *V = YzWork.pop_back_val();
+      if (!YzDerived.insert(V).second)
+        continue;
+      for (User *U : V->users()) {
+        auto *I = dyn_cast<Instruction>(U);
+        if (!I)
+          continue;
+        // The icmp is the predicate we refuse on below; don't propagate the
+        // resulting i1. Unlike the `.x` walk we do NOT stop at `and K` masks:
+        // masking a wave-spanning y/z value does not fold it onto a
+        // source-wave-local residue.
+        if (isa<ICmpInst>(I))
+          continue;
+        if (isPurePropagator(I))
+          YzWork.push_back(I);
+      }
+    }
+    // NOTE on why we do NOT gate on "feeds a conditional branch": by the time
+    // this classifier runs (Phase 6+, after PromoteMemToReg and the source
+    // s_cbranch_execz has been raised), the divergent early exit has been
+    // if-converted into straight-line SPE-predicated form -- the y/z predicate
+    // feeds `select`s and predicated address/value computations, not a
+    // hardware `br`. (Empirically every y/z-derived icmp in the reduce_kernel
+    // has zero conditional-branch users.) The hazard is precisely that
+    // if-converted shape: the two packed source waves disagree on the mask and
+    // one is dragged through with a stale base VGPR into a global load. So the
+    // sound signal is the y/z-derived predicate itself, independent of whether
+    // a `br` survived.
+    for (Instruction &I : instructions(F)) {
+      auto *Cmp = dyn_cast<ICmpInst>(&I);
+      if (!Cmp)
+        continue;
+      bool HasYzOp = false;
+      for (Value *Op : Cmp->operands())
+        if (YzDerived.count(Op))
+          HasYzOp = true;
+      if (!HasYzOp)
+        continue;
+      std::string Detail =
+          "workitem.id.y()/.z()-derived predicate under WaveNative "
+          "wave32->wave64 packing: the value differs between the two packed "
+          "source waves, so this predicate can drive a divergent early exit "
+          "that WaveNative cannot represent (a cleared source wave cannot "
+          "s_cbranch_execz independently of its packed partner), risking "
+          "stale-VGPR out-of-bounds access / HSA aperture violation. See "
+          "project_aperture_rootcause.";
+      Report.ObservedSites.push_back(Detail);
+      Report.WaveNativeYzRefusal = true;
+      if (!Report.Refused) {
+        Report.Refused = true;
+        Report.WaveNativePhantomRefusal = false;
+        Report.RefusalDetail = Detail;
+      }
     }
   }
 

@@ -34,6 +34,12 @@ struct PipelineOptions {
   // offset, so hidden_global_offset_{x,y,z} can be synthesized as zero.
   // Standalone callers keep this false and reject those source hidden args.
   bool AssumeHipGlobalOffsetZero = false;
+  // Unconditionally select ModRepDoubledDispatchProjection for wave32->wave64
+  // cross-widening (offline testing only). The normal path needs no flag: the
+  // raiser auto-upgrades the WaveNative y/z-derived C5 refusal to a doubled
+  // dispatch by default, and the launch runtime honours it via the doubled
+  // dim/factor threaded through the transpile result.
+  bool ForceModrepDoubled = false;
 };
 
 struct PipelineResult {
@@ -57,6 +63,11 @@ struct PipelineResult {
   uint32_t TargetPrivateSegmentFixedSize = 0;
   int LiftedCount = 0;
   int TotalCount = 0;
+  // ModRepDoubledDispatchProjection requirement for the (single) transpiled
+  // kernel: the block dim (0=x,1=y,2=z) and factor (W_t/W_s) the launch runtime
+  // must scale. Dim -1 / factor 1 means no doubling. See raiser.h.
+  int DoubledDispatchDim = -1;
+  unsigned DoubledDispatchFactor = 1;
   bool Success = false;
 };
 

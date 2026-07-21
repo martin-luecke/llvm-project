@@ -156,6 +156,14 @@ enum class PredicateChainProjection {
   ModuloReplication,
   WaveNative,
   ThreadLoop,
+  // Modulo-replication backed by a doubled dispatch
+  // (`ModRepDoubledDispatchProjection`, hotswap/docs/modrep-predicate-chain.md
+  // sec. 6). Each target wave hosts one source wave with the upper lanes as
+  // exact replicas, so a lane and its replica share every predicate: both the
+  // `.x`-derived lane-position predicates (Pass 2) and the `.y`/`.z`-derived
+  // wave-spanning predicates (which become wave-uniform once x is doubled) are
+  // correct by construction. This projection therefore never refuses C5.
+  ModuloReplicationDoubled,
 };
 
 struct PredicateChainClassifierReport {
@@ -181,6 +189,16 @@ struct PredicateChainClassifierReport {
   // under ThreadLoopProjection, which keeps per-source-wave predicate masks
   // distinct instead of truncating them through a single source-width SGPR.
   bool WaveNativeEqualityRefusal = false;
+
+  // True iff WaveNative refused specifically because a `workitem.id.y()`/`.z()`
+  // -derived predicate can drive a divergent early exit that the two packed
+  // source waves disagree on (the reduce_kernel RMSNorm aperture class). This
+  // is the principled upgrade point to `ModRepDoubledDispatchProjection`: a
+  // doubled dispatch makes each target wave uniform in y/z, so the divergence
+  // disappears. The raiser retries under the doubled projection instead of
+  // hard-refusing when the doubled-dispatch route is enabled and the kernel is
+  // matrix-free and small enough to double.
+  bool WaveNativeYzRefusal = false;
 
   // True iff a WaveNative equality (`eq`/`ne`) C5 site was observed. These
   // sites are accepted only by the target-width mask-shadow contract; callers
