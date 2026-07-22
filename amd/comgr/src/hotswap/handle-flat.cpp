@@ -323,6 +323,72 @@ Expected<HandlerResult> lowerFlatCacheControlFence(RaiseContext &Ctx,
   return Hr;
 }
 
+// Under a scaled dispatch source lane `i` and its active replica `i+W_s` share
+// one logical thread, and `emitUnderExec` gates on `lane_id mod W_s`, so both
+// issue any atomic. This breaks two ways:
+//
+//   - A *returning* atomicrmw cannot be made replica-consistent: the lane and
+//     its replica each read a different "old" value (the second issue sees the
+//     first's write), and there is no replica-0 -> replica-1 broadcast to
+//     reconcile them. Refuse every returning form, idempotent or not, rather
+//     than miscompute.
+//   - A store-only *non-idempotent* RMW double-counts: add/sub/fadd
+//     (`global_atomic_pk_add` lowers to FAdd), xor, swap, and any future
+//     inc/dec/nand/fsub -- the split-K / atomic-accumulate epilogue lands at
+//     2x. Gate it to replica-0 (`lane_id < W_s`, one issue per source lane,
+//     matching native wave32). Classify by the idempotent exception set (and/or
+//     and the integer/FP min/max family), where re-applying the same operand is
+//     a no-op, and gate everything else.
+//
+// No other projection needs this: WaveNative forces full-wave HW EXEC, and
+// plain / phantom-lane MODREP never dispatches the replica lanes, so each
+// atomic already issues exactly once. Restrict the whole policy to
+// `usesScaledDispatch` so those paths emit no extra control flow. Report
+// whether the caller must gate a store-only RMW to one replica.
+static Expected<bool> needsOneReplicaGate(RaiseContext &Ctx,
+                                          const DecodedInst &Di,
+                                          AtomicRMWInst::BinOp Op,
+                                          StringRef Format) {
+  if (!Ctx.Projection.usesScaledDispatch())
+    return false;
+  if (Di.NumDefs > 0)
+    return RaiseFailure::unsupportedInstructionForm(
+        Di, Format,
+        "returning atomic RMW under a scaled dispatch: the source lane and its "
+        "active replica each issue the RMW and read a different value, which "
+        "cannot be reconciled without a replica broadcast; refuse rather than "
+        "miscompute");
+  const bool Idempotent =
+      Op == AtomicRMWInst::And || Op == AtomicRMWInst::Or ||
+      Op == AtomicRMWInst::Min || Op == AtomicRMWInst::Max ||
+      Op == AtomicRMWInst::UMin || Op == AtomicRMWInst::UMax ||
+      Op == AtomicRMWInst::FMin || Op == AtomicRMWInst::FMax ||
+      Op == AtomicRMWInst::FMinimum || Op == AtomicRMWInst::FMaximum ||
+      Op == AtomicRMWInst::FMinimumNum || Op == AtomicRMWInst::FMaximumNum;
+  return !Idempotent;
+}
+
+// Emit `emit` under `if (lane_id < W_s)` so exactly one of a source lane and
+// its scaled-dispatch replica issues the atomic, matching native wave32.
+static void emitAtomicUnderOneReplica(RaiseContext &Ctx,
+                                      llvm::function_ref<void()> Emit) {
+  Value *LaneId = Ctx.emitLaneIdx();
+  Value *WsC = ConstantInt::get(LaneId->getType(), Ctx.Isa.WaveSize);
+  Value *IsRep0 = Ctx.B.CreateICmpULT(LaneId, WsC, "one_replica");
+  BasicBlock *PreBb = Ctx.B.GetInsertBlock();
+  Function *Fn = PreBb->getParent();
+  BasicBlock *DoBb = BasicBlock::Create(Ctx.C, "atomic_do", Fn);
+  BasicBlock *SkipBb = BasicBlock::Create(Ctx.C, "atomic_skip", Fn);
+  Ctx.B.CreateCondBr(IsRep0, DoBb, SkipBb);
+  Ctx.B.SetInsertPoint(DoBb);
+  Emit();
+  Ctx.B.CreateBr(SkipBb);
+  Ctx.B.SetInsertPoint(SkipBb);
+  // The manual EXEC-narrowing branch invalidates the memoised lane-active bit
+  // for any later emission of this instruction.
+  Ctx.resetLaneActiveCache();
+}
+
 } // namespace
 
 Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
@@ -1860,22 +1926,32 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
       return RaiseFailure::unsupportedInstructionForm(Di, "FLAT",
                                                       "unhandled flat atomic");
     }
-    Ctx.emitUnderExec([&] {
-      auto *Rmw = Ctx.B.CreateAtomicRMW(AtomicOp, Addr, Data, MaybeAlign(),
-                                        AtomicOrdering::SequentiallyConsistent);
-      if (Di.NumDefs > 0) {
-        Value *RetVal = Rmw;
-        if (Is64) {
-          if (IsFp)
-            RetVal = Ctx.B.CreateBitCast(RetVal, Ctx.I64Ty);
-          Ctx.Regs.writeReg64(Ctx.B, Op.dst(), RetVal);
-        } else {
-          if (IsFp)
-            RetVal = Ctx.B.CreateBitCast(RetVal, Ctx.I32Ty);
-          Ctx.Regs.writeReg32(Ctx.B, Op.dst(), RetVal);
+    auto EmitRMW = [&] {
+      Ctx.emitUnderExec([&] {
+        auto *Rmw =
+            Ctx.B.CreateAtomicRMW(AtomicOp, Addr, Data, MaybeAlign(),
+                                  AtomicOrdering::SequentiallyConsistent);
+        if (Di.NumDefs > 0) {
+          Value *RetVal = Rmw;
+          if (Is64) {
+            if (IsFp)
+              RetVal = Ctx.B.CreateBitCast(RetVal, Ctx.I64Ty);
+            Ctx.Regs.writeReg64(Ctx.B, Op.dst(), RetVal);
+          } else {
+            if (IsFp)
+              RetVal = Ctx.B.CreateBitCast(RetVal, Ctx.I32Ty);
+            Ctx.Regs.writeReg32(Ctx.B, Op.dst(), RetVal);
+          }
         }
-      }
-    });
+      });
+    };
+    Expected<bool> GateOrErr = needsOneReplicaGate(Ctx, Di, AtomicOp, "FLAT");
+    if (!GateOrErr)
+      return GateOrErr.takeError();
+    if (*GateOrErr)
+      emitAtomicUnderOneReplica(Ctx, EmitRMW);
+    else
+      EmitRMW();
     Hr.Handled = true;
     return Hr;
   }
@@ -2054,7 +2130,7 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
     }
     if (IsFp)
       Data = Ctx.B.CreateBitCast(Data, AtomicTy);
-    auto EmitSwapRMW = [&] {
+    auto EmitRMW = [&] {
       Ctx.emitUnderExec([&] {
         Value *Prev = Ctx.B.CreateAtomicRMW(AtomicOp, Addr, Data, MaybeAlign(),
                                             AtomicOrdering::Monotonic);
@@ -2068,36 +2144,13 @@ Expected<HandlerResult> handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
         }
       });
     };
-    // Gate a store-only (numDefs==0) SWAP to one MODREP replica: without
-    // this, target lanes `i` and `i+W_s` both pass the emitUnderExec mask
-    // and double-issue the atomic. Predicating on `lane_id < W_s` issues
-    // exactly one atomic per source lane, matching native wave32. Returning
-    // swaps and non-MODREP projections are refused in
-    // wave-size-obstruction.cpp.
-    const bool GateOneReplica = Sop == CanonicalOp::GLOBAL_ATOMIC_SWAP &&
-                                Di.NumDefs == 0 &&
-                                Ctx.TargetIsa.WaveSize > Ctx.Isa.WaveSize &&
-                                Ctx.Projection.numSourceWavesPerTarget() == 1 &&
-                                !Ctx.Projection.providesFullWaveExecInvariant();
-    if (GateOneReplica) {
-      Value *LaneId = Ctx.emitLaneIdx();
-      Value *WsC = ConstantInt::get(LaneId->getType(), Ctx.Isa.WaveSize);
-      Value *IsRep0 = Ctx.B.CreateICmpULT(LaneId, WsC, "one_replica");
-      BasicBlock *PreBb = Ctx.B.GetInsertBlock();
-      Function *Fn = PreBb->getParent();
-      BasicBlock *DoBb = BasicBlock::Create(Ctx.C, "atomic_do", Fn);
-      BasicBlock *SkipBb = BasicBlock::Create(Ctx.C, "atomic_skip", Fn);
-      Ctx.B.CreateCondBr(IsRep0, DoBb, SkipBb);
-      Ctx.B.SetInsertPoint(DoBb);
-      EmitSwapRMW();
-      Ctx.B.CreateBr(SkipBb);
-      Ctx.B.SetInsertPoint(SkipBb);
-      // The manual EXEC-narrowing branch invalidates the memoised
-      // lane-active bit for any subsequent emission of this instruction.
-      Ctx.resetLaneActiveCache();
-    } else {
-      EmitSwapRMW();
-    }
+    Expected<bool> GateOrErr = needsOneReplicaGate(Ctx, Di, AtomicOp, "GLOBAL");
+    if (!GateOrErr)
+      return GateOrErr.takeError();
+    if (*GateOrErr)
+      emitAtomicUnderOneReplica(Ctx, EmitRMW);
+    else
+      EmitRMW();
     Hr.Handled = true;
     return Hr;
   }

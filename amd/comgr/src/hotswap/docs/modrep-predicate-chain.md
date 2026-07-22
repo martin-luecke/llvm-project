@@ -812,9 +812,17 @@ for any warp-primitive kernel.
   and `SaveExecFromLaneId` (`RewriteId::SaveExecLaneRelative`, via
   `numSourceWavesPerTarget() == 1`) under this projection -- the normal handlers
   already emit correct source-wave-local IR; no target-width projection is needed.
-- **Store-only atomics.** MODREP's `AtomicOneReplica` gate (`lane_id < W_s`) is
-  exactly right: only the real lower half issues each atomic, matching native
-  wave32.
+- **Atomics.** Under a scaled dispatch a source lane and its active replica both
+  issue any atomic. A *returning* atomicrmw is refused outright -- the two issues
+  read different "old" values and there is no replica broadcast to reconcile
+  them. A store-only *non-idempotent* RMW (add/sub/fadd, `global_atomic_pk_add`
+  -> FAdd, xor, swap) would double-count, so it is gated to the lower half
+  (`lane_id < W_s`), matching native wave32; store-only idempotent RMWs (and/or,
+  the integer/FP min/max family) re-apply with no effect and are left alone.
+  `needsOneReplicaGate` in handle-flat.cpp applies this at both the global and
+  flat sites, only for `usesScaledDispatch()` -- WaveNative's full-wave EXEC and
+  plain / phantom-lane MODREP (replica lanes undispatched) each issue once
+  already.
 
 Cost: ~50% lane utilisation (the upper half redoes the lower half's work), i.e.
 2x slower than WaveNative packing. It is the safe correctness fallback, not the
@@ -886,4 +894,7 @@ wave are needed. Validated on gfx942 against a native MFMA numeric oracle.
   and lowers to MFMA under the scaled dispatch, no `init_whole_wave`);
   `scaled_modrep_wmma_refuse.s` (a too-large matrix kernel refuses via the size
   gate rather than miscomputing);
-  `scaled_modrep_wgsize_virtualize.s` (x workgroup-size halving).
+  `scaled_modrep_wgsize_virtualize.s` (x workgroup-size halving);
+  `scaled_modrep_atomic.s` (a store-only non-idempotent RMW -- add/fadd/pk_add --
+  gates to one replica at both the global and flat sites, an idempotent max does
+  not, and a returning non-idempotent RMW refuses).
