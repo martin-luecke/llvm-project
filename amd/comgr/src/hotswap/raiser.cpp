@@ -2474,25 +2474,24 @@ static Expected<RaiseResult> raiseToIRImpl(
                           ? PredicateChainProjection::WaveNative
                           : PredicateChainProjection::ModuloReplication));
 
-    // A scaled dispatch cannot feed a matrix fragment: wmma/mfma distribute a
-    // tile across all W_t lanes, but under this projection only W_s lanes carry
-    // logical data (the rest are replicas). Refuse rather than miscompile. The
-    // C5-upgrade retry below already screens matrix kernels out, so this only
-    // fires for an explicit --force-scaled-modrep on a matrix kernel.
-    if (UseScaledModrep) {
-      for (const DecodedInst &Inst : Insts) {
-        if (isMatrixCanonicalOp(Inst.CanonOp)) {
-          std::string Detail =
-              "ScaledModuloReplicationProjection cannot lower wmma/mfma: a "
-              "matrix "
-              "fragment spans all target lanes, but a scaled dispatch fills "
-              "the upper lanes with replicas. Refusing. See "
-              "hotswap/docs/modrep-predicate-chain.md sec. 10.";
-          errs() << "transpiler: pre-translation abort: " << Detail << "\n";
-          return RaiseFailure::crossWavePredicateChain(KernelName, Detail);
-        }
-      }
-    }
+    // A scaled dispatch CAN feed a matrix fragment (no matrix refusal here).
+    // The WMMA->MFMA lowering is not a naive lane-replicated fragment feed; it
+    // is an explicit ds_bpermute redistribute (`wmma-lowering.cpp`) that reads
+    // only the W_s real source lanes and writes the full W_t-lane MFMA operand
+    // layout. Its `numSourceWavesPerTarget() == 1` path (which the scaled
+    // projection inherits from ModuloReplication) runs a single
+    // `runGroupPass(groupBase=0)` that computes the exact source wave32 WMMA
+    // result, and its collect uses `LaneId & (W_s-1)` so the replica lanes
+    // W_s..W_t-1 land an exact replica of the real result -- precisely the
+    // scaled-dispatch invariant. The one requirement the Wave64 MFMA
+    // collective imposes -- all W_t lanes active with valid data -- is exactly
+    // what a scaled dispatch provides for free (the upper lanes are real
+    // replica threads, not phantom lanes), so no `init_whole_wave` and no
+    // partner wave are needed. Validated on gfx942 against a native MFMA
+    // numeric oracle; see hotswap/docs/modrep-predicate-chain.md sec. 10.4. The
+    // block-too-large case is already handled uniformly for matrix and
+    // non-matrix kernels by the scaled-dispatch size gate above (search
+    // getMaxFlatWorkGroupSize).
     PredicateChainClassifierReport PredReport = classifyPredicateChain(
         *F, Isa.WaveSize, TargetIsa.WaveSize, PredProjection,
         /*maxFlatWorkgroupSize=*/
@@ -2535,19 +2534,36 @@ static Expected<RaiseResult> raiseToIRImpl(
         }
         return false;
       };
-      // Auto-upgrade the WaveNative y/z-derived C5 refusal to a scaled
-      // dispatch, which makes each target wave uniform in y/z and turns the
-      // upper lanes into replicas so the divergence cannot arise. This is the
-      // default resolution (no flag/env). Eligibility: the y/z refusal
-      // specifically, cross-widening with an integer wave ratio, no matrix ops,
-      // and the scaled block fitting the hardware threads/block max; otherwise
-      // the refusal stands. See hotswap/docs/modrep-predicate-chain.md sec. 10.
+      // Auto-upgrade the WaveNative y/z-derived C5 refusal (the reduce_kernel
+      // RMSNorm aperture class, and the matrix attention _fwd_kernel class) to
+      // a scaled dispatch, which makes each target wave uniform in y/z and
+      // turns the upper lanes into replicas so the divergence cannot arise.
+      // This is the default resolution (no flag/env). Eligibility: the y/z
+      // refusal specifically, cross-widening with an integer wave ratio, and
+      // the scaled block fitting the hardware threads/block max; otherwise the
+      // refusal stands.
+      //
+      // Matrix ops ARE eligible. The earlier assumption that a matrix fragment
+      // "cannot be fed from replicas" was wrong about the lowering: the WMMA ->
+      // MFMA path is an explicit ds_bpermute redistribute
+      // (`wmma-lowering.cpp`), not a naive lane-replicated feed. Its
+      // `numSourceWavesPerTarget() == 1` path (which the scaled projection
+      // inherits) reads only the W_s real source lanes, computes the exact
+      // source-wave WMMA result, and replicates it to the upper lanes via the
+      // collect's `LaneId & (W_s-1)`. The Wave64 MFMA collective's one
+      // requirement -- all target lanes active with valid data -- is what a
+      // scaled dispatch provides (real replica threads), so no init_whole_wave
+      // and no partner wave are needed. Validated on gfx942 against a native
+      // MFMA numeric oracle. A matrix kernel whose scaled block exceeds the
+      // hardware threads/block max falls out of this gate and the refusal
+      // stands rather than miscomputing. See
+      // hotswap/docs/modrep-predicate-chain.md sec. 10.
       assert(Isa.WaveSize && "source wave size must be nonzero");
       const unsigned ScaleFactor = TargetIsa.WaveSize / Isa.WaveSize;
       const bool CanUpgradeToScaled =
           !ForceScaledModrep && PredReport.WaveNativeYzRefusal &&
           Isa.isWave32() && !TargetIsa.isWave32() && ScaleFactor >= 2 &&
-          (TargetIsa.WaveSize % Isa.WaveSize) == 0 && !HasMatrixOp() &&
+          (TargetIsa.WaveSize % Isa.WaveSize) == 0 &&
           Meta.MaxFlatWorkgroupSize > 0 &&
           static_cast<unsigned>(Meta.MaxFlatWorkgroupSize) * ScaleFactor <=
               AMDGPU::IsaInfo::getMaxFlatWorkGroupSize();
