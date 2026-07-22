@@ -22,8 +22,8 @@ vcc_saddr_load_kernel:
 	s_wait_kmcnt 0x0
 	s_add_nc_u64 vcc, s[2:3], 16
 	; global_load with vcc as SADDR base -> raw 64-bit VCC value, not a ballot.
-	; CHECK: inttoptr i64 %{{.*}} to ptr addrspace(1)
 	; CHECK-NOT: vcc_ballot
+	; CHECK: inttoptr i64 %{{.*}} to ptr addrspace(1)
 	global_load_u16 v2, v1, vcc
 	s_wait_loadcnt 0x0
 	global_store_b16 v1, v2, s[4:5]
@@ -53,8 +53,8 @@ vcc_saddr_store_kernel:
 	s_wait_kmcnt 0x0
 	s_add_nc_u64 vcc, s[2:3], 16
 	; global_store with vcc as SADDR base -> raw 64-bit VCC value, not a ballot.
-	; CHECK: inttoptr i64 %{{.*}} to ptr addrspace(1)
 	; CHECK-NOT: vcc_ballot
+	; CHECK: inttoptr i64 %{{.*}} to ptr addrspace(1)
 	global_store_b16 v1, v2, vcc
 	s_endpgm
 	.section	.rodata,"a",@progbits
