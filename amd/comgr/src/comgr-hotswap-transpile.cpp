@@ -257,9 +257,9 @@ struct HotswapTranspileResult {
   int64_t LiftedCount = 0;
   int64_t TotalCount = 0;
   // ScaledModuloReplicationProjection requirement for the transpiled kernel:
-  // the block dim (0=x,1=y,2=z) and factor the launch runtime must scale. Dim
-  // -1 / factor 1 means no doubling. Threaded to the loader via get_info.
-  int64_t ScaledDispatchDim = -1;
+  // the factor the launch runtime must scale the block's x extent by (always x,
+  // the wave-carrying dimension). 1 means no scaling. Threaded to the loader
+  // via get_info.
   int64_t ScaledDispatchFactor = 1;
   std::string backend = "comgr";
   std::string sourceGfx;
@@ -511,7 +511,6 @@ void fillResult(HotswapTranspileResult &result, llvm::StringRef sourceGfx,
   if (pipeline) {
     result.LiftedCount = pipeline->LiftedCount;
     result.TotalCount = pipeline->TotalCount;
-    result.ScaledDispatchDim = pipeline->ScaledDispatchDim;
     result.ScaledDispatchFactor =
         static_cast<int64_t>(pipeline->ScaledDispatchFactor);
   }
@@ -826,9 +825,6 @@ amd_comgr_status_t AMD_COMGR_API amd_comgr_hotswap_transpile_result_get_info(
     return AMD_COMGR_STATUS_SUCCESS;
   case AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_TOTAL_COUNT:
     *static_cast<int64_t *>(value) = Result->TotalCount;
-    return AMD_COMGR_STATUS_SUCCESS;
-  case AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_SCALED_DISPATCH_DIM:
-    *static_cast<int64_t *>(value) = Result->ScaledDispatchDim;
     return AMD_COMGR_STATUS_SUCCESS;
   case AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_SCALED_DISPATCH_FACTOR:
     *static_cast<int64_t *>(value) = Result->ScaledDispatchFactor;

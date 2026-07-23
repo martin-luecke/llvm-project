@@ -51,12 +51,11 @@ struct RaiseResult {
   bool HasDivergentExec = false;
   bool HasEnumeratedSetpcDispatch = false;
   // Set when the kernel was raised under ScaledModuloReplicationProjection: the
-  // block dimension (0=x,1=y,2=z) the runtime must scale and the factor
-  // (W_t/W_s). Dim is -1 (factor 1) when no scaled dispatch is required. The
-  // launch runtime reads these (threaded through the comgr transpile result and
-  // the loader) to scale exactly the scaled kernels' dispatch. See
+  // factor (W_t/W_s) the runtime must scale the block's x extent by (x is
+  // always the scaled dimension). 1 means no scaling is required. The launch
+  // runtime reads this (threaded through the comgr transpile result and the
+  // loader) to scale exactly the scaled kernels' dispatch. See
   // amd/comgr/src/hotswap/docs/modrep-predicate-chain.md sec. 10.
-  int ScaledDispatchDim = -1;
   unsigned ScaledDispatchFactor = 1;
 };
 

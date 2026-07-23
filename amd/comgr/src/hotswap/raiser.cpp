@@ -1014,11 +1014,10 @@ static Expected<RaiseResult> raiseToIRImpl(
 
   // Record the scaled-dispatch requirement so the launch runtime scales
   // exactly this kernel's dispatch (threaded through the transpile result and
-  // the loader). Non-scaled projections leave dim=-1 / factor=1.
-  if (Projection.usesScaledDispatch()) {
-    Result.ScaledDispatchDim = static_cast<int>(Projection.scaledDispatchDim());
+  // the loader). Non-scaled projections leave factor=1. The scaled dimension is
+  // always x (the wave-carrying dimension), so only the factor is reported.
+  if (Projection.usesScaledDispatch())
     Result.ScaledDispatchFactor = Projection.scaledDispatchFactor();
-  }
 
   if (!UseThreadLoop && !UseScaledModrep && EnableWaveNative &&
       PhantomLaneRegime && Isa.isWave32() && !TargetIsa.isWave32()) {
@@ -1429,19 +1428,15 @@ static Expected<RaiseResult> raiseToIRImpl(
       // bound; the in-kernel workgroup-size query is virtualized back to the
       // source size via source-hidden-args, so kernel logic still sees MaxWg.
       MaxWg *= static_cast<int>(Projection.scaledDispatchFactor());
-      // IR-level breadcrumb recording the scaled dimension and factor (e.g.
-      // "x2") for offline inspection and the raise_cli lit tests. This is not
-      // the runtime signal: the launch runtime learns the scaled dim/factor
-      // from the transpile result (RaiseResult -> comgr result info fields ->
-      // loader), because this function attribute does not survive to the kernel
-      // descriptor metadata. See hotswap/docs/modrep-predicate-chain.md
-      // sec. 10.
-      assert(Projection.scaledDispatchDim() < 3 &&
-             "scaled dispatch dim must be x/y/z");
-      const char DimChar = "xyz"[Projection.scaledDispatchDim()];
+      // IR-level breadcrumb recording the scale factor along x (e.g. "x2") for
+      // offline inspection and the raise_cli lit tests. This is not the runtime
+      // signal: the launch runtime learns the factor from the transpile result
+      // (RaiseResult -> comgr result info fields -> loader), because this
+      // function attribute does not survive to the kernel descriptor metadata.
+      // The scaled dimension is always x. See
+      // hotswap/docs/modrep-predicate-chain.md sec. 10.
       F->addFnAttr("hotswap-scaled-dispatch",
-                   std::string(1, DimChar) +
-                       std::to_string(Projection.scaledDispatchFactor()));
+                   "x" + std::to_string(Projection.scaledDispatchFactor()));
     }
     F->addFnAttr("amdgpu-flat-work-group-size",
                  std::to_string(MaxWg) + "," + std::to_string(MaxWg));

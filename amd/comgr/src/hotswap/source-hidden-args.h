@@ -42,15 +42,13 @@ struct SourceHiddenArgContext {
   bool AssumeHipGlobalOffsetZero = false;
   unsigned TargetCodeObjectVersion = 6;
   // Scaled-dispatch virtualization (ScaledModuloReplicationProjection). When
-  // >= 0, the runtime launches this block with a `ScaledDispatchFactor`-scaled
-  // extent along dimension `ScaledDispatchDim` (0=x,1=y,2=z). The source
-  // kernel's loops and reduction bounds must still observe the un-scaled block
-  // size, so the synthesized `hidden_group_size_*` and grid-size reads for that
-  // dimension are divided by the factor. All derived hidden args
-  // (block_count = grid/group, remainder = grid%group) stay correct because
-  // each halved read reproduces the exact source size. -1 disables the
-  // adjustment.
-  int ScaledDispatchDim = -1;
+  // > 1, the runtime launches this block with a `ScaledDispatchFactor`-scaled x
+  // extent (x is always the scaled dimension). The source kernel's loops and
+  // reduction bounds must still observe the un-scaled block size, so the
+  // synthesized `hidden_group_size_x` and grid-size-x reads are divided by the
+  // factor. All derived hidden args (block_count = grid/group,
+  // remainder = grid%group) stay correct because each halved read reproduces
+  // the exact source size. 1 disables the adjustment.
   unsigned ScaledDispatchFactor = 1;
 };
 
@@ -64,9 +62,9 @@ struct SourceHiddenArgValue {
   std::string FailureDetail;
 };
 
-// Copy `Projection`'s scaled-dispatch dim/factor onto `Ctx` when the projection
-// uses a scaled dispatch, so size reads for the scaled dimension are
-// virtualized back to the source block size. No-op otherwise.
+// Copy `Projection`'s scaled-dispatch factor onto `Ctx` when the projection
+// uses a scaled dispatch, so the x-dimension size reads are virtualized back to
+// the source block size. No-op otherwise.
 void populateScaledDispatch(SourceHiddenArgContext &Ctx,
                             const WaveProjection &Projection);
 

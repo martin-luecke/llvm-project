@@ -119,15 +119,14 @@ Value *loadTargetHiddenPointer(SourceHiddenArgContext &Ctx,
   return Ctx.B.CreateAlignedLoad(Ctx.I64Ty, Ptr, Align(8), Name);
 }
 
-// Divide a size read by the scaled-dispatch factor when `Dim` is the scaled
-// dimension, so the source kernel observes the un-scaled (logical) size. The
-// hardware size is an exact multiple of the factor (the runtime scales it), so
-// an unsigned shift is exact. No-op for non-scaled dims / non-scaled kernels.
+// Divide an x-dimension size read by the scaled-dispatch factor, so the source
+// kernel observes the un-scaled (logical) size. x is always the scaled
+// dimension, so this is a no-op for y/z (`Dim != 0`) and for non-scaled
+// kernels. The hardware size is an exact multiple of the factor (the runtime
+// scales it), so an unsigned shift is exact.
 Value *virtualizeScaledDispatchSize(SourceHiddenArgContext &Ctx, unsigned Dim,
                                     Value *Size, const Twine &Name) {
-  if (Ctx.ScaledDispatchDim < 0 ||
-      static_cast<unsigned>(Ctx.ScaledDispatchDim) != Dim ||
-      Ctx.ScaledDispatchFactor <= 1)
+  if (Dim != 0 || Ctx.ScaledDispatchFactor <= 1)
     return Size;
   unsigned ShiftBy = llvm::Log2_32(Ctx.ScaledDispatchFactor);
   return Ctx.B.CreateLShr(Size, ConstantInt::get(Size->getType(), ShiftBy),
@@ -293,7 +292,6 @@ void populateScaledDispatch(SourceHiddenArgContext &Ctx,
                             const WaveProjection &Projection) {
   if (!Projection.usesScaledDispatch())
     return;
-  Ctx.ScaledDispatchDim = static_cast<int>(Projection.scaledDispatchDim());
   Ctx.ScaledDispatchFactor = Projection.scaledDispatchFactor();
 }
 

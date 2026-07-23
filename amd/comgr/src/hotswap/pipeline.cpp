@@ -431,10 +431,8 @@ static bool raiseAndCompileKernel(
 
   RaiseResult Raised = std::move(*RaisedOrErr);
   Result.LiftedCount += Stats.LiftedCount;
-  if (Raised.ScaledDispatchDim >= 0) {
-    Result.ScaledDispatchDim = Raised.ScaledDispatchDim;
+  if (Raised.ScaledDispatchFactor > 1)
     Result.ScaledDispatchFactor = Raised.ScaledDispatchFactor;
-  }
   Result.TotalCount += Stats.TotalCount;
   if (Raised.UsesScratchPrivateSegment) {
     Result.UsesScratchPrivateSegment = true;
