@@ -837,7 +837,10 @@ fast path; WaveNative stays the opt-in fast path for kernels it can represent.
   `ModuloReplicationProjection`, overriding the workitem-id-x remap
   (`emitWorkitemIdX`) and the packed-id emission (`emitPackedWorkitemId`, which
   bypasses the base phantom-lane clamp and packs the raw y/z), and exposing
-  `usesScaledDispatch()` / `scaledDispatchDim()` / `scaledDispatchFactor()`.
+  `usesScaledDispatch()` / `scaledDispatchFactor()`. The scaled dimension is
+  always x (the wave-carrying dimension), so it is not exposed or reported --
+  scaling any other dimension would spread the extra threads across different
+  rows/planes instead of aliasing them as replicas.
 - `c5-predicate-chain-classifier`: new `PredicateChainProjection::ModuloReplicationScaled`
   never refuses C5 (both `.x` lane-position and `.y`/`.z` wave-spanning predicates
   are correct by construction); the report flags `WaveNativeYzRefusal` so the
@@ -846,22 +849,21 @@ fast path; WaveNative stays the opt-in fast path for kernels it can represent.
   op is present, and the scaled block fits the hardware max, the raiser
   **automatically** retries under the scaled projection (no flag, no env --
   this is the default resolution, superseding #270). It widens
-  `amdgpu-flat-work-group-size` by the factor and records the scaled dim/factor
+  `amdgpu-flat-work-group-size` by the factor and records the scaled factor
   on the transpile result. Ineligible kernels (matrix, or scaled size > hardware
   max) keep the refusal. `--force-scaled-modrep` selects it unconditionally for
   offline testing of kernels that do not hit the refusal.
-- `source-hidden-args.cpp`: halves the workgroup/grid-size reads for the scaled
-  dimension.
-- Per-kernel runtime signal: the scaled dim/factor is threaded raiser ->
+- `source-hidden-args.cpp`: halves the workgroup/grid-size-x reads.
+- Per-kernel runtime signal: the scaled factor is threaded raiser ->
   `RaiseResult` -> `PipelineResult` -> comgr transpile result
-  (`amd_comgr_hotswap_transpile_result_get_info`,
-  `..._SCALED_DISPATCH_DIM`/`_FACTOR`) -> hsa loader (`HotSwapKernelRecord`) ->
-  `PrepareHotSwapDispatchKernelObject` -> `PatchPublishedKernelDispatchPacket`,
-  which scales `workgroup_size_[dim]` and `grid_size_[dim]` for exactly the
-  scaled kernels. The scaled dim/factor is persisted in the translation cache
-  so cache hits stay correct. No AQL field mutation beyond the block extent and
-  no `group_segment_size` change are needed (LDS is per-block, logical-tid
-  addressed).
+  (`amd_comgr_hotswap_transpile_result_get_info`, `..._SCALED_DISPATCH_FACTOR`)
+  -> hsa loader (`HotSwapKernelRecord`) -> `PrepareHotSwapDispatchKernelObject`
+  -> `PatchPublishedKernelDispatchPacket`, which scales `workgroup_size_x` and
+  `grid_size_x` for exactly the scaled kernels. The scaled dimension is always x,
+  so only the factor is threaded through. The factor is persisted in the
+  translation cache so cache hits stay correct. No AQL field mutation beyond the
+  x extent and no `group_segment_size` change are needed (LDS is per-block,
+  logical-tid addressed).
 
 ### 10.6 Flags and tests
 

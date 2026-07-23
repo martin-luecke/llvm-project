@@ -38,7 +38,7 @@ struct PipelineOptions {
   // cross-widening (offline testing only). The normal path needs no flag: the
   // raiser auto-upgrades the WaveNative y/z-derived C5 refusal to a scaled
   // dispatch by default, and the launch runtime honours it via the scaled
-  // dim/factor threaded through the transpile result.
+  // factor threaded through the transpile result.
   bool ForceScaledModrep = false;
 };
 
@@ -64,9 +64,8 @@ struct PipelineResult {
   int LiftedCount = 0;
   int TotalCount = 0;
   // ScaledModuloReplicationProjection requirement for the (single) transpiled
-  // kernel: the block dim (0=x,1=y,2=z) and factor (W_t/W_s) the launch runtime
-  // must scale. Dim -1 / factor 1 means no doubling. See raiser.h.
-  int ScaledDispatchDim = -1;
+  // kernel: the factor (W_t/W_s) the launch runtime must scale the block's x
+  // extent by. 1 means no scaling. See raiser.h.
   unsigned ScaledDispatchFactor = 1;
   bool Success = false;
 };

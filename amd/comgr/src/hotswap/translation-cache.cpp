@@ -455,7 +455,6 @@ llvm::json::Object metadataObject(const TranslationCacheRequest &request,
        static_cast<int64_t>(Result.Hsaco ? Result.Hsaco->getBufferSize() : 0)},
       {"lifted_count", Result.LiftedCount},
       {"total_count", Result.TotalCount},
-      {"scaled_dispatch_dim", static_cast<int64_t>(Result.ScaledDispatchDim)},
       {"scaled_dispatch_factor",
        static_cast<int64_t>(Result.ScaledDispatchFactor)},
       {"c5_suppressed_count", Result.C5SuppressedCount},
@@ -585,11 +584,9 @@ llvm::Error validateMetadata(const TranslationCacheRequest &request,
   Result.SourcePrivateSegmentFixedSize = static_cast<uint32_t>(*sourceScratch);
   Result.TargetPrivateSegmentFixedSize = static_cast<uint32_t>(*targetScratch);
   Result.TargetEnablePrivateSegment = *targetEnable;
-  // Optional (default -1/1) so cache entries written before scaled-dispatch
+  // Optional (default 1) so cache entries written before scaled-dispatch
   // support still load. The cache key includes the scaled-modrep flags, so a
   // scaled transpile never collides with a non-scaled entry.
-  Result.ScaledDispatchDim =
-      static_cast<int>(obj.getInteger("scaled_dispatch_dim").value_or(-1));
   Result.ScaledDispatchFactor = static_cast<unsigned>(
       obj.getInteger("scaled_dispatch_factor").value_or(1));
   return llvm::Error::success();

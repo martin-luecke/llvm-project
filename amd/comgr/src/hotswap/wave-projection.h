@@ -248,25 +248,19 @@ public:
   virtual bool preservesMbcntDerivedSaveExec() const { return false; }
 
   // True iff this projection expects the runtime to launch the block with a
-  // scaled (`W_t / W_s`) extent along
-  // `scaledDispatchDim()`, so that each target wave hosts exactly one source
-  // wave in its low `W_s` lanes with the remaining lanes as replicas (see
-  // `ScaledModuloReplicationProjection`). When true, the raiser widens the
-  // `amdgpu-flat-work-group-size` attribute by the same factor, halves the
-  // in-kernel workgroup/grid-size query along that dim, and emits a marker
-  // attribute so the launch shim doubles the corresponding block dimension.
+  // `scaledDispatchFactor()`-scaled x extent, so that each target wave hosts
+  // exactly one source wave in its low `W_s` lanes with the remaining lanes as
+  // replicas (see `ScaledModuloReplicationProjection`). The scaled dimension is
+  // always x -- the wave-carrying dimension -- so it is not reported
+  // separately; scaling any other dimension would spread the extra threads
+  // across different rows/planes instead of aliasing them as replicas. When
+  // true, the raiser widens the `amdgpu-flat-work-group-size` attribute by the
+  // same factor, halves the in-kernel workgroup/grid-size query along x, and
+  // emits a marker attribute so the launch shim scales the block's x extent.
   virtual bool usesScaledDispatch() const { return false; }
 
-  // The block dimension (0=x, 1=y, 2=z) the runtime doubles when
-  // `usesScaledDispatch()` is true. Always the fastest wave-carrying
-  // dimension (x) for the wave32->wave64 case; the higher dims that carry the
-  // divergent predicate become wave-uniform once x is doubled. Meaningless
-  // unless `usesScaledDispatch()`.
-  virtual unsigned scaledDispatchDim() const { return 0; }
-
-  // The integer factor by which the dispatch is scaled along
-  // `scaledDispatchDim()` (`W_t / W_s`, i.e. 2 for wave32->wave64).
-  // Meaningless unless `usesScaledDispatch()`.
+  // The integer factor by which the block's x extent is scaled (`W_t / W_s`,
+  // i.e. 2 for wave32->wave64). 1 (the default) means no scaling.
   virtual unsigned scaledDispatchFactor() const { return 1; }
 
   // Number of source waves whose per-lane fragment data is present in
@@ -475,7 +469,6 @@ public:
                                     unsigned NumDims) const override;
 
   bool usesScaledDispatch() const override { return true; }
-  unsigned scaledDispatchDim() const override { return 0; /* x */ }
   unsigned scaledDispatchFactor() const override {
     return Tgt.WaveSize / Src.WaveSize;
   }
