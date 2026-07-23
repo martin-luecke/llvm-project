@@ -1,14 +1,11 @@
-; A wmma kernel cannot be lowered under ScaledModuloReplicationProjection: a matrix
-; fragment is distributed across all target lanes, but a scaled dispatch fills
-; the upper lanes with replicas, so there is no correct feed. The scaled route
-; must REFUSE. max_flat_workgroup_size=256 keeps it under the size gate so the
-; matrix refusal (not the size gate) is what fires. See
-; hotswap/docs/modrep-predicate-chain.md sec. 10.4.
-
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && not raise_cli %t.hsaco --target-isa=gfx942 --force-scaled-modrep \
 ; RUN:     --emit-ir=scaled_modrep_wmma_refuse_kernel 2>&1 \
 ; RUN:   | %FileCheck %s
+
+; A matrix fragment spans all target lanes and cannot be fed from replicas, so
+; the scaled route refuses wmma/mfma. max_flat_workgroup_size=256 keeps it under
+; the size gate so the matrix refusal is what fires.
 
 ; CHECK: ScaledModuloReplicationProjection cannot lower wmma/mfma
 ; CHECK-SAME: matrix fragment spans all target lanes
