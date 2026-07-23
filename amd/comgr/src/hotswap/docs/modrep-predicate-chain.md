@@ -744,11 +744,9 @@ Raise a single kernel to IR under each projection:
 ## 10. Scaled-dispatch projection (`ScaledModuloReplicationProjection`)
 
 This section documents the correct-by-construction resolution of the
-predicate-chain / divergent-early-exit class that §5's options only refused
-(`O1`) or deferred (`O3`, `O4`). It is the principled upgrade of the WaveNative
-`workitem.id.y()`/`.z()`-derived refusal (§6.3 / `c5-predicate-chain-classifier`)
-rather than a symptom patch (contrast PR #270's flat-load hardening, which
-SimplifyCFG merges away at `-O2`).
+predicate-chain / divergent-early-exit class. It is the resolution of the
+WaveNative `workitem.id.y()`/`.z()`-derived refusal
+(sec. 6.3 / `c5-predicate-chain-classifier`).
 
 ### 10.1 Why the other three projections cannot run the reduce
 
@@ -848,7 +846,7 @@ fast path; WaveNative stays the opt-in fast path for kernels it can represent.
 - `raiser.cpp`: when the WaveNative C5 refusal is the `.y`/`.z` case, no matrix
   op is present, and the scaled block fits the hardware max, the raiser
   **automatically** retries under the scaled projection (no flag, no env --
-  this is the default resolution, superseding #270). It widens
+  this is the default resolution). It widens
   `amdgpu-flat-work-group-size` by the factor and records the scaled factor
   on the transpile result. Ineligible kernels (matrix, or scaled size > hardware
   max) keep the refusal. `--force-scaled-modrep` selects it unconditionally for
