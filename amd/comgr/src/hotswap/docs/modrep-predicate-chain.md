@@ -741,7 +741,7 @@ Raise a single kernel to IR under each projection:
    for the tighter bound. If a corpus kernel surfaces with
    `K ∈ (W_s − 1, W_t − 1]`, widen the bound to match.
 
-## 10. Doubled-dispatch projection (`ModRepDoubledDispatchProjection`)
+## 10. Scaled-dispatch projection (`ScaledModuloReplicationProjection`)
 
 This section documents the correct-by-construction resolution of the
 predicate-chain / divergent-early-exit class that §5's options only refused
@@ -779,7 +779,9 @@ Concretely for wave32 -> wave64 (factor 2):
 - The raiser halves the in-kernel workgroup/grid-size query along x
   (`source-hidden-args.cpp`), so loops and reduction bounds still observe the
   source block size. All derived hidden args (`block_count = grid/group`,
-  `remainder = grid%group`) stay correct because the factor cancels in the ratio.
+  `remainder = grid%group`) stay correct because each halved read reproduces the
+  exact source size, so anything computed from them is computed from source
+  values.
 
 **Always x, not the predicate's dimension.** The kernel that surfaced this is
 PyTorch `reduce_kernel<512,1>` launched `(32,16,1)`: `blockDim.x = 32 = W_s`, and
@@ -831,44 +833,45 @@ fast path; WaveNative stays the opt-in fast path for kernels it can represent.
 
 ### 10.5 Selection and plumbing
 
-- `wave-projection.{h,cpp}`: `ModRepDoubledDispatchProjection` derives from
-  `ModuloReplicationProjection`, overriding only the workitem-id-x remap and
-  exposing `usesDoubledDispatch()` / `doubledDispatchDim()` /
-  `doubledDispatchFactor()`.
-- `c5-predicate-chain-classifier`: new `PredicateChainProjection::ModuloReplicationDoubled`
+- `wave-projection.{h,cpp}`: `ScaledModuloReplicationProjection` derives from
+  `ModuloReplicationProjection`, overriding the workitem-id-x remap
+  (`emitWorkitemIdX`) and the packed-id emission (`emitPackedWorkitemId`, which
+  bypasses the base phantom-lane clamp and packs the raw y/z), and exposing
+  `usesScaledDispatch()` / `scaledDispatchDim()` / `scaledDispatchFactor()`.
+- `c5-predicate-chain-classifier`: new `PredicateChainProjection::ModuloReplicationScaled`
   never refuses C5 (both `.x` lane-position and `.y`/`.z` wave-spanning predicates
   are correct by construction); the report flags `WaveNativeYzRefusal` so the
   raiser knows the upgrade applies.
 - `raiser.cpp`: when the WaveNative C5 refusal is the `.y`/`.z` case, no matrix
   op is present, and the scaled block fits the hardware max, the raiser
-  **automatically** retries under the doubled projection (no flag, no env --
+  **automatically** retries under the scaled projection (no flag, no env --
   this is the default resolution, superseding #270). It widens
-  `amdgpu-flat-work-group-size` by the factor and records the doubled dim/factor
+  `amdgpu-flat-work-group-size` by the factor and records the scaled dim/factor
   on the transpile result. Ineligible kernels (matrix, or scaled size > hardware
-  max) keep the refusal. `--force-modrep-doubled` selects it unconditionally for
+  max) keep the refusal. `--force-scaled-modrep` selects it unconditionally for
   offline testing of kernels that do not hit the refusal.
-- `source-hidden-args.cpp`: halves the workgroup/grid-size reads for the doubled
+- `source-hidden-args.cpp`: halves the workgroup/grid-size reads for the scaled
   dimension.
-- Per-kernel runtime signal: the doubled dim/factor is threaded raiser ->
+- Per-kernel runtime signal: the scaled dim/factor is threaded raiser ->
   `RaiseResult` -> `PipelineResult` -> comgr transpile result
   (`amd_comgr_hotswap_transpile_result_get_info`,
-  `..._DOUBLED_DISPATCH_DIM`/`_FACTOR`) -> hsa loader (`HotSwapKernelRecord`) ->
+  `..._SCALED_DISPATCH_DIM`/`_FACTOR`) -> hsa loader (`HotSwapKernelRecord`) ->
   `PrepareHotSwapDispatchKernelObject` -> `PatchPublishedKernelDispatchPacket`,
   which scales `workgroup_size_[dim]` and `grid_size_[dim]` for exactly the
-  doubled kernels. The doubled dim/factor is persisted in the translation cache
+  scaled kernels. The scaled dim/factor is persisted in the translation cache
   so cache hits stay correct. No AQL field mutation beyond the block extent and
   no `group_segment_size` change are needed (LDS is per-block, logical-tid
   addressed).
 
 ### 10.6 Flags and tests
 
-- No flag or env is needed to trigger the fix -- the y/z-refusal -> doubled
-  upgrade is automatic. `raise_cli --force-modrep-doubled` (and
-  `PipelineOptions::ForceModrepDoubled`) is an offline testing knob only.
-- Offline regression: `c5_predicate_chain_workitem_id_y_modrep_doubled.s`
-  (default auto-upgrade + `--force` both raise with the x-remap, doubled
-  `amdgpu-flat-work-group-size`, the `hotswap-modrep-doubled-dispatch` marker,
-  and no `init_whole_wave`); `modrep_doubled_too_large_refuse.s` (default and
+- No flag or env is needed to trigger the fix -- the y/z-refusal -> scaled
+  upgrade is automatic. `raise_cli --force-scaled-modrep` (and
+  `PipelineOptions::ForceScaledModrep`) is an offline testing knob only.
+- Offline regression: `c5_predicate_chain_workitem_id_y_scaled_modrep.s`
+  (default auto-upgrade + `--force` both raise with the x-remap, scaled
+  `amdgpu-flat-work-group-size`, the `hotswap-scaled-dispatch` marker,
+  and no `init_whole_wave`); `scaled_modrep_too_large_refuse.s` (default and
   `--force` both refuse an ineligible >512 block via the size gate);
-  `modrep_doubled_wmma_refuse.s` (matrix refusal);
-  `modrep_doubled_wgsize_virtualize.s` (x workgroup-size halving).
+  `scaled_modrep_wmma_refuse.s` (matrix refusal);
+  `scaled_modrep_wgsize_virtualize.s` (x workgroup-size halving).

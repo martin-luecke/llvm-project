@@ -385,7 +385,7 @@ static bool raiseAndCompileKernel(
   llvm::Expected<RaiseResult> RaisedOrErr = raiseToIR(
       Text.Bytes, SourceISA, KernelName, Meta, KernelOffset, KernelSize,
       TargetISA, Options.EnableWritelaneRewrite, Options.EnableWaveNative,
-      Options.AssumeHipGlobalOffsetZero, Options.ForceModrepDoubled,
+      Options.AssumeHipGlobalOffsetZero, Options.ForceScaledModrep,
       Text.Address, Text.ImageSections, FunctionExtents, &Stats);
   if (!RaisedOrErr) {
     llvm::errs() << "transpiler: Raising '" << KernelName
@@ -431,9 +431,9 @@ static bool raiseAndCompileKernel(
 
   RaiseResult Raised = std::move(*RaisedOrErr);
   Result.LiftedCount += Stats.LiftedCount;
-  if (Raised.DoubledDispatchDim >= 0) {
-    Result.DoubledDispatchDim = Raised.DoubledDispatchDim;
-    Result.DoubledDispatchFactor = Raised.DoubledDispatchFactor;
+  if (Raised.ScaledDispatchDim >= 0) {
+    Result.ScaledDispatchDim = Raised.ScaledDispatchDim;
+    Result.ScaledDispatchFactor = Raised.ScaledDispatchFactor;
   }
   Result.TotalCount += Stats.TotalCount;
   if (Raised.UsesScratchPrivateSegment) {

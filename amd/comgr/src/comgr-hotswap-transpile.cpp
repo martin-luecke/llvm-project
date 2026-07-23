@@ -256,11 +256,11 @@ struct HotswapTranspileResult {
       AMD_COMGR_HOTSWAP_CACHE_WRITE_NOT_ATTEMPTED;
   int64_t LiftedCount = 0;
   int64_t TotalCount = 0;
-  // ModRepDoubledDispatchProjection requirement for the transpiled kernel: the
-  // block dim (0=x,1=y,2=z) and factor the launch runtime must scale. Dim -1 /
-  // factor 1 means no doubling. Threaded to the loader via get_info.
-  int64_t DoubledDispatchDim = -1;
-  int64_t DoubledDispatchFactor = 1;
+  // ScaledModuloReplicationProjection requirement for the transpiled kernel:
+  // the block dim (0=x,1=y,2=z) and factor the launch runtime must scale. Dim
+  // -1 / factor 1 means no doubling. Threaded to the loader via get_info.
+  int64_t ScaledDispatchDim = -1;
+  int64_t ScaledDispatchFactor = 1;
   std::string backend = "comgr";
   std::string sourceGfx;
   std::string targetGfx;
@@ -511,9 +511,9 @@ void fillResult(HotswapTranspileResult &result, llvm::StringRef sourceGfx,
   if (pipeline) {
     result.LiftedCount = pipeline->LiftedCount;
     result.TotalCount = pipeline->TotalCount;
-    result.DoubledDispatchDim = pipeline->DoubledDispatchDim;
-    result.DoubledDispatchFactor =
-        static_cast<int64_t>(pipeline->DoubledDispatchFactor);
+    result.ScaledDispatchDim = pipeline->ScaledDispatchDim;
+    result.ScaledDispatchFactor =
+        static_cast<int64_t>(pipeline->ScaledDispatchFactor);
   }
 }
 
@@ -586,9 +586,9 @@ amd_comgr_status_t hotswapTranspileWithResolvedOptions(
   CacheRequest.CollectTimings = CollectTimings;
   CacheRequest.OptLevel = Options.OptLevel;
   // No env gate: the WaveNative workitem.id.y()/.z()-derived C5 refusal
-  // (reduce_kernel RMSNorm aperture class) is auto-upgraded to a doubled
-  // dispatch (ModRepDoubledDispatchProjection) by the raiser, and the launch
-  // runtime honours it via the doubled dim/factor threaded through the
+  // (reduce_kernel RMSNorm aperture class) is auto-upgraded to a scaled
+  // dispatch (ScaledModuloReplicationProjection) by the raiser, and the launch
+  // runtime honours it via the scaled dim/factor threaded through the
   // transpile result. See amd/comgr/src/hotswap/docs/modrep-predicate-chain.md
   // sec. 10.
 
@@ -665,7 +665,7 @@ amd_comgr_status_t hotswapTranspileWithResolvedOptions(
     PipelineOptions.EnableWritelaneRewrite =
         CacheRequest.EnableWritelaneRewrite;
     PipelineOptions.EnableWaveNative = CacheRequest.EnableWaveNative;
-    PipelineOptions.ForceModrepDoubled = CacheRequest.ForceModrepDoubled;
+    PipelineOptions.ForceScaledModrep = CacheRequest.ForceScaledModrep;
     PipelineOptions.CollectTimings = CollectTimings;
     PipelineOptions.AssumeHipGlobalOffsetZero =
         CacheRequest.AssumeHipGlobalOffsetZero;
@@ -827,11 +827,11 @@ amd_comgr_status_t AMD_COMGR_API amd_comgr_hotswap_transpile_result_get_info(
   case AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_TOTAL_COUNT:
     *static_cast<int64_t *>(value) = Result->TotalCount;
     return AMD_COMGR_STATUS_SUCCESS;
-  case AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_DOUBLED_DISPATCH_DIM:
-    *static_cast<int64_t *>(value) = Result->DoubledDispatchDim;
+  case AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_SCALED_DISPATCH_DIM:
+    *static_cast<int64_t *>(value) = Result->ScaledDispatchDim;
     return AMD_COMGR_STATUS_SUCCESS;
-  case AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_DOUBLED_DISPATCH_FACTOR:
-    *static_cast<int64_t *>(value) = Result->DoubledDispatchFactor;
+  case AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_SCALED_DISPATCH_FACTOR:
+    *static_cast<int64_t *>(value) = Result->ScaledDispatchFactor;
     return AMD_COMGR_STATUS_SUCCESS;
   }
   return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;

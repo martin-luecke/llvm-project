@@ -156,14 +156,15 @@ enum class PredicateChainProjection {
   ModuloReplication,
   WaveNative,
   ThreadLoop,
-  // Modulo-replication backed by a doubled dispatch
-  // (`ModRepDoubledDispatchProjection`, hotswap/docs/modrep-predicate-chain.md
-  // sec. 6). Each target wave hosts one source wave with the upper lanes as
-  // exact replicas, so a lane and its replica share every predicate: both the
+  // Modulo-replication backed by a scaled dispatch
+  // (`ScaledModuloReplicationProjection`,
+  // hotswap/docs/modrep-predicate-chain.md sec. 6). Each target wave hosts one
+  // source wave with the upper lanes as exact replicas, so a lane and its
+  // replica share every predicate: both the
   // `.x`-derived lane-position predicates (Pass 2) and the `.y`/`.z`-derived
   // wave-spanning predicates (which become wave-uniform once x is doubled) are
   // correct by construction. This projection therefore never refuses C5.
-  ModuloReplicationDoubled,
+  ModuloReplicationScaled,
 };
 
 struct PredicateChainClassifierReport {
@@ -191,13 +192,13 @@ struct PredicateChainClassifierReport {
   bool WaveNativeEqualityRefusal = false;
 
   // True iff WaveNative refused specifically because a `workitem.id.y()`/`.z()`
-  // -derived predicate can drive a divergent early exit that the two packed
-  // source waves disagree on (the reduce_kernel RMSNorm aperture class). This
-  // is the principled upgrade point to `ModRepDoubledDispatchProjection`: a
-  // doubled dispatch makes each target wave uniform in y/z, so the divergence
-  // disappears. The raiser retries under the doubled projection instead of
-  // hard-refusing when the doubled-dispatch route is enabled and the kernel is
-  // matrix-free and small enough to double.
+  // -derived value reaches a global memory address, where a divergent early
+  // exit the two packed source waves disagree on can drag a stale base into the
+  // load/store. This is the principled upgrade point to
+  // `ScaledModuloReplicationProjection`: a scaled dispatch makes each target
+  // wave uniform in y/z, so the divergence disappears. The raiser retries under
+  // the scaled projection instead of hard-refusing when the scaled-dispatch
+  // route is enabled and the kernel is matrix-free and small enough to double.
   bool WaveNativeYzRefusal = false;
 
   // True iff a WaveNative equality (`eq`/`ne`) C5 site was observed. These
