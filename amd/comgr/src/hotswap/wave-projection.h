@@ -248,26 +248,26 @@ public:
   virtual bool preservesMbcntDerivedSaveExec() const { return false; }
 
   // True iff this projection expects the runtime to launch the block with a
-  // doubled (more generally, `W_t / W_s`-scaled) extent along
-  // `doubledDispatchDim()`, so that each target wave hosts exactly one source
+  // scaled (`W_t / W_s`) extent along
+  // `scaledDispatchDim()`, so that each target wave hosts exactly one source
   // wave in its low `W_s` lanes with the remaining lanes as replicas (see
-  // `ModRepDoubledDispatchProjection`). When true, the raiser widens the
+  // `ScaledModuloReplicationProjection`). When true, the raiser widens the
   // `amdgpu-flat-work-group-size` attribute by the same factor, halves the
   // in-kernel workgroup/grid-size query along that dim, and emits a marker
   // attribute so the launch shim doubles the corresponding block dimension.
-  virtual bool usesDoubledDispatch() const { return false; }
+  virtual bool usesScaledDispatch() const { return false; }
 
   // The block dimension (0=x, 1=y, 2=z) the runtime doubles when
-  // `usesDoubledDispatch()` is true. Always the fastest wave-carrying
+  // `usesScaledDispatch()` is true. Always the fastest wave-carrying
   // dimension (x) for the wave32->wave64 case; the higher dims that carry the
   // divergent predicate become wave-uniform once x is doubled. Meaningless
-  // unless `usesDoubledDispatch()`.
-  virtual unsigned doubledDispatchDim() const { return 0; }
+  // unless `usesScaledDispatch()`.
+  virtual unsigned scaledDispatchDim() const { return 0; }
 
   // The integer factor by which the dispatch is scaled along
-  // `doubledDispatchDim()` (`W_t / W_s`, i.e. 2 for wave32->wave64).
-  // Meaningless unless `usesDoubledDispatch()`.
-  virtual unsigned doubledDispatchFactor() const { return 1; }
+  // `scaledDispatchDim()` (`W_t / W_s`, i.e. 2 for wave32->wave64).
+  // Meaningless unless `usesScaledDispatch()`.
+  virtual unsigned scaledDispatchFactor() const { return 1; }
 
   // Number of source waves whose per-lane fragment data is present in
   // each target wave under this projection's mapping.  Callers that
@@ -416,8 +416,11 @@ public:
 };
 
 // ============================================================================
-// ModRepDoubledDispatchProjection -- modulo-replication backed by a doubled
-// dispatch (hotswap/docs/modrep-predicate-chain.md sec. 10).
+// ScaledModuloReplicationProjection -- modulo-replication backed by a
+// scaled dispatch (hotswap/docs/modrep-predicate-chain.md sec. 10). The runtime
+// launches the block with a `W_t / W_s`-scaled extent along x (a factor of 2
+// for the only ratio in use today, wave32->wave64); the class and its plumbing
+// are generic in that ratio.
 //
 // The plain `ModuloReplicationProjection` is only correct in the cross-widening
 // direction when the block has no active target replica lanes (the phantom-lane
@@ -425,8 +428,8 @@ public:
 // packs `W_t` real threads per target wave, so MODREP's replica lanes
 // `W_s..W_t-1` would collide with real block threads and drop their work; a
 // data-dependent early-exit predicate then drags one packed source wave through
-// the body masked with stale VGPRs into a faulting load (the reduce_kernel
-// RMSNorm aperture bug; see project_aperture_rootcause).
+// the body masked with stale VGPRs into a faulting load (an aperture violation;
+// see project_aperture_rootcause).
 //
 // This projection makes the "upper lanes are replicas, not real threads"
 // assumption TRUE by construction: the runtime launches the block with a
@@ -455,13 +458,13 @@ public:
 // Refusals live in the raiser: wmma/mfma (a matrix fragment needs all `W_t`
 // lanes and cannot be fed from `W_s` logical lanes + replicas) and source
 // blocks whose scaled size would exceed the target's hardware thread/block max.
-class ModRepDoubledDispatchProjection final
+class ScaledModuloReplicationProjection final
     : public ModuloReplicationProjection {
 public:
   using ModuloReplicationProjection::ModuloReplicationProjection;
 
   // Remap hardware workitem-id.x to the logical source id so replica lanes
-  // alias their originals. No phantom-lane clamp: under a doubled dispatch
+  // alias their originals. No phantom-lane clamp: under a scaled dispatch
   // every hardware lane maps to a valid logical thread (real or replica).
   llvm::Value *emitWorkitemIdX(llvm::IRBuilder<> &B) const override;
 
@@ -471,9 +474,9 @@ public:
   llvm::Value *emitPackedWorkitemId(llvm::IRBuilder<> &B,
                                     unsigned NumDims) const override;
 
-  bool usesDoubledDispatch() const override { return true; }
-  unsigned doubledDispatchDim() const override { return 0; /* x */ }
-  unsigned doubledDispatchFactor() const override {
+  bool usesScaledDispatch() const override { return true; }
+  unsigned scaledDispatchDim() const override { return 0; /* x */ }
+  unsigned scaledDispatchFactor() const override {
     return Tgt.WaveSize / Src.WaveSize;
   }
 };

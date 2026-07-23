@@ -1,4 +1,6 @@
-# rocPRIM decoupled look-back scan under WaveNative: a structural limitation
+# Divergent per-warp scalar loops under WaveNative: a structural limitation
+
+(Concrete instance: rocPRIM's decoupled look-back device scan / `torch.cumsum`.)
 
 ## Summary
 
@@ -97,10 +99,34 @@ The projections each provide only one:
 |------------|:----------------:|:-----------------:|:-------------------------------------------:|
 | WaveNative (current) | yes | **no** (shared file) | yes -- and hits the collision |
 | ThreadLoop (serialize waves) | **no** | yes | **no** -- disallowed for LDS/barrier kernels (serialization breaks barrier sync) |
-| ModuloReplication (own wave64 per source wave) | yes | yes | **no** -- only valid for < 64-thread workgroups; 256 threads would need doubling the workgroup size, which hotswap does not do |
+| ModuloReplication (own wave64 per source wave) | yes | yes | **no** -- valid only for phantom-lane (< W_s-thread) workgroups; a full 256-thread block packs real threads into the replica lanes |
 
-There is no projection that gives concurrent + independent-scalar at this
+There is no *plain* projection that gives concurrent + independent-scalar at this
 workgroup size.
+
+### The scaled-dispatch projection (added since this note)
+
+`ScaledModuloReplicationProjection` (the scaled dispatch;
+`modrep-predicate-chain.md` sec. 10) now makes each target wave64 host exactly
+one source wave (low lanes real, upper lanes replicas) by launching the block
+with a `W_t/W_s`-scaled x-extent. One source wave per target wave means the
+SGPR file is no longer shared between two divergent warps, so it *in principle*
+gives concurrent warps + independent scalar state + LDS/barriers intact -- the
+combination this table said no projection provided.
+
+It is **not** wired up for this kernel and has **not** been validated against
+the cumsum repro:
+
+- The auto-upgrade only fires on the WaveNative `workitem.id.y()/.z()` refusal
+  (`c5-predicate-chain-classifier`); a divergent *scalar loop* is a different
+  shape and does not trigger it. Reaching this projection here would need a new
+  classifier signal (or `--force-scaled-modrep`).
+- It requires the wave-carrying dimension to be x with `blockDim.x` a multiple
+  of `W_s`, and the scaled block to fit the hardware threads/block max.
+
+Until it is validated against the repro (fault -> pass, name-shim only, no
+flags) plus full forward parity, option 4 (loud refusal) remains the safe
+fallback for the divergent-scalar-loop shape.
 
 ## Dispatch note (separate, already-understood issue)
 

@@ -242,12 +242,12 @@ cl::opt<bool> DisableWaveNativeOpt(
     "disable-wave-native",
                          cl::desc("Pin ModuloReplicationProjection."));
 
-cl::opt<bool> ForceModrepDoubledOpt(
-    "force-modrep-doubled",
-    cl::desc("Unconditionally select ModRepDoubledDispatchProjection for "
-             "wave32->wave64 cross-widening (offline testing of the doubled "
+cl::opt<bool> ForceScaledModrepOpt(
+    "force-scaled-modrep",
+    cl::desc("Unconditionally select ScaledModuloReplicationProjection for "
+             "wave32->wave64 cross-widening (offline testing of the scaled "
              "in-kernel virtualization on kernels that do not hit the C5 "
-             "refusal). The normal WaveNative y/z-refusal -> doubled-dispatch "
+             "refusal). The normal WaveNative y/z-refusal -> scaled-dispatch "
              "upgrade is automatic and needs no flag."));
 
 // Batch output de-duplicates failures by the structured fields visible in
@@ -360,7 +360,7 @@ int main(int argc, char **argv) {
       true, EnableWritelaneRewriteOpt, DisableWritelaneRewriteOpt);
   bool EnableWaveNative =
       resolveToggle(true, EnableWaveNativeOpt, DisableWaveNativeOpt);
-  bool ForceModrepDoubled = ForceModrepDoubledOpt;
+  bool ForceScaledModrep = ForceScaledModrepOpt;
 
   // Read the file up-front so we can fall back to the ELF e_flags
   // ISA when the filename heuristic fails (kerneldex corpora often
@@ -484,7 +484,7 @@ int main(int argc, char **argv) {
           COMGR::hotswap::raiseToIR(
               text.Bytes, isa, Target, meta, kernelOffset, kernelSize,
               targetIsa, EnableWritelaneRewrite, EnableWaveNative,
-              AssumeHipGlobalOffsetZeroOpt, ForceModrepDoubled, text.Address,
+              AssumeHipGlobalOffsetZeroOpt, ForceScaledModrep, text.Address,
               text.ImageSections, functionExtents);
       if (!RaisedOrErr) {
         // raiseToIR only returns a module on the success path, so we cannot
@@ -553,7 +553,7 @@ int main(int argc, char **argv) {
     COMGR::hotswap::PipelineOptions pipelineOptions;
     pipelineOptions.EnableWritelaneRewrite = EnableWritelaneRewrite;
     pipelineOptions.EnableWaveNative = EnableWaveNative;
-    pipelineOptions.ForceModrepDoubled = ForceModrepDoubled;
+    pipelineOptions.ForceScaledModrep = ForceScaledModrep;
     pipelineOptions.AssumeHipGlobalOffsetZero = AssumeHipGlobalOffsetZeroOpt;
     pipelineOptions.OptLevel = std::min<unsigned>(OptLevel, 3);
     auto pipe = COMGR::hotswap::runPipeline(coData, isa, effectiveTargetIsa,
@@ -659,7 +659,7 @@ int main(int argc, char **argv) {
           COMGR::hotswap::raiseToIR(
               text.Bytes, isa, kName, meta, kernelOffset, kernelSize, targetIsa,
               EnableWritelaneRewrite, EnableWaveNative,
-              AssumeHipGlobalOffsetZeroOpt, ForceModrepDoubled, text.Address,
+              AssumeHipGlobalOffsetZeroOpt, ForceScaledModrep, text.Address,
               text.ImageSections, functionExtents, &Stats);
       if (RaisedOrErr) {
         COMGR::hotswap::RaiseResult Raised = std::move(*RaisedOrErr);
