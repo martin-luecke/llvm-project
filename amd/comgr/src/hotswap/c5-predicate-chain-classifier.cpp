@@ -10,6 +10,7 @@
 
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstIterator.h"
@@ -217,6 +218,38 @@ bool isPurePropagator(const Instruction *I) {
       return false;
     }
   }
+  return false;
+}
+
+// True iff a value in `Tainted` forms the address of a memory access in `I`:
+// the pointer operand of a load/store/atomic, or a descriptor/offset operand of
+// an AMDGPU buffer intrinsic. A store's or atomic's leading data operand is
+// excluded -- a stale stored value cannot fault, only a stale address can.
+bool usesTaintedAddress(Instruction &I,
+                        const SmallPtrSet<Value *, 32> &Tainted) {
+  auto Hit = [&](Value *V) { return V && Tainted.count(V); };
+  if (auto *LD = dyn_cast<LoadInst>(&I))
+    return Hit(LD->getPointerOperand());
+  if (auto *ST = dyn_cast<StoreInst>(&I))
+    return Hit(ST->getPointerOperand());
+  if (auto *RMW = dyn_cast<AtomicRMWInst>(&I))
+    return Hit(RMW->getPointerOperand());
+  if (auto *CX = dyn_cast<AtomicCmpXchgInst>(&I))
+    return Hit(CX->getPointerOperand());
+  auto *Call = dyn_cast<CallInst>(&I);
+  if (!Call || !Call->getCalledFunction())
+    return false;
+  StringRef Name = Call->getCalledFunction()->getName();
+  if (!Name.contains(".buffer."))
+    return false;
+  // Buffer loads carry only descriptor + offsets; stores/atomics lead with the
+  // data value (cmpswap with data then compare), which is not address-forming.
+  unsigned FirstAddr = Name.contains(".load")     ? 0
+                       : Name.contains("cmpswap") ? 2
+                                                  : 1;
+  for (unsigned A = FirstAddr, E = Call->arg_size(); A < E; ++A)
+    if (Hit(Call->getArgOperand(A)))
+      return true;
   return false;
 }
 
@@ -480,55 +513,39 @@ PredicateChainClassifierReport classifyPredicateChain(
 
   // ===== WaveNative pass: workitem.id.y()/.z()-derived memory addresses. =====
   //
-  // Under WaveNative wave32->wave64 packing the two source waves occupy
-  // consecutive linear-tid ranges (target lane L -> source linear tid base+L).
-  // For a block whose x-extent equals the source wave size the wave boundary
-  // falls between y/z values, so `workitem.id.y`/`.z` DIFFER between the two
-  // packed source waves (only `workitem.id.x` stays source-wave-relative, which
-  // is why Pass 1/2 above reason about `.x`). A predicate on such a
-  // wave-spanning y/z value lets one packed source wave take a divergent early
-  // exit that the other does not. WaveNative cannot represent that: the cleared
-  // source wave cannot `s_cbranch_execz` independently of its packed partner,
-  // so its lanes are dragged through the skipped region masked -- holding stale
-  // VGPRs (e.g. an un-broadcast base pointer) -- and, when such a stale VGPR is
-  // later used as a global load/store address, fault with an
-  // allocation-dependent HSA aperture violation. See
-  // project_aperture_rootcause.
+  // Under wave32->wave64 packing two source waves share one target wave and one
+  // hardware EXEC. When blockDim.x equals the source wave size, workitem.id.y()
+  // and .z() differ between the two packed waves (only .x stays
+  // source-wave-relative, which is why Pass 1/2 reason about .x). A predicate
+  // on such a value can make one packed wave take a divergent early exit the
+  // other does not. That exit cannot be represented per source wave: the wave
+  // that clears its EXEC cannot return on its own, so its lanes keep running
+  // with their modeled EXEC cleared and their registers may hold stale values.
+  // The modeled per-source-wave EXEC gates computed values (through selects),
+  // not the hardware memory instruction, so a stale value used as a load/store
+  // address is not masked at the access -- it issues and can go out of bounds.
   //
-  // We refuse ONLY when BOTH are present: (1) a y/z-derived predicate (the
-  // divergent early exit that can mask one packed source wave) AND (2) a
-  // y/z-derived value reaching the address of a memory op (the stale base that
-  // faults when the masked wave is dragged through). Either alone is safe:
-  //   * a y/z predicate that only feeds a data computation cannot produce a
-  //     stale ADDRESS (the over-refusal case -- a matrix/data kernel whose y/z
-  //     uses never reach memory);
-  //   * a y/z-derived address with no divergent y/z predicate keeps every lane
-  //     active, so each computes its own valid address (the packed-id seeding
-  //     idiom, e.g. `workitem_id_y_packed_seed`).
-  // For a block whose `blockDim.x` is a multiple of the target wave size the
-  // two packed waves also share the same y/z, so the predicate is wave-uniform
-  // and safe regardless. `blockDim.x` is not known at raise time, but requiring
-  // the predicate-AND-address shape is shape-independent and avoids
-  // over-refusing kernels that run correctly under WaveNative today.
+  // Refuse only when a y/z-derived predicate is present AND a y/z-derived value
+  // reaches a memory address. A y/z value that only feeds a stored or computed
+  // value is harmless. Without a divergent predicate every lane stays active
+  // and computes its own valid address; and when blockDim.x is a multiple of
+  // the target wave the two packed waves share the same y/z, so the predicate
+  // is wave-uniform. blockDim.x is unknown at raise time, but the
+  // predicate-and-address shape does not depend on it.
   if (Projection == PredicateChainProjection::WaveNative) {
-    // Taint every value derived from workitem.id.y()/.z(), following data flow
-    // through pure propagators AND comparisons. Propagating the icmp result (as
-    // opposed to stopping at it) lets a y/z predicate taint the values it
-    // selects once the divergent early exit is if-converted into straight-line
-    // predicated form -- including a base/offset that feeds a memory address.
-    // Unlike the `.x` walk we do NOT stop at `and K` masks: masking a
-    // wave-spanning y/z value does not fold it onto a source-wave-local
+    // Taint every value derived from workitem.id.y()/.z(), through pure
+    // propagators and comparisons. Propagating the icmp result lets a predicate
+    // taint the values it selects once the early exit is if-converted,
+    // including an address. Unlike the .x walk we do not stop at `and K` masks:
+    // masking a wave-spanning y/z value does not fold it onto a source-wave
     // residue.
     SmallPtrSet<Value *, 32> YzDerived;
     SmallVector<Value *> YzWork;
     for (Instruction &I : instructions(F)) {
       auto *CI = dyn_cast<CallInst>(&I);
-      if (!CI)
+      if (!CI || !CI->getCalledFunction())
         continue;
-      Function *Callee = CI->getCalledFunction();
-      if (!Callee)
-        continue;
-      Intrinsic::ID Id = Callee->getIntrinsicID();
+      Intrinsic::ID Id = CI->getCalledFunction()->getIntrinsicID();
       if (Id == Intrinsic::amdgcn_workitem_id_y ||
           Id == Intrinsic::amdgcn_workitem_id_z)
         YzWork.push_back(CI);
@@ -537,72 +554,36 @@ PredicateChainClassifierReport classifyPredicateChain(
       Value *V = YzWork.pop_back_val();
       if (!YzDerived.insert(V).second)
         continue;
-      for (User *U : V->users()) {
-        auto *I = dyn_cast<Instruction>(U);
-        if (!I)
-          continue;
-        if (isPurePropagator(I) || isa<ICmpInst>(I))
-          YzWork.push_back(I);
-      }
+      for (User *U : V->users())
+        if (auto *I = dyn_cast<Instruction>(U))
+          if (isPurePropagator(I) || isa<ICmpInst>(I))
+            YzWork.push_back(I);
     }
 
-    // (1) A y/z-derived predicate: an icmp comparing a y/z-derived value.
-    bool HasYzPredicate = false;
+    // One walk: a y/z-derived predicate and a y/z-derived memory address are
+    // both required, so stop as soon as both are seen.
+    bool HasPredicate = false, ReachesAddress = false;
     for (Instruction &I : instructions(F)) {
-      auto *Cmp = dyn_cast<ICmpInst>(&I);
-      if (!Cmp)
-        continue;
-      for (Value *Op : Cmp->operands())
-        if (YzDerived.count(Op)) {
-          HasYzPredicate = true;
-          break;
-        }
-      if (HasYzPredicate)
-        break;
-    }
-
-    // (2) A y/z-derived memory address. Plain global/flat loads and stores
-    // lower to `load`/`store` (and atomics to `atomicrmw`/`cmpxchg`); memory
-    // intrinsics carry the address as a pointer argument. A tainted i32 buffer
-    // voffset is not caught here -- the validated fault class is a
-    // plain-pointer load; tighten if a corpus kernel surfaces a buffer-offset
-    // variant.
-    auto AddressOperand = [](Instruction &I) -> Value * {
-      if (auto *LD = dyn_cast<LoadInst>(&I))
-        return LD->getPointerOperand();
-      if (auto *ST = dyn_cast<StoreInst>(&I))
-        return ST->getPointerOperand();
-      if (auto *RMW = dyn_cast<AtomicRMWInst>(&I))
-        return RMW->getPointerOperand();
-      if (auto *CX = dyn_cast<AtomicCmpXchgInst>(&I))
-        return CX->getPointerOperand();
-      return nullptr;
-    };
-    Value *YzAddress = nullptr;
-    for (Instruction &I : instructions(F)) {
-      Value *Addr = AddressOperand(I);
-      if (!Addr) {
-        if (auto *Call = dyn_cast<CallInst>(&I))
-          for (Value *Arg : Call->args())
-            if (Arg->getType()->isPointerTy() && YzDerived.count(Arg)) {
-              Addr = Arg;
+      if (!HasPredicate)
+        if (auto *Cmp = dyn_cast<ICmpInst>(&I))
+          for (Value *Op : Cmp->operands())
+            if (YzDerived.count(Op)) {
+              HasPredicate = true;
               break;
             }
-      }
-      if (Addr && YzDerived.count(Addr)) {
-        YzAddress = Addr;
+      if (!ReachesAddress)
+        ReachesAddress = usesTaintedAddress(I, YzDerived);
+      if (HasPredicate && ReachesAddress)
         break;
-      }
     }
 
-    if (HasYzPredicate && YzAddress) {
+    if (HasPredicate && ReachesAddress) {
       std::string Detail =
           "workitem.id.y()/.z()-derived predicate under WaveNative "
-          "wave32->wave64 packing reaches a global memory address: the value "
-          "differs between the two packed source waves, so a divergent early "
-          "exit can drag one wave through masked with a stale base VGPR into a "
-          "load/store, risking a stale / out-of-bounds access and an HSA "
-          "aperture violation. See project_aperture_rootcause.";
+          "wave32->wave64 packing reaches a memory address: the value differs "
+          "between the two packed source waves, so a divergent early exit can "
+          "leave one wave running with a stale address register that is not "
+          "masked at the access and can go out of bounds.";
       Report.ObservedSites.push_back(Detail);
       Report.WaveNativeYzRefusal = true;
       if (!Report.Refused) {

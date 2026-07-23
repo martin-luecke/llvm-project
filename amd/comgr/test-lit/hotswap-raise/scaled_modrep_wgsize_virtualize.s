@@ -1,23 +1,17 @@
-; Under ScaledModuloReplicationProjection the runtime launches the block with a
-; scaled x extent, so the in-kernel workgroup-size query along x must be halved
-; back to the source size. This kernel reads hidden_group_size_x, and the raised
-; IR divides that read by the scaled-dispatch factor. See
-; hotswap/docs/modrep-predicate-chain.md sec. 10.2.
-
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --force-scaled-modrep \
 ; RUN:     --emit-ir=scaled_modrep_wgsize_virtualize_kernel 2>&1 \
 ; RUN:   | %FileCheck %s
 
-; CHECK: define amdgpu_kernel void @scaled_modrep_wgsize_virtualize_kernel(
+; The in-kernel hidden_group_size_x read is halved by the scale factor.
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.text
 	.globl	scaled_modrep_wgsize_virtualize_kernel
 	.type	scaled_modrep_wgsize_virtualize_kernel,@function
+; CHECK: define amdgpu_kernel void @scaled_modrep_wgsize_virtualize_kernel(
 scaled_modrep_wgsize_virtualize_kernel:
 	s_load_b64 s[2:3], s[0:1], 0x0
-; the hidden_group_size_x read is halved by the scaled-dispatch factor:
 ; CHECK: %source_hidden_wg_size_0{{.*}} = lshr i32 {{.+}}, 1
 	s_load_b32 s5, s[0:1], 0x8
 	v_bfe_u32 v2, v0, 10, 10

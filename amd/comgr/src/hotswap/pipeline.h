@@ -34,11 +34,10 @@ struct PipelineOptions {
   // offset, so hidden_global_offset_{x,y,z} can be synthesized as zero.
   // Standalone callers keep this false and reject those source hidden args.
   bool AssumeHipGlobalOffsetZero = false;
-  // Unconditionally select ScaledModuloReplicationProjection for wave32->wave64
-  // cross-widening (offline testing only). The normal path needs no flag: the
-  // raiser auto-upgrades the WaveNative y/z-derived C5 refusal to a scaled
-  // dispatch by default, and the launch runtime honours it via the scaled
-  // factor threaded through the transpile result.
+  // Force ScaledModuloReplicationProjection for wave32->wave64 cross-widening.
+  // Production never sets this -- the raiser auto-selects the projection on the
+  // relevant C5 refusal. It exists so lit tests can exercise the projection
+  // (and its refusals) on kernels that do not themselves trigger the refusal.
   bool ForceScaledModrep = false;
 };
 

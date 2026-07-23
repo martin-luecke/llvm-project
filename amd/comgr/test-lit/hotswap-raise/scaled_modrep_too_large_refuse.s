@@ -1,23 +1,19 @@
-; A workitem.id.y()-derived divergent predicate (the reduce_kernel aperture
-; class) whose source block is already 1024 threads. Doubling it would need 2048
-; threads/block, past the gfx942 hardware max, so the scaled route is ineligible
-; and the refusal stands. See hotswap/docs/modrep-predicate-chain.md sec. 10.4.
-
-; Default (auto-upgrade): the size gate makes it ineligible, so the principled
-; WaveNative y/z refusal stands rather than silently doubling past the max.
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && not raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:     --emit-ir=scaled_modrep_too_large_refuse_kernel 2>&1 \
 ; RUN:   | %FileCheck %s --check-prefix=NOUPGRADE
-; NOUPGRADE: workitem.id.y()/.z()-derived predicate under WaveNative
-; NOUPGRADE-NOT: ScaledModuloReplicationProjection
-; NOUPGRADE-NOT: define amdgpu_kernel void @scaled_modrep_too_large_refuse_kernel(
-
-; --force-scaled-modrep: refuse with the size-gate diagnostic.
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && not raise_cli %t.hsaco --target-isa=gfx942 --force-scaled-modrep \
 ; RUN:     --emit-ir=scaled_modrep_too_large_refuse_kernel 2>&1 \
 ; RUN:   | %FileCheck %s --check-prefix=SIZE
+
+; A 1024-thread block would need 2048 threads once scaled, past the target max,
+; so the scaled route is ineligible: the y/z refusal stands (auto-upgrade path)
+; and --force-scaled-modrep refuses with the size-gate diagnostic.
+
+; NOUPGRADE: workitem.id.y()/.z()-derived predicate under WaveNative
+; NOUPGRADE-NOT: ScaledModuloReplicationProjection
+; NOUPGRADE-NOT: define amdgpu_kernel void @scaled_modrep_too_large_refuse_kernel(
 ; SIZE: ScaledModuloReplicationProjection needs to launch 2048 thread
 ; SIZE-SAME: target hardware limit is 1024
 ; SIZE-NOT: define amdgpu_kernel void @scaled_modrep_too_large_refuse_kernel(

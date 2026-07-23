@@ -50,12 +50,9 @@ struct RaiseResult {
   uint32_t SourcePrivateSegmentFixedSize = 0;
   bool HasDivergentExec = false;
   bool HasEnumeratedSetpcDispatch = false;
-  // Set when the kernel was raised under ScaledModuloReplicationProjection: the
-  // factor (W_t/W_s) the runtime must scale the block's x extent by (x is
-  // always the scaled dimension). 1 means no scaling is required. The launch
-  // runtime reads this (threaded through the comgr transpile result and the
-  // loader) to scale exactly the scaled kernels' dispatch. See
-  // amd/comgr/src/hotswap/docs/modrep-predicate-chain.md sec. 10.
+  // Factor by which the runtime must scale the block's x extent under
+  // ScaledModuloReplicationProjection; 1 means no scaling. See sec. 10 of
+  // hotswap/docs/modrep-predicate-chain.md.
   unsigned ScaledDispatchFactor = 1;
 };
 

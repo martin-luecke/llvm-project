@@ -1,15 +1,11 @@
-; ScaledModuloReplicationProjection (the scaled dispatch) is invalid in the
-; phantom-lane regime (max_flat_workgroup_size < target wave size): it drops the
-; MODREP phantom-lane clamp, so hardware lanes past the scaled block size would
-; address out of bounds. The auto-upgrade never reaches a sub-wave kernel (those
-; route to plain MODREP), so this only guards an explicit --force-scaled-modrep;
-; that forced route must REFUSE rather than mislower. See
-; hotswap/docs/modrep-predicate-chain.md sec. 10.
-
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && not raise_cli %t.hsaco --target-isa=gfx942 --force-scaled-modrep \
 ; RUN:     --emit-ir=scaled_modrep_phantom_refuse_kernel 2>&1 \
 ; RUN:   | %FileCheck %s
+
+; The projection drops the phantom-lane clamp, so a sub-wave block
+; (max_flat_workgroup_size < target wave size) must be refused on the forced
+; route rather than address out of bounds.
 
 ; CHECK: ScaledModuloReplicationProjection is invalid in the phantom-lane regime
 ; CHECK-SAME: max_flat_workgroup_size=32 < target wave size 64

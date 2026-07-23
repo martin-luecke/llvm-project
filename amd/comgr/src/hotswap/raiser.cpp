@@ -94,11 +94,6 @@ namespace COMGR::hotswap {
 
 namespace {
 
-// Hardware threads-per-block maximum for the gfx9/CDNA wave64 targets the
-// scaled dispatch scales up to. A source block that would exceed this once
-// scaled by W_t / W_s cannot be doubled.
-constexpr unsigned kTargetMaxThreadsPerBlock = 1024;
-
 llvm::DenseSet<uint64_t>
 collectInstructionOffsets(ArrayRef<DecodedInst> Insts) {
   llvm::DenseSet<uint64_t> Offsets;
@@ -972,7 +967,7 @@ static Expected<RaiseResult> raiseToIRImpl(
     const unsigned Factor = TargetIsa.WaveSize / Isa.WaveSize;
     const unsigned SourceFlat =
         Meta.MaxFlatWorkgroupSize > 0 ? Meta.MaxFlatWorkgroupSize : 1024;
-    if (SourceFlat * Factor > kTargetMaxThreadsPerBlock) {
+    if (SourceFlat * Factor > AMDGPU::IsaInfo::getMaxFlatWorkGroupSize()) {
       std::string Detail =
           formatv("ScaledModuloReplicationProjection needs to launch {0} "
                   "threads/block "
@@ -982,7 +977,7 @@ static Expected<RaiseResult> raiseToIRImpl(
                   "block. See "
                   "hotswap/docs/modrep-predicate-chain.md sec. 10.",
                   SourceFlat * Factor, SourceFlat, Factor,
-                  kTargetMaxThreadsPerBlock)
+                  AMDGPU::IsaInfo::getMaxFlatWorkGroupSize())
               .str();
       errs() << "transpiler: pre-translation abort: " << Detail << "\n";
       return RaiseFailure::crossWavePredicateChain(KernelName, Detail);
@@ -2547,15 +2542,15 @@ static Expected<RaiseResult> raiseToIRImpl(
       // specifically, cross-widening with an integer wave ratio, no matrix ops,
       // and the scaled block fitting the hardware threads/block max; otherwise
       // the refusal stands. See hotswap/docs/modrep-predicate-chain.md sec. 10.
-      const unsigned ScaleFactor =
-          Isa.WaveSize ? TargetIsa.WaveSize / Isa.WaveSize : 0;
+      assert(Isa.WaveSize && "source wave size must be nonzero");
+      const unsigned ScaleFactor = TargetIsa.WaveSize / Isa.WaveSize;
       const bool CanUpgradeToScaled =
           !ForceScaledModrep && PredReport.WaveNativeYzRefusal &&
           Isa.isWave32() && !TargetIsa.isWave32() && ScaleFactor >= 2 &&
           (TargetIsa.WaveSize % Isa.WaveSize) == 0 && !HasMatrixOp() &&
           Meta.MaxFlatWorkgroupSize > 0 &&
           static_cast<unsigned>(Meta.MaxFlatWorkgroupSize) * ScaleFactor <=
-              kTargetMaxThreadsPerBlock;
+              AMDGPU::IsaInfo::getMaxFlatWorkGroupSize();
       if (CanUpgradeToScaled) {
         errs()
             << "transpiler: post-raise fallback: retrying kernel '"
