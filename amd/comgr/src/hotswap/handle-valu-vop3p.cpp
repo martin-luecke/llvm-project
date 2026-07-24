@@ -988,9 +988,12 @@ Expected<HandlerResult> handleValuVoP3P(RaiseContext &Ctx,
   // `wmma-lowering.cpp` -- gfx942 has a direct K=4 MFMA equivalent
   // so the decomposition is 1 MFMA per Wave32 group (not 2 chained
   // like the K=32/K=64 path). The shared ds_bpermute redistribution
-  // math is documented alongside the helper. Targets with neither
-  // `hasTensorOps` nor `hasMFMA` (e.g. gfx12 RDNA4 base) get a
-  // principled refusal -- they have no K=4 f32 matrix path at all.
+  // math is documented alongside the helper. Wave32 targets with
+  // neither `hasTensorOps` nor `hasMFMA` (e.g. gfx1151 RDNA3.5) get a
+  // pure-VALU ds_bpermute + fused-FMA decomposition
+  // (`emitWmmaF3216x16x4SoftwareFMA`); RDNA has no f32 matrix unit, so
+  // the K=4 product is computed directly in-wave. Only a Wave64 target
+  // without MFMA is left with a principled refusal.
   case CanonicalOp::V_WMMA_F32_16x16x4_F32: {
     auto *AbIrTy = FixedVectorType::get(Ctx.F32Ty, 2);
     auto *CdIrTy = FixedVectorType::get(Ctx.F32Ty, 8);
@@ -1047,14 +1050,25 @@ Expected<HandlerResult> handleValuVoP3P(RaiseContext &Ctx,
           return RV.takeError();
         ResultVal = *RV;
       }
+    } else if (Ctx.TargetIsa.isWave32()) {
+      // Target has neither the native gfx1250 WMMA nor an MFMA unit, but
+      // is Wave32 (e.g. gfx1151 RDNA3.5). RDNA has no f32-input matrix
+      // instruction, so lower to a pure-VALU ds_bpermute gather + fused
+      // v_fma_f32 decomposition of D = A*B + C, entirely in-wave. Source
+      // and target share the Wave32 K=4 f32 fragment layout, so there is
+      // no wave projection. See `emitWmmaF3216x16x4SoftwareFMA`.
+      Expected<Value *> RV = emitWmmaF3216x16x4SoftwareFMA(Ctx, A, B, *C);
+      if (!RV)
+        return RV.takeError();
+      ResultVal = *RV;
     } else {
       return RaiseFailure::unsupportedInstructionForm(
           Di, "VOP3P",
-          "v_wmma_f32_16x16x4_f32 cross-target requires either "
-          "hasTensorOps (native gfx1250 intrinsic "
-          "int_amdgcn_wmma_f32_16x16x4_f32) or hasMFMA (gfx942 "
-          "mfma_f32_16x16x4f32 decomposition); this target has "
-          "neither -- no K=4 f32 matrix path is available");
+          "v_wmma_f32_16x16x4_f32 cross-target requires hasTensorOps "
+          "(native gfx1250 intrinsic int_amdgcn_wmma_f32_16x16x4_f32), "
+          "hasMFMA (gfx942 mfma_f32_16x16x4f32 decomposition), or a Wave32 "
+          "target (pure-VALU FMA decomposition); this target is Wave64 "
+          "without MFMA -- no K=4 f32 matrix path is available");
     }
 
     Ctx.writeRegVec(Dest, ResultVal);

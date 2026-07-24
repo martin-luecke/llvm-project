@@ -806,6 +806,118 @@ Expected<Value *> emitWmmAtoMfmaF3216x16x4(RaiseContext &Ctx, Value *A,
 }
 
 // ----------------------------------------------------------------------
+// v_wmma_f32_16x16x4_f32 -> pure-VALU software FMA decomposition
+// ----------------------------------------------------------------------
+//
+// For targets that have NEITHER `hasTensorOps` (the native gfx1250 WMMA
+// intrinsic) NOR `hasMFMA` (the gfx942/gfx950 matrix unit) -- e.g.
+// gfx1151 (RDNA3.5) and other gfx11/gfx12 RDNA parts. RDNA WMMA has no
+// f32-input matrix instruction of any shape, so there is no hardware
+// matrix path to target. The principled, target-independent lowering is
+// to compute the 16x16x4 product D = A*B + C directly with cross-lane
+// gathers (`ds_bpermute`) and fused `v_fma_f32`, entirely within the
+// native Wave32.
+//
+// Because the source (gfx1250 WMMA) and every target this path serves are
+// BOTH Wave32, there is no wave projection / cross-widen: the per-lane
+// fragment layout is identical on both sides and the decomposition is a
+// single in-wave pass. (Contrast `emitWMMAtoMFMA` / the K=4 MFMA path,
+// which spread one Wave32 group across a Wave64 MFMA.) The factor-1
+// `ModuloReplicationProjection` selected for same-wave-size transpiles
+// applies here.
+//
+// Fragment layout (Wave32; the K=4 f32 WMMA layout documented in the
+// header and in `runGroupPassF32K4` above):
+//   A (16x4): lane L holds A[L%16][2*(L>=16)+GPR], GPR in {0,1}
+//             => A[i][k] lives in lane (i + 16*(k>=2)), GPR (k&1)
+//   B (4x16): lane L holds B[2*(L>=16)+GPR][L%16], GPR in {0,1}
+//             => B[k][j] lives in lane (j + 16*(k>=2)), GPR (k&1)
+//   C/D(16x16): lane L holds {C,D}[8*(L>=16)+GPR][L%16], GPR in {0..7}
+//             => lane L owns column j=L%16 and rows i = 8*(L>=16)+g, g in 0..7
+//
+// Per lane L (h = (L>=16), j = L%16), for g in 0..7 (i = 8h+g):
+//   D[i][j] = C[i][j] + sum_{k=0..3} A[i][k] * B[k][j]
+//
+// Gathers (all `ds_bpermute`, byte address = 4*srcLane):
+//   B[k][j]: srcLane = j + 16*(k>=2), read BDwords[k&1]  -- j is this lane's
+//            own column, so 4 permutes with address 4*(L%16) / 4*(L%16+16).
+//   A[i][k]: srcLane = i + 16*(k>=2), read ADwords[k&1]  -- 4 per output row.
+//
+// The gathers run under `wrapAsWWMValue`: the factor-1 MODREP projection
+// does NOT force EXEC=-1, so the cross-lane reads must run in whole-wave
+// mode to observe every physical lane's fragment register (not only the
+// currently-active lanes). Under a projection that already guarantees
+// EXEC=-1 (WaveNative) the wrapper is an identity no-op. The per-lane FMA
+// accumulation and the result are local, so they need no WWM wrapping.
+Expected<Value *> emitWmmaF3216x16x4SoftwareFMA(RaiseContext &Ctx, Value *A,
+                                                Value *Vb, Value *C) {
+  IRBuilder<> &B = Ctx.B;
+  Module &M = Ctx.M;
+
+  if (!Ctx.TargetIsa.isWave32())
+    return createStringError(
+        "software-FMA v_wmma_f32_16x16x4_f32 lowering requires a Wave32 "
+        "target; a Wave64 target without MFMA has no supported f32 matrix "
+        "path");
+
+  Value *ADwords[2], *BDwords[2], *CDwords[8];
+  unpackDwords(B, A, 2, Ctx.I32Ty, ADwords);
+  unpackDwords(B, Vb, 2, Ctx.I32Ty, BDwords);
+  unpackDwords(B, C, 8, Ctx.I32Ty, CDwords);
+
+  Value *LaneId = emitLaneId(B, M, Ctx.I32Ty);
+  Value *LaneMod16 = B.CreateAnd(LaneId, B.getInt32(15), "lane16");
+  // h in {0,1}: 0 for lanes 0-15, 1 for lanes 16-31 (Wave32, lane < 32).
+  Value *HBit = B.CreateLShr(LaneId, B.getInt32(4), "h_bit");
+  Value *RowBase = B.CreateShl(HBit, B.getInt32(3), "row_base"); // 8*h
+
+  auto gather = [&](Value *ByteAddr, Value *Src) -> Value * {
+    // Whole-wave the cross-lane read so it is correct under the factor-1
+    // MODREP projection (EXEC not forced to -1). See the header comment.
+    return Ctx.Projection.wrapAsWWMValue(B, emitDSBpermute(B, M, ByteAddr, Src),
+                                         "wmma_soft_gather");
+  };
+  auto toF32 = [&](Value *V) { return B.CreateBitCast(V, Ctx.F32Ty); };
+
+  // B[k][j] for this lane's own column j = L%16 (4 values, shared by all
+  // 8 outputs this lane produces).
+  Value *BAddrLo = B.CreateShl(LaneMod16, B.getInt32(2), "b_addr_lo");
+  Value *BAddrHi = B.CreateShl(B.CreateAdd(LaneMod16, B.getInt32(16)),
+                               B.getInt32(2), "b_addr_hi");
+  Value *Bk[4];
+  Bk[0] = toF32(gather(BAddrLo, BDwords[0])); // B[0][j]
+  Bk[1] = toF32(gather(BAddrLo, BDwords[1])); // B[1][j]
+  Bk[2] = toF32(gather(BAddrHi, BDwords[0])); // B[2][j]
+  Bk[3] = toF32(gather(BAddrHi, BDwords[1])); // B[3][j]
+
+  Function *FmaFn =
+      Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fma, {Ctx.F32Ty});
+
+  Value *ResultDwords[8];
+  for (unsigned G = 0; G < 8; ++G) {
+    // i = 8h + G. A[i][k] source lane = i (k<2) or i+16 (k>=2).
+    Value *Row = B.CreateAdd(RowBase, B.getInt32(G), "row");
+    Value *AAddrLo = B.CreateShl(Row, B.getInt32(2), "a_addr_lo");
+    Value *AAddrHi = B.CreateShl(B.CreateAdd(Row, B.getInt32(16)),
+                                 B.getInt32(2), "a_addr_hi");
+    Value *Ak[4];
+    Ak[0] = toF32(gather(AAddrLo, ADwords[0])); // A[i][0]
+    Ak[1] = toF32(gather(AAddrLo, ADwords[1])); // A[i][1]
+    Ak[2] = toF32(gather(AAddrHi, ADwords[0])); // A[i][2]
+    Ak[3] = toF32(gather(AAddrHi, ADwords[1])); // A[i][3]
+
+    // D[i][j] = C[i][j] + sum_k A[i][k]*B[k][j], fused per term.
+    Value *Acc = toF32(CDwords[G]); // C[i][j]
+    for (unsigned K = 0; K < 4; ++K)
+      Acc = B.CreateCall(FmaFn, {Ak[K], Bk[K], Acc}, "wmma_fma");
+    ResultDwords[G] = B.CreateBitCast(Acc, Ctx.I32Ty, "wmma_soft_d");
+  }
+
+  return packDwords(B, ResultDwords, 8, Ctx.I32Ty,
+                    FixedVectorType::get(Ctx.F32Ty, 8));
+}
+
+// ----------------------------------------------------------------------
 // v_wmma_scale_f32_16x16x128_f8f6f4 -> v_mfma_scale_f32_16x16x128_f8f6f4
 // ----------------------------------------------------------------------
 //

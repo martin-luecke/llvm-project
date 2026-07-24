@@ -181,6 +181,26 @@ llvm::Expected<llvm::Value *> emitWmmAtoMfmaF3216x16x4(RaiseContext &Ctx,
                                                        llvm::Value *B,
                                                        llvm::Value *C);
 
+/// Lower a Wave32 v_wmma_f32_16x16x4_f32 (gfx1250 RDNA4) to a pure-VALU
+/// software decomposition for targets with NEITHER `hasTensorOps` (native
+/// gfx1250 WMMA) NOR `hasMFMA` (gfx942/gfx950 matrix unit) -- e.g. gfx1151
+/// (RDNA3.5). RDNA WMMA has no f32-input matrix instruction, so the matrix
+/// product D = A*B + C is computed directly with `ds_bpermute` cross-lane
+/// gathers + fused `v_fma_f32`, entirely within the native Wave32 (source
+/// and target share the same Wave32 fragment layout, so no wave projection
+/// is involved). Uses the same K=4 f32 fragment layout as
+/// `emitWmmAtoMfmaF3216x16x4`.
+///
+/// \param A  WMMA source A fragment (<2 x f32> in Wave32)
+/// \param Vb WMMA source B fragment (<2 x f32> in Wave32)
+/// \param C  WMMA accumulator fragment (<8 x f32> in Wave32)
+/// \returns  `<8 x float>` -- result in Wave32 C-layout. Returns an error if
+///           the target is not Wave32.
+llvm::Expected<llvm::Value *> emitWmmaF3216x16x4SoftwareFMA(RaiseContext &Ctx,
+                                                            llvm::Value *A,
+                                                            llvm::Value *Vb,
+                                                            llvm::Value *C);
+
 /// Lower a Wave32 v_wmma_scale_f32_16x16x128_f8f6f4 (gfx1250 RDNA4 VOP3PX2)
 /// to a Wave64 v_mfma_scale_f32_16x16x128_f8f6f4 (gfx950 CDNA4 VOP3PX) via
 /// ds_bpermute lane redistribution + the gfx950 scaled-MFMA intrinsic.
