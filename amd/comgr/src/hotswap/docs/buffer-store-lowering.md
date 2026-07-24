@@ -8,7 +8,9 @@
 >
 > **Scope:** gfx1250 -> gfx942 today; the principle (lift to the
 > matching hardware-OOB intrinsic, never to a software fallback that
-> introduces an `addrspace(5)` alloca) is target-agnostic.
+> introduces an `addrspace(5)` alloca) is target-agnostic. RDNA targets
+> (gfx11 gfx1151, gfx12) require a target-correct buffer descriptor -- see
+> §8.
 
 ---
 
@@ -174,3 +176,36 @@ tensor-copy follow-up work, …).
   §3.4 (source-side user-SGPR layout, including the
   `flat_scratch_init` bit we deliberately do not set) and §4.2
   (target-side scratch attribute propagation).
+
+## 8. RDNA targets: descriptor must be target-correct (gfx1151)
+
+The `<4 x i32>` SRD that `mubuf-addr.cpp::buildMubufSRD` assembles hardcodes the
+gfx9/CDNA descriptor `word3` (FORMAT_32 + NUM_FORMAT_FLOAT, `0x00027000`) and the
+gfx942 num_records semantics. That descriptor is only valid on a CDNA target. On
+an RDNA target (gfx11 gfx1151, gfx12) the buffer-resource `word3` layout differs
+-- most importantly `OOB_SELECT`: gfx10+ needs `OOB_SELECT=3` (raw, byte-extent
+bounds), and with the gfx9 `word3` the stride-0 descriptor reports zero records,
+so every buffer load/store/atomic is out-of-bounds (loads read 0, stores/atomics
+drop). This silently corrupted every hipBLASLt Tensile GEMM on gfx1250 -> gfx1151.
+
+**Fix (target-correct descriptor via the backend).** Route RDNA targets
+(`TargetIsa.HasMfma == false`) through the `llvm.amdgcn.make.buffer.rsrc` +
+`raw_ptr_buffer_{load,store,atomic_*}` path instead of the hand-assembled
+`<4 x i32>` SRD. `make.buffer.rsrc` takes the base pointer, stride, num_records
+(byte extent) and a `word3`; the backend materialises a valid V# for the actual
+target. The `word3` is supplied by `mubuf-addr.cpp::rawBufferRsrcWord3`, which
+mirrors `SIInstrInfo::getDefaultRsrcDataFormat()` (gfx10+: `UFMT_32_FLOAT` +
+`RESOURCE_LEVEL=1` + `OOB_SELECT=3`; gfx9: the existing `0x00027000`). The
+CDNA/gfx942/950 path is gated on `HasMfma` and left byte-for-byte unchanged, so
+that architecture -- and its lit coverage -- does not move. Buffer atomics use
+`rawPtrBufferAtomicVariant` to map each legacy atomic intrinsic to its
+addrspace(8) counterpart on RDNA.
+
+> **Rule:** never hand-encode a target's V# `word3`/num_records from another
+> target's constants. Recover the architecture-neutral fields (base, byte
+> extent) and let `make.buffer.rsrc` encode the descriptor for the target, or
+> derive `word3` from the canonical `getDefaultRsrcDataFormat()` shape.
+
+Verified on real gfx1151 (FFM gfx1250 as reference): isolated raw-buffer GEMM,
+256-thread `buffer_atomic_add`, and torch `F.linear` (1.3e-5) all correct;
+`blit-linear` container smoke passes.

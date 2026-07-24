@@ -310,10 +310,11 @@ Expected<HandlerResult> handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
         StoreTy = VecTy;
         Val = Ctx.Regs.readRegVec(Ctx.B, Vdata, VecTy);
       }
-      // Stores (and atomics / LDS-loads below) originally always used the
-      // legacy <4 x i32> Srd, including under cross-widening to gfx942/950.
-      // Only RDNA targets (!HasMfma), whose V# word3 differs, must switch to
-      // the make.buffer.rsrc path -- keep the CDNA path byte-for-byte.
+      // Stores (and atomics / LDS-loads below) use the <4 x i32> Srd on CDNA
+      // and the make.buffer.rsrc / raw_ptr path on RDNA (!HasMfma), whose V#
+      // word3 differs. Unlike the load above, the CDNA store path does not use
+      // raw-ptr even under cross-widening, so the gate here is HasMfma alone --
+      // this keeps the CDNA store path byte-for-byte identical.
       const bool StoreRawPtr = !Ctx.TargetIsa.HasMfma;
       Function *BufSt = Intrinsic::getOrInsertDeclaration(
           &Ctx.M,
@@ -351,9 +352,10 @@ Expected<HandlerResult> handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
 
     Type *LdTy = (Dwords == 1) ? static_cast<Type *>(Ctx.I32Ty)
                                : FixedVectorType::get(Ctx.I32Ty, Dwords);
-    // Buffer-load-to-LDS originally always used the legacy <4 x i32> Srd.
-    // Switch only RDNA targets (!HasMfma) to the make.buffer.rsrc path; keep
-    // the CDNA (gfx942/950) path byte-for-byte, including under cross-widening.
+    // CDNA uses the <4 x i32> Srd; RDNA (!HasMfma) uses the make.buffer.rsrc /
+    // raw_ptr path (its V# word3 differs). Gate on HasMfma alone so the CDNA
+    // buffer-load-to-LDS path is byte-for-byte identical, including under
+    // cross-widening.
     const bool LdsRawPtr = !Ctx.TargetIsa.HasMfma;
     Function *BufLd = Intrinsic::getOrInsertDeclaration(
         &Ctx.M,

@@ -8,6 +8,7 @@
 
 #include "mubuf-addr.h"
 
+#include "SIDefines.h" // AMDGPU::UfmtGFX11::UFMT_32_FLOAT
 #include "Utils/AMDGPUBaseInfo.h" // AMDGPU::getNamedOperandIdx, AMDGPU::OpName::offset
 #include "llvm/ADT/Twine.h"
 #include "llvm/IR/Constants.h"
@@ -205,6 +206,29 @@ bool constantI32(Value *V, uint32_t &Out) {
 // FORMAT_32 + NUM_FORMAT_FLOAT for the same raw store family; the raw
 // intrinsics still move the explicitly typed payload bits without
 // numeric conversion.
+// Descriptor word3 (the format/flags dword) for a raw buffer resource built
+// via llvm.amdgcn.make.buffer.rsrc. The backend stores operand 3 into word3
+// verbatim (SIISelLowering::lowerPointerAsRsrcIntrin performs no target
+// fix-ups), so the caller must supply the target's canonical raw-buffer format.
+// This mirrors SIInstrInfo::getDefaultRsrcDataFormat():
+//   * gfx10+/RDNA: UFMT_32_FLOAT with RESOURCE_LEVEL=1 and OOB_SELECT=3.
+//     OOB_SELECT=3 selects raw (byte-extent) bounds; with the default
+//     OOB_SELECT=0 a stride-0 descriptor reports zero records, so every access
+//     is out-of-bounds -- reads return 0 and writes are dropped.
+//   * gfx9/CDNA: the SI-family FORMAT_32 + NUM_FORMAT_FLOAT shape, matching what
+//     the <4 x i32> descriptor path already emits for gfx942/950.
+// GFX12 shares the GFX11 UFMT (getDefaultRsrcDataFormat treats >=GFX11 alike);
+// gfx10 is not a HotSwap target (it would need UfmtGFX10). HasMfma is the CDNA
+// (gfx9) marker.
+uint32_t rawBufferRsrcWord3(const ISAProfile &Target) {
+  if (Target.HasMfma)
+    return 0x00027000u; // gfx9 FORMAT_32 + NUM_FORMAT_FLOAT
+  return (static_cast<uint32_t>(AMDGPU::UfmtGFX11::UFMT_32_FLOAT)
+          << 12) |
+         (1u << 24) | // RESOURCE_LEVEL
+         (3u << 28);  // OOB_SELECT = raw (byte-extent) bounds
+}
+
 Expected<Value *> buildMubufSRD(RaiseContext &Ctx, const SRSRCDwords &Dw) {
   constexpr uint32_t kGfx1250RawPointerWord1Bits = 0xfc000000u;
   constexpr uint32_t kGfx1250RawBufferMaxRecords = 0x00ffffffu;
@@ -380,16 +404,7 @@ Expected<MubufAddr> decodeMubufAddr(RaiseContext &Ctx, const DecodedInst &Di,
   Function *MakeRsrc = Intrinsic::getOrInsertDeclaration(
       &Ctx.M, Intrinsic::amdgcn_make_buffer_rsrc,
       {PointerType::get(Ctx.C, 8), PointerType::get(Ctx.C, 1)});
-  // The word3 (format/flags) of a raw buffer resource is ISA-generation
-  // specific: gfx9/CDNA (MFMA) uses the SI-family DATA_FORMAT/NUM_FORMAT
-  // encoding (FORMAT_32_FLOAT = 0x00027000); gfx10+/RDNA (gfx11 gfx1151,
-  // gfx12 gfx1250) uses the newer OOB_SELECT-based encoding (0x31014000).
-  // Passing the gfx9 word3 to a make.buffer.rsrc lowered for a gfx11 target
-  // yields a descriptor whose bounds read as zero -> every load is
-  // out-of-bounds and returns 0. Select by target family so the backend
-  // builds a valid V# for whatever target we transpile to. (make.buffer.rsrc
-  // stores word3 verbatim, so this must be the target-correct value.)
-  const uint32_t Word3 = Ctx.TargetIsa.HasMfma ? 0x00027000u : 0x31014000u;
+  const uint32_t Word3 = rawBufferRsrcWord3(Ctx.TargetIsa);
   Out.RawPtrRsrc =
       Ctx.B.CreateCall(MakeRsrc,
                        {BasePtr, ConstantInt::get(Type::getInt16Ty(Ctx.C), 0),
