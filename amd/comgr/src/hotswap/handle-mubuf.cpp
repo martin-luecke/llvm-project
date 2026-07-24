@@ -107,6 +107,16 @@ Expected<HandlerResult> handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
     Value *Voffset = Mbuf.Voffset;
     Value *Soffset = Mbuf.Soffset;
     Value *AuxFlags = Mbuf.AuxFlags;
+    // The legacy <4 x i32> `Srd` (built by buildMubufSRD) carries
+    // gfx942/CDNA-specific word3 (FORMAT_32) + num_records constants and is
+    // valid only on a CDNA target. RDNA targets (gfx11 gfx1151, gfx12) need a
+    // different V# word3, so route them through the make.buffer.rsrc /
+    // raw_ptr_buffer path where the backend encodes a valid descriptor for the
+    // target (mubuf-addr.cpp picks the target-correct word3). Cross-widening
+    // (wave32->wave64, gfx942/950) already used the raw-ptr path. HasMfma marks
+    // the CDNA family whose legacy descriptor stays byte-for-byte unchanged.
+    const bool UseRawPtr = (Ctx.TargetIsa.WaveSize > Ctx.Isa.WaveSize) ||
+                           !Ctx.TargetIsa.HasMfma;
     auto RawPtrBufferLoad = [&](Type *LoadTy) -> Value * {
       Function *BufLd = Intrinsic::getOrInsertDeclaration(
           &Ctx.M, Intrinsic::amdgcn_raw_ptr_buffer_load, {LoadTy});
@@ -137,7 +147,7 @@ Expected<HandlerResult> handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
           Type *MemTy = (loadBits == 8) ? Type::getInt8Ty(Ctx.C)
                                         : Type::getInt16Ty(Ctx.C);
           Value *Loaded = nullptr;
-          if (Ctx.TargetIsa.WaveSize > Ctx.Isa.WaveSize) {
+          if (UseRawPtr) {
             Loaded = RawPtrBufferLoad(MemTy);
           } else {
             Function *BufLd = Intrinsic::getOrInsertDeclaration(
@@ -179,7 +189,7 @@ Expected<HandlerResult> handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
           }
         } else if (dwords == 1) {
           Value *Loaded = nullptr;
-          if (Ctx.TargetIsa.WaveSize > Ctx.Isa.WaveSize) {
+          if (UseRawPtr) {
             Loaded = RawPtrBufferLoad(Ctx.I32Ty);
           } else {
             Function *BufLd = Intrinsic::getOrInsertDeclaration(
@@ -191,7 +201,7 @@ Expected<HandlerResult> handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
         } else {
           auto *VecTy = FixedVectorType::get(Ctx.I32Ty, dwords);
           Value *Loaded = nullptr;
-          if (Ctx.TargetIsa.WaveSize > Ctx.Isa.WaveSize) {
+          if (UseRawPtr) {
             Loaded = RawPtrBufferLoad(VecTy);
           } else {
             Function *BufLd = Intrinsic::getOrInsertDeclaration(
@@ -273,10 +283,19 @@ Expected<HandlerResult> handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
         StoreTy = VecTy;
         Val = Ctx.Regs.readRegVec(Ctx.B, Vdata, VecTy);
       }
+      // Stores (and atomics / LDS-loads below) originally always used the
+      // legacy <4 x i32> Srd, including under cross-widening to gfx942/950.
+      // Only RDNA targets (!HasMfma), whose V# word3 differs, must switch to
+      // the make.buffer.rsrc path -- keep the CDNA path byte-for-byte.
+      const bool StoreRawPtr = !Ctx.TargetIsa.HasMfma;
       Function *BufSt = Intrinsic::getOrInsertDeclaration(
-          &Ctx.M, Intrinsic::amdgcn_raw_buffer_store, {StoreTy});
+          &Ctx.M,
+          StoreRawPtr ? Intrinsic::amdgcn_raw_ptr_buffer_store
+                      : Intrinsic::amdgcn_raw_buffer_store,
+          {StoreTy});
+      Value *StRsrc = StoreRawPtr ? Mbuf.RawPtrRsrc : Srd;
       auto EmitStore = [&] {
-        Ctx.B.CreateCall(BufSt, {Val, Srd, Voffset, Soffset, AuxFlags});
+        Ctx.B.CreateCall(BufSt, {Val, StRsrc, Voffset, Soffset, AuxFlags});
       };
       if (Ctx.Projection.providesFullWaveExecInvariant())
         EmitStore();
@@ -305,8 +324,16 @@ Expected<HandlerResult> handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
 
     Type *LdTy = (Dwords == 1) ? static_cast<Type *>(Ctx.I32Ty)
                                : FixedVectorType::get(Ctx.I32Ty, Dwords);
+    // Buffer-load-to-LDS originally always used the legacy <4 x i32> Srd.
+    // Switch only RDNA targets (!HasMfma) to the make.buffer.rsrc path; keep
+    // the CDNA (gfx942/950) path byte-for-byte, including under cross-widening.
+    const bool LdsRawPtr = !Ctx.TargetIsa.HasMfma;
     Function *BufLd = Intrinsic::getOrInsertDeclaration(
-        &Ctx.M, Intrinsic::amdgcn_raw_buffer_load, {LdTy});
+        &Ctx.M,
+        LdsRawPtr ? Intrinsic::amdgcn_raw_ptr_buffer_load
+                  : Intrinsic::amdgcn_raw_buffer_load,
+        {LdTy});
+    Value *LdsRsrc = LdsRawPtr ? Mbuf.RawPtrRsrc : Mbuf.Srd;
 
     // LDS destination address comes from M0, which is wave-uniform; read it
     // once outside the diamond.
@@ -325,7 +352,7 @@ Expected<HandlerResult> handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
     // discarded on masked-out lanes).
     Ctx.emitUnderExec([&] {
       Value *Loaded = Ctx.B.CreateCall(
-          BufLd, {Mbuf.Srd, Mbuf.Voffset, Mbuf.Soffset, Mbuf.AuxFlags},
+          BufLd, {LdsRsrc, Mbuf.Voffset, Mbuf.Soffset, Mbuf.AuxFlags},
           "lds_buf_ld");
       Ctx.B.CreateStore(Loaded, LdsPtr);
     });
@@ -359,6 +386,20 @@ Expected<HandlerResult> handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
     if (!MbufOrErr)
       return MbufOrErr.takeError();
     MubufAddr Mbuf = *MbufOrErr;
+
+    // Buffer atomics still emit the legacy <4 x i32> Srd (gfx942/CDNA word3),
+    // which is invalid on RDNA targets (gfx11 gfx1151, gfx12): the descriptor
+    // reads out-of-bounds and the atomic is silently dropped. Migrating the
+    // atomic dispatch to the make.buffer.rsrc / raw_ptr_buffer_atomic_* path
+    // (as done for loads/stores/LDS above) is a mechanical follow-up. Until
+    // then, refuse loudly on RDNA rather than miscompile; CDNA (gfx942/950)
+    // keeps its validated legacy path.
+    if (!Ctx.TargetIsa.HasMfma)
+      return createStringError(
+          "transpiler: MUBUF buffer atomic on an RDNA target is not yet "
+          "migrated to the make.buffer.rsrc descriptor path (the legacy "
+          "gfx942 <4 x i32> descriptor is out-of-bounds on gfx11/gfx12); "
+          "refusing rather than silently dropping the atomic");
 
     // `BUFFER_ATOMIC_CMPSWAP` is the one buffer atomic whose vdata is
     // a register PAIR carrying `{cmp, new}` rather than a single data

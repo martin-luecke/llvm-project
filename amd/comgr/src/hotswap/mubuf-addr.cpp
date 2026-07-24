@@ -380,10 +380,20 @@ Expected<MubufAddr> decodeMubufAddr(RaiseContext &Ctx, const DecodedInst &Di,
   Function *MakeRsrc = Intrinsic::getOrInsertDeclaration(
       &Ctx.M, Intrinsic::amdgcn_make_buffer_rsrc,
       {PointerType::get(Ctx.C, 8), PointerType::get(Ctx.C, 1)});
+  // The word3 (format/flags) of a raw buffer resource is ISA-generation
+  // specific: gfx9/CDNA (MFMA) uses the SI-family DATA_FORMAT/NUM_FORMAT
+  // encoding (FORMAT_32_FLOAT = 0x00027000); gfx10+/RDNA (gfx11 gfx1151,
+  // gfx12 gfx1250) uses the newer OOB_SELECT-based encoding (0x31014000).
+  // Passing the gfx9 word3 to a make.buffer.rsrc lowered for a gfx11 target
+  // yields a descriptor whose bounds read as zero -> every load is
+  // out-of-bounds and returns 0. Select by target family so the backend
+  // builds a valid V# for whatever target we transpile to. (make.buffer.rsrc
+  // stores word3 verbatim, so this must be the target-correct value.)
+  const uint32_t Word3 = Ctx.TargetIsa.HasMfma ? 0x00027000u : 0x31014000u;
   Out.RawPtrRsrc =
       Ctx.B.CreateCall(MakeRsrc,
                        {BasePtr, ConstantInt::get(Type::getInt16Ty(Ctx.C), 0),
-                        NumRecords, ConstantInt::get(Ctx.I32Ty, 0x27000)},
+                        NumRecords, ConstantInt::get(Ctx.I32Ty, Word3)},
                        "mubuf_raw_ptr_rsrc");
   Out.AuxFlags = ConstantInt::get(Ctx.I32Ty, 0);
   return Out;
