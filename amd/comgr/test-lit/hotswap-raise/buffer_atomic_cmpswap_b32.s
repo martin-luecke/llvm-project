@@ -1,5 +1,3 @@
-; XFAIL: *
-; XFAIL reason: gfx1250 (RDNA) buffer atomics are refused pending migration of the atomic dispatch to make.buffer.rsrc / raw_ptr_buffer_atomic (loads/stores/LDS already migrated in handle-mubuf.cpp); legacy gfx942 <4 x i32> descriptor is OOB on RDNA.
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx1250 \
 ; RUN:     --emit-ir=buffer_atomic_cmpswap_b32_kernel 2>/dev/null \
@@ -7,7 +5,7 @@
 
 ; Raw-buffer atomic cmpswap b32 (return) lift.
 ; CHECK-LABEL: define amdgpu_kernel void @buffer_atomic_cmpswap_b32_kernel(
-; CHECK: call i32 @llvm.amdgcn.raw.buffer.atomic.cmpswap
+; CHECK: call i32 @llvm.amdgcn.raw.ptr.buffer.atomic.cmpswap
 ; CHECK-NOT: cmpxchg
 ; CHECK-NOT: atomicrmw xchg
 

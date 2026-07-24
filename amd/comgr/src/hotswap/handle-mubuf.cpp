@@ -27,6 +27,33 @@
 using namespace llvm;
 
 namespace COMGR::hotswap {
+
+// Map a CDNA/gfx942 raw-buffer atomic intrinsic to its addrspace(8)
+// make.buffer.rsrc counterpart. Used only for RDNA targets (!HasMfma), where
+// the legacy <4 x i32> descriptor is out-of-bounds; CDNA keeps the legacy ID.
+static Intrinsic::ID rawPtrBufferAtomicVariant(Intrinsic::ID Cdna) {
+  switch (Cdna) {
+  case Intrinsic::amdgcn_raw_buffer_atomic_add:
+    return Intrinsic::amdgcn_raw_ptr_buffer_atomic_add;
+  case Intrinsic::amdgcn_raw_buffer_atomic_sub:
+    return Intrinsic::amdgcn_raw_ptr_buffer_atomic_sub;
+  case Intrinsic::amdgcn_raw_buffer_atomic_and:
+    return Intrinsic::amdgcn_raw_ptr_buffer_atomic_and;
+  case Intrinsic::amdgcn_raw_buffer_atomic_or:
+    return Intrinsic::amdgcn_raw_ptr_buffer_atomic_or;
+  case Intrinsic::amdgcn_raw_buffer_atomic_xor:
+    return Intrinsic::amdgcn_raw_ptr_buffer_atomic_xor;
+  case Intrinsic::amdgcn_raw_buffer_atomic_swap:
+    return Intrinsic::amdgcn_raw_ptr_buffer_atomic_swap;
+  case Intrinsic::amdgcn_raw_buffer_atomic_fadd:
+    return Intrinsic::amdgcn_raw_ptr_buffer_atomic_fadd;
+  case Intrinsic::amdgcn_raw_buffer_atomic_cmpswap:
+    return Intrinsic::amdgcn_raw_ptr_buffer_atomic_cmpswap;
+  default:
+    llvm_unreachable("unhandled buffer atomic for raw-ptr descriptor mapping");
+  }
+}
+
 Expected<HandlerResult> handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
                                     OpResolver &Op) {
   HandlerResult Hr;
@@ -387,19 +414,17 @@ Expected<HandlerResult> handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
       return MbufOrErr.takeError();
     MubufAddr Mbuf = *MbufOrErr;
 
-    // Buffer atomics still emit the legacy <4 x i32> Srd (gfx942/CDNA word3),
-    // which is invalid on RDNA targets (gfx11 gfx1151, gfx12): the descriptor
-    // reads out-of-bounds and the atomic is silently dropped. Migrating the
-    // atomic dispatch to the make.buffer.rsrc / raw_ptr_buffer_atomic_* path
-    // (as done for loads/stores/LDS above) is a mechanical follow-up. Until
-    // then, refuse loudly on RDNA rather than miscompile; CDNA (gfx942/950)
-    // keeps its validated legacy path.
-    if (!Ctx.TargetIsa.HasMfma)
-      return createStringError(
-          "transpiler: MUBUF buffer atomic on an RDNA target is not yet "
-          "migrated to the make.buffer.rsrc descriptor path (the legacy "
-          "gfx942 <4 x i32> descriptor is out-of-bounds on gfx11/gfx12); "
-          "refusing rather than silently dropping the atomic");
+    // RDNA targets (!HasMfma) route atomics through the make.buffer.rsrc /
+    // raw_ptr_buffer_atomic path: the legacy <4 x i32> Srd word3 is CDNA-only
+    // and reads out-of-bounds on gfx11/gfx12 (loads=0, stores/atomics dropped).
+    // CDNA (gfx942/950) keeps the legacy path byte-for-byte -- same gate as the
+    // load/store/LDS paths above. `AtomRsrc` and `AtomicId` select the resource
+    // and intrinsic accordingly for every atomic form below.
+    const bool AtomRawPtr = !Ctx.TargetIsa.HasMfma;
+    Value *AtomRsrc = AtomRawPtr ? Mbuf.RawPtrRsrc : Mbuf.Srd;
+    auto AtomicId = [&](Intrinsic::ID Cdna) {
+      return AtomRawPtr ? rawPtrBufferAtomicVariant(Cdna) : Cdna;
+    };
 
     // `BUFFER_ATOMIC_CMPSWAP` is the one buffer atomic whose vdata is
     // a register PAIR carrying `{cmp, new}` rather than a single data
@@ -414,14 +439,15 @@ Expected<HandlerResult> handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
       NewReg.WidthInDwords = 1;
       Value *NewVal = Ctx.Regs.readReg32(Ctx.B, NewReg);
       Function *CasFn = Intrinsic::getOrInsertDeclaration(
-          &Ctx.M, Intrinsic::amdgcn_raw_buffer_atomic_cmpswap, {Ctx.I32Ty});
+          &Ctx.M, AtomicId(Intrinsic::amdgcn_raw_buffer_atomic_cmpswap),
+          {Ctx.I32Ty});
       Ctx.emitUnderExec([&] {
         // Raw-buffer atomics preserve descriptor-relative addressing and
         // hardware OOB behavior. The intrinsic takes {new, cmp}, matching
         // LLVM's AMDGPU intrinsic contract for buffer cmpswap.
         Value *OldVal =
             Ctx.B.CreateCall(CasFn,
-                             {NewVal, CmpVal, Mbuf.Srd, Mbuf.Voffset,
+                             {NewVal, CmpVal, AtomRsrc, Mbuf.Voffset,
                               Mbuf.Soffset, Mbuf.AuxFlags},
                              "buf_atomic_cmpswap");
         if (Di.NumDefs > 0)
@@ -452,12 +478,16 @@ Expected<HandlerResult> handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
                              Sop == CanonicalOp::BUFFER_ATOMIC_MAX_NUM_F64;
       Value *SrcF64 = Ctx.B.CreateBitCast(Data, Ctx.F64Ty, "fp64_minmax_src");
       Function *BufLd = Intrinsic::getOrInsertDeclaration(
-          &Ctx.M, Intrinsic::amdgcn_raw_buffer_load, {Ctx.I64Ty});
+          &Ctx.M,
+          AtomRawPtr ? Intrinsic::amdgcn_raw_ptr_buffer_load
+                     : Intrinsic::amdgcn_raw_buffer_load,
+          {Ctx.I64Ty});
       Function *CasFn = Intrinsic::getOrInsertDeclaration(
-          &Ctx.M, Intrinsic::amdgcn_raw_buffer_atomic_cmpswap, {Ctx.I64Ty});
+          &Ctx.M, AtomicId(Intrinsic::amdgcn_raw_buffer_atomic_cmpswap),
+          {Ctx.I64Ty});
       Ctx.emitUnderExec([&] {
         Value *InitI64 = Ctx.B.CreateCall(
-            BufLd, {Mbuf.Srd, Mbuf.Voffset, Mbuf.Soffset, Mbuf.AuxFlags},
+            BufLd, {AtomRsrc, Mbuf.Voffset, Mbuf.Soffset, Mbuf.AuxFlags},
             "fp64_minmax_init");
         Function *F = Ctx.B.GetInsertBlock()->getParent();
         BasicBlock *PreBb = Ctx.B.GetInsertBlock();
@@ -487,7 +517,7 @@ Expected<HandlerResult> handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
             Ctx.B.CreateBitCast(NewF64, Ctx.I64Ty, "fp64_minmax_new_bits");
         Value *Returned =
             Ctx.B.CreateCall(CasFn,
-                             {NewI64, Expected, Mbuf.Srd, Mbuf.Voffset,
+                             {NewI64, Expected, AtomRsrc, Mbuf.Voffset,
                               Mbuf.Soffset, Mbuf.AuxFlags},
                              "fp64_minmax_cas");
         Value *Ok = Ctx.B.CreateICmpEQ(Returned, Expected, "fp64_minmax_ok");
@@ -560,11 +590,11 @@ Expected<HandlerResult> handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
     }
     if (IsFp)
       Data = Ctx.B.CreateBitCast(Data, AtomicTy);
-    Function *AtomicFn =
-        Intrinsic::getOrInsertDeclaration(&Ctx.M, AtomicIntrinsic, {AtomicTy});
+    Function *AtomicFn = Intrinsic::getOrInsertDeclaration(
+        &Ctx.M, AtomicId(AtomicIntrinsic), {AtomicTy});
     Ctx.emitUnderExec([&] {
       Value *OldVal = Ctx.B.CreateCall(
-          AtomicFn, {Data, Mbuf.Srd, Mbuf.Voffset, Mbuf.Soffset, Mbuf.AuxFlags},
+          AtomicFn, {Data, AtomRsrc, Mbuf.Voffset, Mbuf.Soffset, Mbuf.AuxFlags},
           "buf_atomic");
       // RTN-form write-back. The raw-buffer intrinsic returns the old
       // memory value just like the target ISA RTN form; when the source
