@@ -2457,14 +2457,14 @@ static Expected<RaiseResult> raiseToIRImpl(
                     "refusal (analysis-triggered, no user opt-in)\n";
           errs() << "transpiler: thread-loop fallback trigger: "
                  << PredReport.RefusalDetail << "\n";
-          return raiseToIRImpl(TextBytes, SourceIsa, KernelName, Meta,
-                               KernelOffset, KernelSize, TextBaseAddress,
-                               SourceImageSections, CompilationTargetIsa,
-                               /*enableWritelaneRewrite=*/false,
-                               /*enableWaveNative=*/false,
-                               /*forceThreadLoopProjection=*/true,
-                               /*suppressC5ForThreadLoopRoute=*/true,
-                               AssumeHipGlobalOffsetZero, FunctionExtents, Stats);
+          return raiseToIRImpl(
+              TextBytes, SourceIsa, KernelName, Meta, KernelOffset, KernelSize,
+              TextBaseAddress, SourceImageSections, CompilationTargetIsa,
+              /*enableWritelaneRewrite=*/false,
+              /*enableWaveNative=*/false,
+              /*forceThreadLoopProjection=*/true,
+              /*suppressC5ForThreadLoopRoute=*/true, AssumeHipGlobalOffsetZero,
+              FunctionExtents, Stats);
         }
       }
       errs() << "transpiler: pre-translation abort: "
