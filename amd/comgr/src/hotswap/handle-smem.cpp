@@ -323,8 +323,12 @@ Expected<HandlerResult> handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
         Ctx.getKernargPtrProvenance();
     bool BaseIsKnownNonEntry = BaseProvenance.isNonEntry();
     bool BaseIsLiveEntry = BaseProvenance.isLiveEntry();
+    bool BaseIsEntryOrNonEntry = BaseProvenance.isEntryOrNonEntry();
     int64_t SourceByteOffset = ByteOffset;
-    if (BaseIsLiveEntry)
+    // Add the entry-arm byte offset for both a pure entry pointer and the entry
+    // arm of a two-mode merge, so implicit-range classification and hidden-arg
+    // synthesis address the correct source offset on the entry path.
+    if (BaseProvenance.hasEntryOffset())
       SourceByteOffset += BaseProvenance.EntryByteOffset;
 
     // Implicit-args reroute. A source kernel reading through the entry kernarg
@@ -346,14 +350,29 @@ Expected<HandlerResult> handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
         Ctx.Kernargs.ImplicitArgsBase > 0 &&
         SourceByteOffset >= Ctx.Kernargs.ImplicitArgsBase;
     bool IsEntryImplicitArgLoad = IsSourceImplicitArgOffset && BaseIsLiveEntry;
+    bool IsTwoModeImplicitArgLoad =
+        IsSourceImplicitArgOffset && BaseIsEntryOrNonEntry;
+    // Hard-Unknown provenance (an unclassified write to the pointer pair, or an
+    // entry-offset disagreement across paths) is not recoverable: refuse under
+    // strict rather than guess whether the offset addresses the source hidden
+    // args or ordinary memory. The recoverable two-mode merge (EntryOrNonEntry)
+    // is handled below by a runtime select and is NOT refused.
     if (IsSourceImplicitArgOffset && !IsEntryImplicitArgLoad &&
-        isStrictMode()) {
+        !IsTwoModeImplicitArgLoad && isStrictMode()) {
       return RaiseFailure::strictUnsafeLowering(
           Di, "implicitarg.ptr",
           "cross-arch implicitarg.ptr lowering is unresolved: source "
           "implicit-arg offsets may be applied to the target runtime "
           "hidden-arg block on some CFG paths");
     }
+    // A register (non-immediate) offset through a possibly-pristine kernarg
+    // pointer could reach the source implicit-arg range at a value we cannot
+    // resolve at raise time (the offset is not a compile-time constant here).
+    // Synthesis needs a constant field offset, so refuse under strict rather
+    // than risk applying a source implicit offset to the target hidden block.
+    // (A genuine runtime array index into an explicit-arg region is the common
+    // shape but is indistinguishable from a hidden-range hit without offset
+    // range/constant analysis -- see the dynamic-offset follow-up.)
     if (BaseIsKernargPair && !BaseIsKnownNonEntry && !ImmOffset &&
         Ctx.Kernargs.ImplicitArgsBase > 0 && isStrictMode()) {
       return RaiseFailure::strictUnsafeLowering(
@@ -424,6 +443,99 @@ Expected<HandlerResult> handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
       Ctx.noteSgprMemoryLoadForKernargProvenance(Dest.BaseIdx, LoadDwords);
       Hr.Handled = true;
       return Hr;
+    }
+
+    // Two-mode kernarg ABI (EntryOrNonEntry): this read reaches after a CFG
+    // merge where the pointer is, per path, either the dispatch entry pointer
+    // (so the offset addresses the source hidden args -> synthesize) or a
+    // memory buffer (so it is an ordinary load). Both arms carry the correct
+    // value for their path, so emit both and select per dword on the runtime
+    // provenance shadow. No assumption about matching target hidden-arg layout.
+    if (IsTwoModeImplicitArgLoad) {
+      SourceHiddenArgContext HiddenCtx{Ctx.C,
+                                       Ctx.M,
+                                       Ctx.B,
+                                       Ctx.I8Ty,
+                                       Ctx.I32Ty,
+                                       Ctx.I64Ty,
+                                       Ctx.Kernargs.Args,
+                                       Ctx.AssumeHipGlobalOffsetZero,
+                                       Ctx.TargetCodeObjectVersion};
+      populateScaledDispatch(HiddenCtx, Ctx.Projection);
+
+      // Classify every dword of this read against the source hidden-arg map:
+      //   * Matched with a value  -> a modelled hidden field (synthesizable).
+      //   * Matched, no value      -> a recognized-but-unsupported hidden field
+      //                               (e.g. hidden_private_base): NOT ordinary
+      //                               memory, must refuse rather than miscompile.
+      //   * Not matched            -> the source metadata declares NO hidden arg
+      //                               at this offset, so it is not a hidden-arg
+      //                               read at all. `ImplicitArgsBase` is only a
+      //                               lower bound; Tensile's inline user-args
+      //                               struct extends past it, so these are
+      //                               ordinary explicit/user args whose layout is
+      //                               identical on source and target -> an
+      //                               ordinary load is correct on BOTH arms.
+      SmallVector<Value *, 16> SynthDwords(LoadDwords, nullptr);
+      bool AllSynth = true;
+      bool AnyModelledHiddenField = false;
+      for (int D = 0; D < LoadDwords; D++) {
+        SourceHiddenArgValue Dw =
+            emitSourceHiddenDword(HiddenCtx, SourceByteOffset + D * 4);
+        if (Dw.Matched) {
+          AnyModelledHiddenField = true;
+          if (!Dw.Value && isStrictMode())
+            return RaiseFailure::unsupportedSourceHiddenArg(Di, "SMEM",
+                                                            Dw.FailureDetail);
+        }
+        if (!Dw.Matched || !Dw.Value) {
+          AllSynth = false;
+          if (!Dw.Matched)
+            continue; // keep scanning: prove none of the dwords is hidden
+          break;
+        }
+        SynthDwords[D] = Dw.Value;
+      }
+      if (AnyModelledHiddenField) {
+        if (AllSynth) {
+          // Every dword is a modelled hidden field. Select per dword between the
+          // synthesized entry-arm value and an ordinary load (non-entry arm) on
+          // the runtime provenance shadow.
+          Value *IsEntry = Ctx.loadKernargPtrEntryShadow();
+          Value *BaseAddr = Ctx.Regs.loadSGPR64(Ctx.B, Base.BaseIdx);
+          Value *Ptr = Ctx.B.CreateIntToPtr(BaseAddr, Ctx.PtrGlobalTy);
+          if (ByteOffset != 0)
+            Ptr = Ctx.B.CreateInBoundsGEP(Ctx.I8Ty, Ptr,
+                                          Ctx.B.getInt64(ByteOffset));
+          for (int D = 0; D < LoadDwords; D++) {
+            Value *Ep = (D == 0)
+                            ? Ptr
+                            : Ctx.B.CreateInBoundsGEP(Ctx.I8Ty, Ptr,
+                                                      Ctx.B.getInt64(D * 4));
+            Value *Ordinary = Ctx.B.CreateLoad(Ctx.I32Ty, Ep, "smem_load");
+            Value *Sel = Ctx.B.CreateSelect(IsEntry, SynthDwords[D], Ordinary,
+                                            "implicitarg_two_mode");
+            Ctx.Regs.storeSGPR32(Ctx.B, Dest.BaseIdx + D, Sel);
+          }
+          Ctx.noteSgprMemoryLoadForKernargProvenance(Dest.BaseIdx, LoadDwords);
+          Hr.Handled = true;
+          return Hr;
+        }
+        // Some dwords are hidden fields and some are not (a load straddling the
+        // hidden/non-hidden boundary), or a recognized-but-unsupported field:
+        // the entry arm cannot be proven. Refuse under strict; permissive keeps
+        // the pre-existing ordinary-load behaviour.
+        if (isStrictMode())
+          return RaiseFailure::strictUnsafeLowering(
+              Di, "implicitarg.ptr",
+              "two-mode kernarg implicit-arg read straddles modelled and "
+              "non-hidden bytes; cannot prove the entry arm");
+      }
+      // No dword maps to a hidden field (AnyModelledHiddenField == false): this
+      // is an ordinary memory read (an explicit/user arg beyond the hidden
+      // block; ImplicitArgsBase is only a lower bound). It is correct on both
+      // arms, so fall through to the ordinary load -- a sound classification, not
+      // a permissive relaxation, so it holds under strict mode too.
     }
 
     // Generic GEP+load against `addrspace(1)`. AMDGPU ISel selects the final

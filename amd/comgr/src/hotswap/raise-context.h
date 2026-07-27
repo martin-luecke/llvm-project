@@ -317,9 +317,16 @@ struct RaiseContext {
   //               SGPR value. Constant rebases of such a value remain NonEntry.
   //   Unknown   - paths disagree, are unreachable, include an unclassified
   //               write, or carry different EntryByteOffset values.
+  //   EntryOrNonEntry - every reaching path carries either the entry pointer
+  //               (at one agreed byte offset) or a memory-loaded value, with no
+  //               unclassified write anywhere. Recoverable: a use site selects
+  //               between source hidden-arg synthesis and an ordinary load on a
+  //               runtime provenance predicate. This is the two-mode kernarg
+  //               ABI (inline entry args vs. an indirect user-args buffer).
   enum class KernargPtrLaneProvenance {
     LiveEntry,
     NonEntry,
+    EntryOrNonEntry,
     Unknown,
   };
 
@@ -346,6 +353,17 @@ struct RaiseContext {
       return Low == KernargPtrLaneProvenance::NonEntry &&
              High == KernargPtrLaneProvenance::NonEntry;
     }
+
+    // Recoverable two-mode merge: the pointer is entry-or-non-entry on both
+    // lanes. A use site lowers a hidden-arg read as a runtime select between
+    // synthesis (entry arm, at EntryByteOffset) and an ordinary load.
+    bool isEntryOrNonEntry() const {
+      return Low == KernargPtrLaneProvenance::EntryOrNonEntry &&
+             High == KernargPtrLaneProvenance::EntryOrNonEntry;
+    }
+
+    // True when EntryByteOffset names the entry arm's source byte offset.
+    bool hasEntryOffset() const { return isLiveEntry() || isEntryOrNonEntry(); }
   };
 
   // Merge facts from two control-flow paths. Equal lane facts survive; any
@@ -356,7 +374,12 @@ struct RaiseContext {
                                KernargPtrLaneProvenance Rhs) {
     if (Lhs == Rhs)
       return Lhs;
-    return KernargPtrLaneProvenance::Unknown;
+    if (Lhs == KernargPtrLaneProvenance::Unknown ||
+        Rhs == KernargPtrLaneProvenance::Unknown)
+      return KernargPtrLaneProvenance::Unknown;
+    // Distinct facts drawn from {LiveEntry, NonEntry, EntryOrNonEntry} collapse
+    // to the recoverable two-mode mid state (mirrors the prepass lattice).
+    return KernargPtrLaneProvenance::EntryOrNonEntry;
   }
 
   // Pair-wise control-flow join for provenance carried through IR diamonds.
@@ -365,12 +388,25 @@ struct RaiseContext {
     KernargPtrProvenance Result = {
         joinKernargPtrLaneProvenance(Lhs.Low, Rhs.Low),
         joinKernargPtrLaneProvenance(Lhs.High, Rhs.High), 0};
-    if (Result.isLiveEntry()) {
-      if (Lhs.isLiveEntry() && Rhs.isLiveEntry() &&
-          Lhs.EntryByteOffset == Rhs.EntryByteOffset)
-        Result.EntryByteOffset = Lhs.EntryByteOffset;
-      else
-        Result.Low = Result.High = KernargPtrLaneProvenance::Unknown;
+    // Reconcile the entry byte offset across every entry-bearing input; a
+    // disagreement is not recoverable and falls to Unknown.
+    if (Result.hasEntryOffset()) {
+      const KernargPtrProvenance *Inputs[] = {&Lhs, &Rhs};
+      bool HaveOffset = false;
+      int64_t Offset = 0;
+      for (const KernargPtrProvenance *In : Inputs) {
+        if (!In->hasEntryOffset())
+          continue;
+        if (HaveOffset && Offset != In->EntryByteOffset) {
+          Result.Low = Result.High = KernargPtrLaneProvenance::Unknown;
+          Result.EntryByteOffset = 0;
+          return Result;
+        }
+        HaveOffset = true;
+        Offset = In->EntryByteOffset;
+      }
+      if (HaveOffset)
+        Result.EntryByteOffset = Offset;
     }
     return Result;
   }
@@ -389,11 +425,29 @@ struct RaiseContext {
     return CurrentKernargPtrProvenance;
   }
 
+  // Store the runtime provenance shadow (true = live entry pointer). No-op when
+  // the kernel has no kernarg-segment pointer SGPR. Emitted at the current
+  // insertion point, so the alloca merges naturally across the source CFG.
+  void storeKernargPtrEntryShadow(bool IsEntry) {
+    if (!KernargPtrEntryShadow)
+      return;
+    B.CreateStore(IsEntry ? B.getTrue() : B.getFalse(), KernargPtrEntryShadow);
+  }
+
+  // Load the runtime provenance shadow. Precondition: KernargPtrEntryShadow is
+  // non-null (the caller only reaches here on a recoverable two-mode merge,
+  // which requires a kernarg-segment pointer SGPR).
+  llvm::Value *loadKernargPtrEntryShadow() {
+    assert(KernargPtrEntryShadow && "no kernarg provenance shadow to load");
+    return B.CreateLoad(I1Ty, KernargPtrEntryShadow, "kernarg_ptr_is_entry");
+  }
+
   // Restore a proven entry-pointer fact after a constant-preserving rebase.
   void setKernargPtrLiveEntryByteOffset(int64_t ByteOffset) {
     CurrentKernargPtrProvenance.Low = KernargPtrLaneProvenance::LiveEntry;
     CurrentKernargPtrProvenance.High = KernargPtrLaneProvenance::LiveEntry;
     CurrentKernargPtrProvenance.EntryByteOffset = ByteOffset;
+    storeKernargPtrEntryShadow(true);
   }
 
   // Restore a proven non-entry pointer fact after a constant-preserving rebase.
@@ -401,6 +455,7 @@ struct RaiseContext {
     CurrentKernargPtrProvenance.Low = KernargPtrLaneProvenance::NonEntry;
     CurrentKernargPtrProvenance.High = KernargPtrLaneProvenance::NonEntry;
     CurrentKernargPtrProvenance.EntryByteOffset = 0;
+    storeKernargPtrEntryShadow(false);
   }
 
   // Update the current intra-BB provenance state after an ordinary SGPR write.
@@ -431,11 +486,21 @@ struct RaiseContext {
     if (KernargPtrSgpr < 0)
       return;
     int EndIdx = BaseIdx + WidthDwords - 1;
-    if (BaseIdx <= KernargPtrSgpr && EndIdx >= KernargPtrSgpr)
+    bool OverlapsPair = false;
+    if (BaseIdx <= KernargPtrSgpr && EndIdx >= KernargPtrSgpr) {
       CurrentKernargPtrProvenance.Low = KernargPtrLaneProvenance::NonEntry;
-    if (BaseIdx <= KernargPtrSgpr + 1 && EndIdx >= KernargPtrSgpr + 1)
+      OverlapsPair = true;
+    }
+    if (BaseIdx <= KernargPtrSgpr + 1 && EndIdx >= KernargPtrSgpr + 1) {
       CurrentKernargPtrProvenance.High = KernargPtrLaneProvenance::NonEntry;
+      OverlapsPair = true;
+    }
     CurrentKernargPtrProvenance.EntryByteOffset = 0;
+    // A memory load into the pointer pair produces a non-entry value at
+    // runtime; keep the provenance shadow in sync so a downstream two-mode
+    // merge selects the ordinary-load arm on this path.
+    if (OverlapsPair)
+      storeKernargPtrEntryShadow(false);
   }
 
   // Record the prepass-computed entry fact for a recovered source BB.
@@ -566,6 +631,14 @@ struct RaiseContext {
   llvm::SmallVector<llvm::AllocaInst *> SgprWaveMaskValidShadow;
   llvm::SmallVector<llvm::AllocaInst *> SourceWaveSgprPairShadow;
   llvm::SmallVector<llvm::AllocaInst *> SourceWaveSgprPairValidShadow;
+  // Runtime provenance shadow for the kernarg-segment pointer pair: an i1 that
+  // is true whenever the live pointer is the dispatch entry pointer and false
+  // when it has been overwritten by a memory load. Maintained in lockstep with
+  // the static provenance mutators below. It is only consulted at a hidden-arg
+  // read whose static provenance is the recoverable EntryOrNonEntry two-mode
+  // merge, to select between source hidden-arg synthesis (entry) and an ordinary
+  // load (non-entry). Null when the kernel has no kernarg-segment pointer SGPR.
+  llvm::AllocaInst *KernargPtrEntryShadow = nullptr;
   // Same-BB source-image address facts for PC-relative literal loads. This is
   // not a generic constant tracker: only s_get_pc_i64 seeds it, only constant
   // s_add/sub_nc_u64 propagates it, and only SMEM literal materialisation reads
@@ -788,6 +861,8 @@ struct RaiseContext {
                SourceWaveSgprPairShadow.end());
     Out.append(SourceWaveSgprPairValidShadow.begin(),
                SourceWaveSgprPairValidShadow.end());
+    if (KernargPtrEntryShadow)
+      Out.push_back(KernargPtrEntryShadow);
   }
 
   // Pending failure raised during operand-read dispatch (e.g.

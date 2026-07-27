@@ -217,20 +217,32 @@ struct KernargPtrLaneEffect {
   KernargPtrLaneEffectKind High = KernargPtrLaneEffectKind::Preserve;
 };
 
-// Per-lane four-point lattice used internally by the fixed-point solver:
+// Per-lane five-point lattice used internally by the fixed-point solver:
 //
-//              Unknown
-//             /       \
-//    LiveEntry       NonEntry
-//             \       /
-//             Unvisited
+//                 Unknown
+//                    |
+//             EntryOrNonEntry
+//             /            \
+//    LiveEntry              NonEntry
+//             \            /
+//               Unvisited
 //
-// `Unvisited` is bottom. When exporting final BB facts, bottom is treated as
-// Unknown so strict mode refuses unreachable or unrecovered paths.
+// `Unvisited` is bottom. `EntryOrNonEntry` is the join of a `LiveEntry` path
+// with a `NonEntry` path -- the pointer is, on every reaching path, EITHER the
+// dispatch entry pointer (at a single agreed byte offset) OR a value loaded
+// from memory, with no unclassified write on any path. This is exactly the
+// two-mode kernarg ABI Tensile emits (inline args via the entry pointer vs. an
+// indirect user-args buffer). It is recoverable: a use site can select between
+// the source-hidden-arg synthesis (entry path) and an ordinary memory load
+// (non-entry path) at runtime. `Unknown` (top) is an unclassified write or an
+// offset disagreement -- not recoverable. When exporting final BB facts,
+// `Unvisited` is treated as `Unknown` so strict mode refuses unreachable or
+// unrecovered paths.
 enum class KernargPtrLaneDataflowState {
   Unvisited,
   LiveEntry,
   NonEntry,
+  EntryOrNonEntry,
   Unknown,
 };
 
@@ -256,6 +268,16 @@ struct KernargPtrDataflowState {
     return Low == KernargPtrLaneDataflowState::NonEntry &&
            High == KernargPtrLaneDataflowState::NonEntry;
   }
+
+  bool isEntryOrNonEntry() const {
+    return Low == KernargPtrLaneDataflowState::EntryOrNonEntry &&
+           High == KernargPtrLaneDataflowState::EntryOrNonEntry;
+  }
+
+  // True when the entry byte offset is meaningful: the pair carries a
+  // dispatch-entry component on every reaching path (pure entry) or on the
+  // entry arm of a two-mode merge.
+  bool hasEntryOffset() const { return isLiveEntry() || isEntryOrNonEntry(); }
 };
 
 // Classification of one MC register definition for kernarg-pointer overlap.
@@ -447,6 +469,95 @@ applyKernargPtrEffect(KernargPtrDataflowState State,
   return Result;
 }
 
+// A 64-bit constant pointer rebase is frequently emitted as a split 32-bit
+// carry chain rather than a single s_add_nc_u64: an in-place add of a constant
+// to the low lane (setting SCC) followed by an in-place add-with-carry of a
+// constant to the high lane. Recognise either half as an in-place constant add
+// to a specific kernarg-pointer lane. The net 64-bit pointer delta of the pair
+// is exactly (immLo + (immHi << 32)) independent of the runtime carry, so each
+// half contributes its constant to the entry byte offset at its lane position;
+// the carry the high add consumes is precisely the low add's carry-out and
+// cancels the low lane's modular wrap. `Delta` is that lane's contribution
+// already shifted to its 64-bit position.
+struct KernargPtrLaneConstAdd {
+  bool Matched = false;
+  unsigned Lane = 0; // 0 = low (KernargPtrSgpr), 1 = high (KernargPtrSgpr+1)
+  int64_t Delta = 0;
+};
+
+static KernargPtrLaneConstAdd
+classifyKernargPtrLaneConstAdd(const MCRegisterInfo &MRI, const DecodedInst &Di,
+                              unsigned KernargPtrSgpr) {
+  // Only the in-place scalar 32-bit add family participates in a pointer
+  // carry-chain rebase. The low half is S_ADD_U32 (carry-out); the high half
+  // is S_ADDC_U32 (carry-in). Subtraction is not used to advance a kernarg
+  // pointer in the observed corpus, so it is left to the generic effect.
+  bool IsLow = Di.CanonOp == CanonicalOp::S_ADD_U32;
+  bool IsHigh = Di.CanonOp == CanonicalOp::S_ADDC_U32;
+  if (!IsLow && !IsHigh)
+    return {};
+  if (!Di.isReg(0) || Di.NumSrcs < 2)
+    return {};
+  KernargPrepassDef Def = classifyKernargPrepassDef(MRI, Di.getReg(0));
+  if (Def.DefKind != KernargPrepassDef::Kind::IndexedSgpr)
+    return {};
+  unsigned Lane;
+  if (Def.Index == KernargPtrSgpr)
+    Lane = 0;
+  else if (Def.Index == KernargPtrSgpr + 1)
+    Lane = 1;
+  else
+    return {};
+  // The high half must be the carry-in add (S_ADDC_U32) and the low half the
+  // carry-out add (S_ADD_U32); a mismatched lane/opcode is not the rebase idiom.
+  if ((Lane == 0) != IsLow)
+    return {};
+  // Require in-place accumulation: src0 is the same lane being defined.
+  unsigned Src0 = Di.SrcMap[0];
+  unsigned Src1 = Di.SrcMap[1];
+  if (!Di.isReg(Src0))
+    return {};
+  KernargPrepassDef Src0Def = classifyKernargPrepassDef(MRI, Di.getReg(Src0));
+  if (Src0Def.DefKind != KernargPrepassDef::Kind::IndexedSgpr ||
+      Src0Def.Index != Def.Index)
+    return {};
+  std::optional<int64_t> Imm = evalOperandAsConst(Di.Inst, Src1);
+  if (!Imm)
+    return {};
+  KernargPtrLaneConstAdd Result;
+  Result.Matched = true;
+  Result.Lane = Lane;
+  Result.Delta = (Lane == 0) ? *Imm : (*Imm << 32);
+  return Result;
+}
+
+// True when `Di` defines a kernarg-pointer lane AND reads that same lane as a
+// source -- an in-place modification (`sLane = f(sLane, ...)`). Callers use
+// this, after ruling out constant rebases, to recognise a runtime-variable
+// displacement of the pointer (the result is still derived from the pointer,
+// just no longer at a compile-time-constant offset).
+static bool isInPlaceKernargPtrLaneDisplacement(const MCRegisterInfo &MRI,
+                                                const DecodedInst &Di,
+                                                unsigned KernargPtrSgpr) {
+  if (!Di.isReg(0))
+    return false;
+  KernargPrepassDef Def = classifyKernargPrepassDef(MRI, Di.getReg(0));
+  if (Def.DefKind != KernargPrepassDef::Kind::IndexedSgpr)
+    return false;
+  if (Def.Index != KernargPtrSgpr && Def.Index != KernargPtrSgpr + 1)
+    return false;
+  for (unsigned I = 0; I < Di.NumSrcs; ++I) {
+    unsigned SrcIdx = Di.SrcMap[I];
+    if (!Di.isReg(SrcIdx))
+      continue;
+    KernargPrepassDef Src = classifyKernargPrepassDef(MRI, Di.getReg(SrcIdx));
+    if (Src.DefKind == KernargPrepassDef::Kind::IndexedSgpr &&
+        Src.Index == Def.Index)
+      return true;
+  }
+  return false;
+}
+
 // Apply one decoded instruction to the pair-level dataflow fact. Most
 // instructions reduce to lane overwrite effects; scalar add/sub of a literal
 // gets a pair-level transfer because it can preserve `Entry+Const` or
@@ -468,7 +579,11 @@ static KernargPtrDataflowState applyKernargPtrInstructionEffect(
       classifyKernargPtrConstRebase(Di, IsKernargPair);
   if (Rebase.TouchesKernargPtr) {
     if (Rebase.Delta) {
-      if (State.isLiveEntry()) {
+      // A constant rebase advances the entry-offset component (whether the
+      // pointer is a pure entry pointer or the entry arm of a two-mode merge)
+      // and is ordinary pointer arithmetic on a non-entry value. Either way
+      // the entry-or-non-entry classification is preserved.
+      if (State.hasEntryOffset()) {
         State.EntryByteOffset += *Rebase.Delta;
         return State;
       }
@@ -479,12 +594,47 @@ static KernargPtrDataflowState applyKernargPtrInstructionEffect(
             KernargPtrLaneDataflowState::Unknown, 0};
   }
 
+  // Split 32-bit carry-chain rebase (one lane at a time). It preserves the
+  // pair's entry-or-non-entry classification and advances the entry byte offset
+  // by this lane's constant contribution.
+  KernargPtrLaneConstAdd LaneAdd =
+      classifyKernargPtrLaneConstAdd(MRI, Di, KernargPtrSgpr);
+  if (LaneAdd.Matched) {
+    if (State.hasEntryOffset()) {
+      State.EntryByteOffset += LaneAdd.Delta;
+      return State;
+    }
+    if (State.isNonEntry())
+      return State;
+    return {KernargPtrLaneDataflowState::Unknown,
+            KernargPtrLaneDataflowState::Unknown, 0};
+  }
+
+  // In-place displacement of a pointer lane by a RUNTIME value (the lane is
+  // both defined and used, and this is not a constant rebase handled above --
+  // e.g. `s_add_co_u32 sLo, sLo, sVar` or `s_lshl2_add_u32 sLo, sVar, sLo` in a
+  // grouped-GEMM per-sub-kernel argument stride). The result is the old pointer
+  // plus a runtime delta, so it is provably NOT the pristine dispatch pointer
+  // at a compile-time-constant offset. AMDGPU hidden arguments live only at
+  // fixed offsets from the pristine pointer, so a subsequent `[ptr + const]`
+  // read through a dynamically displaced pointer can never address a hidden-arg
+  // slot -- it is ordinary memory. Model that as NonEntry (which the SMEM
+  // handler lowers as an ordinary load, never hidden-arg synthesis). Only a
+  // pointer whose provenance is already known (entry-bearing or non-entry) can
+  // be classified this way; an unclassified base stays Unknown so a genuinely
+  // ambiguous pristine-or-not pointer still refuses under strict mode.
+  if ((State.hasEntryOffset() || State.isNonEntry()) &&
+      isInPlaceKernargPtrLaneDisplacement(MRI, Di, KernargPtrSgpr))
+    return {KernargPtrLaneDataflowState::NonEntry,
+            KernargPtrLaneDataflowState::NonEntry, 0};
+
   return applyKernargPtrEffect(
       State, instructionKernargPtrEffect(MRI, MII, STI, Di, KernargPtrSgpr));
 }
 
-// Join two predecessor facts for one lane. Unvisited is bottom; disagreements
-// become Unknown, which remains stable under further joins.
+// Join two predecessor facts for one lane. Unvisited is bottom; a LiveEntry
+// path meeting a NonEntry path yields the recoverable EntryOrNonEntry mid
+// state; an actual Unknown on either side stays Unknown (top).
 static KernargPtrLaneDataflowState
 joinKernargPtrLaneStates(KernargPtrLaneDataflowState Lhs,
                          KernargPtrLaneDataflowState Rhs) {
@@ -494,7 +644,12 @@ joinKernargPtrLaneStates(KernargPtrLaneDataflowState Lhs,
     return Lhs;
   if (Lhs == Rhs)
     return Lhs;
-  return KernargPtrLaneDataflowState::Unknown;
+  if (Lhs == KernargPtrLaneDataflowState::Unknown ||
+      Rhs == KernargPtrLaneDataflowState::Unknown)
+    return KernargPtrLaneDataflowState::Unknown;
+  // Distinct, non-bottom, non-top facts drawn from {LiveEntry, NonEntry,
+  // EntryOrNonEntry} all collapse to the two-mode mid state.
+  return KernargPtrLaneDataflowState::EntryOrNonEntry;
 }
 
 // Join predecessor facts independently for both tracked lanes.
@@ -510,12 +665,24 @@ joinKernargPtrStates(KernargPtrDataflowState Lhs, KernargPtrDataflowState Rhs) {
   KernargPtrDataflowState Result = {
       joinKernargPtrLaneStates(Lhs.Low, Rhs.Low),
       joinKernargPtrLaneStates(Lhs.High, Rhs.High), 0};
-  if (Result.isLiveEntry()) {
-    if (Lhs.isLiveEntry() && Rhs.isLiveEntry() &&
-        Lhs.EntryByteOffset == Rhs.EntryByteOffset)
-      Result.EntryByteOffset = Lhs.EntryByteOffset;
-    else
-      Result.Low = Result.High = KernargPtrLaneDataflowState::Unknown;
+  // When the joined pair carries an entry component (pure entry or the entry
+  // arm of a two-mode merge), the entry byte offset must be identical on every
+  // entry-bearing input -- otherwise synthesis at a use site could not pick a
+  // single source hidden-arg offset. Differing offsets fall to Unknown.
+  if (Result.hasEntryOffset()) {
+    std::optional<int64_t> Offset;
+    for (const KernargPtrDataflowState *In : {&Lhs, &Rhs}) {
+      if (!In->hasEntryOffset())
+        continue;
+      if (Offset && *Offset != In->EntryByteOffset) {
+        Result.Low = Result.High = KernargPtrLaneDataflowState::Unknown;
+        Result.EntryByteOffset = 0;
+        return Result;
+      }
+      Offset = In->EntryByteOffset;
+    }
+    if (Offset)
+      Result.EntryByteOffset = *Offset;
   }
   return Result;
 }
@@ -531,6 +698,8 @@ toFinalKernargPtrLaneProvenance(KernargPtrLaneDataflowState State) {
     return KernargPtrLaneProvenance::LiveEntry;
   case KernargPtrLaneDataflowState::NonEntry:
     return KernargPtrLaneProvenance::NonEntry;
+  case KernargPtrLaneDataflowState::EntryOrNonEntry:
+    return KernargPtrLaneProvenance::EntryOrNonEntry;
   }
   llvm_unreachable("unknown kernarg pointer lane dataflow state");
 }
@@ -542,7 +711,7 @@ toFinalKernargPtrProvenance(KernargPtrDataflowState State) {
   KernargPtrProvenance Result = {toFinalKernargPtrLaneProvenance(State.Low),
                                  toFinalKernargPtrLaneProvenance(State.High),
                                  0};
-  if (Result.isLiveEntry())
+  if (Result.hasEntryOffset())
     Result.EntryByteOffset = State.EntryByteOffset;
   return Result;
 }
@@ -1886,6 +2055,17 @@ static Expected<RaiseResult> raiseToIRImpl(
     Ctx.SgprWaveMaskValidShadow.push_back(ValidA);
     Ctx.SourceWaveSgprPairShadow.push_back(PairA);
     Ctx.SourceWaveSgprPairValidShadow.push_back(PairValidA);
+  }
+
+  // Runtime provenance shadow for the kernarg-segment pointer pair. At kernel
+  // entry the pointer is the dispatch entry pointer (LiveEntry), so seed true.
+  // The provenance mutators keep it in sync at every pointer redefinition; a
+  // hidden-arg read on an EntryOrNonEntry two-mode merge consults it to select
+  // between synthesis and an ordinary load.
+  if (UserSgprLayout.KernargSegmentPtrSgpr >= 0) {
+    Ctx.KernargPtrEntryShadow =
+        B.CreateAlloca(I1Ty, nullptr, "kernarg_ptr_is_entry");
+    B.CreateStore(B.getTrue(), Ctx.KernargPtrEntryShadow);
   }
 
   llvm::Error RaiseReadFailure = llvm::Error::success();
