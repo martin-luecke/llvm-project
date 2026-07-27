@@ -1285,10 +1285,29 @@ Expected<HandlerResult> handleValuVoP3P(RaiseContext &Ctx,
           return RV.takeError();
         ResultVal = *RV;
       }
+    } else if (Ctx.TargetIsa.HasWmma16x16x16F16 &&
+               (Sop == CanonicalOp::V_WMMA_F32_16x16x32_F16 ||
+                Sop == CanonicalOp::V_WMMA_F32_16x16x32_BF16)) {
+      // gfx11-family wave32 target (RDNA3 / RDNA3.5 / RDNA4 base, e.g.
+      // gfx1151 / gfx1150): no gfx1250 K=32 WMMA and no MFMA, but it
+      // does have the K=16 WMMA (`int_amdgcn_wmma_f32_16x16x16_{f16,
+      // bf16}`).  Decompose the K=32 source into two chained K=16 target
+      // WMMAs (same Wave32 size, so no cross-widening) -- see
+      // `wmma-lowering.cpp::emitWMMAtoGFX11WMMA`.  Only the F16/BF16
+      // K=32 source variants reach this arm; the FP8/BF8 K=64 and IU8
+      // families have no gfx11 WMMA hardware and fall through to the
+      // refusal below.
+      {
+        Expected<Value *> RV = emitWMMAtoGFX11WMMA(Ctx, A, B, *C, WmmaInputType);
+        if (!RV)
+          return RV.takeError();
+        ResultVal = *RV;
+      }
     } else {
       // Target has neither gfx1250 tensor ops (hasTensorOps, K=32
       // / K=64 WMMA native) nor MFMA (gfx942 CDNA3 et al., the
-      // cross-target decomposition sink).  No path exists to
+      // cross-target decomposition sink) nor a usable gfx11 K=16
+      // WMMA path for this element type.  No path exists to
       // lower this opcode.  The pre-2026-04-22 handler fell
       // through to `emitWMMAtoMFMA` here and emitted MFMA-
       // intrinsic IR the target couldn't lower; the raise

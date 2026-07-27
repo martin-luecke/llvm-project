@@ -127,6 +127,46 @@ llvm::Expected<llvm::Value *> emitWMMAtoMFMA(RaiseContext &Ctx, llvm::Value *A,
                                              llvm::Value *B, llvm::Value *C,
                                              WMMAInputType InputType);
 
+/// Lower a Wave32 gfx1250 K=32 WMMA (`v_wmma_f32_16x16x32_f16` /
+/// `..._bf16`) onto a gfx11-family **Wave32** target that has only the
+/// K=16 WMMA (`int_amdgcn_wmma_f32_16x16x16_f16` / `..._bf16`), e.g.
+/// gfx1151 / gfx1150.
+///
+/// This is the same-wave-size sibling of `emitWMMAtoMFMA`: both source
+/// and target are Wave32 collectives over a 16x16 tile, so there is NO
+/// wave32->wave64 cross-widening, NO two-source-wave pass logic, and
+/// (when the accumulator layouts match) NO C/D redistribution. The only
+/// transform is the K dimension: one K=32 source WMMA decomposes into
+/// two chained K=16 target WMMAs (accumulator threaded C -> D1 -> D),
+/// with the source A/B fragments split along K and bridged into the
+/// target's per-lane layout via `ds_bpermute`.
+///
+/// Fragment shapes (identical 8-VGPR/lane containers on both sides):
+///   A/B  -- `<16 x half>` (f16) or `<16 x bfloat>` (bf16)
+///   C/D  -- `<8 x float>`
+///
+/// Layout bridge (see wmma-lowering.cpp for the lane equations and the
+/// empirical validation): gfx1250 packs the two K-halves into the two
+/// Wave32 lane-halves (lanes 0-15 -> k 0..15, lanes 16-31 -> k 16..31),
+/// whereas gfx11 K=16 WMMA expects each K=16 fragment replicated across
+/// both lane-halves. The K-lo target fragment therefore broadcasts
+/// source lanes 0-15, the K-hi fragment broadcasts source lanes 16-31.
+///
+/// Only F16/BF16 are handled here; gfx11 has no FP8/BF8/IU8 WMMA, so the
+/// caller keeps the principled refusal for those source variants.
+///
+/// \param a  WMMA source A fragment (`<16 x half>` / `<16 x bfloat>`)
+/// \param b  WMMA source B fragment (same type as A)
+/// \param c  WMMA accumulator fragment (`<8 x float>`)
+/// \param inputType  must be WMMAInputType::F16 or ::BF16.
+/// \returns  `<8 x float>` -- result in Wave32 C-layout, or an error if
+///           \p inputType is not an F16/BF16 variant.
+llvm::Expected<llvm::Value *> emitWMMAtoGFX11WMMA(RaiseContext &Ctx,
+                                                  llvm::Value *A,
+                                                  llvm::Value *B,
+                                                  llvm::Value *C,
+                                                  WMMAInputType InputType);
+
 /// Lower a Wave32 v_wmma_f32_16x16x4_f32 (gfx1250 RDNA4 VOP3P opcode
 /// 0x05D) to Wave64 mfma_f32_16x16x4f32 (gfx942 CDNA3) using
 /// ds_bpermute lane redistribution.

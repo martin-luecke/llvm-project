@@ -615,6 +615,173 @@ Expected<Value *> emitWMMAtoMFMA(RaiseContext &Ctx, Value *A, Value *Vb,
 }
 
 // ----------------------------------------------------------------------
+// gfx1250 K=32 WMMA -> gfx11-family K=16 WMMA (same Wave32 size)
+// ----------------------------------------------------------------------
+//
+// Source (gfx1250 RDNA4, Wave32):
+//   int_amdgcn_wmma_f32_16x16x32_{f16,bf16}
+//     A/B  -- <16 x half> (f16) / <16 x i16> (bf16), 8 VGPRs:
+//             i = lane%16,  k = 16*floor(lane/16) + element
+//             (lanes 0-15 carry k=0..15, lanes 16-31 carry k=16..31;
+//             the two K-halves occupy the two Wave32 lane-halves, no
+//             duplication).
+//     C/D  -- <8 x float>, 8 VGPRs: Wave32 16x16 accumulator layout.
+//
+// Target (gfx11 family RDNA3+, Wave32):
+//   int_amdgcn_wmma_f32_16x16x16_{f16,bf16}  (A, B, C) -> D
+//     A/B  -- <16 x half> / <16 x i16>, 8 VGPRs: i = lane%16, k=0..15,
+//             REPLICATED across both lane-halves (lanes 0-15 == 16-31),
+//             which is the RDNA3 K=16 WMMA operand convention.
+//     C/D  -- <8 x float>: same Wave32 16x16 accumulator layout as the
+//             source (validated by the numeric GEMM test), so the
+//             accumulator threads through untouched -- no C/D bridge.
+//
+// Decomposition: one K=32 source WMMA = two chained K=16 target WMMAs:
+//   D1 = wmma_k16(A[k 0..15],  B[k 0..15],  C)
+//   D  = wmma_k16(A[k 16..31], B[k 16..31], D1)
+//
+// Fragment bridge (ds_bpermute within the single Wave32):
+//   K-lo: target lane L needs source (i=L%16, k=0..15), which lives in
+//         source lane (L%16)        -> addr = (L%16)        << 2
+//   K-hi: target lane L needs source (i=L%16, k=16..31), in source lane
+//         (L%16 + 16)               -> addr = (L%16 + 16)    << 2
+//   Each fragment is the full <16 x t> = 8 dwords (one bpermute/dword).
+//   B mirrors A (identical i=lane%16 / k-by-lane-half layout).
+//
+// Same wave size (32->32): no wave32->wave64 cross-widening, no two-pass
+// group logic, no accumulator redistribution -- structurally much simpler
+// than emitWMMAtoMFMA. `wrapAsWWMValue` keeps the bpermute/WMMA chain
+// correct under the ModuloReplicationProjection phantom-lane regime and
+// is an identity no-op for full-wave launches (mirrors emitWMMAtoMFMA's
+// whole-wave handling).
+// Accumulator (C/D) fragment layout bridge between the gfx1250 source and
+// the gfx11 target. Both hold a 16x16 f32 tile as <8 x float> per Wave32
+// lane, but order the 8 per-lane elements differently:
+//
+//   gfx1250 ("block"):       row = 8*(lane/16) + e,  col = lane%16
+//                            (lanes 0-15 -> rows 0-7, lanes 16-31 -> rows 8-15)
+//   gfx11   ("interleaved"): row = 2*e + (lane/16),  col = lane%16
+//                            (verified on gfx1151 hardware by the native K=16
+//                             WMMA matmul probe)
+//
+// Both directions are pure intra-Wave32 permutations: same column (lane%16),
+// only the (lane-half, element) coordinate of a given row moves, so each
+// bridges with one ds_bpermute pair + a lane-half select per output dword.
+
+// gfx1250 block C -> gfx11 interleaved C (for the accumulator input).
+// Target (lane L, elem E) wants row r = 2*E + (L/16); in the source block
+// layout that row lives at lane (L%16)+16*(E>=4), element base+(L/16) with
+// base = (E<4 ? 2*E : 2*E-8).
+static void bridgeAccBlockToInterleave(IRBuilder<> &B, Module &M, RaiseContext &Ctx,
+                                       Value **In8, Value *LaneId, Value **Out8) {
+  Value *LaneMod16 = B.CreateAnd(LaneId, B.getInt32(15), "lane16");
+  Value *IsHigh = B.CreateICmpUGE(LaneId, B.getInt32(16), "is_high");
+  for (int E = 0; E < 8; ++E) {
+    int Base = (E < 4) ? (2 * E) : (2 * E - 8);
+    Value *SrcLane =
+        B.CreateAdd(LaneMod16, B.getInt32(16 * (E >= 4 ? 1 : 0)), "c_srclane");
+    Value *Addr = B.CreateShl(SrcLane, B.getInt32(2), "c_addr");
+    Value *Lo = emitDSBpermute(B, M, Addr, In8[Base]);
+    Value *Hi = emitDSBpermute(B, M, Addr, In8[Base + 1]);
+    Out8[E] = Ctx.Projection.wrapAsWWMValue(
+        B, B.CreateSelect(IsHigh, Hi, Lo, "c_brg"), "c_brg_wwm");
+  }
+}
+
+// gfx11 interleaved D -> gfx1250 block D (for the result). Target
+// (lane L, elem e) wants row r = 8*(L/16)+e; in the interleaved layout that
+// row lives at lane (L%16)+16*(e&1), element (e>>1)+4*(L/16).
+static void bridgeAccInterleaveToBlock(IRBuilder<> &B, Module &M, RaiseContext &Ctx,
+                                       Value **In8, Value *LaneId, Value **Out8) {
+  Value *LaneMod16 = B.CreateAnd(LaneId, B.getInt32(15), "lane16");
+  Value *IsHigh = B.CreateICmpUGE(LaneId, B.getInt32(16), "is_high");
+  for (int e = 0; e < 8; ++e) {
+    Value *SrcLane =
+        B.CreateAdd(LaneMod16, B.getInt32(16 * (e & 1)), "d_srclane");
+    Value *Addr = B.CreateShl(SrcLane, B.getInt32(2), "d_addr");
+    Value *Lo = emitDSBpermute(B, M, Addr, In8[e >> 1]);       // L/16==0
+    Value *Hi = emitDSBpermute(B, M, Addr, In8[(e >> 1) + 4]); // L/16==1
+    Out8[e] = Ctx.Projection.wrapAsWWMValue(
+        B, B.CreateSelect(IsHigh, Hi, Lo, "d_brg"), "d_brg_wwm");
+  }
+}
+
+Expected<Value *> emitWMMAtoGFX11WMMA(RaiseContext &Ctx, Value *A, Value *Vb,
+                                      Value *C, WMMAInputType InputType) {
+  // gfx11 K=16 WMMA hardware exists only for the F16/BF16 element types; the
+  // FP8/BF8/IU8 K=64 families have no gfx11 matrix hardware and must be refused
+  // by the caller. Guard defensively rather than assert so a future caller
+  // reaching this with the wrong type fails loudly instead of miscompiling.
+  if (InputType != WMMAInputType::F16 && InputType != WMMAInputType::BF16)
+    return createStringError(
+        "emitWMMAtoGFX11WMMA: gfx11 K=16 WMMA covers only F16/BF16; "
+        "FP8/BF8/IU8 have no gfx11 WMMA hardware and must be refused by "
+        "the caller");
+  IRBuilder<> &B = Ctx.B;
+  Module &M = Ctx.M;
+
+  const bool IsBF16 = (InputType == WMMAInputType::BF16);
+  // gfx11 bf16 WMMA takes its A/B operands as <16 x i16> (the intrinsic is
+  // AMDGPUWmmaIntrinsic<llvm_anyint, llvm_anyfloat>); f16 takes <16 x half>.
+  Type *AbElemTy = IsBF16 ? Type::getInt16Ty(Ctx.C) : Type::getHalfTy(Ctx.C);
+  auto *AbIrTy = FixedVectorType::get(AbElemTy, 16);
+  auto *CdIrTy = FixedVectorType::get(Ctx.F32Ty, 8);
+
+  Value *ADwords[8], *BDwords[8];
+  unpackDwords(B, A, 8, Ctx.I32Ty, ADwords);
+  unpackDwords(B, Vb, 8, Ctx.I32Ty, BDwords);
+
+  Value *LaneId = emitLaneId(B, M, Ctx.I32Ty);
+  Value *LaneMod16 = B.CreateAnd(LaneId, B.getInt32(15), "lane16");
+  Value *LoAddr = B.CreateShl(LaneMod16, B.getInt32(2), "klo_addr");
+  Value *HiAddr =
+      B.CreateShl(B.CreateAdd(LaneMod16, B.getInt32(16), "khi_lane"),
+                  B.getInt32(2), "khi_addr");
+
+  // Broadcast source K-lo (lanes 0-15) and K-hi (lanes 16-31) halves
+  // across the whole Wave32 into the replicated gfx11 fragment layout.
+  Value *ALoDw[8], *AHiDw[8], *BLoDw[8], *BHiDw[8];
+  for (unsigned I = 0; I < 8; ++I) {
+    ALoDw[I] = emitDSBpermute(B, M, LoAddr, ADwords[I]);
+    AHiDw[I] = emitDSBpermute(B, M, HiAddr, ADwords[I]);
+    BLoDw[I] = emitDSBpermute(B, M, LoAddr, BDwords[I]);
+    BHiDw[I] = emitDSBpermute(B, M, HiAddr, BDwords[I]);
+  }
+
+  Value *ALo = packDwords(B, ALoDw, 8, Ctx.I32Ty, AbIrTy);
+  Value *BLo = packDwords(B, BLoDw, 8, Ctx.I32Ty, AbIrTy);
+  Value *AHi = packDwords(B, AHiDw, 8, Ctx.I32Ty, AbIrTy);
+  Value *BHi = packDwords(B, BHiDw, 8, Ctx.I32Ty, AbIrTy);
+
+  Intrinsic::ID WmmaId = IsBF16 ? Intrinsic::amdgcn_wmma_f32_16x16x16_bf16
+                                : Intrinsic::amdgcn_wmma_f32_16x16x16_f16;
+  // AMDGPUWmmaIntrinsic overloads are [CD (return), AB (operand)]; the K=16
+  // f16/bf16 family is the plain 3-arg (A, B, C) shape with no op_sel/reuse
+  // operands (those belong to the gfx12-base and gfx1250 mod classes).
+  Function *WmmaFn =
+      Intrinsic::getOrInsertDeclaration(&M, WmmaId, {CdIrTy, AbIrTy});
+
+  // Bridge the source (gfx1250 block) accumulator into the gfx11
+  // interleaved layout before feeding it to the K=16 WMMAs, and bridge the
+  // result back to the block layout the surrounding (source) code expects.
+  Value *CDwords[8], *Cgfx11Dw[8];
+  unpackDwords(B, C, 8, Ctx.I32Ty, CDwords);
+  bridgeAccBlockToInterleave(B, M, Ctx, CDwords, LaneId, Cgfx11Dw);
+  Value *Cgfx11 = packDwords(B, Cgfx11Dw, 8, Ctx.I32Ty, CdIrTy);
+
+  // Chained accumulate in the gfx11 layout: C -> D1 (k 0..15) -> D2 (k 16..31).
+  Value *D1 = Ctx.Projection.wrapAsWWMValue(
+      B, B.CreateCall(WmmaFn, {ALo, BLo, Cgfx11}, "wmma_klo"), "wmma_klo_wwm");
+  Value *D2 = Ctx.Projection.wrapAsWWMValue(
+      B, B.CreateCall(WmmaFn, {AHi, BHi, D1}, "wmma_khi"), "wmma_khi_wwm");
+
+  Value *D2Dwords[8], *Dgfx12Dw[8];
+  unpackDwords(B, D2, 8, Ctx.I32Ty, D2Dwords);
+  bridgeAccInterleaveToBlock(B, M, Ctx, D2Dwords, LaneId, Dgfx12Dw);
+  return packDwords(B, Dgfx12Dw, 8, Ctx.I32Ty, CdIrTy);
+}
+
+// ----------------------------------------------------------------------
 // v_wmma_f32_16x16x4_f32 -> mfma_f32_16x16x4f32 lowering
 // ----------------------------------------------------------------------
 //

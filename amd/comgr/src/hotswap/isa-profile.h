@@ -50,6 +50,20 @@ struct ISAProfile {
   // no equivalent hardware unit, so cross-target lifts must refuse.
   bool HasTensorOps = false;
   bool HasIeeeNumMinMaxAtomics = false;
+  // True iff the subtarget exposes the gfx11-family K=16 WMMA instruction
+  // `v_wmma_f32_16x16x16_f16` / `..._bf16` (LLVM intrinsics
+  // `int_amdgcn_wmma_f32_16x16x16_f16` / `..._bf16`, IntrinsicsAMDGPU.td).
+  // This is the cross-target decomposition sink for a gfx1250 K=32 WMMA
+  // (`v_wmma_f32_16x16x32_f16`) onto a gfx11-family wave32 target (e.g.
+  // gfx1151 / gfx1150) that has K=16 WMMA but not the gfx1250 K=32 unit:
+  // one K=32 source WMMA decomposes into two chained K=16 target WMMAs
+  // (see `emitWMMAtoGFX11WMMA` in wmma-lowering.cpp). The K=16 WMMA exists
+  // on every gfx11+ subtarget (RDNA3 / RDNA3.5 / RDNA4 base / gfx1250),
+  // but the dispatch in handle-valu-vop3p.cpp checks `HasTensorOps`
+  // (native K=32) first, so this path is only taken on targets that lack
+  // the native K=32 form. Per-shape capability bit per matrix-translation
+  // §5.0.1: branch on the flag, not on a target triple.
+  bool HasWmma16x16x16F16 = false;
   // True iff the subtarget exposes gfx950's MAI extensions on top of the
   // shared gfx9-family `MAIInsts` feature.  Distinct from `HasMfma`, which
   // is set on every gfx9-family target with MAI (gfx940 / gfx942 / gfx950).
@@ -121,6 +135,10 @@ struct ISAProfile {
                   STI.hasFeature(llvm::AMDGPU::FeatureWMMA256bInsts);
     P.HasTensorOps = STI.hasFeature(llvm::AMDGPU::FeatureGFX1250Insts);
     P.HasIeeeNumMinMaxAtomics = llvm::AMDGPU::isGFX12Plus(STI);
+    // K=16 f16/bf16 WMMA exists on every gfx11+ wave32 subtarget (RDNA3
+    // onward). The K=32 native form is gated separately by HasTensorOps,
+    // which the dispatch checks first.
+    P.HasWmma16x16x16F16 = llvm::AMDGPU::isGFX11Plus(STI) && P.isWave32();
     P.HasGfx950Insts = STI.hasFeature(llvm::AMDGPU::FeatureGFX950Insts);
     P.HasFP8ConversionInsts =
         STI.hasFeature(llvm::AMDGPU::FeatureFP8ConversionInsts);
