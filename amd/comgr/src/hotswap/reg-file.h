@@ -148,6 +148,15 @@ struct AllocaRegFile {
   // non-constant value clears the shadow.
   llvm::unique_function<void(llvm::Value *)> OnM0Written;
 
+  // Tracking hook fired on every scalar-register store, passing the destination
+  // SGPR index and the stored 32-bit value. The owning RaiseContext installs
+  // this to maintain a raise-time, intra-BB constant/runtime shadow per SGPR
+  // (see raise-context.h `SgprConstShadow`): a `ConstantInt` store records the
+  // constant, any other store records "provably runtime". Used to classify a
+  // register kernarg-load offset as a runtime index (ordinary memory) vs a
+  // constant offset that could reach the source implicit-arg range.
+  llvm::unique_function<void(int, llvm::Value *)> OnSgprWrittenValue;
+
   // Initialise storage.
   //
   // `MRI` is queried for the architectural SGPR_32 / TTMP_32 register-

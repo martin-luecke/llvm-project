@@ -649,6 +649,20 @@ struct RaiseContext {
   // Raise-time constant shadow of M0; see updateM0Const / getM0Const.
   std::optional<uint64_t> M0Const;
 
+  // Raise-time, intra-BB constant/runtime classification of an SGPR value.
+  //   KnownConstant - written in this BB with a compile-time constant (Value).
+  //   KnownRuntime  - written in this BB with a provably non-constant value.
+  //   Unknown       - a block live-in; constness not established intra-BB.
+  enum class SgprConstKind { Unknown, KnownConstant, KnownRuntime };
+  struct SgprConstQuery {
+    SgprConstKind Kind = SgprConstKind::Unknown;
+    int64_t Value = 0;
+  };
+
+  // Raise-time, intra-BB SGPR constant/runtime classification; see
+  // updateSgprConst / getSgprConst / clearSgprConstShadow.
+  llvm::DenseMap<int, SgprConstQuery> SgprConstShadow;
+
   // Conservative lane-wise kernarg-pointer provenance for the strict hidden-arg
   // SMEM gate. Filled before instruction lowering by a fixed-point over the
   // decoded CFG. Mixed incoming states become Unknown and keep strict mode
@@ -852,6 +866,26 @@ struct RaiseContext {
   }
   void clearM0Const() { M0Const = std::nullopt; }
   std::optional<uint64_t> getM0Const() const { return M0Const; }
+
+  // Fired from the reg-file on every scalar store. A ConstantInt records the
+  // constant; any other value records "provably runtime". Intra-BB only:
+  // cleared at each basic-block boundary (see `clearSgprConstShadow`), so a
+  // recorded fact always dominates its use within the same block.
+  void updateSgprConst(int Idx, llvm::Value *V) {
+    if (Idx < 0)
+      return;
+    if (auto *CI = llvm::dyn_cast_or_null<llvm::ConstantInt>(V))
+      SgprConstShadow[Idx] = {SgprConstKind::KnownConstant, CI->getSExtValue()};
+    else
+      SgprConstShadow[Idx] = {SgprConstKind::KnownRuntime, 0};
+  }
+  void clearSgprConstShadow() { SgprConstShadow.clear(); }
+  SgprConstQuery getSgprConst(int Idx) const {
+    auto It = SgprConstShadow.find(Idx);
+    if (It == SgprConstShadow.end())
+      return {};
+    return It->second;
+  }
 
   void collectSgprWaveMaskShadowAllocas(
       llvm::SmallVectorImpl<llvm::AllocaInst *> &Out) const {

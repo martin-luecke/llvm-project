@@ -4,7 +4,7 @@
 ; RUN:   | %FileCheck %s
 
 ; strict-mode refusal: dynamic (register) kernarg offset may reach the source implicit-arg range.
-; CHECK: dynamic source kernarg offsets may reach the source implicit-arg range
+; CHECK: a constant or unclassified kernarg offset may reach the source implicit-arg range
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6

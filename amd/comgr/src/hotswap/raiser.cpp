@@ -2108,6 +2108,15 @@ static Expected<RaiseResult> raiseToIRImpl(
   // `Ctx.getM0Const()` to resolve the M0-relative VGPR index statically.
   Regs.OnM0Written = [&Ctx](llvm::Value *V) { Ctx.updateM0Const(V); };
 
+  // Wire the reg-file's scalar-store hook to ctx's raise-time, intra-BB SGPR
+  // constant/runtime shadow. A constant store records the value; any other
+  // store records "provably runtime". The SMEM handler consults this to tell a
+  // genuine runtime kernarg-load offset (ordinary memory) apart from a constant
+  // offset that could reach the source implicit-arg range.
+  Regs.OnSgprWrittenValue = [&Ctx](int Idx, llvm::Value *V) {
+    Ctx.updateSgprConst(Idx, V);
+  };
+
   if (UseThreadLoop) {
     auto *IterA = B.CreateAlloca(I32Ty, nullptr, "tl_iter_alloca");
     B.CreateStore(B.getInt32(0), IterA);
@@ -2204,6 +2213,9 @@ static Expected<RaiseResult> raiseToIRImpl(
       Ctx.clearSgprWaveMaskShadow();
       // M0's raise-time constant shadow only dominates within its BB.
       Ctx.clearM0Const();
+      // The SGPR constant/runtime shadow is likewise intra-BB: a fact recorded
+      // in a predecessor does not dominate this block's uses.
+      Ctx.clearSgprConstShadow();
     }
 
     if (Error E = Ctx.computeVGPRAdjust(Di))

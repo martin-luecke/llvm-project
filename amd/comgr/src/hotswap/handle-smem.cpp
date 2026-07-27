@@ -366,19 +366,27 @@ Expected<HandlerResult> handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
           "hidden-arg block on some CFG paths");
     }
     // A register (non-immediate) offset through a possibly-pristine kernarg
-    // pointer could reach the source implicit-arg range at a value we cannot
-    // resolve at raise time (the offset is not a compile-time constant here).
-    // Synthesis needs a constant field offset, so refuse under strict rather
-    // than risk applying a source implicit offset to the target hidden block.
-    // (A genuine runtime array index into an explicit-arg region is the common
-    // shape but is indistinguishable from a hidden-range hit without offset
-    // range/constant analysis -- see the dynamic-offset follow-up.)
+    // pointer. AMDGPU hidden arguments are read only at compile-time-constant
+    // offsets from the pristine kernarg pointer, so if the offset register holds
+    // a PROVABLY-RUNTIME value it cannot address a hidden-arg slot -- it is a
+    // runtime index into an explicit array argument (identical source/target
+    // layout), so an ordinary load is correct. If the offset is a compile-time
+    // constant it could land on a hidden field we cannot synthesize from a
+    // register operand, and a block-live-in offset has unknown constness; both
+    // stay a strict refusal rather than risk applying a source implicit offset
+    // to the target hidden block.
     if (BaseIsKernargPair && !BaseIsKnownNonEntry && !ImmOffset &&
         Ctx.Kernargs.ImplicitArgsBase > 0 && isStrictMode()) {
-      return RaiseFailure::strictUnsafeLowering(
-          Di, "implicitarg.ptr",
-          "cross-arch implicitarg.ptr lowering is unresolved: dynamic source "
-          "kernarg offsets may reach the source implicit-arg range");
+      RaiseContext::SgprConstQuery OffConst =
+          Op.isSrcReg(1) ? Ctx.getSgprConst(Op.srcReg(1).BaseIdx)
+                         : RaiseContext::SgprConstQuery{};
+      if (OffConst.Kind != RaiseContext::SgprConstKind::KnownRuntime)
+        return RaiseFailure::strictUnsafeLowering(
+            Di, "implicitarg.ptr",
+            "cross-arch implicitarg.ptr lowering is unresolved: a constant or "
+            "unclassified kernarg offset may reach the source implicit-arg "
+            "range");
+      // Provably-runtime offset: fall through to the ordinary memory load.
     }
     if (IsEntryImplicitArgLoad) {
       SourceHiddenArgContext HiddenCtx{Ctx.C,
