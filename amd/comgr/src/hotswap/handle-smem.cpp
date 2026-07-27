@@ -453,97 +453,34 @@ Expected<HandlerResult> handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
       return Hr;
     }
 
-    // Two-mode kernarg ABI (EntryOrNonEntry): this read reaches after a CFG
-    // merge where the pointer is, per path, either the dispatch entry pointer
-    // (so the offset addresses the source hidden args -> synthesize) or a
-    // memory buffer (so it is an ordinary load). Both arms carry the correct
-    // value for their path, so emit both and select per dword on the runtime
-    // provenance shadow. No assumption about matching target hidden-arg layout.
-    if (IsTwoModeImplicitArgLoad) {
-      SourceHiddenArgContext HiddenCtx{Ctx.C,
-                                       Ctx.M,
-                                       Ctx.B,
-                                       Ctx.I8Ty,
-                                       Ctx.I32Ty,
-                                       Ctx.I64Ty,
-                                       Ctx.Kernargs.Args,
-                                       Ctx.AssumeHipGlobalOffsetZero,
-                                       Ctx.TargetCodeObjectVersion};
-      populateScaledDispatch(HiddenCtx, Ctx.Projection);
-
-      // Classify every dword of this read against the source hidden-arg map:
-      //   * Matched with a value  -> a modelled hidden field (synthesizable).
-      //   * Matched, no value      -> a recognized-but-unsupported hidden field
-      //                               (e.g. hidden_private_base): NOT ordinary
-      //                               memory, must refuse rather than miscompile.
-      //   * Not matched            -> the source metadata declares NO hidden arg
-      //                               at this offset, so it is not a hidden-arg
-      //                               read at all. `ImplicitArgsBase` is only a
-      //                               lower bound; Tensile's inline user-args
-      //                               struct extends past it, so these are
-      //                               ordinary explicit/user args whose layout is
-      //                               identical on source and target -> an
-      //                               ordinary load is correct on BOTH arms.
-      SmallVector<Value *, 16> SynthDwords(LoadDwords, nullptr);
-      bool AllSynth = true;
-      bool AnyModelledHiddenField = false;
-      for (int D = 0; D < LoadDwords; D++) {
-        SourceHiddenArgValue Dw =
-            emitSourceHiddenDword(HiddenCtx, SourceByteOffset + D * 4);
-        if (Dw.Matched) {
-          AnyModelledHiddenField = true;
-          if (!Dw.Value && isStrictMode())
-            return RaiseFailure::unsupportedSourceHiddenArg(Di, "SMEM",
-                                                            Dw.FailureDetail);
-        }
-        if (!Dw.Matched || !Dw.Value) {
-          AllSynth = false;
-          if (!Dw.Matched)
-            continue; // keep scanning: prove none of the dwords is hidden
-          break;
-        }
-        SynthDwords[D] = Dw.Value;
-      }
-      if (AnyModelledHiddenField) {
-        if (AllSynth) {
-          // Every dword is a modelled hidden field. Select per dword between the
-          // synthesized entry-arm value and an ordinary load (non-entry arm) on
-          // the runtime provenance shadow.
-          Value *IsEntry = Ctx.loadKernargPtrEntryShadow();
-          Value *BaseAddr = Ctx.Regs.loadSGPR64(Ctx.B, Base.BaseIdx);
-          Value *Ptr = Ctx.B.CreateIntToPtr(BaseAddr, Ctx.PtrGlobalTy);
-          if (ByteOffset != 0)
-            Ptr = Ctx.B.CreateInBoundsGEP(Ctx.I8Ty, Ptr,
-                                          Ctx.B.getInt64(ByteOffset));
-          for (int D = 0; D < LoadDwords; D++) {
-            Value *Ep = (D == 0)
-                            ? Ptr
-                            : Ctx.B.CreateInBoundsGEP(Ctx.I8Ty, Ptr,
-                                                      Ctx.B.getInt64(D * 4));
-            Value *Ordinary = Ctx.B.CreateLoad(Ctx.I32Ty, Ep, "smem_load");
-            Value *Sel = Ctx.B.CreateSelect(IsEntry, SynthDwords[D], Ordinary,
-                                            "implicitarg_two_mode");
-            Ctx.Regs.storeSGPR32(Ctx.B, Dest.BaseIdx + D, Sel);
-          }
-          Ctx.noteSgprMemoryLoadForKernargProvenance(Dest.BaseIdx, LoadDwords);
-          Hr.Handled = true;
-          return Hr;
-        }
-        // Some dwords are hidden fields and some are not (a load straddling the
-        // hidden/non-hidden boundary), or a recognized-but-unsupported field:
-        // the entry arm cannot be proven. Refuse under strict; permissive keeps
-        // the pre-existing ordinary-load behaviour.
-        if (isStrictMode())
+    // Two-mode kernarg ABI (EntryOrNonEntry merge): the pointer is, per path,
+    // either the pristine dispatch entry pointer or a value loaded from memory
+    // (Tensile's inline-args vs. indirect user-args-buffer selector). Whether
+    // this read is a hidden-arg read is decided purely by whether its byte range
+    // maps to a declared source hidden field:
+    //
+    //   * Maps to a declared hidden field: on the entry arm the value would need
+    //     synthesis from the dispatch packet, but on the non-entry arm the same
+    //     bytes are an ordinary buffer load -- the two arms carry different
+    //     values and disambiguating them needs a runtime provenance select. No
+    //     observed kernel requires this, so refuse loudly rather than ship
+    //     untested machinery. (Pristine-entry reads still synthesize via the
+    //     IsEntryImplicitArgLoad path above; this is only the merged case.)
+    //   * Maps to no declared hidden field: it is an ordinary explicit/user arg.
+    //     `ImplicitArgsBase` is only a lower bound -- Tensile's inline user-args
+    //     struct extends well past it -- and explicit args share an identical
+    //     source/target layout, so an ordinary load is correct on both arms.
+    //     Fall through. This is a sound classification, not a strict relaxation.
+    if (IsTwoModeImplicitArgLoad && isStrictMode()) {
+      for (int Byte = 0; Byte < LoadBytes; ++Byte) {
+        if (classifySourceHiddenArgByte(Ctx.Kernargs.Args,
+                                        SourceByteOffset + Byte))
           return RaiseFailure::strictUnsafeLowering(
               Di, "implicitarg.ptr",
-              "two-mode kernarg implicit-arg read straddles modelled and "
-              "non-hidden bytes; cannot prove the entry arm");
+              "two-mode kernarg read reaches a declared source hidden field on "
+              "the entry arm of an inline/indirect merge; runtime provenance "
+              "disambiguation for this shape is not implemented");
       }
-      // No dword maps to a hidden field (AnyModelledHiddenField == false): this
-      // is an ordinary memory read (an explicit/user arg beyond the hidden
-      // block; ImplicitArgsBase is only a lower bound). It is correct on both
-      // arms, so fall through to the ordinary load -- a sound classification, not
-      // a permissive relaxation, so it holds under strict mode too.
     }
 
     // Generic GEP+load against `addrspace(1)`. AMDGPU ISel selects the final

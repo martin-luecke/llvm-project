@@ -425,29 +425,11 @@ struct RaiseContext {
     return CurrentKernargPtrProvenance;
   }
 
-  // Store the runtime provenance shadow (true = live entry pointer). No-op when
-  // the kernel has no kernarg-segment pointer SGPR. Emitted at the current
-  // insertion point, so the alloca merges naturally across the source CFG.
-  void storeKernargPtrEntryShadow(bool IsEntry) {
-    if (!KernargPtrEntryShadow)
-      return;
-    B.CreateStore(IsEntry ? B.getTrue() : B.getFalse(), KernargPtrEntryShadow);
-  }
-
-  // Load the runtime provenance shadow. Precondition: KernargPtrEntryShadow is
-  // non-null (the caller only reaches here on a recoverable two-mode merge,
-  // which requires a kernarg-segment pointer SGPR).
-  llvm::Value *loadKernargPtrEntryShadow() {
-    assert(KernargPtrEntryShadow && "no kernarg provenance shadow to load");
-    return B.CreateLoad(I1Ty, KernargPtrEntryShadow, "kernarg_ptr_is_entry");
-  }
-
   // Restore a proven entry-pointer fact after a constant-preserving rebase.
   void setKernargPtrLiveEntryByteOffset(int64_t ByteOffset) {
     CurrentKernargPtrProvenance.Low = KernargPtrLaneProvenance::LiveEntry;
     CurrentKernargPtrProvenance.High = KernargPtrLaneProvenance::LiveEntry;
     CurrentKernargPtrProvenance.EntryByteOffset = ByteOffset;
-    storeKernargPtrEntryShadow(true);
   }
 
   // Restore a proven non-entry pointer fact after a constant-preserving rebase.
@@ -455,7 +437,6 @@ struct RaiseContext {
     CurrentKernargPtrProvenance.Low = KernargPtrLaneProvenance::NonEntry;
     CurrentKernargPtrProvenance.High = KernargPtrLaneProvenance::NonEntry;
     CurrentKernargPtrProvenance.EntryByteOffset = 0;
-    storeKernargPtrEntryShadow(false);
   }
 
   // Update the current intra-BB provenance state after an ordinary SGPR write.
@@ -486,21 +467,11 @@ struct RaiseContext {
     if (KernargPtrSgpr < 0)
       return;
     int EndIdx = BaseIdx + WidthDwords - 1;
-    bool OverlapsPair = false;
-    if (BaseIdx <= KernargPtrSgpr && EndIdx >= KernargPtrSgpr) {
+    if (BaseIdx <= KernargPtrSgpr && EndIdx >= KernargPtrSgpr)
       CurrentKernargPtrProvenance.Low = KernargPtrLaneProvenance::NonEntry;
-      OverlapsPair = true;
-    }
-    if (BaseIdx <= KernargPtrSgpr + 1 && EndIdx >= KernargPtrSgpr + 1) {
+    if (BaseIdx <= KernargPtrSgpr + 1 && EndIdx >= KernargPtrSgpr + 1)
       CurrentKernargPtrProvenance.High = KernargPtrLaneProvenance::NonEntry;
-      OverlapsPair = true;
-    }
     CurrentKernargPtrProvenance.EntryByteOffset = 0;
-    // A memory load into the pointer pair produces a non-entry value at
-    // runtime; keep the provenance shadow in sync so a downstream two-mode
-    // merge selects the ordinary-load arm on this path.
-    if (OverlapsPair)
-      storeKernargPtrEntryShadow(false);
   }
 
   // Record the prepass-computed entry fact for a recovered source BB.
@@ -631,14 +602,6 @@ struct RaiseContext {
   llvm::SmallVector<llvm::AllocaInst *> SgprWaveMaskValidShadow;
   llvm::SmallVector<llvm::AllocaInst *> SourceWaveSgprPairShadow;
   llvm::SmallVector<llvm::AllocaInst *> SourceWaveSgprPairValidShadow;
-  // Runtime provenance shadow for the kernarg-segment pointer pair: an i1 that
-  // is true whenever the live pointer is the dispatch entry pointer and false
-  // when it has been overwritten by a memory load. Maintained in lockstep with
-  // the static provenance mutators below. It is only consulted at a hidden-arg
-  // read whose static provenance is the recoverable EntryOrNonEntry two-mode
-  // merge, to select between source hidden-arg synthesis (entry) and an ordinary
-  // load (non-entry). Null when the kernel has no kernarg-segment pointer SGPR.
-  llvm::AllocaInst *KernargPtrEntryShadow = nullptr;
   // Same-BB source-image address facts for PC-relative literal loads. This is
   // not a generic constant tracker: only s_get_pc_i64 seeds it, only constant
   // s_add/sub_nc_u64 propagates it, and only SMEM literal materialisation reads
@@ -895,8 +858,6 @@ struct RaiseContext {
                SourceWaveSgprPairShadow.end());
     Out.append(SourceWaveSgprPairValidShadow.begin(),
                SourceWaveSgprPairValidShadow.end());
-    if (KernargPtrEntryShadow)
-      Out.push_back(KernargPtrEntryShadow);
   }
 
   // Pending failure raised during operand-read dispatch (e.g.

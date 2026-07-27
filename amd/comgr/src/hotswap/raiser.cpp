@@ -2057,17 +2057,6 @@ static Expected<RaiseResult> raiseToIRImpl(
     Ctx.SourceWaveSgprPairValidShadow.push_back(PairValidA);
   }
 
-  // Runtime provenance shadow for the kernarg-segment pointer pair. At kernel
-  // entry the pointer is the dispatch entry pointer (LiveEntry), so seed true.
-  // The provenance mutators keep it in sync at every pointer redefinition; a
-  // hidden-arg read on an EntryOrNonEntry two-mode merge consults it to select
-  // between synthesis and an ordinary load.
-  if (UserSgprLayout.KernargSegmentPtrSgpr >= 0) {
-    Ctx.KernargPtrEntryShadow =
-        B.CreateAlloca(I1Ty, nullptr, "kernarg_ptr_is_entry");
-    B.CreateStore(B.getTrue(), Ctx.KernargPtrEntryShadow);
-  }
-
   llvm::Error RaiseReadFailure = llvm::Error::success();
   auto ReadFailureHandler = [&](llvm::Error Err) {
     if (RaiseReadFailure) {
