@@ -361,6 +361,61 @@ declared `meta.args` (Triton sometimes reads past its own declared
 args), refuse. If the arg maps to a **refuse** row in §5, refuse. If
 it maps to a **derivable** row, substitute the IR constant.
 
+#### G2.1 -- Implemented: kernarg-pointer provenance (refines G2)
+
+> **Status:** implemented in `raiser.cpp` (prepass), `raise-context.h`
+> (consumer lattice), and `handle-smem.cpp` (use site). The bare
+> `offset ≥ implicitArgsBase → refuse` rule above is too coarse for two
+> real shapes; this subsection is the shipped refinement.
+
+`implicitArgsBase` is only a **lower bound** on the hidden block: a
+kernel whose kernarg pointer is repointed (Tensile's indirect
+"UserArgs" buffer) or whose inline argument struct extends past the
+launcher's declared args reads ordinary data at offsets `≥
+implicitArgsBase`. Whether a `[ptr + off]` read is a hidden-arg read is
+therefore decided by the **provenance of `ptr`** and by whether `off`
+maps to a **declared** hidden field, not by the offset magnitude alone.
+
+The prepass tracks a per-BB lattice for the kernarg-pointer SGPR pair
+(`raiser.cpp`), exported to the consumer:
+
+| Provenance | Meaning | Constant-offset read in implicit range |
+|---|---|---|
+| `LiveEntry(+k)` | pristine dispatch pointer + constant `k` | hidden-arg read → synthesize (§5) / refuse |
+| `NonEntry` | value loaded from memory, or displaced by a runtime value | ordinary memory load |
+| `EntryOrNonEntry` | clean join of a `LiveEntry` and a `NonEntry` path (the inline-vs-indirect selector) | maps to a declared hidden field → **refuse** (arms carry different values); else ordinary load |
+| `Unknown` | unclassified write; could still be pristine | refuse |
+
+Two prepass transfer refinements make this precise:
+
+- **Split 64-bit rebase.** A constant pointer advance emitted as the
+  32-bit carry chain `s_add_co_u32 lo,lo,immLo` + `s_add_co_ci_u32
+  hi,hi,immHi` is recognised as a constant rebase (net delta `immLo +
+  (immHi<<32)`, carry-independent), so the inline arm stays `LiveEntry`.
+- **Runtime displacement.** An in-place add of a *runtime* value to a
+  pointer lane (`s_add_co_u32 s0,s0,sVar`, `s_lshl2_add_u32`) yields
+  `NonEntry`: a runtime-displaced pointer cannot address a fixed
+  hidden-arg slot.
+
+**Runtime vs constant offset.** A register (non-immediate) offset is
+classified by an intra-BB SGPR constant/runtime shadow (mirrors the
+existing `M0Const` shadow): a **provably-runtime** offset is an ordinary
+array index (never a hidden arg); a **constant** or block-live-in offset
+still refuses, since a constant could land on a hidden field the register
+form cannot synthesize.
+
+**Correctness basis (the invariant this all rests on):** AMDGPU hidden
+arguments are read only at *compile-time-constant* offsets from the
+*pristine* kernarg pointer. Any loaded pointer, runtime-displaced
+pointer, or runtime offset is therefore ordinary explicit/array/user
+memory (identical source/target layout), and the only genuine refusals
+left are (a) a pristine or two-mode read of a declared hidden field we
+cannot synthesize, and (b) a constant/unknown offset that might hit one.
+Lit: `kernarg_two_mode_implicitarg_strict.s`,
+`kernarg_two_mode_hidden_field_refuse_strict.s`,
+`kernarg_runtime_offset_ordinary_strict.s`,
+`kernarg_register_offset_*_strict_refuse.s`.
+
 ### G3 -- User-SGPR compatibility (startup)
 
 For each user-SGPR enable bit the source KD sets, verify the target
