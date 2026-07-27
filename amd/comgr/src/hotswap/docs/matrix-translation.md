@@ -192,6 +192,18 @@ gfx942 it is false -> Template C refuses (no software dequant fallback
 per §5.4). On gfx1250 it is false too (native `V_WMMA_SCALED` is the
 intended path) -> use the native path above.
 
+For wave32 targets that have neither `hasWMMA1250` (native K=32) nor
+`hasMFMA` (the CDNA wave64 decomposition sink) but do have the gfx11 K=16
+f16/bf16 WMMA hardware (RDNA3 / RDNA3.5, e.g. gfx1151 / gfx1150), the
+`V_WMMA_F32_16x16x32_{F16,BF16}` source is lowered to two chained native
+`V_WMMA_F32_16x16x16_{F16,BF16}` target ops, keyed on the
+`HasWmma16x16x16F16` capability bit (`isGFX11Plus && isWave32`). This is an
+in-wave, same-wave-size path -- no cross-widening, so it reuses the shared
+`ds_bpermute` / pack / unpack / lane helpers rather than the MFMA wave64
+projection. See `gfx11-wmma-target.design.md` for the K-lo/K-hi fragment
+broadcast and the block<->interleave accumulator bridging. The 8-bit K=64
+fp8/bf8/iu8 family has no gfx11 WMMA hardware and stays a loud refusal.
+
 #### 5.0.2 Identity and same-family translation
 
 When the source and target flags coincide for a given SemOp the native
