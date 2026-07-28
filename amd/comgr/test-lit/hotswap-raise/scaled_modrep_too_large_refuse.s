@@ -1,5 +1,5 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && not raise_cli %t.hsaco --target-isa=gfx942 \
+; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:     --emit-ir=scaled_modrep_too_large_refuse_kernel 2>&1 \
 ; RUN:   | %FileCheck %s --check-prefix=NOUPGRADE
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
@@ -8,12 +8,14 @@
 ; RUN:   | %FileCheck %s --check-prefix=SIZE
 
 ; A 1024-thread block would need 2048 threads once scaled, past the target max,
-; so the scaled route is ineligible: the y/z refusal stands (auto-upgrade path)
-; and --force-scaled-modrep refuses with the size-gate diagnostic.
+; so the scaled route is ineligible. Without --force the y/z refusal is rescued
+; by the ThreadLoop C5 retry; --force-scaled-modrep refuses with the size gate.
 
-; NOUPGRADE: workitem.id.y()/.z()-derived predicate under WaveNative
+; NOUPGRADE: retrying kernel {{.+}} under ThreadLoopProjection after C5 predicate-chain refusal
+; NOUPGRADE: thread-loop fallback trigger: workitem.id.y()/.z()-derived predicate under WaveNative
+; NOUPGRADE: selected ThreadLoopProjection
 ; NOUPGRADE-NOT: ScaledModuloReplicationProjection
-; NOUPGRADE-NOT: define amdgpu_kernel void @scaled_modrep_too_large_refuse_kernel(
+; NOUPGRADE: define amdgpu_kernel void @scaled_modrep_too_large_refuse_kernel(
 ; SIZE: ScaledModuloReplicationProjection needs to launch 2048 thread
 ; SIZE-SAME: target hardware limit is 1024
 ; SIZE-NOT: define amdgpu_kernel void @scaled_modrep_too_large_refuse_kernel(
