@@ -184,8 +184,6 @@ void AllocaRegFile::storeSGPR32(IRBuilder<> &B, int Idx, Value *V) {
   // RaiseContext::lastSgprWaveMaskI1 / onSgprWritten contract.
   if (OnSgprWritten)
     OnSgprWritten(Idx);
-  if (OnSgprWrittenValue)
-    OnSgprWrittenValue(Idx, V);
 }
 
 namespace {
@@ -243,12 +241,6 @@ void AllocaRegFile::storeSGPR64(IRBuilder<> &B, int Idx, Value *V) {
   if (OnSgprWritten) {
     OnSgprWritten(Idx);
     OnSgprWritten(Idx + 1);
-  }
-  // Lo/Hi are folded to ConstantInt by the IRBuilder when V is constant, so the
-  // per-lane constant shadow stays precise across 64-bit stores.
-  if (OnSgprWrittenValue) {
-    OnSgprWrittenValue(Idx, Lo);
-    OnSgprWrittenValue(Idx + 1, Hi);
   }
 }
 

@@ -3,13 +3,7 @@
 ; RUN:   --emit-ir=kernarg_runtime_offset_ordinary_strict \
 ; RUN:   | %FileCheck %s --check-prefix=STRICT
 
-; A register kernarg-load offset whose value is PROVABLY RUNTIME (derived from
-; the workgroup id, not a compile-time constant) can never address a fixed
-; hidden-arg slot -- AMDGPU hidden arguments are read only at compile-time
-; constant offsets from the pristine kernarg pointer. So under strict mode this
-; is an ordinary explicit/array read (inttoptr + load), NOT a refusal and NOT
-; hidden-arg synthesis. Contrast kernarg_register_offset_strict_refuse.s, where
-; the offset is a constant-in-register (0xc) and strict mode still refuses.
+; Kernarg load through a register (non-immediate) offset.
 ; STRICT-LABEL: define amdgpu_kernel void @kernarg_runtime_offset_ordinary_strict(
 ; STRICT-NOT: call ptr addrspace(4) @llvm.amdgcn.implicitarg.ptr()
 ; STRICT: inttoptr i64
