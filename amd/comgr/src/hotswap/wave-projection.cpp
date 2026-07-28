@@ -355,9 +355,11 @@ static Value *emitScaledDispatchLogicalX(IRBuilder<> &B, Value *RawX,
   const unsigned Ratio = TgtWaveSize / SrcWaveSize;
   const unsigned RatioLog2 = llvm::Log2_32(Ratio);
   // Hardware-wave-aligned high part, rescaled to source-lane units.
-  Value *WaveAligned = B.CreateAnd(
-      RawX, ConstantInt::get(Ty, ~static_cast<uint64_t>(TgtWaveSize - 1u)),
-      "dd_wave_aligned");
+  Value *WaveAligned =
+      B.CreateAnd(RawX,
+                  ConstantInt::get(Ty, ~static_cast<uint64_t>(TgtWaveSize - 1u),
+                                   /*IsSigned=*/true),
+                  "dd_wave_aligned");
   Value *WaveScaled = B.CreateLShr(WaveAligned, ConstantInt::get(Ty, RatioLog2),
                                    "dd_wave_base");
   // Source lane within the wave (same for a lane and its replica).
