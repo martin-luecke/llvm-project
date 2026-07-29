@@ -359,6 +359,73 @@ target_include_directories(TranslationCacheTests PRIVATE
 
 comgr_configure_test_target(TranslationCacheTests)
 
+# -- HotswapHsaToolDispatchTests ---------------------------------------------
+
+if(COMGR_BUILD_HOTSWAP_HSA_TOOL)
+  set(_hotswap_hsa_tool_global_object
+    ${CMAKE_CURRENT_BINARY_DIR}/hotswap-hsa-tool-shared-global.co)
+  set(_hotswap_hsa_tool_two_kernel_object
+    ${CMAKE_CURRENT_BINARY_DIR}/hotswap-hsa-tool-two-kernel.co)
+  set(_hotswap_hsa_tool_stripped_object
+    ${CMAKE_CURRENT_BINARY_DIR}/vecadd-gfx950-stripped.co)
+  add_custom_command(
+    OUTPUT ${_hotswap_hsa_tool_global_object}
+    COMMAND $<TARGET_FILE:llvm-mc> -triple=amdgcn-amd-amdhsa -mcpu=gfx950
+      ${CMAKE_CURRENT_SOURCE_DIR}/hotswap-hsa-tool-shared-global.s
+      -filetype=obj -o ${_hotswap_hsa_tool_global_object}.o
+    COMMAND $<TARGET_FILE:lld> -flavor gnu -shared --strip-all
+      ${_hotswap_hsa_tool_global_object}.o
+      -o ${_hotswap_hsa_tool_global_object}
+    DEPENDS hotswap-hsa-tool-shared-global.s llvm-mc lld
+    VERBATIM)
+  add_custom_target(HotswapHsaToolTestObjects
+    DEPENDS ${_hotswap_hsa_tool_global_object}
+      ${_hotswap_hsa_tool_two_kernel_object}
+      ${_hotswap_hsa_tool_stripped_object})
+  add_custom_command(
+    OUTPUT ${_hotswap_hsa_tool_two_kernel_object}
+    COMMAND $<TARGET_FILE:llvm-mc> -triple=amdgcn-amd-amdhsa -mcpu=gfx950
+      ${CMAKE_CURRENT_SOURCE_DIR}/hotswap-hsa-tool-two-kernel.s
+      -filetype=obj -o ${_hotswap_hsa_tool_two_kernel_object}.o
+    COMMAND $<TARGET_FILE:lld> -flavor gnu -shared
+      ${_hotswap_hsa_tool_two_kernel_object}.o
+      -o ${_hotswap_hsa_tool_two_kernel_object}
+    DEPENDS hotswap-hsa-tool-two-kernel.s llvm-mc lld
+    VERBATIM)
+  add_custom_command(
+    OUTPUT ${_hotswap_hsa_tool_stripped_object}
+    COMMAND $<TARGET_FILE:llvm-objcopy> --strip-all
+      ${CMAKE_CURRENT_SOURCE_DIR}/../test-lit/vecadd_gfx950.co
+      ${_hotswap_hsa_tool_stripped_object}
+    DEPENDS ../test-lit/vecadd_gfx950.co llvm-objcopy
+    VERBATIM)
+  add_executable(HotswapHsaToolDispatchTests
+    HotswapHsaToolApiTest.cpp
+    HotswapHsaToolDispatchTest.cpp
+    ../tools/hotswap-hsa-tool/hotswap-dispatch.cpp
+    ../tools/hotswap-hsa-tool/hotswap-object.cpp
+    ../tools/hotswap-hsa-tool/hotswap-platform-io-posix.cpp
+    ../tools/hotswap-hsa-tool/hotswap-proof-posix.cpp)
+  target_link_libraries(HotswapHsaToolDispatchTests PRIVATE
+    comgr-hotswap-hsa-tool
+    ${COMGR_GTEST_LIBS}
+    ${LLVM_PTHREAD_LIB}
+    LLVMObject
+    LLVMSupport)
+  target_include_directories(HotswapHsaToolDispatchTests PRIVATE
+    ${COMGR_GTEST_INCLUDE_DIRS}
+    ../tools/hotswap-hsa-tool
+    ${COMGR_HOTSWAP_HSA_RUNTIME_INCLUDE_DIR}
+    ${COMGR_HOTSWAP_HSA_RUNTIME_INCLUDE_DIR}/inc)
+  target_compile_definitions(HotswapHsaToolDispatchTests PRIVATE
+    "COMGR_HOTSWAP_HSA_TOOL_TEST_OBJECT=\"${CMAKE_CURRENT_SOURCE_DIR}/../test-lit/vecadd_gfx950.co\""
+    "COMGR_HOTSWAP_HSA_TOOL_GLOBAL_TEST_OBJECT=\"${_hotswap_hsa_tool_global_object}\""
+    "COMGR_HOTSWAP_HSA_TOOL_TWO_KERNEL_TEST_OBJECT=\"${_hotswap_hsa_tool_two_kernel_object}\""
+    "COMGR_HOTSWAP_HSA_TOOL_STRIPPED_TEST_OBJECT=\"${_hotswap_hsa_tool_stripped_object}\"")
+  add_dependencies(HotswapHsaToolDispatchTests HotswapHsaToolTestObjects)
+  comgr_configure_test_target(HotswapHsaToolDispatchTests)
+endif()
+
 # Register every test binary with the test-unit / check-comgr plumbing.
 add_custom_target(test-unit
   COMMAND $<TARGET_FILE:HotswapElfTests>
@@ -386,4 +453,9 @@ add_dependencies(test-unit HotswapElfTests HotswapMCTests
   MXFP4DequantTests
   C5PredicateChainTests
   TranslationCacheTests)
+if(COMGR_BUILD_HOTSWAP_HSA_TOOL)
+  add_dependencies(test-unit HotswapHsaToolDispatchTests)
+  add_custom_command(TARGET test-unit POST_BUILD
+    COMMAND $<TARGET_FILE:HotswapHsaToolDispatchTests>)
+endif()
 add_dependencies(check-comgr test-unit)

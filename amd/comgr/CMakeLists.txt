@@ -129,6 +129,9 @@ set(SOURCES
 option(COMGR_ENABLE_HOTSWAP_TRANSPILE
   "Build the hotswap-transpiler-backed amd_comgr_hotswap_transpile entry point" OFF)
 
+option(COMGR_BUILD_HOTSWAP_HSA_TOOL
+  "Build the COMGR-backed HotSwap HSA API tool" OFF)
+
 # Add Windows resource file for version info
 if(WIN32)
   # Allow users to override the DLL name via -DCOMGR_DLL_NAME
@@ -456,6 +459,14 @@ target_include_directories(amd_comgr
 configure_file(
   include/amd_comgr.h.in
   include/amd_comgr.h @ONLY)
+
+if(COMGR_BUILD_HOTSWAP_HSA_TOOL)
+  if(NOT COMGR_ENABLE_HOTSWAP_TRANSPILE)
+    message(FATAL_ERROR
+      "COMGR_BUILD_HOTSWAP_HSA_TOOL requires COMGR_ENABLE_HOTSWAP_TRANSPILE")
+  endif()
+  add_subdirectory(tools/hotswap-hsa-tool)
+endif()
 
 set(AMD_COMGR_CONFIG_NAME amd_comgr-config.cmake)
 set(AMD_COMGR_TARGETS_NAME amd_comgr-targets.cmake)
