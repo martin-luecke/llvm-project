@@ -33,6 +33,7 @@
 
 #include <memory>
 #include <mutex>
+#include <utility>
 
 namespace {
 
@@ -64,9 +65,14 @@ TEST(MCContextInlineSrcMgr, HotswapInitMCStateAttachesInlineSourceManager) {
   ASSERT_TRUE(static_cast<bool>(StateOrErr))
       << "initMCState('gfx942') must succeed on an AMDGPU-enabled LLVM "
          "build (InitializeAllTargetMCs was just run above): "
-      << llvm::toString(std::move(StateOrErr.takeError()));
+      << llvm::toString(StateOrErr.takeError());
 
   COMGR::hotswap::MCState State = std::move(*StateOrErr);
+  ASSERT_NE(State.TargetOptions, nullptr)
+      << "initMCState must own the options retained by MCAsmInfo";
+  ASSERT_NE(State.AsmInfo, nullptr) << "initMCState must construct MCAsmInfo";
+  EXPECT_EQ(&State.AsmInfo->getTargetOptions(), State.TargetOptions.get())
+      << "MCAsmInfo must not retain a reference to temporary options";
   ASSERT_NE(State.Ctx, nullptr) << "initMCState must construct an MCContext";
 
   EXPECT_NE(State.Ctx->getInlineSourceManager(), nullptr)

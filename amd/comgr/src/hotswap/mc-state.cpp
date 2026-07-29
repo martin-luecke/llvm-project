@@ -53,8 +53,9 @@ llvm::Expected<MCState> initMCState(StringRef TargetIsa) {
     return STIOrErr.takeError();
 
   State.SubtargetInfo = std::move(*STIOrErr);
-  State.AsmInfo.reset(
-      State.Target->createMCAsmInfo(*State.RegInfo, Triple, MCTargetOptions()));
+  State.TargetOptions = std::make_unique<MCTargetOptions>();
+  State.AsmInfo.reset(State.Target->createMCAsmInfo(*State.RegInfo, Triple,
+                                                    *State.TargetOptions));
   if (!State.AsmInfo)
     return makeHotswapError("initMCState: createMCAsmInfo returned null");
 

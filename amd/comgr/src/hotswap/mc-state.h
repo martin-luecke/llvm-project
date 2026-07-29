@@ -27,6 +27,7 @@
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/MC/MCTargetOptions.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Error.h"
 
@@ -43,6 +44,9 @@ struct MCState {
   std::unique_ptr<llvm::MCInstrInfo> InstrInfo;
   std::unique_ptr<llvm::MCRegisterInfo> RegInfo;
   std::unique_ptr<llvm::MCSubtargetInfo> SubtargetInfo;
+  // MCAsmInfo retains a reference to these options. Heap ownership keeps the
+  // referenced object stable when MCState is moved out of an Expected.
+  std::unique_ptr<llvm::MCTargetOptions> TargetOptions;
   std::unique_ptr<const llvm::MCAsmInfo> AsmInfo;
   std::unique_ptr<llvm::MCContext> Ctx;
   std::unique_ptr<llvm::MCDisassembler> Disasm;
