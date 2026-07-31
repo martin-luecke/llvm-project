@@ -2886,7 +2886,10 @@ amd_comgr_hotswap_rewrite(
  *   the output data object.
  *
  * @note The result is dispatched in place of the source kernel; see the
- * \ref hotswap dispatch contract.
+ * \ref hotswap dispatch contract. This entry point reports no transpile
+ * metadata, so it cannot return a scaled-dispatch factor: a translation that
+ * requires one fails with @c AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT, so use
+ * @c amd_comgr_hotswap_transpile_with_options_v2 for those kernels.
  */
 amd_comgr_status_t AMD_COMGR_API
 amd_comgr_hotswap_transpile(
@@ -3055,7 +3058,13 @@ typedef enum amd_comgr_hotswap_transpile_result_info_s {
      ScaledModuloReplicationProjection (W_t/W_s, e.g. 2); 1 when no scaling is
      required. The scaled dimension is always x -- the wave-carrying dimension --
      so the runtime does not need to be told which one. See
-     modrep-predicate-chain.md sec. 10. */
+     modrep-predicate-chain.md sec. 10.
+
+     Per kernel. A request that cannot receive this factor -- one that passes
+     no @p result, or that does not name a single kernel -- fails with
+     @c AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT when the translation needs
+     scaling, rather than returning an artifact whose precondition the caller
+     cannot see. */
   AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_SCALED_DISPATCH_FACTOR = 0x6, /* int64_t */
 } amd_comgr_hotswap_transpile_result_info_t;
 
@@ -3104,7 +3113,11 @@ typedef enum amd_comgr_hotswap_transpile_result_string_s {
  * ownership, result, and status contract.
  *
  * @note The result is dispatched in place of the source kernel; see the
- * \ref hotswap dispatch contract.
+ * \ref hotswap dispatch contract. If the translation requires a scaled
+ * dispatch, @p result must be non-null and the request must name a single
+ * kernel, so that
+ * @c AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_SCALED_DISPATCH_FACTOR can be reported;
+ * otherwise @c AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT is returned.
  */
 amd_comgr_status_t AMD_COMGR_API
 amd_comgr_hotswap_transpile_with_options(
@@ -3156,7 +3169,11 @@ amd_comgr_hotswap_transpile_with_options(
  *   returned data object.
  *
  * @note The result is dispatched in place of the source kernel; see the
- * \ref hotswap dispatch contract.
+ * \ref hotswap dispatch contract. If the translation requires a scaled
+ * dispatch, @p result must be non-null and the request must name a single
+ * kernel, so that
+ * @c AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_SCALED_DISPATCH_FACTOR can be reported;
+ * otherwise @c AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT is returned.
  */
 amd_comgr_status_t AMD_COMGR_API
 amd_comgr_hotswap_transpile_with_options_v2(
