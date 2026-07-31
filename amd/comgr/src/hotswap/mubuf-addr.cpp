@@ -145,7 +145,60 @@ bool constantI32(Value *V, uint32_t &Out) {
   return false;
 }
 
-// Build a gfx942-compatible raw buffer descriptor <4 x i32> from the
+constexpr uint32_t kGfx1250RawBufferMaxRecords = 0x00ffffffu;
+constexpr uint32_t kRawBufferMaxRecords = 0x7ffffffeu;
+
+// Byte extent (NUM_RECORDS) of the *source* V#, as an i64.
+//
+// The field's layout is a property of the source ISA, so both descriptor forms
+// the MUBUF path emits -- the hand-built <4 x i32> and the addrspace(8)
+// resource -- must decode it the same way or they disagree about the same
+// buffer.
+//
+// gfx12+ V#: base = resource[56:0], num_records = resource[101:57] (bytes).
+// The field starts at bit 57 rather than a dword boundary, so dword2 alone
+// holds num_records[38:7] -- the byte extent shifted right by 7. Reading
+// dword2 raw yields a bound 128x too small, which reads back as a
+// zero-or-tiny extent and puts every access out of bounds. Reconstruct the
+// full 45 bits (mirrors handle-smem.cpp / S_BUFFER_LOAD):
+//   num_records[6:0]   = dword1[31:25]
+//   num_records[38:7]  = dword2[31:0]
+//   num_records[44:39] = dword3[5:0]
+//
+// Targets carry a 32-bit byte extent, so the wider source field is clamped to
+// the raw-buffer maximum; that also maps the gfx12 all-ones "OOB disabled" and
+// effectively-unbounded encodings onto that maximum.
+Value *decodeSourceNumRecords(RaiseContext &Ctx, const SRSRCDwords &Dw) {
+  if (!Ctx.Isa.Has45BitNumRecordsBufferResource) {
+    Value *IsSourceMax = Ctx.B.CreateICmpEQ(
+        Dw.Dw2, ConstantInt::get(Ctx.I32Ty, kGfx1250RawBufferMaxRecords),
+        "mubuf_raw_is_gfx125_max");
+    return Ctx.B.CreateZExt(
+        Ctx.B.CreateSelect(IsSourceMax,
+                           ConstantInt::get(Ctx.I32Ty, kRawBufferMaxRecords),
+                           Dw.Dw2),
+        Ctx.I64Ty, "mubuf_raw_num_records");
+  }
+
+  Value *NumLo =
+      Ctx.B.CreateAnd(Ctx.B.CreateLShr(Dw.Dw1, ConstantInt::get(Ctx.I32Ty, 25)),
+                      ConstantInt::get(Ctx.I32Ty, 0x7f));
+  Value *Full = Ctx.B.CreateOr(
+      Ctx.B.CreateShl(Ctx.B.CreateZExt(Dw.Dw2, Ctx.I64Ty), Ctx.B.getInt64(7)),
+      Ctx.B.CreateZExt(NumLo, Ctx.I64Ty));
+  Value *NumHi = Ctx.B.CreateShl(
+      Ctx.B.CreateZExt(
+          Ctx.B.CreateAnd(Dw.Dw3, ConstantInt::get(Ctx.I32Ty, 0x3f)),
+          Ctx.I64Ty),
+      Ctx.B.getInt64(39));
+  Full = Ctx.B.CreateOr(Full, NumHi, "mubuf_raw_num_records_full");
+  Value *TooBig =
+      Ctx.B.CreateICmpUGT(Full, Ctx.B.getInt64(kRawBufferMaxRecords));
+  return Ctx.B.CreateSelect(TooBig, Ctx.B.getInt64(kRawBufferMaxRecords), Full,
+                            "mubuf_raw_num_records");
+}
+
+// Build a raw buffer descriptor <4 x i32> for the compilation target from the
 // source SRSRC dwords. Same-wave descriptors are routed through
 // `amdgcn.readfirstlane` so they land in SGPRs directly. Cross-widening MUBUF
 // loads use the parallel addrspace(8) `rawPtrRsrc` built in decodeMubufAddr
@@ -187,7 +240,11 @@ bool constantI32(Value *V, uint32_t &Out) {
 //   RSRC2 = 0x7ffffffe  NUM_RECORDS, the largest 4-byte-aligned byte
 //                       bound used by native gfx942 Triton for raw
 //                       pointer-derived descriptors.
-//   RSRC3 = 0x00027000  FORMAT_32 + NUM_FORMAT_FLOAT.
+//
+// RSRC3 is not a constant: it is the target's raw-buffer format dword,
+// `ISAProfile::RawBufferRsrcWord3`. The gfx9 encoding above is what that
+// field holds for a gfx9 target; gfx10+ targets need OOB_SELECT=3 instead,
+// or the descriptor reports zero records. See isa-profile.h.
 //
 // The source descriptor value 0x00ffffff is the gfx1250 raw-pointer
 // "effectively unbounded" sentinel Triton emits for these JIT MUBUF
@@ -223,33 +280,6 @@ Expected<Value *> buildMubufSRD(RaiseContext &Ctx, const SRSRCDwords &Dw) {
       return Word;
     return Ctx.B.CreateCall(Readfirstlane, {Word}, Name);
   };
-  Value *Dw1NonBaseBits = Ctx.B.CreateAnd(
-      Dw.Dw1, ConstantInt::get(Ctx.I32Ty, 0xFFFF0000u), "srd_dw1_nonbase_bits");
-  Value *Dw1HasOnlyBase = Ctx.B.CreateICmpEQ(
-      Dw1NonBaseBits, ConstantInt::get(Ctx.I32Ty, 0), "srd_dw1_only_base");
-  Value *Dw1HasGfx125RawBits = Ctx.B.CreateICmpEQ(
-      Dw1NonBaseBits, ConstantInt::get(Ctx.I32Ty, kGfx1250RawPointerWord1Bits),
-      "srd_dw1_gfx125_raw_bits");
-  Value *Dw1IsRawBase =
-      Ctx.B.CreateOr(Dw1HasOnlyBase, Dw1HasGfx125RawBits, "srd_dw1_raw_base");
-  Value *Dw3IsZero = Ctx.B.CreateICmpEQ(Dw.Dw3, ConstantInt::get(Ctx.I32Ty, 0),
-                                        "srd_dw3_zero");
-  Value *Dw3IsFormat32 = Ctx.B.CreateICmpEQ(
-      Dw.Dw3, ConstantInt::get(Ctx.I32Ty, kGfx942RawBufferFormat32),
-      "srd_dw3_format32");
-  Value *Dw3IsFormat32Uint = Ctx.B.CreateICmpEQ(
-      Dw.Dw3, ConstantInt::get(Ctx.I32Ty, kGfx942RawBufferFormat32Uint),
-      "srd_dw3_format32_uint");
-  Value *Dw3IsFormat32Float = Ctx.B.CreateICmpEQ(
-      Dw.Dw3, ConstantInt::get(Ctx.I32Ty, kGfx942RawBufferFormat32Float),
-      "srd_dw3_format32_float");
-  Value *Dw3IsRaw =
-      Ctx.B.CreateOr(Ctx.B.CreateOr(Dw3IsZero, Dw3IsFormat32),
-                     Ctx.B.CreateOr(Dw3IsFormat32Uint, Dw3IsFormat32Float),
-                     "srd_dw3_raw_shape");
-  Value *RawPointerShape =
-      Ctx.B.CreateAnd(Dw1IsRawBase, Dw3IsRaw, "srd_raw_pointer_shape");
-
   uint32_t Dw1Const = 0;
   if (constantI32(Dw.Dw1, Dw1Const) && (Dw1Const & 0xFFFF0000u) != 0 &&
       (Dw1Const & 0xFFFF0000u) != kGfx1250RawPointerWord1Bits) {
@@ -272,16 +302,13 @@ Expected<Value *> buildMubufSRD(RaiseContext &Ctx, const SRSRCDwords &Dw) {
       Ctx.B.CreateAnd(Dw.Dw1, ConstantInt::get(Ctx.I32Ty, 0xFFFF));
   Value *SrdW0 = ScalarizeDescriptorWord(Dw.Dw0, "srd_w0");
   Value *SrdW1 = ScalarizeDescriptorWord(CleanDw1, "srd_w1");
-  Value *SourceMax = ConstantInt::get(Ctx.I32Ty, kGfx1250RawBufferMaxRecords);
-  Value *TargetMax = ConstantInt::get(Ctx.I32Ty, kGfx942RawBufferMaxRecords);
-  Value *IsSourceMax =
-      Ctx.B.CreateICmpEQ(Dw.Dw2, SourceMax, "srd_is_gfx125_max");
-  Value *ShouldMapMax =
-      Ctx.B.CreateAnd(IsSourceMax, RawPointerShape, "srd_map_gfx125_max");
-  Value *MappedDw2 =
-      Ctx.B.CreateSelect(ShouldMapMax, TargetMax, Dw.Dw2, "srd_num_records");
-  Value *SrdW2 = ScalarizeDescriptorWord(MappedDw2, "srd_w2");
-  Value *Word3 = ConstantInt::get(Ctx.I32Ty, kGfx942RawBufferFormat32Float);
+  // Same source decode as the addrspace(8) resource below, truncated to the
+  // target's 32-bit NUM_RECORDS field (decodeSourceNumRecords already clamps
+  // to that range).
+  Value *NumRecords = Ctx.B.CreateTrunc(decodeSourceNumRecords(Ctx, Dw),
+                                        Ctx.I32Ty, "srd_num_records");
+  Value *SrdW2 = ScalarizeDescriptorWord(NumRecords, "srd_w2");
+  Value *Word3 = ConstantInt::get(Ctx.I32Ty, Ctx.TargetIsa.RawBufferRsrcWord3);
   Value *Srd = UndefValue::get(FixedVectorType::get(Ctx.I32Ty, 4));
   Srd = Ctx.B.CreateInsertElement(Srd, SrdW0, static_cast<uint64_t>(0));
   Srd = Ctx.B.CreateInsertElement(Srd, SrdW1, static_cast<uint64_t>(1));
@@ -328,48 +355,7 @@ Expected<MubufAddr> decodeMubufAddr(RaiseContext &Ctx, const DecodedInst &Di,
 
   Out.Soffset = M.HaveSoff ? Ctx.Regs.readReg32(Ctx.B, M.Soff)
                            : ConstantInt::get(Ctx.I32Ty, 0);
-  constexpr uint32_t kGfx1250RawBufferMaxRecords = 0x00ffffffu;
-  constexpr uint32_t kGfx942RawBufferMaxRecords = 0x7ffffffeu;
-  Value *NumRecords = nullptr;
-  if (Ctx.Isa.Has45BitNumRecordsBufferResource) {
-    // gfx12+ V#: base = resource[56:0], num_records = resource[101:57] (bytes).
-    // The field starts at bit 57 (not the 64-bit dword boundary), so source
-    // dword2 alone holds num_records[38:7] -- the byte extent shifted right by
-    // 7. Reading dword2 raw yields a bound 128x too small, so every A/B tile
-    // buffer_load runs out of bounds and returns zero. Reconstruct the full
-    // 45-bit num_records (mirrors handle-smem.cpp / S_BUFFER_LOAD):
-    //   num_records[6:0]   = dword1[31:25]
-    //   num_records[38:7]  = dword2[31:0]
-    //   num_records[44:39] = dword3[5:0]
-    Value *NumLo = Ctx.B.CreateAnd(
-        Ctx.B.CreateLShr(Dw.Dw1, ConstantInt::get(Ctx.I32Ty, 25)),
-        ConstantInt::get(Ctx.I32Ty, 0x7f));
-    Value *Full = Ctx.B.CreateOr(
-        Ctx.B.CreateShl(Ctx.B.CreateZExt(Dw.Dw2, Ctx.I64Ty), Ctx.B.getInt64(7)),
-        Ctx.B.CreateZExt(NumLo, Ctx.I64Ty));
-    Value *NumHi = Ctx.B.CreateShl(
-        Ctx.B.CreateZExt(
-            Ctx.B.CreateAnd(Dw.Dw3, ConstantInt::get(Ctx.I32Ty, 0x3f)),
-            Ctx.I64Ty),
-        Ctx.B.getInt64(39));
-    Full = Ctx.B.CreateOr(Full, NumHi, "mubuf_raw_num_records_full");
-    // gfx942 raw buffers carry a 32-bit byte extent; clamp the wider source
-    // field to the native raw-buffer max (this also maps the gfx12 all-ones
-    // "OOB disabled" / effectively-unbounded encodings onto gfx942's max).
-    Value *TooBig =
-        Ctx.B.CreateICmpUGT(Full, Ctx.B.getInt64(kGfx942RawBufferMaxRecords));
-    NumRecords =
-        Ctx.B.CreateSelect(TooBig, Ctx.B.getInt64(kGfx942RawBufferMaxRecords),
-                           Full, "mubuf_raw_num_records");
-  } else {
-    Value *SourceMax = ConstantInt::get(Ctx.I32Ty, kGfx1250RawBufferMaxRecords);
-    Value *TargetMax = ConstantInt::get(Ctx.I32Ty, kGfx942RawBufferMaxRecords);
-    Value *IsSourceMax =
-        Ctx.B.CreateICmpEQ(Dw.Dw2, SourceMax, "mubuf_raw_is_gfx125_max");
-    NumRecords =
-        Ctx.B.CreateZExt(Ctx.B.CreateSelect(IsSourceMax, TargetMax, Dw.Dw2),
-                         Ctx.I64Ty, "mubuf_raw_num_records");
-  }
+  Value *NumRecords = decodeSourceNumRecords(Ctx, Dw);
   Value *CleanDw1 =
       Ctx.B.CreateAnd(Dw.Dw1, ConstantInt::get(Ctx.I32Ty, 0xFFFF));
   Value *BaseLo = Ctx.B.CreateZExt(Dw.Dw0, Ctx.I64Ty);
@@ -380,11 +366,11 @@ Expected<MubufAddr> decodeMubufAddr(RaiseContext &Ctx, const DecodedInst &Di,
   Function *MakeRsrc = Intrinsic::getOrInsertDeclaration(
       &Ctx.M, Intrinsic::amdgcn_make_buffer_rsrc,
       {PointerType::get(Ctx.C, 8), PointerType::get(Ctx.C, 1)});
-  Out.RawPtrRsrc =
-      Ctx.B.CreateCall(MakeRsrc,
-                       {BasePtr, ConstantInt::get(Type::getInt16Ty(Ctx.C), 0),
-                        NumRecords, ConstantInt::get(Ctx.I32Ty, 0x27000)},
-                       "mubuf_raw_ptr_rsrc");
+  Out.RawPtrRsrc = Ctx.B.CreateCall(
+      MakeRsrc,
+      {BasePtr, ConstantInt::get(Type::getInt16Ty(Ctx.C), 0), NumRecords,
+       ConstantInt::get(Ctx.I32Ty, Ctx.TargetIsa.RawBufferRsrcWord3)},
+      "mubuf_raw_ptr_rsrc");
   Out.AuxFlags = ConstantInt::get(Ctx.I32Ty, 0);
   return Out;
 }

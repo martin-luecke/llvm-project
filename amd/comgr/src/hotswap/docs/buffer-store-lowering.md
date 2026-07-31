@@ -174,3 +174,48 @@ tensor-copy follow-up work, …).
   §3.4 (source-side user-SGPR layout, including the
   `flat_scratch_init` bit we deliberately do not set) and §4.2
   (target-side scratch attribute propagation).
+
+## 8. Target and source V# encodings
+
+The rebuilt descriptor is a translation, not a copy: its format word
+belongs to the *target* ISA and its `NUM_RECORDS` field is decoded from
+the *source* ISA's layout. Getting either wrong yields a descriptor that
+is structurally valid and silently dead.
+
+**Word3 (format/flags) is a target property.** Both descriptor forms
+store this dword verbatim -- the hand-built `<4 x i32>`, and operand 3 of
+`llvm.amdgcn.make.buffer.rsrc`, which
+`SIISelLowering::lowerPointerAsRsrcIntrin` passes through without
+fix-up. `ISAProfile::RawBufferRsrcWord3` mirrors the high dword of
+`SIInstrInfo::getDefaultRsrcDataFormat()`:
+
+| target | word3 | fields |
+|---|---|---|
+| gfx9 | `0x00027000` | `DATA_FORMAT=32`, `NUM_FORMAT=FLOAT` |
+| gfx10+ | `0x31016000` | `UFMT_32_FLOAT`, `RESOURCE_LEVEL=1`, `OOB_SELECT=3` |
+
+`OOB_SELECT` is load-bearing. It selects raw byte-extent bounds; the gfx9
+encoding leaves it at 0, which on gfx10+ means structured bounds, and a
+stride-0 descriptor then reports zero records. Every access is out of
+bounds: loads return 0, stores and atomics are dropped, with no fault.
+
+gfx9 keeps `DATA_FORMAT=32` rather than `getDefaultRsrcDataFormat()`'s
+`DATA_FORMAT=8` because MI300 MUBUF checks `DATA_FORMAT != INVALID`
+before committing a raw store (see the bisection table in
+`mubuf-addr.cpp`).
+
+**`NUM_RECORDS` is a source property.** A gfx12 V# carries a 45-bit byte
+extent split across `dword1[31:25]`, `dword2`, and `dword3[5:0]`, so
+`dword2` alone is the extent `>> 7` -- a bound 128x too small.
+`decodeSourceNumRecords` reconstructs it and clamps to the target's
+32-bit field; both descriptor forms call it, so they cannot disagree
+about the same buffer.
+
+**Why this survived to RDNA bring-up.** Cross-widening loads
+(wave32 source -> wave64 target) already took the
+`make.buffer.rsrc` path, which decoded the source correctly, and every
+CDNA target is wave64. A wave32 target -- gfx11 -- is the first
+configuration that reaches the hand-built descriptor with a gfx12 source,
+so both defects were latent until then. `buffer_store_short_srd_words.s`
+and `buffer_descriptor_target_word3.s` pin the two encodings against each
+other.

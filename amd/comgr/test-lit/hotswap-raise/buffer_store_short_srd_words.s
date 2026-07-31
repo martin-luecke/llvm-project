@@ -1,32 +1,58 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=buffer_store_short_sentinel_srd_kernel,buffer_store_short_finite_srd_kernel,buffer_store_short_allones_srd_kernel,buffer_store_short_ambiguous_srd_kernel 2>/dev/null | %FileCheck %s
+; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=buffer_store_short_sentinel_srd_kernel,buffer_store_short_finite_srd_kernel,buffer_store_short_allones_srd_kernel,buffer_store_short_ambiguous_srd_kernel 2>/dev/null | %FileCheck %s --check-prefixes=CHECK,CDNA
+; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
+; RUN:   && raise_cli %t.hsaco --target-isa=gfx1151 --emit-ir=buffer_store_short_sentinel_srd_kernel,buffer_store_short_finite_srd_kernel,buffer_store_short_allones_srd_kernel,buffer_store_short_ambiguous_srd_kernel 2>/dev/null | %FileCheck %s --check-prefixes=CHECK,RDNA
 
-; Buffer store b16 SRD stride/num-records word reconstruction.
+; Buffer store b16 SRD num-records reconstruction and target format word.
+;
+; A gfx1250 source V# splits NUM_RECORDS across dword1[31:25] (low 7 bits),
+; dword2 (bits [38:7]) and dword3[5:0] (bits [44:39]), so dword2 alone is the
+; byte extent >> 7. The <4 x i32> descriptor and the addrspace(8) resource must
+; decode it identically, or the two forms disagree about the same buffer; the
+; kernels below vary dword2 over the sentinel / finite / all-ones / ambiguous
+; shapes. Word3 is the target's raw-buffer format (gfx942: 0x27000 == 159744),
+; never the bare DATA_FORMAT_32 (131072).
+
 ; CHECK-LABEL: define amdgpu_kernel void @buffer_store_short_sentinel_srd_kernel(
-; CHECK: icmp eq i32 {{.*}}16777215
-; CHECK: select i1 {{.*}}, i32 2147483646, i32 16777215
+; CHECK: and i32 %{{.+}}, 127
+; CHECK: zext i32 16777215 to i64
+; CHECK: shl i64 %{{.+}}, 7
+; CHECK: shl i64 %{{.+}}, 39
+; CHECK: %[[FULL:mubuf_raw_num_records_full[0-9]*]] = or i64
+; CHECK: %[[NR:.+]] = select i1 %{{.+}}, i64 2147483646, i64 %[[FULL]]
+; CHECK: %[[W2:.+]] = trunc i64 %[[NR]] to i32
 ; CHECK-NOT: insertelement <4 x i32> {{.*}}, i32 131072, i64 3
-; CHECK: insertelement <4 x i32> {{.*}}, i32 159744, i64 3
+; CDNA: insertelement <4 x i32> {{.*}}, i32 159744, i64 3
+; RDNA: insertelement <4 x i32> {{.*}}, i32 822173696, i64 3
 ; CHECK: call void @llvm.amdgcn.raw.buffer.store.i16(
+
 ; CHECK-LABEL: define amdgpu_kernel void @buffer_store_short_finite_srd_kernel(
-; CHECK: icmp eq i32 {{.*}}16777215
-; CHECK: select i1 {{.*}}, i32 2147483646, i32 4096
+; CHECK: zext i32 4096 to i64
+; CHECK: shl i64 %{{.+}}, 7
+; CHECK: %[[FULLF:mubuf_raw_num_records_full[0-9]*]] = or i64
+; CHECK: %[[NRF:.+]] = select i1 %{{.+}}, i64 2147483646, i64 %[[FULLF]]
+; CHECK: %[[W2F:.+]] = trunc i64 %[[NRF]] to i32
 ; CHECK-NOT: insertelement <4 x i32> {{.*}}, i32 131072, i64 3
-; CHECK: insertelement <4 x i32> {{.*}}, i32 159744, i64 3
+; CDNA: insertelement <4 x i32> {{.*}}, i32 159744, i64 3
+; RDNA: insertelement <4 x i32> {{.*}}, i32 822173696, i64 3
 ; CHECK: call void @llvm.amdgcn.raw.buffer.store.i16(
+
 ; CHECK-LABEL: define amdgpu_kernel void @buffer_store_short_allones_srd_kernel(
-; CHECK: icmp eq i32 {{.*}}16777215
-; CHECK: select i1 {{.*}}, i32 2147483646, i32 {{(-1|4294967295)}}
+; CHECK: zext i32 -1 to i64
+; CHECK: shl i64 %{{.+}}, 7
+; CHECK: %[[FULLA:mubuf_raw_num_records_full[0-9]*]] = or i64
+; CHECK: select i1 %{{.+}}, i64 2147483646, i64 %[[FULLA]]
 ; CHECK-NOT: insertelement <4 x i32> {{.*}}, i32 131072, i64 3
-; CHECK: insertelement <4 x i32> {{.*}}, i32 159744, i64 3
+; CDNA: insertelement <4 x i32> {{.*}}, i32 159744, i64 3
+; RDNA: insertelement <4 x i32> {{.*}}, i32 822173696, i64 3
 ; CHECK: call void @llvm.amdgcn.raw.buffer.store.i16(
+
 ; CHECK-LABEL: define amdgpu_kernel void @buffer_store_short_ambiguous_srd_kernel(
-; CHECK: icmp eq i32 1, 0
-; CHECK: icmp eq i32 1, 131072
-; CHECK: icmp eq i32 1, 147456
-; CHECK: icmp eq i32 1, 159744
-; CHECK: select i1 {{.*}}, i32 2147483646, i32 16777215
-; CHECK-NOT: select i1 true, i32 2147483646, i32 16777215
+; CHECK: zext i32 16777215 to i64
+; CHECK: and i32 1, 63
+; CHECK: shl i64 %{{.+}}, 39
+; CHECK: %[[FULLB:mubuf_raw_num_records_full[0-9]*]] = or i64
+; CHECK: select i1 %{{.+}}, i64 2147483646, i64 %[[FULLB]]
 ; CHECK: call void @llvm.amdgcn.raw.buffer.store.i16(
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
