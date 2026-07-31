@@ -812,9 +812,17 @@ for any warp-primitive kernel.
   and `SaveExecFromLaneId` (`RewriteId::SaveExecLaneRelative`, via
   `numSourceWavesPerTarget() == 1`) under this projection -- the normal handlers
   already emit correct source-wave-local IR; no target-width projection is needed.
-- **Store-only atomics.** MODREP's `AtomicOneReplica` gate (`lane_id < W_s`) is
-  exactly right: only the real lower half issues each atomic, matching native
-  wave32.
+- **Atomics.** Under a scaled dispatch a source lane and its active replica both
+  issue any atomic. A *returning* atomicrmw is refused outright -- the two issues
+  read different "old" values and there is no replica broadcast to reconcile
+  them. A store-only *non-idempotent* RMW (add/sub/fadd, `global_atomic_pk_add`
+  -> FAdd, xor, swap) would double-count, so it is gated to the lower half
+  (`lane_id < W_s`), matching native wave32; store-only idempotent RMWs (and/or,
+  the integer/FP min/max family) re-apply with no effect and are left alone.
+  `needsOneReplicaGate` in handle-flat.cpp applies this at both the global and
+  flat sites, only for `usesScaledDispatch()` -- WaveNative's full-wave EXEC and
+  plain / phantom-lane MODREP (replica lanes undispatched) each issue once
+  already.
 
 Cost: ~50% lane utilisation (the upper half redoes the lower half's work), i.e.
 2x slower than WaveNative packing. It is the safe correctness fallback, not the
@@ -822,12 +830,21 @@ fast path; WaveNative stays the opt-in fast path for kernels it can represent.
 
 ### 10.4 Refusals
 
-- **wmma / mfma:** a matrix fragment spans all `W_t` lanes and cannot be fed from
-  `W_s` logical lanes + replicas. Refuse.
 - **Source blocks that don't fit:** the scaled flat size
   (`max_flat_workgroup_size * W_t/W_s`) must not exceed the target hardware
   threads/block max (1024 for gfx9/CDNA). The reduce is 512 -> 1024, exactly the
-  limit. Refuse larger blocks rather than truncate.
+  limit. Refuse larger blocks rather than truncate. This is the only refusal and
+  it applies uniformly to matrix and non-matrix kernels.
+
+Matrix (wmma/mfma) kernels are supported, not refused. The WMMA -> MFMA lowering
+is an explicit `ds_bpermute` redistribute (`wmma-lowering.cpp`), not a naive
+lane-replicated fragment feed: its `numSourceWavesPerTarget() == 1` path reads
+only the `W_s` real source lanes, computes the exact source-wave WMMA result, and
+replicates it to the upper lanes via the collect's `LaneId & (W_s-1)`. The one
+requirement the Wave64 MFMA collective imposes -- all `W_t` lanes active with
+valid data -- is exactly what a scaled dispatch provides (the upper lanes are
+real replica threads, not phantom lanes), so no `init_whole_wave` and no partner
+wave are needed. Validated on gfx942 against a native MFMA numeric oracle.
 
 ### 10.5 Selection and plumbing
 
@@ -843,14 +860,14 @@ fast path; WaveNative stays the opt-in fast path for kernels it can represent.
   never refuses C5 (both `.x` lane-position and `.y`/`.z` wave-spanning predicates
   are correct by construction); the report flags `WaveNativeYzRefusal` so the
   raiser knows the upgrade applies.
-- `raiser.cpp`: when the WaveNative C5 refusal is the `.y`/`.z` case, no matrix
-  op is present, and the scaled block fits the hardware max, the raiser
-  **automatically** retries under the scaled projection (no flag, no env --
-  this is the default resolution). It widens
-  `amdgpu-flat-work-group-size` by the factor and records the scaled factor
-  on the transpile result. Ineligible kernels (matrix, or scaled size > hardware
-  max) keep the refusal. `--force-scaled-modrep` selects it unconditionally for
-  offline testing of kernels that do not hit the refusal.
+- `raiser.cpp`: when the WaveNative C5 refusal is the `.y`/`.z` case and the
+  scaled block fits the hardware max, the raiser **automatically** retries under
+  the scaled projection (no flag, no env -- this is the default resolution),
+  matrix and non-matrix kernels alike. It widens `amdgpu-flat-work-group-size`
+  by the factor and records the scaled factor on the transpile result. Kernels
+  whose scaled size exceeds the hardware max keep the refusal.
+  `--force-scaled-modrep` selects it unconditionally for offline testing of
+  kernels that do not hit the refusal.
 - `source-hidden-args.cpp`: halves the workgroup/grid-size-x reads.
 - Per-kernel runtime signal: the scaled factor is threaded raiser ->
   `RaiseResult` -> `PipelineResult` -> comgr transpile result
@@ -873,5 +890,11 @@ fast path; WaveNative stays the opt-in fast path for kernels it can represent.
   `amdgpu-flat-work-group-size`, the `hotswap-scaled-dispatch` marker,
   and no `init_whole_wave`); `scaled_modrep_too_large_refuse.s` (default and
   `--force` both refuse an ineligible >512 block via the size gate);
-  `scaled_modrep_wmma_refuse.s` (matrix refusal);
-  `scaled_modrep_wgsize_virtualize.s` (x workgroup-size halving).
+  `scaled_modrep_wmma_lower.s` (a matrix kernel with y/z divergence auto-upgrades
+  and lowers to MFMA under the scaled dispatch, no `init_whole_wave`);
+  `scaled_modrep_wmma_refuse.s` (a too-large matrix kernel refuses via the size
+  gate rather than miscomputing);
+  `scaled_modrep_wgsize_virtualize.s` (x workgroup-size halving);
+  `scaled_modrep_atomic.s` (a store-only non-idempotent RMW -- add/fadd/pk_add --
+  gates to one replica at both the global and flat sites, an idempotent max does
+  not, and a returning non-idempotent RMW refuses).

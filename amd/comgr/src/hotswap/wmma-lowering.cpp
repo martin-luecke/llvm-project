@@ -243,6 +243,31 @@ static Value *selectByLaneGroup(IRBuilder<> &B, Value *LaneGroup, Value *V0,
   return S;
 }
 
+/// Wrap an MFMA/collect value from the WMMA->MFMA collective in `strict.wwm`,
+/// but only when the projection needs the backend to force HW EXEC=-1 there.
+///
+/// The collective needs every target lane HW-active (the collect bpermutes read
+/// MFMA output from the upper lanes). WaveNative guarantees that via
+/// `init_whole_wave` (`providesFullWaveExecInvariant()`), and a scaled
+/// dispatch guarantees it too -- its upper lanes are real replica threads and a
+/// matrix op sits in wave-uniform control flow -- so both take the identity
+/// path. Only the phantom-lane MODREP regime, whose upper lanes are never
+/// dispatched, needs the marker.
+///
+/// Skipping it on those two is a codegen-correctness requirement, not an
+/// optimization: a large tile emits thousands of `strict.wwm` markers and
+/// `SIPreAllocateWWMRegs`, which needs a dedicated physreg per vreg in a WWM
+/// bracket, exhausts the register file and crashes. The general cross-lane
+/// handlers keep `wrapAsWWMValue` -- they can sit in data-divergent regions
+/// where the marker is load-bearing.
+static Value *wwmMatrixCollective(RaiseContext &Ctx, IRBuilder<> &B, Value *V,
+                                  const Twine &Name) {
+  if (Ctx.Projection.providesFullWaveExecInvariant() ||
+      Ctx.Projection.usesScaledDispatch())
+    return V;
+  return Ctx.Projection.wrapAsWWMValue(B, V, Name);
+}
+
 /// Redistribute A or B input from gfx12 WMMA layout (8 VGPRs, Wave32)
 /// to gfx942 MFMA layout (2 VGPRs x 2 passes, Wave64).
 ///
@@ -468,15 +493,16 @@ static void runGroupPass(IRBuilder<> &B, Module &M, RaiseContext &Ctx,
   // where the collect bpermute DOES pull from those upper-half
   // lanes to assemble rows 8..15.  Wrapping the MFMA result directly
   // forces the MFMA into the WWM backward slice.
-  Value *Mfma1 = Ctx.Projection.wrapAsWWMValue(
-      B, B.CreateCall(MfmaFn, {SrcALo, SrcBLo, Acc, Cbsz, Abid, Blgp}, "mfma1"),
+  Value *Mfma1 = wwmMatrixCollective(
+      Ctx, B,
+      B.CreateCall(MfmaFn, {SrcALo, SrcBLo, Acc, Cbsz, Abid, Blgp}, "mfma1"),
       "mfma1_wwm");
 
   Value *SrcAHi = packDwords(B, MfmaAHi, 2, Ctx.I32Ty, MfmaAbPackTy);
   Value *SrcBHi = packDwords(B, MfmaBHi, 2, Ctx.I32Ty, MfmaAbPackTy);
 
-  Value *Mfma2 = Ctx.Projection.wrapAsWWMValue(
-      B,
+  Value *Mfma2 = wwmMatrixCollective(
+      Ctx, B,
       B.CreateCall(MfmaFn, {SrcAHi, SrcBHi, Mfma1, Cbsz, Abid, Blgp}, "mfma2"),
       "mfma2_wwm");
 
@@ -510,7 +536,7 @@ static void runGroupPass(IRBuilder<> &B, Module &M, RaiseContext &Ctx,
   // Under WaveNative this is an identity no-op.
   for (unsigned I = 0; I < 8; ++I)
     ResultDwords[I] =
-        Ctx.Projection.wrapAsWWMValue(B, ResultDwords[I], "wmma_collect_wwm");
+        wwmMatrixCollective(Ctx, B, ResultDwords[I], "wmma_collect_wwm");
 }
 
 Expected<Value *> emitWMMAtoMFMA(RaiseContext &Ctx, Value *A, Value *Vb,
@@ -732,8 +758,9 @@ static void runGroupPassF32K4(IRBuilder<> &B, Module &M, RaiseContext &Ctx,
   // MODREP (so the backend's `SIWholeQuadMode` pulls the MFMA into
   // a WWM region) and is an identity no-op under WaveNative (whose
   // kernel-entry `init_whole_wave` already keeps HW EXEC=-1).
-  Value *Mfma = Ctx.Projection.wrapAsWWMValue(
-      B, B.CreateCall(MfmaFn, {MfmaA, MfmaB, Acc, Cbsz, Abid, Blgp}, "mfma"),
+  Value *Mfma = wwmMatrixCollective(
+      Ctx, B,
+      B.CreateCall(MfmaFn, {MfmaA, MfmaB, Acc, Cbsz, Abid, Blgp}, "mfma"),
       "mfma_wwm");
 
   Value *MfmaDst[4];
@@ -747,7 +774,7 @@ static void runGroupPassF32K4(IRBuilder<> &B, Module &M, RaiseContext &Ctx,
   // rationale.
   for (unsigned I = 0; I < 8; ++I)
     ResultDwords[I] =
-        Ctx.Projection.wrapAsWWMValue(B, ResultDwords[I], "wmma_collect_wwm");
+        wwmMatrixCollective(Ctx, B, ResultDwords[I], "wmma_collect_wwm");
 }
 
 Expected<Value *> emitWmmAtoMfmaF3216x16x4(RaiseContext &Ctx, Value *A,
@@ -1035,8 +1062,8 @@ llvm::Expected<llvm::Value *> emitWMMAScaleF8F6F4toScaledMFMA(
     Function *mfmaFn = Intrinsic::getOrInsertDeclaration(
         &M, Intrinsic::amdgcn_mfma_scale_f32_16x16x128_f8f6f4,
         {mfmaABTy, mfmaABTy});
-    Value *mfmaResult = ctx.Projection.wrapAsWWMValue(
-        B,
+    Value *mfmaResult = wwmMatrixCollective(
+        ctx, B,
         B.CreateCall(mfmaFn,
                      {aPacked, bPacked, acc, cbsz, blgp, opSelA, scaleSrc0Pass,
                       opSelB, scaleSrc1Pass},
@@ -1054,8 +1081,8 @@ llvm::Expected<llvm::Value *> emitWMMAScaleF8F6F4toScaledMFMA(
     // emitWMMAtoMFMA -- the bpermute writes are HW-EXEC-gated and need
     // SIWholeQuadMode to widen the active mask.  No-op under WaveNative.
     for (unsigned i = 0; i < 8; ++i)
-      resultDwords[i] = ctx.Projection.wrapAsWWMValue(B, resultDwords[i],
-                                                      "wmma_scale_collect_wwm");
+      resultDwords[i] = wwmMatrixCollective(ctx, B, resultDwords[i],
+                                            "wmma_scale_collect_wwm");
   };
 
   SmallVector<Value *, 8> result0;
@@ -1615,8 +1642,8 @@ Expected<Value *> emitWMMAScaleF8F6F4toMFMA(
       Value *SrcA = packDwords(B, aPerKBlock[kBlock], 2, ctx.I32Ty, ctx.I64Ty);
       Value *SrcB = packDwords(B, bPerKBlock[kBlock], 2, ctx.I32Ty, ctx.I64Ty);
 
-      Value *Partial = ctx.Projection.wrapAsWWMValue(
-          B,
+      Value *Partial = wwmMatrixCollective(
+          ctx, B,
           B.CreateCall(MfmaFn, {SrcA, SrcB, ZeroAcc, Cbsz, Abid, Blgp},
                        "kblock_partial"),
           "kblock_partial_wwm");
@@ -1638,7 +1665,7 @@ Expected<Value *> emitWMMAScaleF8F6F4toMFMA(
 
     for (unsigned i = 0; i < 8; ++i)
       Result[i] =
-          ctx.Projection.wrapAsWWMValue(B, Result[i], "wmma_scale_collect_wwm");
+          wwmMatrixCollective(ctx, B, Result[i], "wmma_scale_collect_wwm");
   };
 
   Value *Result0[8];
