@@ -130,8 +130,11 @@ static void print_result_if_present(amd_comgr_hotswap_transpile_result_t Result)
   printf(" kernel_name=");
   with_result_string(Result, AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_KERNEL_NAME,
                      print_result_string, stdout);
-  printf(" lifted=%lld total=%lld scaled_dispatch_factor=%lld cache_key=",
+  printf(" lifted=%lld total=%lld scaled_dispatch_factor=%lld fail_reason=",
          (long long)Lifted, (long long)Total, (long long)ScaledFactor);
+  with_result_string(Result, AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_FAIL_REASON,
+                     print_result_string, stdout);
+  printf(" cache_key=");
   with_result_string(Result, AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_CACHE_KEY,
                      print_result_string, stdout);
   printf("\n");

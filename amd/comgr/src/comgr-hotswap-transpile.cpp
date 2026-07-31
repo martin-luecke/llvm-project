@@ -673,8 +673,9 @@ amd_comgr_status_t hotswapTranspileWithResolvedOptions(
     addPipelineTimings(Timings, Pipeline.Timings);
   }
 
-  auto failWith = [&](llvm::StringRef Reason,
-                      llvm::StringRef Detail) -> amd_comgr_status_t {
+  auto failWith = [&](llvm::StringRef Reason, llvm::StringRef Detail,
+                      amd_comgr_status_t Status =
+                          AMD_COMGR_STATUS_ERROR) -> amd_comgr_status_t {
     HotswapTranspileResult FailResult;
     fillResult(FailResult, CacheRequest.SourceGfx, CacheRequest.TargetGfx,
                false, CacheHit, lookupStatusFromCacheStatus(CacheStatus),
@@ -684,12 +685,39 @@ amd_comgr_status_t hotswapTranspileWithResolvedOptions(
     if (amd_comgr_status_t ResultStatus =
             returnResult(std::move(FailResult), result))
       return ResultStatus;
-    return AMD_COMGR_STATUS_ERROR;
+    return Status;
   };
 
   if (!Pipeline.Success || !Pipeline.Hsaco ||
       Pipeline.Hsaco->getBufferSize() == 0)
     return failWith(pipelineFailReason(Pipeline), pipelineFailDetail(Pipeline));
+
+  // The caller must scale the block's x extent by this factor, so a request
+  // shaped so that it cannot receive the factor fails the precondition
+  // documented on `result` and on the kernel-name flag. `result` is an optional
+  // out-parameter carrying the transpile metadata (cache status, counts, fail
+  // reason, this factor); passing null means "I do not need that metadata",
+  // which `amd_comgr_hotswap_transpile` does by construction. An unnamed
+  // request covers every kernel in the object while the factor is per kernel,
+  // so one value cannot describe it.
+  if (Pipeline.ScaledDispatchFactor > 1 &&
+      (result == nullptr || CacheRequest.KernelName.empty())) {
+    llvm::StringRef Why =
+        result == nullptr
+            ? "the request passes no result object to report it through"
+            : "the request covers every kernel in the code object, and the "
+              "factor is per kernel";
+    std::string Detail;
+    llvm::raw_string_ostream OS(Detail);
+    OS << "kernel requires a scaled dispatch (x-extent factor "
+       << Pipeline.ScaledDispatchFactor << ") but " << Why
+       << "; use amd_comgr_hotswap_transpile_with_options_v2 with "
+          "USE_KERNEL_NAME and a non-null result";
+    // Reported through the result object when the caller asked for one; the
+    // status carries it either way.
+    return failWith("scaled_dispatch_not_reportable", Detail,
+                    AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT);
+  }
 
   amd_comgr_hotswap_cache_write_status_t CacheWriteStatus =
       AMD_COMGR_HOTSWAP_CACHE_WRITE_NOT_ATTEMPTED;
