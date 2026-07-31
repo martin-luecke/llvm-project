@@ -819,10 +819,12 @@ for any warp-primitive kernel.
   -> FAdd, xor, swap) would double-count, so it is gated to the lower half
   (`lane_id < W_s`), matching native wave32; store-only idempotent RMWs (and/or,
   the integer/FP min/max family) re-apply with no effect and are left alone.
-  `needsOneReplicaGate` in handle-flat.cpp applies this at both the global and
-  flat sites, only for `usesScaledDispatch()` -- WaveNative's full-wave EXEC and
-  plain / phantom-lane MODREP (replica lanes undispatched) each issue once
-  already.
+  `needsOneReplicaGate` / `emitAtomicUnderOneReplica` in `atomic-replica.{h,cpp}`
+  apply this uniformly at the FLAT/GLOBAL (handle-flat.cpp), MUBUF
+  (handle-mubuf.cpp), and DS (handle-ds.cpp) atomic sites, keyed on the
+  canonical op so the idempotent exception set is a single table. It is scoped to
+  `usesScaledDispatch()` -- WaveNative's full-wave EXEC and plain / phantom-lane
+  MODREP (replica lanes undispatched) each issue once already.
 
 Cost: ~50% lane utilisation (the upper half redoes the lower half's work), i.e.
 2x slower than WaveNative packing. It is the safe correctness fallback, not the
@@ -830,11 +832,26 @@ fast path; WaveNative stays the opt-in fast path for kernels it can represent.
 
 ### 10.4 Refusals
 
-- **Source blocks that don't fit:** the scaled flat size
+A scaled dispatch runs the upper half as replicas of the lower, so any operation
+whose correctness depends on the upper lanes being *distinct* threads must refuse
+rather than double-issue. The classes:
+
+- **Oversized source blocks:** the scaled flat size
   (`max_flat_workgroup_size * W_t/W_s`) must not exceed the target hardware
   threads/block max (1024 for gfx9/CDNA). The reduce is 512 -> 1024, exactly the
-  limit. Refuse larger blocks rather than truncate. This is the only refusal and
-  it applies uniformly to matrix and non-matrix kernels.
+  limit. Refuse larger blocks rather than truncate. Applies to matrix and
+  non-matrix kernels alike. Gated in `raiser.cpp` (`CanUpgradeToScaled`).
+- **Returning atomic RMWs:** a lane and its replica read different "old" values
+  with no broadcast to reconcile them (sec. 10.3). `needsOneReplicaGate`
+  (`atomic-replica.cpp`) refuses them at every atomic site.
+- **Compare-and-swap:** the obstruction classifier refuses `*_atomic_cmpswap`
+  independently of the store-only/returning split.
+- **TENSOR load/store to LDS:** the cross-target TDM helper
+  (`handle-vimage.cpp`) runs a per-source-wave atomic-barrier update, which the
+  replica group would issue a second time. Refused under a scaled dispatch until
+  the helper is made replica-aware. The `CanUpgradeToScaled` gate also excludes
+  tensor-carrying kernels so they stay on WaveNative (two real source waves), and
+  the handler backstops the forced-scaled route.
 
 Matrix (wmma/mfma) kernels are supported, not refused. The WMMA -> MFMA lowering
 is an explicit `ds_bpermute` redistribute (`wmma-lowering.cpp`), not a naive

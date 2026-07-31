@@ -2534,6 +2534,18 @@ static Expected<RaiseResult> raiseToIRImpl(
         }
         return false;
       };
+      // A tensor op's cross-target TDM helper issues a per-source-wave
+      // atomic-barrier update, which a scaled dispatch's replica group would
+      // double-issue (see handle-vimage.cpp). Keep such a kernel off the scaled
+      // route so it stays on WaveNative, where both source waves are real.
+      auto HasTensorOp = [&]() {
+        for (const DecodedInst &Inst : Insts) {
+          if (Inst.CanonOp == CanonicalOp::TENSOR_LOAD_TO_LDS ||
+              Inst.CanonOp == CanonicalOp::TENSOR_STORE_FROM_LDS)
+            return true;
+        }
+        return false;
+      };
       // Auto-upgrade the WaveNative y/z-derived C5 refusal (the reduce_kernel
       // RMSNorm aperture class, and the matrix attention _fwd_kernel class) to
       // a scaled dispatch, which makes each target wave uniform in y/z and
@@ -2563,7 +2575,7 @@ static Expected<RaiseResult> raiseToIRImpl(
       const bool CanUpgradeToScaled =
           !ForceScaledModrep && PredReport.WaveNativeYzRefusal &&
           Isa.isWave32() && !TargetIsa.isWave32() && ScaleFactor >= 2 &&
-          (TargetIsa.WaveSize % Isa.WaveSize) == 0 &&
+          (TargetIsa.WaveSize % Isa.WaveSize) == 0 && !HasTensorOp() &&
           Meta.MaxFlatWorkgroupSize > 0 &&
           static_cast<unsigned>(Meta.MaxFlatWorkgroupSize) * ScaleFactor <=
               AMDGPU::IsaInfo::getMaxFlatWorkGroupSize();

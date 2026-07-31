@@ -6,6 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "atomic-replica.h"
 #include "handlers.h"
 #include "mubuf-addr.h"
 
@@ -360,6 +361,24 @@ Expected<HandlerResult> handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
       return MbufOrErr.takeError();
     MubufAddr Mbuf = *MbufOrErr;
 
+    // Under a scaled dispatch a source lane and its active replica both pass
+    // the `emitUnderExec` mask, so a non-idempotent buffer atomic double-counts
+    // and a returning one reads two different old values. Route every buffer
+    // atomic
+    // -- the raw-buffer switch below, the F64 min/max CAS loop, and cmpswap --
+    // through the shared decision: refuse the returning forms, gate the
+    // store-only non-idempotent ones to one replica.
+    Expected<bool> GateOrErr = needsOneReplicaGate(Ctx, Di, "MUBUF");
+    if (!GateOrErr)
+      return GateOrErr.takeError();
+    const bool GateOneReplica = *GateOrErr;
+    auto EmitGated = [&](llvm::function_ref<void()> Body) {
+      if (GateOneReplica)
+        emitAtomicUnderOneReplica(Ctx, Body);
+      else
+        Body();
+    };
+
     // `BUFFER_ATOMIC_CMPSWAP` is the one buffer atomic whose vdata is
     // a register PAIR carrying `{cmp, new}` rather than a single data
     // word.  Split it out before the single-word raw-buffer atomic
@@ -374,17 +393,19 @@ Expected<HandlerResult> handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
       Value *NewVal = Ctx.Regs.readReg32(Ctx.B, NewReg);
       Function *CasFn = Intrinsic::getOrInsertDeclaration(
           &Ctx.M, Intrinsic::amdgcn_raw_buffer_atomic_cmpswap, {Ctx.I32Ty});
-      Ctx.emitUnderExec([&] {
-        // Raw-buffer atomics preserve descriptor-relative addressing and
-        // hardware OOB behavior. The intrinsic takes {new, cmp}, matching
-        // LLVM's AMDGPU intrinsic contract for buffer cmpswap.
-        Value *OldVal =
-            Ctx.B.CreateCall(CasFn,
-                             {NewVal, CmpVal, Mbuf.Srd, Mbuf.Voffset,
-                              Mbuf.Soffset, Mbuf.AuxFlags},
-                             "buf_atomic_cmpswap");
-        if (Di.NumDefs > 0)
-          Ctx.Regs.writeReg32(Ctx.B, Op.dst(), OldVal);
+      EmitGated([&] {
+        Ctx.emitUnderExec([&] {
+          // Raw-buffer atomics preserve descriptor-relative addressing and
+          // hardware OOB behavior. The intrinsic takes {new, cmp}, matching
+          // LLVM's AMDGPU intrinsic contract for buffer cmpswap.
+          Value *OldVal =
+              Ctx.B.CreateCall(CasFn,
+                               {NewVal, CmpVal, Mbuf.Srd, Mbuf.Voffset,
+                                Mbuf.Soffset, Mbuf.AuxFlags},
+                               "buf_atomic_cmpswap");
+          if (Di.NumDefs > 0)
+            Ctx.Regs.writeReg32(Ctx.B, Op.dst(), OldVal);
+        });
       });
       Hr.Handled = true;
       return Hr;
@@ -414,47 +435,50 @@ Expected<HandlerResult> handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
           &Ctx.M, Intrinsic::amdgcn_raw_buffer_load, {Ctx.I64Ty});
       Function *CasFn = Intrinsic::getOrInsertDeclaration(
           &Ctx.M, Intrinsic::amdgcn_raw_buffer_atomic_cmpswap, {Ctx.I64Ty});
-      Ctx.emitUnderExec([&] {
-        Value *InitI64 = Ctx.B.CreateCall(
-            BufLd, {Mbuf.Srd, Mbuf.Voffset, Mbuf.Soffset, Mbuf.AuxFlags},
-            "fp64_minmax_init");
-        Function *F = Ctx.B.GetInsertBlock()->getParent();
-        BasicBlock *PreBb = Ctx.B.GetInsertBlock();
-        BasicBlock *LoopBb = BasicBlock::Create(Ctx.C, "fp64_minmax_loop", F);
-        BasicBlock *ExitBb = BasicBlock::Create(Ctx.C, "fp64_minmax_exit", F);
-        Ctx.B.CreateBr(LoopBb);
-        Ctx.B.SetInsertPoint(LoopBb);
-        PHINode *Expected =
-            Ctx.B.CreatePHI(Ctx.I64Ty, 2, "fp64_minmax_expected");
-        Expected->addIncoming(InitI64, PreBb);
-        Value *OldF64 =
-            Ctx.B.CreateBitCast(Expected, Ctx.F64Ty, "fp64_minmax_old");
-        Value *NewF64;
-        if (IsIeeeNum) {
-          Intrinsic::ID NumIntr =
-              IsMax ? Intrinsic::maximumnum : Intrinsic::minimumnum;
-          Function *NumFn =
-              Intrinsic::getOrInsertDeclaration(&Ctx.M, NumIntr, {Ctx.F64Ty});
-          NewF64 = Ctx.B.CreateCall(NumFn, {OldF64, SrcF64}, "fp64_minmax_new");
-        } else {
-          Value *Cmp =
-              IsMax ? Ctx.B.CreateFCmpOGT(SrcF64, OldF64, "fp64_minmax_cmp")
-                    : Ctx.B.CreateFCmpOLT(SrcF64, OldF64, "fp64_minmax_cmp");
-          NewF64 = Ctx.B.CreateSelect(Cmp, SrcF64, OldF64, "fp64_minmax_new");
-        }
-        Value *NewI64 =
-            Ctx.B.CreateBitCast(NewF64, Ctx.I64Ty, "fp64_minmax_new_bits");
-        Value *Returned =
-            Ctx.B.CreateCall(CasFn,
-                             {NewI64, Expected, Mbuf.Srd, Mbuf.Voffset,
-                              Mbuf.Soffset, Mbuf.AuxFlags},
-                             "fp64_minmax_cas");
-        Value *Ok = Ctx.B.CreateICmpEQ(Returned, Expected, "fp64_minmax_ok");
-        Expected->addIncoming(Returned, Ctx.B.GetInsertBlock());
-        Ctx.B.CreateCondBr(Ok, ExitBb, LoopBb);
-        Ctx.B.SetInsertPoint(ExitBb);
-        if (Di.NumDefs > 0)
-          Ctx.Regs.writeReg64(Ctx.B, Op.dst(), Returned);
+      EmitGated([&] {
+        Ctx.emitUnderExec([&] {
+          Value *InitI64 = Ctx.B.CreateCall(
+              BufLd, {Mbuf.Srd, Mbuf.Voffset, Mbuf.Soffset, Mbuf.AuxFlags},
+              "fp64_minmax_init");
+          Function *F = Ctx.B.GetInsertBlock()->getParent();
+          BasicBlock *PreBb = Ctx.B.GetInsertBlock();
+          BasicBlock *LoopBb = BasicBlock::Create(Ctx.C, "fp64_minmax_loop", F);
+          BasicBlock *ExitBb = BasicBlock::Create(Ctx.C, "fp64_minmax_exit", F);
+          Ctx.B.CreateBr(LoopBb);
+          Ctx.B.SetInsertPoint(LoopBb);
+          PHINode *Expected =
+              Ctx.B.CreatePHI(Ctx.I64Ty, 2, "fp64_minmax_expected");
+          Expected->addIncoming(InitI64, PreBb);
+          Value *OldF64 =
+              Ctx.B.CreateBitCast(Expected, Ctx.F64Ty, "fp64_minmax_old");
+          Value *NewF64;
+          if (IsIeeeNum) {
+            Intrinsic::ID NumIntr =
+                IsMax ? Intrinsic::maximumnum : Intrinsic::minimumnum;
+            Function *NumFn =
+                Intrinsic::getOrInsertDeclaration(&Ctx.M, NumIntr, {Ctx.F64Ty});
+            NewF64 =
+                Ctx.B.CreateCall(NumFn, {OldF64, SrcF64}, "fp64_minmax_new");
+          } else {
+            Value *Cmp =
+                IsMax ? Ctx.B.CreateFCmpOGT(SrcF64, OldF64, "fp64_minmax_cmp")
+                      : Ctx.B.CreateFCmpOLT(SrcF64, OldF64, "fp64_minmax_cmp");
+            NewF64 = Ctx.B.CreateSelect(Cmp, SrcF64, OldF64, "fp64_minmax_new");
+          }
+          Value *NewI64 =
+              Ctx.B.CreateBitCast(NewF64, Ctx.I64Ty, "fp64_minmax_new_bits");
+          Value *Returned =
+              Ctx.B.CreateCall(CasFn,
+                               {NewI64, Expected, Mbuf.Srd, Mbuf.Voffset,
+                                Mbuf.Soffset, Mbuf.AuxFlags},
+                               "fp64_minmax_cas");
+          Value *Ok = Ctx.B.CreateICmpEQ(Returned, Expected, "fp64_minmax_ok");
+          Expected->addIncoming(Returned, Ctx.B.GetInsertBlock());
+          Ctx.B.CreateCondBr(Ok, ExitBb, LoopBb);
+          Ctx.B.SetInsertPoint(ExitBb);
+          if (Di.NumDefs > 0)
+            Ctx.Regs.writeReg64(Ctx.B, Op.dst(), Returned);
+        });
       });
       Hr.Handled = true;
       return Hr;
@@ -521,26 +545,29 @@ Expected<HandlerResult> handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
       Data = Ctx.B.CreateBitCast(Data, AtomicTy);
     Function *AtomicFn =
         Intrinsic::getOrInsertDeclaration(&Ctx.M, AtomicIntrinsic, {AtomicTy});
-    Ctx.emitUnderExec([&] {
-      Value *OldVal = Ctx.B.CreateCall(
-          AtomicFn, {Data, Mbuf.Srd, Mbuf.Voffset, Mbuf.Soffset, Mbuf.AuxFlags},
-          "buf_atomic");
-      // RTN-form write-back. The raw-buffer intrinsic returns the old
-      // memory value just like the target ISA RTN form; when the source
-      // is non-RTN, leaving the result unused lets the backend select
-      // the no-return encoding.
-      if (Di.NumDefs > 0) {
-        Value *RetVal = OldVal;
-        if (IsF64) {
-          if (IsFp)
-            RetVal = Ctx.B.CreateBitCast(RetVal, Ctx.I64Ty);
-          Ctx.Regs.writeReg64(Ctx.B, Op.dst(), RetVal);
-        } else {
-          if (IsFp)
-            RetVal = Ctx.B.CreateBitCast(RetVal, Ctx.I32Ty);
-          Ctx.Regs.writeReg32(Ctx.B, Op.dst(), RetVal);
+    EmitGated([&] {
+      Ctx.emitUnderExec([&] {
+        Value *OldVal = Ctx.B.CreateCall(
+            AtomicFn,
+            {Data, Mbuf.Srd, Mbuf.Voffset, Mbuf.Soffset, Mbuf.AuxFlags},
+            "buf_atomic");
+        // RTN-form write-back. The raw-buffer intrinsic returns the old
+        // memory value just like the target ISA RTN form; when the source
+        // is non-RTN, leaving the result unused lets the backend select
+        // the no-return encoding.
+        if (Di.NumDefs > 0) {
+          Value *RetVal = OldVal;
+          if (IsF64) {
+            if (IsFp)
+              RetVal = Ctx.B.CreateBitCast(RetVal, Ctx.I64Ty);
+            Ctx.Regs.writeReg64(Ctx.B, Op.dst(), RetVal);
+          } else {
+            if (IsFp)
+              RetVal = Ctx.B.CreateBitCast(RetVal, Ctx.I32Ty);
+            Ctx.Regs.writeReg32(Ctx.B, Op.dst(), RetVal);
+          }
         }
-      }
+      });
     });
     Hr.Handled = true;
     return Hr;

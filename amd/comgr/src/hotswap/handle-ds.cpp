@@ -6,6 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "atomic-replica.h"
 #include "handlers.h"
 
 #include "Utils/AMDGPUBaseInfo.h" // AMDGPU::getNamedOperandIdx
@@ -797,14 +798,25 @@ Expected<HandlerResult> handleDS(RaiseContext &Ctx, const DecodedInst &Di,
     ParsedReg StData = Op.srcReg(1);
     Value *Data =
         Ctx.B.CreateBitCast(Ctx.Regs.readReg64(Ctx.B, StData), Ctx.F64Ty);
-    Ctx.emitUnderExec([&] {
-      auto *Rmw =
-          Ctx.B.CreateAtomicRMW(AtomicRMWInst::FAdd, Ptr, Data, MaybeAlign(),
-                                AtomicOrdering::SequentiallyConsistent);
-      if (Di.NumDefs > 0)
-        Ctx.Regs.writeReg64(Ctx.B, Op.dst(),
-                            Ctx.B.CreateBitCast(Rmw, Ctx.I64Ty));
-    });
+    // Under a scaled dispatch the replica lane would re-issue this LDS add, so
+    // gate the store-only form to one replica and refuse the returning form.
+    Expected<bool> GateOrErr = needsOneReplicaGate(Ctx, Di, "DS");
+    if (!GateOrErr)
+      return GateOrErr.takeError();
+    auto EmitRMW = [&] {
+      Ctx.emitUnderExec([&] {
+        auto *Rmw =
+            Ctx.B.CreateAtomicRMW(AtomicRMWInst::FAdd, Ptr, Data, MaybeAlign(),
+                                  AtomicOrdering::SequentiallyConsistent);
+        if (Di.NumDefs > 0)
+          Ctx.Regs.writeReg64(Ctx.B, Op.dst(),
+                              Ctx.B.CreateBitCast(Rmw, Ctx.I64Ty));
+      });
+    };
+    if (*GateOrErr)
+      emitAtomicUnderOneReplica(Ctx, EmitRMW);
+    else
+      EmitRMW();
     Hr.Handled = true;
     return Hr;
   }
@@ -828,13 +840,22 @@ Expected<HandlerResult> handleDS(RaiseContext &Ctx, const DecodedInst &Di,
     }
     Value *Ptr = toLdsPtr(Ctx, Addr);
     Value *Data = Op.src(1);
-    Ctx.emitUnderExec([&] {
-      auto *Rmw =
-          Ctx.B.CreateAtomicRMW(AtomicRMWInst::Add, Ptr, Data, MaybeAlign(),
-                                AtomicOrdering::SequentiallyConsistent);
-      if (Di.NumDefs > 0)
-        Ctx.Regs.writeReg32(Ctx.B, Op.dst(), Rmw);
-    });
+    Expected<bool> GateOrErr = needsOneReplicaGate(Ctx, Di, "DS");
+    if (!GateOrErr)
+      return GateOrErr.takeError();
+    auto EmitRMW = [&] {
+      Ctx.emitUnderExec([&] {
+        auto *Rmw =
+            Ctx.B.CreateAtomicRMW(AtomicRMWInst::Add, Ptr, Data, MaybeAlign(),
+                                  AtomicOrdering::SequentiallyConsistent);
+        if (Di.NumDefs > 0)
+          Ctx.Regs.writeReg32(Ctx.B, Op.dst(), Rmw);
+      });
+    };
+    if (*GateOrErr)
+      emitAtomicUnderOneReplica(Ctx, EmitRMW);
+    else
+      EmitRMW();
     Hr.Handled = true;
     return Hr;
   }

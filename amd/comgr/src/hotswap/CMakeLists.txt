@@ -173,6 +173,7 @@ add_library(hotswap-transpiler OBJECT
   canonical-op-attrs.cpp
   handle-smem.cpp
   source-hidden-args.cpp
+  atomic-replica.cpp
   handle-flat.cpp
   flat-addr.cpp
   handle-mubuf.cpp

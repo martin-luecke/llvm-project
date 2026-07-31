@@ -449,9 +449,14 @@ public:
 // upper half redoes the lower half's work), so it is the safe correctness
 // fallback, not the fast path.
 //
-// Refusals live in the raiser: wmma/mfma (a matrix fragment needs all `W_t`
-// lanes and cannot be fed from `W_s` logical lanes + replicas) and source
-// blocks whose scaled size would exceed the target's hardware thread/block max.
+// Matrix (wmma/mfma) kernels ride this projection: the WMMA->MFMA path is an
+// explicit `ds_bpermute` redistribute that reads only the `W_s` real source
+// lanes and replicates the result onto the upper half, so replica lanes carry
+// valid data. The remaining refusals are enumerated in
+// hotswap/docs/modrep-predicate-chain.md sec. 10.4 -- returning atomics and
+// non-replica-aware TENSOR ops (both would double-issue across the replica),
+// compare-and-swap, and source blocks whose scaled size would exceed the
+// target's hardware thread/block max.
 class ScaledModuloReplicationProjection final
     : public ModuloReplicationProjection {
 public:

@@ -247,6 +247,22 @@ Expected<HandlerResult> handleVIMAGE(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
 
+  // The cross-target TDM helper splits a wave32->wave64 target wave into two
+  // source-wave groups and each group runs the descriptor's atomic-barrier
+  // update when its local lane 0 fires. Under a scaled dispatch the upper group
+  // is a replica of the lower, so hardware lanes 0 and 32 issue the same LDS
+  // atomicrmw and the barrier double-counts. Refuse until the helper is made
+  // replica-aware rather than miscompute. A matrix kernel carrying a tensor op
+  // reaches here through the auto-upgrade; the raiser's scaled-dispatch
+  // eligibility gate keeps it off the scaled route for the common path, and
+  // this backstops the forced-scaled route.
+  if (Ctx.Projection.usesScaledDispatch())
+    return RaiseFailure::unsupportedInstructionForm(
+        Di, "VIMAGE",
+        "TENSOR load/store to LDS under a scaled dispatch: the per-source-wave "
+        "atomic-barrier update would be issued by both a source lane and its "
+        "replica; refuse until the TDM helper is replica-aware");
+
   TDMArgs Args;
   if (Error Err = marshalTDMArgs(Ctx, Di, Op, Args))
     return Err;
