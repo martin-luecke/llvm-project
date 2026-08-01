@@ -58,6 +58,11 @@ struct PipelineResult {
   uint32_t TargetPrivateSegmentFixedSize = 0;
   int LiftedCount = 0;
   int TotalCount = 0;
+  int64_t DependencyFunctionCount = 0;
+  int64_t SourceImageDwordCount = 0;
+  int64_t ObjectRelocationCount = 0;
+  int64_t DependencyRelocationCount = 0;
+  std::string DependencyFunctionNames;
   // ScaledModuloReplicationProjection requirement for the (single) transpiled
   // kernel: the factor (W_t/W_s) the launch runtime must scale the block's x
   // extent by. 1 means no scaling. See raiser.h.

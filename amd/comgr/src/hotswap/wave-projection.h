@@ -172,6 +172,13 @@ public:
   virtual llvm::Value *emitPackedWorkitemId(llvm::IRBuilder<> &B,
                                             unsigned NumDims) const;
 
+  // Emit the source-visible flattened local workitem id. Most projections
+  // preserve the source launch geometry and therefore need only the legacy x
+  // value at the one current consumer (TTMP8 wave-id reconstruction). A
+  // projection that changes launch geometry must override this hook.
+  virtual llvm::Value *emitSourceFlatWorkitemId(llvm::IRBuilder<> &B,
+                                                unsigned NumDims) const;
+
   // Given the current EXEC alloca value (source-width iN), return an i1
   // true iff the current lane is active. Concrete projections define
   // what "active" means -- modulo-replication fans each target lane onto
@@ -428,14 +435,14 @@ public:
 // This projection makes the "upper lanes are replicas, not real threads"
 // assumption TRUE by construction: the runtime launches the block with a
 // `W_t / W_s`-scaled extent along the fastest (wave-carrying) dimension x, so
-// each target wave hosts exactly ONE source wave in lanes `0..W_s-1` and exact
-// REPLICAS of those lanes in `W_s..W_t-1`. Concretely for wave32->wave64:
+// each target wave hosts exactly ONE source wave and replicas of its lanes.
+// The final source wave may be partial; its target lanes repeat modulo the
+// actual remaining source-lane count. Concretely for wave32->wave64:
 //
 //   * the runtime doubles blockDim.x (grid unchanged);
-//   * the raised kernel maps hardware workitem-id.x back to the logical source
-//     id via `logical_x = ((x_hw & ~(W_t-1)) >> log2(W_t/W_s)) | (x_hw &
-//     (W_s-1))` so hardware lane `W_s + i` sees the same logical thread as lane
-//     `i`;
+//   * the raised kernel flattens the physical local ID, finds its source-wave
+//     population from the AQL workgroup dimensions, maps the target lane modulo
+//     that population, and unflattens the resulting source local ID;
 //   * the raiser halves the in-kernel workgroup/grid-size query along x so
 //     loops and reduction bounds still observe the source block size.
 //
@@ -449,13 +456,18 @@ public:
 // upper half redoes the lower half's work), so it is the safe correctness
 // fallback, not the fast path.
 //
-// Refusals live in the raiser: wmma/mfma (a matrix fragment needs all `W_t`
-// lanes and cannot be fed from `W_s` logical lanes + replicas) and source
-// blocks whose scaled size would exceed the target's hardware thread/block max.
+// Matrix refusals live in the raiser: wmma/mfma fragments need all `W_t` lanes
+// and cannot be fed from `W_s` logical lanes plus replicas. The runtime launch
+// gate separately refuses any actual scaled block that exceeds target limits;
+// the source metadata maximum is only a conservative capability bound.
 class ScaledModuloReplicationProjection final
     : public ModuloReplicationProjection {
 public:
-  using ModuloReplicationProjection::ModuloReplicationProjection;
+  ScaledModuloReplicationProjection(const ISAProfile &SrcIsa,
+                                    const ISAProfile &TgtIsa, llvm::Type *I32Ty,
+                                    llvm::Type *I64Ty, unsigned NumWorkitemDims)
+      : ModuloReplicationProjection(SrcIsa, TgtIsa, I32Ty, I64Ty),
+        NumWorkitemDims(NumWorkitemDims) {}
 
   // Remap hardware workitem-id.x to the logical source id so replica lanes
   // alias their originals. No phantom-lane clamp: under a scaled dispatch
@@ -468,10 +480,25 @@ public:
   llvm::Value *emitPackedWorkitemId(llvm::IRBuilder<> &B,
                                     unsigned NumDims) const override;
 
+  llvm::Value *emitSourceFlatWorkitemId(llvm::IRBuilder<> &B,
+                                        unsigned NumDims) const override;
+
   bool usesScaledDispatch() const override { return true; }
   unsigned scaledDispatchFactor() const override {
     return Tgt.WaveSize / Src.WaveSize;
   }
+
+private:
+  struct SourceWorkitemIds {
+    llvm::Value *X = nullptr;
+    llvm::Value *Y = nullptr;
+    llvm::Value *Z = nullptr;
+    llvm::Value *Flat = nullptr;
+  };
+
+  SourceWorkitemIds emitSourceWorkitemIds(llvm::IRBuilder<> &B) const;
+
+  unsigned NumWorkitemDims;
 };
 
 // ============================================================================

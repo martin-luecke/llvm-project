@@ -16,7 +16,9 @@
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/BinaryFormat/MsgPackDocument.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/JSON.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/MemoryBufferRef.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
@@ -212,10 +214,26 @@ void writeBinaryFile(const std::string &Path,
   Os.write(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
 }
 
-COMGR::hotswap::TranslationCacheRequest makeRequest(
-    llvm::MemoryBufferRef Source, const std::string &RulesPath,
-    const std::string &SourceGfx = "gfx1250",
-    const std::string &TargetGfx = "gfx942") {
+void removeMetadataField(const std::string &Path, llvm::StringRef Field) {
+  auto Buffer = llvm::MemoryBuffer::getFile(Path);
+  ASSERT_TRUE(Buffer) << "cannot read " << Path;
+  auto Parsed = llvm::json::parse((*Buffer)->getBuffer());
+  ASSERT_TRUE(static_cast<bool>(Parsed)) << "cannot parse " << Path;
+  llvm::json::Object *Object = Parsed->getAsObject();
+  ASSERT_NE(Object, nullptr);
+  ASSERT_TRUE(Object->erase(Field));
+
+  std::string Text;
+  llvm::raw_string_ostream Os(Text);
+  Parsed->print(Os);
+  Os << "\n";
+  writeTextFile(Path, Text);
+}
+
+COMGR::hotswap::TranslationCacheRequest
+makeRequest(llvm::MemoryBufferRef Source, const std::string &RulesPath,
+            const std::string &SourceGfx = "gfx1250",
+            const std::string &TargetGfx = "gfx942") {
   COMGR::hotswap::TranslationCacheRequest Request;
   Request.SourceObject = Source;
   Request.SourceGfx = SourceGfx;
@@ -243,6 +261,11 @@ COMGR::hotswap::PipelineResult makeSuccessfulResult(
       "");
   Result.LiftedCount = 7;
   Result.TotalCount = 7;
+  Result.DependencyFunctionCount = 2;
+  Result.SourceImageDwordCount = 3;
+  Result.ObjectRelocationCount = 4;
+  Result.DependencyRelocationCount = 0;
+  Result.DependencyFunctionNames = "cache_probe_kernel\ndevice_helper";
   return Result;
 }
 
@@ -275,6 +298,34 @@ TEST(TranslationCache, FirstRunMissWriteSecondRunHit) {
   EXPECT_EQ(Second.Result.Hsaco->getBuffer(), Result.Hsaco->getBuffer());
   EXPECT_EQ(Second.Result.LiftedCount, Result.LiftedCount);
   EXPECT_EQ(Second.Result.TotalCount, Result.TotalCount);
+  EXPECT_EQ(Second.Result.ScaledDispatchFactor, Result.ScaledDispatchFactor);
+  EXPECT_EQ(Second.Result.DependencyFunctionCount,
+            Result.DependencyFunctionCount);
+  EXPECT_EQ(Second.Result.DependencyFunctionNames,
+            Result.DependencyFunctionNames);
+  EXPECT_EQ(Second.Result.SourceImageDwordCount, Result.SourceImageDwordCount);
+  EXPECT_EQ(Second.Result.ObjectRelocationCount, Result.ObjectRelocationCount);
+  EXPECT_EQ(Second.Result.DependencyRelocationCount,
+            Result.DependencyRelocationCount);
+}
+
+TEST(TranslationCache, MissingDependencyProofFieldIsInvalid) {
+  TempDir Temp("hotswap_cache_test");
+  ASSERT_TRUE(Temp.Valid);
+
+  std::string Rules = Temp.file("rules.json");
+  writeTextFile(Rules, "{\"version\":1,\"rules\":[]}\n");
+  auto Source = fakeAmdgpuElf();
+  auto Request = makeRequest(bufRef(Source), Rules);
+  auto Write =
+      COMGR::hotswap::writeTranslationCache(Request, makeSuccessfulResult());
+  ASSERT_EQ(Write.Status, COMGR::hotswap::TranslationCacheStatus::WriteSuccess)
+      << Write.Reason;
+
+  removeMetadataField(Write.MetadataPath, "dependency_function_count");
+  auto Lookup = COMGR::hotswap::lookupTranslationCache(Request);
+  EXPECT_EQ(Lookup.Status, COMGR::hotswap::TranslationCacheStatus::Invalid);
+  EXPECT_NE(Lookup.Reason.find("dependency_function_count"), std::string::npos);
 }
 
 TEST(TranslationCache, KernelNameParticipatesInCacheKey) {
@@ -289,8 +340,8 @@ TEST(TranslationCache, KernelNameParticipatesInCacheKey) {
   auto Source = fakeAmdgpuElf();
   auto WholeObject = makeRequest(bufRef(Source), Rules);
 
-  auto WholeWrite =
-      COMGR::hotswap::writeTranslationCache(WholeObject, makeSuccessfulResult());
+  auto WholeWrite = COMGR::hotswap::writeTranslationCache(
+      WholeObject, makeSuccessfulResult());
   ASSERT_EQ(WholeWrite.Status,
             COMGR::hotswap::TranslationCacheStatus::WriteSuccess)
       << WholeWrite.Reason;
@@ -331,8 +382,10 @@ TEST(TranslationCache, ChangedInputHashCausesMiss) {
   writeTextFile(Rules, "{\"version\":1,\"rules\":[]}\n");
   auto Source = fakeAmdgpuElf();
   auto Request = makeRequest(bufRef(Source), Rules);
-  ASSERT_EQ(COMGR::hotswap::writeTranslationCache(Request, makeSuccessfulResult()).Status,
-            COMGR::hotswap::TranslationCacheStatus::WriteSuccess);
+  ASSERT_EQ(
+      COMGR::hotswap::writeTranslationCache(Request, makeSuccessfulResult())
+          .Status,
+      COMGR::hotswap::TranslationCacheStatus::WriteSuccess);
 
   Source[HashPerturbOffset] ^= 0x1;
   auto Changed = makeRequest(bufRef(Source), Rules);
@@ -351,14 +404,18 @@ TEST(TranslationCache, ChangedIsaCausesMiss) {
   writeTextFile(Rules, "{\"version\":1,\"rules\":[]}\n");
   auto Source = fakeAmdgpuElf();
   auto Request = makeRequest(bufRef(Source), Rules);
-  ASSERT_EQ(COMGR::hotswap::writeTranslationCache(Request, makeSuccessfulResult()).Status,
-            COMGR::hotswap::TranslationCacheStatus::WriteSuccess);
+  ASSERT_EQ(
+      COMGR::hotswap::writeTranslationCache(Request, makeSuccessfulResult())
+          .Status,
+      COMGR::hotswap::TranslationCacheStatus::WriteSuccess);
 
-  auto ChangedSourceIsa = makeRequest(bufRef(Source), Rules, "gfx1200", "gfx942");
+  auto ChangedSourceIsa =
+      makeRequest(bufRef(Source), Rules, "gfx1200", "gfx942");
   EXPECT_EQ(COMGR::hotswap::lookupTranslationCache(ChangedSourceIsa).Status,
             COMGR::hotswap::TranslationCacheStatus::Miss);
 
-  auto ChangedTargetIsa = makeRequest(bufRef(Source), Rules, "gfx1250", "gfx950");
+  auto ChangedTargetIsa =
+      makeRequest(bufRef(Source), Rules, "gfx1250", "gfx950");
   EXPECT_EQ(COMGR::hotswap::lookupTranslationCache(ChangedTargetIsa).Status,
             COMGR::hotswap::TranslationCacheStatus::Miss);
 }
@@ -413,7 +470,8 @@ TEST(TranslationCache, CorruptMetadataIsInvalid) {
   writeTextFile(Rules, "{\"version\":1,\"rules\":[]}\n");
   auto Source = fakeAmdgpuElf();
   auto Request = makeRequest(bufRef(Source), Rules);
-  auto Write = COMGR::hotswap::writeTranslationCache(Request, makeSuccessfulResult());
+  auto Write =
+      COMGR::hotswap::writeTranslationCache(Request, makeSuccessfulResult());
   ASSERT_EQ(Write.Status, COMGR::hotswap::TranslationCacheStatus::WriteSuccess);
 
   writeTextFile(Write.MetadataPath, "not-json\n");
@@ -433,7 +491,8 @@ TEST(TranslationCache, CorruptObjectIsInvalid) {
   writeTextFile(Rules, "{\"version\":1,\"rules\":[]}\n");
   auto Source = fakeAmdgpuElf();
   auto Request = makeRequest(bufRef(Source), Rules);
-  auto Write = COMGR::hotswap::writeTranslationCache(Request, makeSuccessfulResult());
+  auto Write =
+      COMGR::hotswap::writeTranslationCache(Request, makeSuccessfulResult());
   ASSERT_EQ(Write.Status, COMGR::hotswap::TranslationCacheStatus::WriteSuccess);
 
   writeBinaryFile(Write.ObjectPath, {1, 2, 3, 4});
@@ -455,7 +514,8 @@ TEST(TranslationCache, ReadonlyMissDoesNotWrite) {
   auto Lookup = COMGR::hotswap::lookupTranslationCache(Request);
   EXPECT_EQ(Lookup.Status, COMGR::hotswap::TranslationCacheStatus::Miss);
 
-  auto Write = COMGR::hotswap::writeTranslationCache(Request, makeSuccessfulResult());
+  auto Write =
+      COMGR::hotswap::writeTranslationCache(Request, makeSuccessfulResult());
   EXPECT_EQ(Write.Status, COMGR::hotswap::TranslationCacheStatus::Disabled);
 
   auto Second = COMGR::hotswap::lookupTranslationCache(Request);
@@ -483,5 +543,6 @@ TEST(TranslationCache, SkipKernelListDoesNotUseSubstringMatching) {
 
   std::vector<std::string> Kernels = {"target_kernel"};
   EXPECT_TRUE(
-      COMGR::hotswap::skippedKernelForTranslationCache(Kernels, "target").empty());
+      COMGR::hotswap::skippedKernelForTranslationCache(Kernels, "target")
+          .empty());
 }

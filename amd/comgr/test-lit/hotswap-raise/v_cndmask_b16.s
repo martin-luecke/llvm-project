@@ -17,10 +17,11 @@ v_cndmask_b16_kernel:
 	v_mov_b32_e32 v1, s0
 	v_mov_b32_e32 v2, s1
 	; CHECK: [[CMP:%.+]] = icmp ult i32 0,
+	; CHECK: [[ACTIVE:%vcmp_active[0-9]*]] = and i1 [[CMP]], %{{[^ ]+}}
 	v_cmp_lt_u32_e64 s0, 0, v0
 	; CHECK: trunc i32 {{.+}} to i16
 	; CHECK: trunc i32 {{.+}} to i16
-	; CHECK: %cndmask_b16 = select i1 [[CMP]], i16 {{.+}}, i16
+	; CHECK: %cndmask_b16 = select i1 [[ACTIVE]], i16 {{.+}}, i16
 	; CHECK: zext i16 %cndmask_b16 to i32
 	; CHECK: and i32 {{.+}}, -65536
 	; CHECK: %cndmask_b16_merge_lo = or i32
@@ -36,13 +37,14 @@ v_cndmask_b16_kernel:
 	.type	v_cndmask_b16_neg_kernel,@function
 v_cndmask_b16_neg_kernel:
 	; CHECK: [[CMP_NEG:%.+]] = icmp ult i32 0,
+	; CHECK: [[ACTIVE_NEG:%vcmp_active[0-9]*]] = and i1 [[CMP_NEG]], %{{[^ ]+}}
 	v_cmp_lt_u32_e64 s0, 0, v0
 	; CHECK: trunc i32 {{.+}} to i16
 	; CHECK: trunc i32 {{.+}} to i16
 	; CHECK: bitcast i16 {{.+}} to half
 	; CHECK: %neg_b16_src0 = fneg half
 	; CHECK: bitcast half %neg_b16_src0 to i16
-	; CHECK: %cndmask_b16 = select i1 [[CMP_NEG]], i16 {{.+}}, i16
+	; CHECK: %cndmask_b16 = select i1 [[ACTIVE_NEG]], i16 {{.+}}, i16
 	; CHECK: zext i16 %cndmask_b16 to i32
 	; CHECK: and i32 {{.+}}, -65536
 	; CHECK: %cndmask_b16_merge_lo = or i32
@@ -58,13 +60,14 @@ v_cndmask_b16_neg_kernel:
 	.type	v_cndmask_b16_abs_kernel,@function
 v_cndmask_b16_abs_kernel:
 	; CHECK: [[CMP_ABS:%.+]] = icmp ult i32 0,
+	; CHECK: [[ACTIVE_ABS:%vcmp_active[0-9]*]] = and i1 [[CMP_ABS]], %{{[^ ]+}}
 	v_cmp_lt_u32_e64 s0, 0, v0
 	; CHECK: trunc i32 {{.+}} to i16
 	; CHECK: trunc i32 {{.+}} to i16
 	; CHECK: bitcast i16 {{.+}} to half
 	; CHECK: %abs_b16_src1 = call half @llvm.fabs.f16(half
 	; CHECK: bitcast half %abs_b16_src1 to i16
-	; CHECK: %cndmask_b16 = select i1 [[CMP_ABS]], i16 {{.+}}, i16
+	; CHECK: %cndmask_b16 = select i1 [[ACTIVE_ABS]], i16 {{.+}}, i16
 	; CHECK: zext i16 %cndmask_b16 to i32
 	; CHECK: and i32 {{.+}}, -65536
 	; CHECK: %cndmask_b16_merge_lo = or i32

@@ -6,9 +6,10 @@
 ; fused v_cmp+v_cndmask SGPR-condition rewrite (select on cmp, no lane-mask extract).
 ; CHECK-LABEL: define amdgpu_kernel void @v_cmp_cndmask_sgpr_kernel(
 ; CHECK: [[CMP:%vcmpf[0-9]*]] = fcmp oge float %{{[^,]+}}, 5.000000e-01
-; CHECK: %vcmp_ballot = call i64 @llvm.amdgcn.ballot.i64(i1 [[CMP]])
+; CHECK: [[ACTIVE:%vcmp_active[0-9]*]] = and i1 [[CMP]], %{{[^ ]+}}
+; CHECK: %vcmp_ballot = call i64 @llvm.amdgcn.ballot.i64(i1 [[ACTIVE]])
 ; CHECK-NEXT: %vcmp_ballot_trunc = trunc i64 %vcmp_ballot to i32
-; CHECK: %cndmask = select i1 [[CMP]], i32 1065353216, i32 -1082130432
+; CHECK: %cndmask = select i1 [[ACTIVE]], i32 1065353216, i32 -1082130432
 ; CHECK-NOT: %mask_lane_idx{{[0-9]*}} = zext i32 %{{[^ ]+}} to i64
 ; CHECK-NOT: %mask_at_lane{{[0-9]*}} = lshr i64 %{{[^,]+}},
 ; CHECK-NOT: %mask_lane_i1{{[0-9]*}} = icmp ne i64

@@ -261,6 +261,10 @@ struct HotswapTranspileResult {
   // the wave-carrying dimension). 1 means no scaling. Threaded to the loader
   // via get_info.
   int64_t ScaledDispatchFactor = 1;
+  int64_t DependencyFunctionCount = 0;
+  int64_t SourceImageDwordCount = 0;
+  int64_t ObjectRelocationCount = 0;
+  int64_t DependencyRelocationCount = 0;
   std::string backend = "comgr";
   std::string sourceGfx;
   std::string targetGfx;
@@ -272,6 +276,7 @@ struct HotswapTranspileResult {
   std::string FailDetail;
   std::string timingJson;
   std::string kernelName;
+  std::string dependencyFunctionNames;
 
   static HotswapTranspileResult *convert(
       amd_comgr_hotswap_transpile_result_t result) {
@@ -506,6 +511,11 @@ void fillResult(HotswapTranspileResult &result, llvm::StringRef sourceGfx,
     result.TotalCount = pipeline->TotalCount;
     result.ScaledDispatchFactor =
         static_cast<int64_t>(pipeline->ScaledDispatchFactor);
+    result.DependencyFunctionCount = pipeline->DependencyFunctionCount;
+    result.SourceImageDwordCount = pipeline->SourceImageDwordCount;
+    result.ObjectRelocationCount = pipeline->ObjectRelocationCount;
+    result.DependencyRelocationCount = pipeline->DependencyRelocationCount;
+    result.dependencyFunctionNames = pipeline->DependencyFunctionNames;
   }
 }
 
@@ -660,14 +670,12 @@ amd_comgr_status_t hotswapTranspileWithResolvedOptions(
     PipelineOptions.CollectTimings = CollectTimings;
     PipelineOptions.OptLevel = CacheRequest.OptLevel;
     if (!CacheRequest.KernelName.empty()) {
-      Pipeline = COMGR::hotswap::runPipeline(InputBuf,
-                                             SourceIdent.Processor,
-                                             TargetIdent.Processor,
-                                             CacheRequest.KernelName,
-                                             PipelineOptions);
+      Pipeline = COMGR::hotswap::runPipeline(
+          InputBuf, CacheRequest.SourceIsa, CacheRequest.TargetIsa,
+          CacheRequest.KernelName, PipelineOptions);
     } else {
       Pipeline = COMGR::hotswap::runPipelineAllKernels(
-          InputBuf, SourceIdent.Processor, TargetIdent.Processor,
+          InputBuf, CacheRequest.SourceIsa, CacheRequest.TargetIsa,
           PipelineOptions);
     }
     addPipelineTimings(Timings, Pipeline.Timings);
@@ -850,6 +858,18 @@ amd_comgr_status_t AMD_COMGR_API amd_comgr_hotswap_transpile_result_get_info(
   case AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_SCALED_DISPATCH_FACTOR:
     *static_cast<int64_t *>(value) = Result->ScaledDispatchFactor;
     return AMD_COMGR_STATUS_SUCCESS;
+  case AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_DEPENDENCY_FUNCTION_COUNT:
+    *static_cast<int64_t *>(value) = Result->DependencyFunctionCount;
+    return AMD_COMGR_STATUS_SUCCESS;
+  case AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_SOURCE_IMAGE_DWORD_COUNT:
+    *static_cast<int64_t *>(value) = Result->SourceImageDwordCount;
+    return AMD_COMGR_STATUS_SUCCESS;
+  case AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_OBJECT_RELOCATION_COUNT:
+    *static_cast<int64_t *>(value) = Result->ObjectRelocationCount;
+    return AMD_COMGR_STATUS_SUCCESS;
+  case AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_DEPENDENCY_RELOCATION_COUNT:
+    *static_cast<int64_t *>(value) = Result->DependencyRelocationCount;
+    return AMD_COMGR_STATUS_SUCCESS;
   }
   return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
 }
@@ -896,6 +916,9 @@ amd_comgr_status_t AMD_COMGR_API amd_comgr_hotswap_transpile_result_get_string(
     break;
   case AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_KERNEL_NAME:
     Field = &Result->kernelName;
+    break;
+  case AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_DEPENDENCY_FUNCTION_NAMES:
+    Field = &Result->dependencyFunctionNames;
     break;
   }
   if (!Field)

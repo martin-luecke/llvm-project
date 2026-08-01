@@ -170,6 +170,19 @@ Expected<HandlerResult> handleValuVcmp(RaiseContext &Ctx, const DecodedInst &Di,
     Cmp = M->IsFloat ? Ctx.B.CreateFCmp(M->Pred, S0, S1, "vcmpf")
                      : Ctx.B.CreateICmp(M->Pred, S0, S1, "vcmp");
 
+  // Plain V_CMP writes zero to its destination mask for lanes disabled by
+  // source EXEC. The scalar IR compare above is evaluated independently in
+  // every target lane, so intersect it with modeled EXEC before balloting or
+  // recording the per-lane SGPR shadow. This matters for divergence idioms
+  // that deliberately issue a compare under an empty EXEC mask and later
+  // merge the resulting SGPR mask (PyTorch ArgMax's NaN arm is one example).
+  // V_CMPX applies the same mask through `CurExec & Mask` below.
+  if (Sop == CanonicalOp::V_CMP) {
+    Value *Active =
+        Ctx.Projection.emitLaneActiveBit(Ctx.B, Ctx.Regs.loadExec(Ctx.B));
+    Cmp = Ctx.B.CreateAnd(Cmp, Active, "vcmp_active");
+  }
+
   if (Sop == CanonicalOp::V_CMPX) {
     // Compare-and-exec: result ANDs into EXEC.
     //

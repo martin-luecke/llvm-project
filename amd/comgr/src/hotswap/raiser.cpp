@@ -64,6 +64,7 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormatVariadic.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
@@ -234,8 +235,9 @@ threadLoopUnsupportedWorkgroupMemoryOrBarrier(ArrayRef<DecodedInst> Insts,
 struct RaiseRetryState {
   // Run under ThreadLoopProjection.
   bool ForceThreadLoopProjection = false;
-  // Disarm ThreadLoopProjection's own C5 gate: the loop is what makes the
-  // refused predicate source-wave-scoped, so the gate would refuse its own fix.
+  // Disarm ThreadLoopProjection's own C5 gate only for the separately-proven
+  // SGPR-forced explicit-readfirstlane route, whose lane lowering is
+  // source-wave-scoped. This is not a general C5 escape hatch.
   bool SuppressC5ForThreadLoopRoute = false;
 };
 
@@ -339,6 +341,17 @@ static Expected<RaiseResult> raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   auto *I32Ty = Type::getInt32Ty(C);
   auto *I64Ty = Type::getInt64Ty(C);
 
+  // The kernel-entry v0 holds the packed workitem id, x[0:9] | y[10:19] |
+  // z[20:29]. ENABLE_VGPR_WORKITEM_ID records the highest enabled dimension.
+  // Compute this before selecting the projection because a scaled launch must
+  // remap the complete flattened local id, not x in isolation.
+  unsigned WorkitemIdCnt =
+      (Meta.ComputePgmRsrc2 >>
+       llvm::amdhsa::COMPUTE_PGM_RSRC2_ENABLE_VGPR_WORKITEM_ID_SHIFT) &
+      ((1u << llvm::amdhsa::COMPUTE_PGM_RSRC2_ENABLE_VGPR_WORKITEM_ID_WIDTH) -
+       1u);
+  unsigned NumWorkitemDims = WorkitemIdCnt >= 2 ? 3u : WorkitemIdCnt + 1u;
+
   // Projection choice.
   //
   // `ModuloReplicationProjection` is the long-standing default: it fans
@@ -438,30 +451,6 @@ static Expected<RaiseResult> raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
     return RaiseFailure::crossWavePredicateChain(KernelName, Detail);
   }
 
-  // Size gate for the scaled dispatch: the runtime scales the block by
-  // W_t / W_s along x, so the scaled flat size must not exceed the target's
-  // hardware threads-per-block maximum.
-  if (UseScaledModrep) {
-    const unsigned Factor = TargetIsa.WaveSize / Isa.WaveSize;
-    const unsigned SourceFlat =
-        Meta.MaxFlatWorkgroupSize > 0 ? Meta.MaxFlatWorkgroupSize : 1024;
-    if (SourceFlat * Factor > AMDGPU::IsaInfo::getMaxFlatWorkGroupSize()) {
-      std::string Detail =
-          formatv("ScaledModuloReplicationProjection needs to launch {0} "
-                  "threads/block "
-                  "(source max_flat_workgroup_size {1} scaled by {2}) but the "
-                  "target "
-                  "hardware limit is {3}; refuse rather than truncate the "
-                  "block. See "
-                  "hotswap/docs/modrep-predicate-chain.md sec. 10.",
-                  SourceFlat * Factor, SourceFlat, Factor,
-                  AMDGPU::IsaInfo::getMaxFlatWorkGroupSize())
-              .str();
-      errs() << "transpiler: pre-translation abort: " << Detail << "\n";
-      return RaiseFailure::crossWavePredicateChain(KernelName, Detail);
-    }
-  }
-
   std::unique_ptr<WaveProjection> ProjectionPtr;
   if (UseThreadLoop) {
     ProjectionPtr =
@@ -472,7 +461,7 @@ static Expected<RaiseResult> raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
               "disabled by the retry caller)\n";
   } else if (UseScaledModrep) {
     ProjectionPtr = std::make_unique<ScaledModuloReplicationProjection>(
-        Isa, TargetIsa, I32Ty, I64Ty);
+        Isa, TargetIsa, I32Ty, I64Ty, NumWorkitemDims);
     errs() << "transpiler: kernel '" << KernelName
            << "' selected ScaledModuloReplicationProjection (scaled dispatch "
               "along x; each target wave hosts one source wave with replica "
@@ -552,6 +541,9 @@ static Expected<RaiseResult> raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   DecodeResult Decoded = std::move(*DecodedOrErr);
   auto &Insts = Decoded.Insts;
   auto &BlockStarts = Decoded.BlockStarts;
+  llvm::SmallVector<KernelSymbolExtent> DependencyFunctionExtents;
+  DependencyFunctionExtents.push_back({KernelName.str(), Options.KernelOffset,
+                                       DecodeLimit - Options.KernelOffset});
 
   // ==== Phase 1.1: s_set_pc_i64 analysis ====
   //
@@ -599,14 +591,14 @@ static Expected<RaiseResult> raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
     return std::nullopt;
   };
   auto FunctionExtentContaining =
-      [&](uint64_t A) -> std::optional<std::pair<uint64_t, uint64_t>> {
+      [&](uint64_t A) -> const KernelSymbolExtent * {
     for (const KernelSymbolExtent &E : Options.FunctionExtents) {
       if (E.Size == 0)
         continue;
       if (A >= E.Offset && A < E.Offset + E.Size)
-        return std::make_pair(E.Offset, E.Offset + E.Size);
+        return &E;
     }
-    return std::nullopt;
+    return nullptr;
   };
   while (true) {
     Expected<SetPcAnalysis> SetpcAnalysisOrErr =
@@ -626,8 +618,12 @@ static Expected<RaiseResult> raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
           RegionContaining(Addr);
       bool NewCallee = false;
       if (!Region) {
-        Region = FunctionExtentContaining(Addr);
-        NewCallee = Region.has_value();
+        if (const KernelSymbolExtent *Callee = FunctionExtentContaining(Addr)) {
+          Region =
+              std::make_pair(Callee->Offset, Callee->Offset + Callee->Size);
+          DependencyFunctionExtents.push_back(*Callee);
+          NewCallee = true;
+        }
       }
       if (!Region) {
         return RaiseFailure::kernelBoundaryViolation(
@@ -802,12 +798,30 @@ static Expected<RaiseResult> raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   Module &M = *Result.Module;
   M.setTargetTriple(Triple("amdgcn-amd-amdhsa"));
 
+  StringRef TargetMachineIsa = Options.CompilationTargetIsa.empty()
+                                   ? Options.SourceIsa
+                                   : Options.CompilationTargetIsa;
+  StringRef TargetMachineCpu =
+      Options.CompilationTargetIsa.empty() ? SourceCpu : TargetCpu;
+  std::string TargetMachineFeatures;
+  TargetIdentifier TargetMachineIdent;
+  if (parseTargetIdentifier(TargetMachineIsa, TargetMachineIdent) ==
+      AMD_COMGR_STATUS_SUCCESS) {
+    for (StringRef Feature : TargetMachineIdent.Features) {
+      if (Feature.size() < 2 ||
+          (Feature.back() != '+' && Feature.back() != '-'))
+        return RaiseFailure::badInput("target ISA '" + TargetMachineIsa +
+                                      "' has a malformed feature");
+      if (!TargetMachineFeatures.empty())
+        TargetMachineFeatures += ',';
+      TargetMachineFeatures += Feature.back();
+      TargetMachineFeatures += Feature.drop_back().str();
+    }
+  }
   TargetOptions Opts;
   std::unique_ptr<TargetMachine> Tm(Mc.Target->createTargetMachine(
-      Triple("amdgcn-amd-amdhsa"),
-      Options.CompilationTargetIsa.empty() ? Options.SourceIsa
-                                           : Options.CompilationTargetIsa,
-      "", Opts, Reloc::PIC_));
+      Triple("amdgcn-amd-amdhsa"), TargetMachineCpu, TargetMachineFeatures,
+      Opts, Reloc::PIC_));
   if (!Tm) {
     errs() << "transpiler: Failed to create TargetMachine\n";
     return RaiseFailure::targetMachineCreationFailed();
@@ -879,17 +893,6 @@ static Expected<RaiseResult> raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
     F->addParamAttr(0, Attribute::getWithByRefType(C, KernargByrefTy));
     F->addParamAttr(0, Attribute::getWithAlignment(C, Align(16)));
   }
-  // The kernel-entry v0 holds the packed workitem id, x[0:9] | y[10:19] |
-  // z[20:29]. ENABLE_VGPR_WORKITEM_ID (COMPUTE_PGM_RSRC2 bits [12:11]) records
-  // how many of x/y/z the source enabled: 0 -> X, 1 -> X+Y, 2 -> X+Y+Z. The
-  // packed v0 seed below reconstructs exactly those fields; seeding only X left
-  // every threadIdx.y / threadIdx.z read folding to 0.
-  unsigned WorkitemIdCnt =
-      (Meta.ComputePgmRsrc2 >>
-       llvm::amdhsa::COMPUTE_PGM_RSRC2_ENABLE_VGPR_WORKITEM_ID_SHIFT) &
-      ((1u << llvm::amdhsa::COMPUTE_PGM_RSRC2_ENABLE_VGPR_WORKITEM_ID_WIDTH) -
-       1u);
-  unsigned NumWorkitemDims = WorkitemIdCnt >= 2 ? 3u : WorkitemIdCnt + 1u;
   {
     // Pin the workgroup size to exactly what the source kernel declared, so
     // the backend lays out LDS / workitem IDs the same way the original
@@ -904,7 +907,18 @@ static Expected<RaiseResult> raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
       // un-scaled source size: the runtime writes that field from the
       // application's requested block before the dispatch path scales the AQL
       // packet, so kernel logic still sees MaxWg.
-      MaxWg *= static_cast<int>(Projection.scaledDispatchFactor());
+      const int ScaledMaxWg =
+          MaxWg * static_cast<int>(Projection.scaledDispatchFactor());
+      // `max_flat_workgroup_size` is a conservative kernel capability, not
+      // the size of every launch. A source kernel may advertise 1024 while a
+      // particular dispatch uses only 128 threads. The scaled target supports
+      // exactly the subset whose actual scaled block fits the target; advertise
+      // that target ceiling and let the launch gate validate every packet.
+      // Refusing from the source metadata maximum would incorrectly reject all
+      // legal smaller dispatches of such a kernel.
+      MaxWg = std::min(
+          ScaledMaxWg,
+          static_cast<int>(AMDGPU::IsaInfo::getMaxFlatWorkGroupSize()));
       // IR-level breadcrumb recording the scale factor along x (e.g. "x2") for
       // offline inspection and the raise_cli lit tests. This is not the runtime
       // signal: the launch runtime learns the factor from the transpile result
@@ -974,12 +988,25 @@ static Expected<RaiseResult> raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   // zero / drops writes, so a raised kernel with a non-trivial LDS
   // round-trip reads from an uninitialised segment.
   //
-  // We mirror the source's `.group_segment_fixed_size` by setting the
-  // per-function `amdgpu-lds-size` attribute in the source-declared
-  // range.  The attribute takes "min,max" -- we pass the same value
-  // for both since the source's static size is known exactly.
+  // Preserve the allocation visible to the source kernel, not merely the
+  // byte count written in its metadata. Hardware rounds every non-zero LDS
+  // request to the source subtarget's allocation granule. That distinction is
+  // observable across families: a gfx1250 kernel may request one byte and use
+  // the entire source allocation granule, while copying the literal one-byte
+  // request to gfx942 allocates a smaller target granule and silently drops
+  // accesses in the remainder. Requesting the source-rounded byte count from
+  // the target preserves all source-addressable LDS. The backend may round it
+  // further for the target, which is safe.
+  //
+  // The attribute takes "min,max"; use the same source-rounded value for both
+  // because the source's static allocation is fixed.
   if (Meta.GroupSegmentFixedSize > 0) {
-    std::string SizeStr = std::to_string(Meta.GroupSegmentFixedSize);
+    uint64_t SourceLdsGranule =
+        static_cast<uint64_t>(AMDGPU::getLdsDwGranularity(*Mc.SubtargetInfo)) *
+        sizeof(uint32_t);
+    uint64_t AllocatedLdsSize =
+        alignTo(Meta.GroupSegmentFixedSize, SourceLdsGranule);
+    std::string SizeStr = std::to_string(AllocatedLdsSize);
     F->addFnAttr("amdgpu-lds-size", SizeStr + "," + SizeStr);
   }
 
@@ -1071,7 +1098,7 @@ static Expected<RaiseResult> raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   // The intrinsic is called only to seed the SGPR pair the source descriptor
   // dedicated to the dispatch packet, so a source that never had the pointer
   // gives a target that does not need it. Same rule as workitem-id y/z above.
-  if (UserSgprLayout.DispatchPtrSgpr < 0)
+  if (UserSgprLayout.DispatchPtrSgpr < 0 && !UseScaledModrep)
     F->addFnAttr("amdgpu-no-dispatch-ptr");
 
   if (UserSgprLayout.DispatchPtrSgpr >= 0) {
@@ -1183,11 +1210,16 @@ static Expected<RaiseResult> raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
     B.CreateStore(Ttmp7Val, Regs.Ttmp[7]);
 
     SeedTtmp8 = [&](IRBuilder<> &SeedB) {
-      // wave_id = workitem_id_x / wavefront_size (32 for gfx12)
-      Value *TidForTtmp = Projection.emitWorkitemIdX(SeedB);
+      // A scaled projection changes the launch geometry and must reconstruct
+      // the source flattened local id before deriving TTMP8's source wave id.
+      // Other projections retain the existing workitem-id-x reconstruction.
+      Value *TidForTtmp =
+          UseScaledModrep
+              ? Projection.emitSourceFlatWorkitemId(SeedB, NumWorkitemDims)
+              : Projection.emitWorkitemIdX(SeedB);
       TidForTtmp->setName("ttmp8_tid");
-      Value *WaveId =
-          SeedB.CreateLShr(TidForTtmp, SeedB.getInt32(5), "wave_id_in_wg");
+      Value *WaveId = SeedB.CreateLShr(
+          TidForTtmp, SeedB.getInt32(Log2_32(Isa.WaveSize)), "wave_id_in_wg");
       Value *Ttmp8Val =
           SeedB.CreateShl(WaveId, SeedB.getInt32(25), "ttmp8_val");
       SeedB.CreateStore(Ttmp8Val, Regs.Ttmp[8]);
@@ -1286,6 +1318,7 @@ static Expected<RaiseResult> raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
                    Options.KernelOffset,
                    KernelEndOffset};
   Ctx.SetpcAnalysis = &SetpcAnalysis;
+  Ctx.DependencyFunctionExtents = DependencyFunctionExtents;
   Ctx.SourcePrivateSegmentFixedSize = Meta.PrivateSegmentFixedSize;
   Ctx.SourceComputePgmRsrc2 = Meta.ComputePgmRsrc2;
   Ctx.SourceKernelCodeProperties = Meta.KernelCodeProperties;
@@ -1963,19 +1996,17 @@ static Expected<RaiseResult> raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
       // Auto-upgrade the WaveNative y/z-derived C5 refusal to a scaled
       // dispatch, which makes each target wave uniform in y/z and turns the
       // upper lanes into replicas so the divergence cannot arise. This is the
-      // default resolution (no flag/env). Eligibility: the y/z refusal
-      // specifically, cross-widening with an integer wave ratio, no matrix ops,
-      // and the scaled block fitting the hardware threads/block max; otherwise
-      // the refusal stands. See hotswap/docs/modrep-predicate-chain.md sec. 10.
+      // default resolution (no flag/env). Eligibility is a y/z refusal,
+      // cross-widening with an integer wave ratio, and no matrix op. The source
+      // metadata maximum is not an eligibility gate: the caller validates the
+      // actual scaled packet against target limits before dispatch. See
+      // hotswap/docs/modrep-predicate-chain.md sec. 10.
       assert(Isa.WaveSize && "source wave size must be nonzero");
       const unsigned ScaleFactor = TargetIsa.WaveSize / Isa.WaveSize;
       const bool CanUpgradeToScaled =
           !Options.ForceScaledModrep && PredReport.WaveNativeYzRefusal &&
           Isa.isWave32() && !TargetIsa.isWave32() && ScaleFactor >= 2 &&
-          (TargetIsa.WaveSize % Isa.WaveSize) == 0 && !HasMatrixOp() &&
-          Meta.MaxFlatWorkgroupSize > 0 &&
-          static_cast<unsigned>(Meta.MaxFlatWorkgroupSize) * ScaleFactor <=
-              AMDGPU::IsaInfo::getMaxFlatWorkGroupSize();
+          (TargetIsa.WaveSize % Isa.WaveSize) == 0 && !HasMatrixOp();
       if (CanUpgradeToScaled) {
         errs()
             << "transpiler: post-raise fallback: retrying kernel '"
@@ -1992,48 +2023,27 @@ static Expected<RaiseResult> raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
                              RaiseRetryState{});
       }
 
-      // C5 predicate-chain refusal -> retry under ThreadLoopProjection.
-      // TLP iterates the kernel body once per source wave with a synthetic
-      // per-iteration source tid (see ThreadLoopProjection::emitWorkitemIdX),
-      // so a workitem.id.x-derived predicate that would diverge across MODREP
-      // replicas / WaveNative packing is evaluated correctly per source wave.
-      // TLP's own C5 gate (shouldRefuseC5) returns false when
-      // SuppressThreadLoopC5 is on, precisely because the loop makes the
-      // predicate source-wave-scoped. Eligible for any cross-widen C5 refusal
-      // (multiplicative wave ratio), not just the WaveNative-equality
-      // sub-case: the MODREP multi-warp (>1 source wave) refusal -- e.g. an
-      // `icmp ult tid-derived, W_s-1` predicate -- needs the same
-      // per-source-wave iteration. Matrix ops still route to WaveNative (they
-      // need all target lanes simultaneously); TLP is refused for kernels with
-      // LDS/barriers (barrier hoisting + LDS aliasing are unimplemented) via
-      // threadLoopUnsupportedWorkgroupMemoryOrBarrier below.
-      const bool CanRetryThreadLoop =
-          PredReport.Refused && !Retry.ForceThreadLoopProjection &&
-          TargetIsa.WaveSize > Isa.WaveSize &&
-          (TargetIsa.WaveSize % Isa.WaveSize) == 0 && !HasMatrixOp();
-      if (CanRetryThreadLoop) {
-        std::string ThreadLoopUnsupportedDetail;
-        if (threadLoopUnsupportedWorkgroupMemoryOrBarrier(
-                Insts, ThreadLoopUnsupportedDetail)) {
-          errs() << "transpiler: thread-loop C5 fallback not eligible for "
-                    "kernel '"
-                 << KernelName << "': " << ThreadLoopUnsupportedDetail
-                 << "; keeping principled C5 refusal\n";
-        } else {
-          errs() << "transpiler: post-raise fallback: retrying kernel '"
-                 << KernelName
-                 << "' under ThreadLoopProjection after C5 predicate-chain "
-                    "refusal (analysis-triggered, no user opt-in)\n";
-          errs() << "transpiler: thread-loop fallback trigger: "
-                 << PredReport.RefusalDetail << "\n";
-          RaiseOptions ThreadLoopOptions = Options;
-          ThreadLoopOptions.EnableWritelaneRewrite = false;
-          ThreadLoopOptions.EnableWaveNative = false;
-          ThreadLoopOptions.ForceScaledModrep = false;
-          return raiseToIRImpl(TextBytes, KernelName, Meta, ThreadLoopOptions,
-                               {/*Retry.ForceThreadLoopProjection=*/true,
-                                /*Retry.SuppressC5ForThreadLoopRoute=*/true});
-        }
+      // WaveNative holds hardware EXEC full and models each packed source
+      // wave's EXEC in IR. A y/z-divergent early exit can therefore leave a
+      // packed half with stale address state. Plain MODREP keeps hardware EXEC
+      // coupled to the backend's divergent control flow and does not have that
+      // failure mode. Retry the complete lift under MODREP and let its existing
+      // obstruction and C5 checks prove the narrower projection safe or refuse
+      // it. ThreadLoopProjection is not a fallback here: it does not yet clone
+      // the complete CFG into a temporal source-wave loop.
+      if (UseWaveNative && PredReport.WaveNativeYzRefusal && !HasMatrixOp()) {
+        errs() << "transpiler: post-raise fallback: retrying kernel '"
+               << KernelName
+               << "' under ModuloReplicationProjection after WaveNative C5 "
+                  "y/z-derived refusal (analysis-triggered, full safety "
+                  "checks re-run)\n";
+        errs() << "transpiler: modrep fallback trigger: "
+               << PredReport.RefusalDetail << "\n";
+        RaiseOptions ModrepOptions = Options;
+        ModrepOptions.EnableWaveNative = false;
+        ModrepOptions.ForceScaledModrep = false;
+        return raiseToIRImpl(TextBytes, KernelName, Meta, ModrepOptions,
+                             RaiseRetryState{});
       }
       errs() << "transpiler: pre-translation abort: "
              << reasonString(RaiseFailureReason::CrossWavePredicateChain)
@@ -2075,6 +2085,13 @@ static Expected<RaiseResult> raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
 
   Result.UsesScratchPrivateSegment = Ctx.UsesScratchPrivateSegment;
   Result.SourcePrivateSegmentFixedSize = Ctx.SourcePrivateSegmentFixedSize;
+  if (Options.Stats) {
+    Options.Stats->DependencyFunctionNames.clear();
+    Options.Stats->DependencyFunctionExtents = DependencyFunctionExtents;
+    for (const KernelSymbolExtent &Extent : DependencyFunctionExtents)
+      Options.Stats->DependencyFunctionNames.push_back(Extent.Name);
+    Options.Stats->SourceImageDwordAddresses = Ctx.SourceImageDwordAddresses;
+  }
   return Result;
 }
 

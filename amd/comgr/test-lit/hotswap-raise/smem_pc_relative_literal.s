@@ -17,6 +17,7 @@ smem_pc_relative_literal_kernel:
 ; CHECK-LABEL: define amdgpu_kernel void @smem_pc_relative_literal_kernel(
 ; CHECK-NOT: smem_load
 ; CHECK-NOT: inttoptr i64 {{.*}} to ptr addrspace(1)
+; CHECK: phi i32 [ 305419896,
 	s_get_pc_i64 s[4:5]
 .Lafter_getpc:
 	s_add_nc_u64 s[4:5], s[4:5], .Lliteral-.Lafter_getpc

@@ -609,12 +609,8 @@ handleValuCrossLane(RaiseContext &Ctx, const DecodedInst &Di, OpResolver &Op) {
                                          "rfl_source_wave_base");
 
       Value *Exec = Ctx.Regs.loadExec(Ctx.B);
-      Value *ShiftAmt =
-          Ctx.B.CreateZExtOrTrunc(GroupBase, Exec->getType(), "rfl_exec_shift");
-      Value *SourceExecWide =
-          Ctx.B.CreateLShr(Exec, ShiftAmt, "rfl_exec_at_srcwave");
       Value *SourceExec =
-          Ctx.B.CreateTrunc(SourceExecWide, Ctx.I32Ty, "rfl_exec");
+          Ctx.Projection.emitCurrentSourceWaveMask(Ctx.B, Exec, "rfl_exec");
       Function *Cttz = Intrinsic::getOrInsertDeclaration(
           &Ctx.M, Intrinsic::cttz, {Ctx.I32Ty});
       Value *FirstSet = Ctx.B.CreateCall(

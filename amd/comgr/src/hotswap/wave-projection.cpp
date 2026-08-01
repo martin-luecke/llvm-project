@@ -140,6 +140,12 @@ Value *WaveProjection::emitPackedWorkitemId(IRBuilder<> &B,
   return packWorkitemId(B, emitWorkitemIdX(B), NumDims);
 }
 
+Value *WaveProjection::emitSourceFlatWorkitemId(IRBuilder<> &B,
+                                                unsigned NumDims) const {
+  (void)NumDims;
+  return emitWorkitemIdX(B);
+}
+
 Value *WaveProjection::emitCurrentSourceWaveMask(IRBuilder<> &B, Value *Mask,
                                                  const Twine &Name) const {
   Type *SourceTy = sourceWaveMaskTy();
@@ -339,50 +345,148 @@ Value *ModuloReplicationProjection::extractLaneBitFromWaveMask(IRBuilder<> &B,
 // logical thread as hardware lane `i`. Everything else is inherited MODREP.
 // ----------------------------------------------------------------------------
 
-// logical_x = ((x_hw & ~(W_t-1)) >> log2(W_t/W_s)) | (x_hw & (W_s-1))
-//
-// The first term recovers the hardware wave index and rescales it to source
-// lanes; the second term is the source lane within the wave (identical for a
-// lane and its replica). For wave32->wave64 this is
-// `((x_hw & ~63) >> 1) | (x_hw & 31)`.
-static Value *emitScaledDispatchLogicalX(IRBuilder<> &B, Value *RawX,
-                                         unsigned SrcWaveSize,
-                                         unsigned TgtWaveSize) {
+// A full target wave maps target lane L to source lane L % W_s. The final
+// source wave may contain fewer than W_s workitems, however: simply masking L
+// by W_s-1 would turn replica lanes into nonexistent source workitems. Derive
+// that final wave's population from the dispatch geometry and map L modulo the
+// actual population instead.
+static Value *emitScaledDispatchLogicalId(IRBuilder<> &B, Value *RawId,
+                                          Value *SourceFlatSize,
+                                          unsigned SrcWaveSize,
+                                          unsigned TgtWaveSize) {
   assert(TgtWaveSize > SrcWaveSize && (TgtWaveSize % SrcWaveSize) == 0 &&
          "scaled-dispatch remap requires cross-widening with an integer "
          "wave-size ratio");
-  Type *Ty = RawX->getType();
-  const unsigned Ratio = TgtWaveSize / SrcWaveSize;
-  const unsigned RatioLog2 = llvm::Log2_32(Ratio);
-  // Hardware-wave-aligned high part, rescaled to source-lane units.
-  Value *WaveAligned =
-      B.CreateAnd(RawX,
-                  ConstantInt::get(Ty, ~static_cast<uint64_t>(TgtWaveSize - 1u),
-                                   /*IsSigned=*/true),
-                  "dd_wave_aligned");
-  Value *WaveScaled = B.CreateLShr(WaveAligned, ConstantInt::get(Ty, RatioLog2),
-                                   "dd_wave_base");
-  // Source lane within the wave (same for a lane and its replica).
-  Value *SrcLane =
-      B.CreateAnd(RawX, ConstantInt::get(Ty, SrcWaveSize - 1u), "dd_src_lane");
-  return B.CreateOr(WaveScaled, SrcLane, "dd_logical_x");
+  Type *Ty = RawId->getType();
+  Value *TargetWave =
+      B.CreateUDiv(RawId, ConstantInt::get(Ty, TgtWaveSize), "dd_target_wave");
+  Value *SourceWaveBase = B.CreateMul(
+      TargetWave, ConstantInt::get(Ty, SrcWaveSize), "dd_source_wave_base");
+  Value *SourceWaveRemaining =
+      B.CreateSub(SourceFlatSize, SourceWaveBase, "dd_source_wave_remaining");
+  Value *IsPartialSourceWave =
+      B.CreateICmpULT(SourceWaveRemaining, ConstantInt::get(Ty, SrcWaveSize),
+                      "dd_is_partial_source_wave");
+  Value *SourceWavePopulation = B.CreateSelect(
+      IsPartialSourceWave, SourceWaveRemaining,
+      ConstantInt::get(Ty, SrcWaveSize), "dd_source_wave_population");
+  Value *TargetLane =
+      B.CreateURem(RawId, ConstantInt::get(Ty, TgtWaveSize), "dd_target_lane");
+  Value *SourceLane =
+      B.CreateURem(TargetLane, SourceWavePopulation, "dd_source_lane");
+  return B.CreateAdd(SourceWaveBase, SourceLane, "dd_logical_flat_tid");
 }
 
 Value *
 ScaledModuloReplicationProjection::emitWorkitemIdX(IRBuilder<> &B) const {
-  // Deliberately bypass ModuloReplicationProjection::emitWorkitemIdX (the
-  // phantom-lane clamp): a scaled dispatch has no phantom lanes, every
-  // hardware lane is a real source thread or an exact replica of one.
-  Value *Raw = WaveProjection::emitWorkitemIdX(B);
-  return emitScaledDispatchLogicalX(B, Raw, Src.WaveSize, Tgt.WaveSize);
+  // Deliberately bypass ModuloReplicationProjection's phantom-lane clamp. A
+  // scaled dispatch has no phantom lanes, but the source-visible x coordinate
+  // must be reconstructed from the flattened physical local id: x alone is
+  // not wave-carrying for shapes such as (1, 256, 2).
+  return emitSourceWorkitemIds(B).X;
 }
 
 Value *ScaledModuloReplicationProjection::emitPackedWorkitemId(
     IRBuilder<> &B, unsigned NumDims) const {
-  // Remapped x OR'd with the source's raw y/z fields. y/z are per-thread
-  // correct as launched and become wave-uniform once x is doubled, so no
-  // remap or clamp is applied to them.
-  return packWorkitemId(B, emitWorkitemIdX(B), NumDims);
+  assert(NumDims == NumWorkitemDims &&
+         "scaled projection workitem dimension mismatch");
+  SourceWorkitemIds Ids = emitSourceWorkitemIds(B);
+  if (NumDims < 2)
+    return Ids.X;
+  Value *Packed = B.CreateOr(
+      Ids.X,
+      B.CreateShl(Ids.Y, ConstantInt::get(I32Ty, WorkitemIdYBitOffset),
+                  "dd_tid_y_shl"),
+      "dd_tid_xy");
+  if (NumDims < 3)
+    return Packed;
+  return B.CreateOr(Packed,
+                    B.CreateShl(Ids.Z,
+                                ConstantInt::get(I32Ty, WorkitemIdZBitOffset),
+                                "dd_tid_z_shl"),
+                    "dd_tid_xyz");
+}
+
+Value *ScaledModuloReplicationProjection::emitSourceFlatWorkitemId(
+    IRBuilder<> &B, unsigned NumDims) const {
+  assert(NumDims == NumWorkitemDims &&
+         "scaled projection workitem dimension mismatch");
+  return emitSourceWorkitemIds(B).Flat;
+}
+
+ScaledModuloReplicationProjection::SourceWorkitemIds
+ScaledModuloReplicationProjection::emitSourceWorkitemIds(IRBuilder<> &B) const {
+  Module *M = B.GetInsertBlock()->getModule();
+  Function *DispatchPtr =
+      Intrinsic::getOrInsertDeclaration(M, Intrinsic::amdgcn_dispatch_ptr);
+  Value *Dispatch = B.CreateCall(DispatchPtr, {}, "dd_dispatch");
+  Value *GroupXYPtr = B.CreateInBoundsGEP(B.getInt8Ty(), Dispatch,
+                                          ConstantInt::get(B.getInt64Ty(), 4),
+                                          "dd_group_xy_ptr");
+  LoadInst *GroupXY = B.CreateLoad(I32Ty, GroupXYPtr, "dd_group_xy");
+  GroupXY->setAlignment(Align(4));
+  Value *PhysicalSizeX = B.CreateAnd(GroupXY, ConstantInt::get(I32Ty, 0xffff),
+                                     "dd_physical_group_size_x");
+  Value *SourceSizeX = B.CreateUDiv(
+      PhysicalSizeX, ConstantInt::get(I32Ty, scaledDispatchFactor()),
+      "dd_source_group_size_x");
+  Value *SourceSizeY = NumWorkitemDims >= 2
+                           ? B.CreateLShr(GroupXY, ConstantInt::get(I32Ty, 16),
+                                          "dd_source_group_size_y")
+                           : ConstantInt::get(I32Ty, 1);
+  Value *SourceSizeZ = ConstantInt::get(I32Ty, 1);
+  if (NumWorkitemDims >= 3) {
+    Value *GroupZPtr = B.CreateInBoundsGEP(B.getInt8Ty(), Dispatch,
+                                           ConstantInt::get(B.getInt64Ty(), 8),
+                                           "dd_group_z_ptr");
+    LoadInst *GroupZ =
+        B.CreateLoad(B.getInt16Ty(), GroupZPtr, "dd_source_group_size_z_i16");
+    GroupZ->setAlignment(Align(2));
+    SourceSizeZ = B.CreateZExt(GroupZ, I32Ty, "dd_source_group_size_z");
+  }
+  Value *SourceFlatSize = B.CreateMul(
+      SourceSizeX, B.CreateMul(SourceSizeY, SourceSizeZ, "dd_source_size_yz"),
+      "dd_source_flat_size");
+
+  Function *WorkitemX =
+      Intrinsic::getOrInsertDeclaration(M, Intrinsic::amdgcn_workitem_id_x);
+  Value *RawX = B.CreateCall(WorkitemX, {}, "dd_tid_x");
+  Value *RawY = ConstantInt::get(I32Ty, 0);
+  Value *RawZ = ConstantInt::get(I32Ty, 0);
+  if (NumWorkitemDims >= 2) {
+    Function *WorkitemY =
+        Intrinsic::getOrInsertDeclaration(M, Intrinsic::amdgcn_workitem_id_y);
+    RawY = B.CreateCall(WorkitemY, {}, "dd_tid_y");
+  }
+  if (NumWorkitemDims >= 3) {
+    Function *WorkitemZ =
+        Intrinsic::getOrInsertDeclaration(M, Intrinsic::amdgcn_workitem_id_z);
+    RawZ = B.CreateCall(WorkitemZ, {}, "dd_tid_z");
+  }
+
+  Value *FlatYZ = B.CreateAdd(RawY, B.CreateMul(SourceSizeY, RawZ, "dd_flat_z"),
+                              "dd_flat_yz");
+  Value *PhysicalFlat =
+      B.CreateAdd(RawX, B.CreateMul(PhysicalSizeX, FlatYZ, "dd_flat_yz_stride"),
+                  "dd_physical_flat_tid");
+  Value *LogicalFlat = emitScaledDispatchLogicalId(
+      B, PhysicalFlat, SourceFlatSize, Src.WaveSize, Tgt.WaveSize);
+
+  SourceWorkitemIds Result;
+  Result.Flat = LogicalFlat;
+  Result.X = B.CreateURem(LogicalFlat, SourceSizeX, "dd_logical_x");
+  if (NumWorkitemDims < 2) {
+    Result.Y = ConstantInt::get(I32Ty, 0);
+    Result.Z = ConstantInt::get(I32Ty, 0);
+    return Result;
+  }
+
+  Value *FlatAfterX = B.CreateUDiv(LogicalFlat, SourceSizeX, "dd_flat_after_x");
+  Result.Y = B.CreateURem(FlatAfterX, SourceSizeY, "dd_logical_y");
+  Result.Z = NumWorkitemDims >= 3
+                 ? B.CreateUDiv(FlatAfterX, SourceSizeY, "dd_logical_z")
+                 : ConstantInt::get(I32Ty, 0);
+  return Result;
 }
 
 // ----------------------------------------------------------------------------

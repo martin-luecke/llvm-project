@@ -7,11 +7,12 @@
 ; s_and_b32 high-bit wave-mask lowering under --disable-wave-native.
 ; CHECK-LABEL: define amdgpu_kernel void @s_and_imm_high_bit_mask_kernel(
 ; CHECK: %vcmpf = fcmp oge float %{{[^,]+}}, 5.000000e-01
+; CHECK: [[ACTIVE:%vcmp_active[0-9]*]] = and i1 %vcmpf, %{{[^ ]+}}
 ; CHECK: %mask_at_lane = lshr i64 -281470681808896, %mask_lane_idx
 ; CHECK: %mask_lane_bit = and i64 %mask_at_lane, 1
 ; CHECK: %mask_lane_i1 = icmp ne i64 %mask_lane_bit, 0
 ; CHECK: %and = and i32 %{{[^,]+}}, -65536
-; CHECK: %wave_mask_and = and i1 %vcmpf, %mask_lane_i1
+; CHECK: %wave_mask_and = and i1 [[ACTIVE]], %mask_lane_i1
 ; CHECK: %cndmask = select i1 %wave_mask_and, i32 1, i32 0
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"

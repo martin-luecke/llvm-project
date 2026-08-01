@@ -357,6 +357,8 @@ Expected<HandlerResult> handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
                 "constant SMEM address does not point inside a supported "
                 "source code-object section");
           }
+          if (!llvm::is_contained(Ctx.SourceImageDwordAddresses, *DwordAddr))
+            Ctx.SourceImageDwordAddresses.push_back(*DwordAddr);
           Ctx.Regs.storeSGPR32(Ctx.B, Dest.BaseIdx + D,
                                ConstantInt::get(Ctx.I32Ty, *Dword));
         }

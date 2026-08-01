@@ -1,24 +1,22 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:     --emit-ir=scaled_modrep_too_large_refuse_kernel 2>&1 \
-; RUN:   | %FileCheck %s --check-prefix=NOUPGRADE
+; RUN:   | %FileCheck %s
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && not raise_cli %t.hsaco --target-isa=gfx942 --force-scaled-modrep \
+; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --force-scaled-modrep \
 ; RUN:     --emit-ir=scaled_modrep_too_large_refuse_kernel 2>&1 \
-; RUN:   | %FileCheck %s --check-prefix=SIZE
+; RUN:   | %FileCheck %s
 
-; A 1024-thread block would need 2048 threads once scaled, past the target max,
-; so the scaled route is ineligible. Without --force the y/z refusal is rescued
-; by the ThreadLoop C5 retry; --force-scaled-modrep refuses with the size gate.
+; The metadata advertises a conservative 1024-thread source maximum, but the
+; scaled target is legal for each dispatch whose actual source block is at most
+; 512 threads. Translation therefore caps the target metadata at the hardware
+; limit and reports the x2 dispatch factor; the launch gate owns the per-packet
+; size check and refuses an actual source block larger than 512.
 
-; NOUPGRADE: retrying kernel {{.+}} under ThreadLoopProjection after C5 predicate-chain refusal
-; NOUPGRADE: thread-loop fallback trigger: workitem.id.y()/.z()-derived predicate under WaveNative
-; NOUPGRADE: selected ThreadLoopProjection
-; NOUPGRADE-NOT: ScaledModuloReplicationProjection
-; NOUPGRADE: define amdgpu_kernel void @scaled_modrep_too_large_refuse_kernel(
-; SIZE: ScaledModuloReplicationProjection needs to launch 2048 thread
-; SIZE-SAME: target hardware limit is 1024
-; SIZE-NOT: define amdgpu_kernel void @scaled_modrep_too_large_refuse_kernel(
+; CHECK: selected ScaledModuloReplicationProjection
+; CHECK: define amdgpu_kernel void @scaled_modrep_too_large_refuse_kernel(
+; CHECK-DAG: "amdgpu-flat-work-group-size"="1024,1024"
+; CHECK-DAG: "hotswap-scaled-dispatch"="x2"
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.text

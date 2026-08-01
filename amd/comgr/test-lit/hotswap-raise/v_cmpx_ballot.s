@@ -10,7 +10,8 @@
 ; CHECK-NEXT: %cmpx_ballot = call i64 @llvm.amdgcn.ballot.i64(i1 %[[CMPX_CMP]])
 ; CHECK-NEXT: %cmpx_exec = and i64 {{[^,]+}}, %cmpx_ballot
 ; CHECK:      %[[VCMP:[^ ]+]] = icmp ult i32 %{{[^ ,]+}}, 96
-; CHECK-NEXT: %vcmp_ballot = call i64 @llvm.amdgcn.ballot.i64(i1 %[[VCMP]])
+; CHECK:      %[[ACTIVE:vcmp_active[0-9]*]] = and i1 %[[VCMP]], %{{[^ ]+}}
+; CHECK-NEXT: %vcmp_ballot = call i64 @llvm.amdgcn.ballot.i64(i1 %[[ACTIVE]])
 ; CHECK-NEXT: %vcmp_ballot_trunc = trunc i64 %vcmp_ballot to i32
 ; CHECK-NOT: sext i1 %{{[^ ]+}} to i32
 ; CHECK-NOT: trunc i64 %cmpx_ballot to i32

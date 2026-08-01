@@ -19,12 +19,13 @@ v_cndmask_b32_modifiers_kernel:
 	v_mov_b32_e32 v1, s0
 	v_mov_b32_e32 v2, s1
 	; CHECK: [[CMP:%[[:alnum:]_.]+]] = icmp ult i32 0,
+	; CHECK: [[ACTIVE:%vcmp_active[0-9]*]] = and i1 [[CMP]], %{{[^ ]+}}
 	v_cmp_lt_u32_e64 s0, 0, v0
 	; CHECK: [[NEG:%[[:alnum:]_.]+]] = fneg float %{{[^,]+}}
 	; CHECK: [[NEG_BITS:%[[:alnum:]_.]+]] = bitcast float [[NEG]] to i32
 	; CHECK: [[ABS:%[[:alnum:]_.]+]] = call float @llvm.fabs.f32(float %{{[^)]+}})
 	; CHECK: [[ABS_BITS:%[[:alnum:]_.]+]] = bitcast float [[ABS]] to i32
-	; CHECK: %cndmask = select i1 [[CMP]], i32 [[ABS_BITS]], i32 [[NEG_BITS]]
+	; CHECK: %cndmask = select i1 [[ACTIVE]], i32 [[ABS_BITS]], i32 [[NEG_BITS]]
 	v_cndmask_b32_e64 v1, -v1, |v2|, s0
 	global_store_b32 v0, v1, s[2:3]
 	s_endpgm

@@ -7,7 +7,8 @@
 ; CHECK-LABEL: define amdgpu_kernel void @v_cmp_i16_trunc_kernel(
 ; CHECK: [[SRC:%[A-Za-z0-9_.]+]] = trunc i32 {{.*}} to i16
 ; CHECK: [[CMP:%[^ ]+]] = icmp slt i16 -1, [[SRC]]
-; CHECK: %vcmp_ballot = call i64 @llvm.amdgcn.ballot.i64(i1 [[CMP]])
+; CHECK: [[ACTIVE:%vcmp_active[0-9]*]] = and i1 [[CMP]], %{{[^ ]+}}
+; CHECK: %vcmp_ballot = call i64 @llvm.amdgcn.ballot.i64(i1 [[ACTIVE]])
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6

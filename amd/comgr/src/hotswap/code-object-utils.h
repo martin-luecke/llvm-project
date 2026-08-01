@@ -58,8 +58,14 @@ struct TextSection {
 /// Resolved text-section extent for a kernel symbol. `Offset` is relative to
 /// `.text`; `Size` bounds decoding to the selected symbol's byte range.
 struct KernelSymbolExtent {
+  std::string Name;
   uint64_t Offset = 0;
   uint64_t Size = 0;
+};
+
+struct DependencyRelocationInfo {
+  uint64_t ObjectRelocationCount = 0;
+  llvm::SmallVector<uint64_t> DependencyRelocationOffsets;
 };
 
 /// One entry of the kernel argument table extracted from the AMDGPU MsgPack
@@ -192,6 +198,15 @@ findKernelSymbolExtent(llvm::MemoryBufferRef ElfData,
 /// and lifted alongside the caller.
 llvm::Expected<llvm::SmallVector<KernelSymbolExtent>>
 listTextFunctionExtents(llvm::MemoryBufferRef ElfData);
+
+/// Classify ELF relocations by whether their relocation location overlaps a
+/// decoded dependency function or a source-image dword materialized by the
+/// translation. Relocations elsewhere in the object are counted but are not
+/// part of the selected kernel's dependency closure.
+llvm::Expected<DependencyRelocationInfo> analyzeDependencyRelocations(
+    llvm::MemoryBufferRef ElfData,
+    llvm::ArrayRef<KernelSymbolExtent> DependencyFunctions,
+    llvm::ArrayRef<uint64_t> SourceImageDwordAddresses);
 
 } // namespace COMGR::hotswap
 

@@ -76,8 +76,11 @@ struct RaiseContext {
   llvm::ArrayRef<uint8_t> SourceTextBytes;
   uint64_t SourceTextBaseAddress = 0;
   llvm::ArrayRef<TextSection::ImageSection> SourceImageSections;
+  llvm::SmallVector<uint64_t> SourceImageDwordAddresses;
   uint64_t KernelStartOffset = 0;
   uint64_t KernelEndOffset = 0;
+  // Selected kernel plus every statically followed outlined helper.
+  llvm::ArrayRef<KernelSymbolExtent> DependencyFunctionExtents;
 
   RaiseContext(llvm::LLVMContext &C, llvm::Module &M, llvm::IRBuilder<> &B,
                AllocaRegFile &Regs, const WaveProjection &Projection,

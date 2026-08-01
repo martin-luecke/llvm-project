@@ -8,6 +8,11 @@
 ; RUN:     --disable-writelane-rewrite \
 ; RUN:     --emit-ir=writelane_sgpr_forced_use_kernel 2>/dev/null \
 ; RUN:   | %FileCheck %s --check-prefix=UNCHANGED
+; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
+; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 \
+; RUN:     --force-scaled-modrep \
+; RUN:     --emit-ir=writelane_sgpr_forced_use_kernel 2>/dev/null \
+; RUN:   | %FileCheck %s --check-prefix=MODREP
 
 ; writelane sgpr-source forced-use rewrite (bpermute readfirstlane), no thread-loop projection.
 ; REWRITE-NOT: ThreadLoopProjection
@@ -22,6 +27,15 @@
 ; UNCHANGED: readfirstlane_srcwave = call i32 @llvm.amdgcn.ds.bpermute
 ; UNCHANGED-NOT: cwd_lane_id_lo
 ; UNCHANGED-NOT: cwd_writelane_rewritten
+
+; MODREP-LABEL: define amdgpu_kernel void @writelane_sgpr_forced_use_kernel(
+; A modulo-replicated source EXEC is already source-width. In particular, the
+; upper replica must not shift this i32 mask by 32 while finding its first
+; active source lane.
+; MODREP: %rfl_source_wave_base{{.*}} = and i32 %lane_id, -32
+; MODREP-NOT: rfl_exec_at_srcwave
+; MODREP: %rfl_first_set{{.*}} = call i32 @llvm.cttz.i32(i32 {{.+}}, i1 false)
+; MODREP: %readfirstlane_srcwave{{.*}} = call i32 @llvm.amdgcn.ds.bpermute
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
@@ -125,7 +139,7 @@ amdhsa.kernels:
     .group_segment_fixed_size: 0
     .kernarg_segment_align: 8
     .kernarg_segment_size: 264
-    .max_flat_workgroup_size: 1024
+    .max_flat_workgroup_size: 512
     .name:           writelane_sgpr_forced_use_kernel
     .private_segment_fixed_size: 0
     .sgpr_count:     6

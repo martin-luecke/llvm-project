@@ -6,9 +6,11 @@
 ; v_dual_cndmask_b32 SGPR/VCC-cond select lift.
 ; CHECK-LABEL: define amdgpu_kernel void @v_dual_cndmask_b32_sgpr_cond_kernel(
 ; CHECK: [[SGPR_CMP:%[[:alnum:]_.]+]] = icmp ult i32 8,
+; CHECK: [[SGPR_ACTIVE:%vcmp_active[0-9]*]] = and i1 [[SGPR_CMP]], %{{[^ ]+}}
 ; CHECK: [[VCC_CMP:%[[:alnum:]_.]+]] = icmp ult i32 3,
-; CHECK: %vopd_cndmask = select i1 [[SGPR_CMP]],
-; CHECK: %vopd_cndmask{{[0-9]+}} = select i1 [[VCC_CMP]],
+; CHECK: [[VCC_ACTIVE:%vcmp_active[0-9]*]] = and i1 [[VCC_CMP]], %{{[^ ]+}}
+; CHECK: %vopd_cndmask = select i1 [[SGPR_ACTIVE]],
+; CHECK: %vopd_cndmask{{[0-9]+}} = select i1 [[VCC_ACTIVE]],
 ; CHECK-NOT: call i32 @llvm.amdgcn.cndmask
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"

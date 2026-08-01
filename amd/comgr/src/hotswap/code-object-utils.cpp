@@ -394,6 +394,7 @@ findKernelSymbolExtent(llvm::MemoryBufferRef ElfData,
                             "' address is outside .text");
 
   KernelSymbolExtent Extent;
+  Extent.Name = KernelName.str();
   Extent.Offset = *AddrOrErr - TextBase;
 
   uint64_t SymbolSize = llvm::object::ELFSymbolRef(*SymOrErr).getSize();
@@ -475,6 +476,7 @@ listTextFunctionExtents(llvm::MemoryBufferRef ElfData) {
   // address (or .text end) so an outlined helper without a recorded size still
   // gets a usable extent.
   struct FuncSym {
+    std::string Name;
     uint64_t Addr;
     uint64_t Size;
   };
@@ -496,7 +498,11 @@ listTextFunctionExtents(llvm::MemoryBufferRef ElfData) {
       return AddrOrErr.takeError();
     if (*AddrOrErr < TextBase || *AddrOrErr >= TextEnd)
       continue;
-    Funcs.push_back({*AddrOrErr, llvm::object::ELFSymbolRef(Sym).getSize()});
+    llvm::Expected<llvm::StringRef> NameOrErr = Sym.getName();
+    if (!NameOrErr)
+      return NameOrErr.takeError();
+    Funcs.push_back({NameOrErr->str(), *AddrOrErr,
+                     llvm::object::ELFSymbolRef(Sym).getSize()});
   }
 
   llvm::sort(Funcs, [](const FuncSym &A, const FuncSym &B) {
@@ -518,11 +524,58 @@ listTextFunctionExtents(llvm::MemoryBufferRef ElfData) {
       Size = NextAddr - F.Addr;
     }
     KernelSymbolExtent Extent;
+    Extent.Name = F.Name;
     Extent.Offset = F.Addr - TextBase;
     Extent.Size = Size;
     Extents.push_back(Extent);
   }
   return Extents;
+}
+
+llvm::Expected<DependencyRelocationInfo> analyzeDependencyRelocations(
+    llvm::MemoryBufferRef ElfData,
+    llvm::ArrayRef<KernelSymbolExtent> DependencyFunctions,
+    llvm::ArrayRef<uint64_t> SourceImageDwordAddresses) {
+  llvm::Expected<std::unique_ptr<llvm::object::ObjectFile>> ObjOrErr =
+      llvm::object::ObjectFile::createELFObjectFile(ElfData);
+  if (!ObjOrErr)
+    return ObjOrErr.takeError();
+
+  uint64_t TextBase = UINT64_MAX;
+  for (const llvm::object::SectionRef &Sec : (*ObjOrErr)->sections()) {
+    llvm::Expected<llvm::StringRef> NameOrErr = Sec.getName();
+    if (!NameOrErr)
+      return NameOrErr.takeError();
+    if (*NameOrErr == ".text") {
+      TextBase = Sec.getAddress();
+      break;
+    }
+  }
+  if (TextBase == UINT64_MAX)
+    return makeHotswapError(
+        "analyzeDependencyRelocations: .text section not found");
+
+  DependencyRelocationInfo Result;
+  for (const llvm::object::SectionRef &Sec : (*ObjOrErr)->sections()) {
+    for (const llvm::object::RelocationRef &Relocation : Sec.relocations()) {
+      ++Result.ObjectRelocationCount;
+      const uint64_t Address = Relocation.getOffset();
+      const bool InFunction = llvm::any_of(
+          DependencyFunctions, [&](const KernelSymbolExtent &Extent) {
+            if (Extent.Offset > UINT64_MAX - TextBase)
+              return false;
+            const uint64_t Begin = TextBase + Extent.Offset;
+            return Address >= Begin && Address - Begin < Extent.Size;
+          });
+      const bool InSourceDword =
+          llvm::any_of(SourceImageDwordAddresses, [&](uint64_t DwordAddress) {
+            return Address >= DwordAddress && Address - DwordAddress < 4;
+          });
+      if (InFunction || InSourceDword)
+        Result.DependencyRelocationOffsets.push_back(Address);
+    }
+  }
+  return Result;
 }
 
 llvm::Error checkLiftedKernargSegment(const KernelMeta &Emitted,

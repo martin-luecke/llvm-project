@@ -1,5 +1,6 @@
 #include "pipeline.h"
 #include "code-object-utils.h"
+#include "comgr.h"
 #include "mc-state.h"
 #include "raise-failure.h"
 #include "raiser.h"
@@ -150,10 +151,32 @@ createHotswapTargetMachine(llvm::StringRef TargetISA, unsigned OptLevel) {
         llvm::Twine("transpiler: AMDGPU target not registered: ") + Err);
   llvm::CodeGenOptLevel CGOL = llvm::CodeGenOpt::getLevel(OptLevel).value_or(
       llvm::CodeGenOptLevel::Default);
+  llvm::StringRef Processor = TargetISA;
+  std::string Features;
+  TargetIdentifier Ident;
+  if (parseTargetIdentifier(TargetISA, Ident) == AMD_COMGR_STATUS_SUCCESS) {
+    Processor = Ident.Processor;
+    for (llvm::StringRef Feature : Ident.Features) {
+      if (Feature.size() < 2 ||
+          (Feature.back() != '+' && Feature.back() != '-'))
+        return llvm::createStringError(
+            llvm::Twine("transpiler: malformed target feature '") + Feature +
+            "'");
+      if (!Features.empty())
+        Features += ',';
+      Features += Feature.back();
+      Features += Feature.drop_back().str();
+    }
+  }
   llvm::TargetOptions Opts;
-  return std::unique_ptr<llvm::TargetMachine>(TheTarget->createTargetMachine(
-      TheTriple, TargetISA, /*Features=*/"", Opts, llvm::Reloc::PIC_,
+  std::unique_ptr<llvm::TargetMachine> TM(TheTarget->createTargetMachine(
+      TheTriple, Processor, Features, Opts, llvm::Reloc::PIC_,
       /*CodeModel=*/std::nullopt, CGOL));
+  if (!TM)
+    return llvm::createStringError(
+        llvm::Twine("transpiler: failed to create TargetMachine for ISA '") +
+        TargetISA + "'");
+  return TM;
 }
 
 // In-process `opt`: run the default per-module pipeline at OptLevel.
@@ -383,17 +406,24 @@ static bool raiseAndCompileKernel(
              << llvm::utohexstr(KernelSize) << "\n");
 
   // Function-symbol extents let the raiser follow a tail-call into an outlined
-  // device helper outside this kernel's own extent (see raiseToIR).
-  // Best-effort: on failure fall back to an empty list, which keeps the strict
-  // in-extent-only behavior.
+  // device helper outside this kernel's own extent (see raiseToIR). Failure to
+  // enumerate them is not equivalent to proving that the selected kernel has
+  // no helper dependencies, so keep this path fail-closed.
   llvm::SmallVector<KernelSymbolExtent> FunctionExtents;
   if (llvm::Expected<llvm::SmallVector<KernelSymbolExtent>> ExtentsOrErr =
           listTextFunctionExtents(CodeObjectData)) {
     FunctionExtents = std::move(*ExtentsOrErr);
   } else {
-    LLVM_DEBUG(llvm::dbgs() << "hotswap: listTextFunctionExtents failed, "
-                               "falling back to empty extents list\n");
-    llvm::consumeError(ExtentsOrErr.takeError());
+    std::string Err = llvm::toString(ExtentsOrErr.takeError());
+    Result.FailKernel = KernelName;
+    Result.FailReason = "DependencyFunctionEnumerationFailed";
+    Result.FailFormat = "DependencyClosure";
+    Result.FailDetail = Err;
+    llvm::errs() << "transpiler: dependency-function enumeration failed for '"
+                 << KernelName << "': " << Err << "\n";
+    Result.Timings.raiseSeconds +=
+        timingElapsed(Options.CollectTimings, RaiseStart);
+    return false;
   }
 
   RaiseStats Stats;
@@ -454,6 +484,49 @@ static bool raiseAndCompileKernel(
   }
 
   RaiseResult Raised = std::move(*RaisedOrErr);
+  llvm::Expected<DependencyRelocationInfo> RelocationsOrErr =
+      analyzeDependencyRelocations(CodeObjectData,
+                                   Stats.DependencyFunctionExtents,
+                                   Stats.SourceImageDwordAddresses);
+  if (!RelocationsOrErr) {
+    std::string Err = llvm::toString(RelocationsOrErr.takeError());
+    Result.FailKernel = KernelName;
+    Result.FailReason = "DependencyRelocationAnalysisFailed";
+    Result.FailFormat = "DependencyClosure";
+    Result.FailDetail = Err;
+    llvm::errs() << "transpiler: dependency-relocation analysis failed for '"
+                 << KernelName << "': " << Err << "\n";
+    Result.Timings.raiseSeconds +=
+        timingElapsed(Options.CollectTimings, RaiseStart);
+    return false;
+  }
+  Result.DependencyFunctionCount +=
+      static_cast<int64_t>(Stats.DependencyFunctionNames.size());
+  Result.SourceImageDwordCount +=
+      static_cast<int64_t>(Stats.SourceImageDwordAddresses.size());
+  Result.ObjectRelocationCount =
+      std::max(Result.ObjectRelocationCount,
+               static_cast<int64_t>(RelocationsOrErr->ObjectRelocationCount));
+  Result.DependencyRelocationCount += static_cast<int64_t>(
+      RelocationsOrErr->DependencyRelocationOffsets.size());
+  for (const std::string &Name : Stats.DependencyFunctionNames) {
+    if (!Result.DependencyFunctionNames.empty())
+      Result.DependencyFunctionNames += '\n';
+    Result.DependencyFunctionNames += Name;
+  }
+  if (!RelocationsOrErr->DependencyRelocationOffsets.empty()) {
+    Result.FailKernel = KernelName;
+    Result.FailReason = "DependencyRelocationUnsupported";
+    Result.FailFormat = "DependencyClosure";
+    Result.FailDetail =
+        "selected dependency closure contains an unresolved ELF relocation";
+    llvm::errs() << "transpiler: dependency closure for '" << KernelName
+                 << "' contains " << Result.DependencyRelocationCount
+                 << " unresolved ELF relocation(s)\n";
+    Result.Timings.raiseSeconds +=
+        timingElapsed(Options.CollectTimings, RaiseStart);
+    return false;
+  }
   Result.LiftedCount += Stats.LiftedCount;
   if (Raised.ScaledDispatchFactor > 1)
     Result.ScaledDispatchFactor = Raised.ScaledDispatchFactor;

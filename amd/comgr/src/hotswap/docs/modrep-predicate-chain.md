@@ -824,10 +824,14 @@ fast path; WaveNative stays the opt-in fast path for kernels it can represent.
 
 - **wmma / mfma:** a matrix fragment spans all `W_t` lanes and cannot be fed from
   `W_s` logical lanes + replicas. Refuse.
-- **Source blocks that don't fit:** the scaled flat size
-  (`max_flat_workgroup_size * W_t/W_s`) must not exceed the target hardware
-  threads/block max (1024 for gfx9/CDNA). The reduce is 512 -> 1024, exactly the
-  limit. Refuse larger blocks rather than truncate.
+- **Actual source blocks that don't fit:** the packet gate must validate every
+  launch after scaling and refuse when its actual flat size times `W_t/W_s`
+  exceeds the target threads/block limit (1024 for gfx9/CDNA). Metadata's
+  `max_flat_workgroup_size` is only a conservative kernel capability: a kernel
+  may advertise 1024 while the current launch uses 128 threads, which safely
+  scales to 256. The translated target advertises the smaller of the scaled
+  source capability and the target hardware ceiling; this deliberately narrows
+  the launch envelope and never authorizes an oversized packet.
 
 ### 10.5 Selection and plumbing
 
@@ -843,14 +847,15 @@ fast path; WaveNative stays the opt-in fast path for kernels it can represent.
   never refuses C5 (both `.x` lane-position and `.y`/`.z` wave-spanning predicates
   are correct by construction); the report flags `WaveNativeYzRefusal` so the
   raiser knows the upgrade applies.
-- `raiser.cpp`: when the WaveNative C5 refusal is the `.y`/`.z` case, no matrix
-  op is present, and the scaled block fits the hardware max, the raiser
+- `raiser.cpp`: when the WaveNative C5 refusal is the `.y`/`.z` case and no
+  matrix op is present, the raiser
   **automatically** retries under the scaled projection (no flag, no env --
   this is the default resolution). It widens
-  `amdgpu-flat-work-group-size` by the factor and records the scaled factor
-  on the transpile result. Ineligible kernels (matrix, or scaled size > hardware
-  max) keep the refusal. `--force-scaled-modrep` selects it unconditionally for
-  offline testing of kernels that do not hit the refusal.
+  `amdgpu-flat-work-group-size` by the factor, capped at the target hardware
+  limit, and records the scaled factor on the transpile result. Matrix kernels
+  keep the refusal.
+  `--force-scaled-modrep` selects the scaled route unconditionally for offline
+  testing of kernels that do not hit the refusal.
 - Hidden-argument reads: nothing to do. The kernarg buffer already holds the
   un-scaled source geometry (see above).
 - Per-kernel runtime signal: the scaled factor is threaded raiser ->
@@ -866,14 +871,16 @@ fast path; WaveNative stays the opt-in fast path for kernels it can represent.
 
 ### 10.6 Flags and tests
 
-- No flag or env is needed to trigger the fix -- the y/z-refusal -> scaled
-  upgrade is automatic. `raise_cli --force-scaled-modrep` (and
+- No flag or env is needed to trigger the fix -- the y/z-refusal takes the
+  automatic scaled upgrade and the launch gate refuses an actual packet whose
+  scaled shape exceeds target limits. `raise_cli --force-scaled-modrep` (and
   `PipelineOptions::ForceScaledModrep`) is an offline testing knob only.
 - Offline regression: `c5_predicate_chain_workitem_id_y_scaled_modrep.s`
   (default auto-upgrade + `--force` both raise with the x-remap, scaled
   `amdgpu-flat-work-group-size`, the `hotswap-scaled-dispatch` marker,
-  and no `init_whole_wave`); `scaled_modrep_too_large_refuse.s` (default and
-  `--force` both refuse an ineligible >512 block via the size gate);
-  `scaled_modrep_wmma_refuse.s` (matrix refusal);
-  `hidden_arg_scaled_dispatch_unscaled.s` (the x workgroup-size read is
-  served un-scaled from the kernarg buffer, with no virtualization).
+  and no `init_whole_wave`); `scaled_modrep_wmma_refuse.s` (matrix refusal);
+  `scaled_modrep_too_large_refuse.s` (a conservative 1024-thread source
+  metadata bound produces a target capped at 1024; actual packet limits remain
+  a runtime obligation); `hidden_arg_scaled_dispatch_unscaled.s` (the x
+  workgroup-size read is served un-scaled from the kernarg buffer, with no
+  virtualization).

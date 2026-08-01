@@ -3,8 +3,9 @@
 
 ; v_cmp_class_f32 class.f32+ballot lift.
 ; CHECK-LABEL: define amdgpu_kernel void @v_cmp_class_f32_kernel(
-; CHECK: %vclass{{[0-9]*}} = call i1 @llvm.amdgcn.class.f32(float %{{[^,]+}}, i32 512)
-; CHECK: %vcmp_ballot = call i64 @llvm.amdgcn.ballot.i64(i1 %vclass{{[0-9]*}})
+; CHECK: [[CMP:%vclass[0-9]*]] = call i1 @llvm.amdgcn.class.f32(float %{{[^,]+}}, i32 512)
+; CHECK: [[ACTIVE:%vcmp_active[0-9]*]] = and i1 [[CMP]], %{{[^ ]+}}
+; CHECK: %vcmp_ballot = call i64 @llvm.amdgcn.ballot.i64(i1 [[ACTIVE]])
 ; CHECK-NEXT: %vcmp_ballot_trunc = trunc i64 %vcmp_ballot to i32
 ; CHECK-NOT: fcmp {{.*}} float %{{[^,]+}}, {{.*}}i32
 ; CHECK-NOT: sext i1 %vclass{{[0-9]*}} to i32

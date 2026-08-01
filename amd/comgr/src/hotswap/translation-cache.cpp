@@ -20,6 +20,7 @@
 
 #include <chrono>
 #include <dlfcn.h>
+#include <limits>
 #include <string>
 #include <sys/stat.h>
 
@@ -43,7 +44,7 @@ double timingElapsed(bool CollectTimings, TimingClock::time_point start) {
   return CollectTimings ? secondsBetween(start, TimingClock::now()) : 0.0;
 }
 
-constexpr int kCacheSchemaVersion = 4;
+constexpr int kCacheSchemaVersion = 5;
 
 struct FileIdentity {
   std::string path;
@@ -420,6 +421,22 @@ llvm::Error validateKernelArray(const llvm::json::Object &obj,
   return llvm::Error::success();
 }
 
+llvm::Error validateDependencyFunctionNames(llvm::StringRef Names,
+                                            int64_t ExpectedCount) {
+  if (ExpectedCount <= 0)
+    return llvm::createStringError(
+        "dependency function count must be positive");
+  if (Names.empty() || Names.front() == '\n' || Names.back() == '\n' ||
+      Names.contains("\n\n"))
+    return llvm::createStringError(
+        "dependency function names are empty or malformed");
+  if (static_cast<uint64_t>(Names.count('\n')) + 1 !=
+      static_cast<uint64_t>(ExpectedCount))
+    return llvm::createStringError(
+        "dependency function name count does not match metadata count");
+  return llvm::Error::success();
+}
+
 llvm::json::Object metadataObject(const TranslationCacheRequest &request,
                                   const KeyData &keyData,
                                   const PipelineResult &Result,
@@ -454,6 +471,11 @@ llvm::json::Object metadataObject(const TranslationCacheRequest &request,
       {"total_count", Result.TotalCount},
       {"scaled_dispatch_factor",
        static_cast<int64_t>(Result.ScaledDispatchFactor)},
+      {"dependency_function_count", Result.DependencyFunctionCount},
+      {"dependency_function_names", Result.DependencyFunctionNames},
+      {"source_image_dword_count", Result.SourceImageDwordCount},
+      {"object_relocation_count", Result.ObjectRelocationCount},
+      {"dependency_relocation_count", Result.DependencyRelocationCount},
       {"c5_suppressed_count", Result.C5SuppressedCount},
       {"c5_suppression_reason", Result.C5SuppressionReason},
       {"uses_scratch_private_segment", Result.UsesScratchPrivateSegment},
@@ -545,6 +567,30 @@ llvm::Error validateMetadata(const TranslationCacheRequest &request,
   llvm::Expected<int64_t> total = requireInt(obj, "total_count");
   if (!total)
     return total.takeError();
+  llvm::Expected<int64_t> scaledDispatchFactor =
+      requireInt(obj, "scaled_dispatch_factor");
+  if (!scaledDispatchFactor)
+    return scaledDispatchFactor.takeError();
+  llvm::Expected<int64_t> dependencyFunctionCount =
+      requireInt(obj, "dependency_function_count");
+  if (!dependencyFunctionCount)
+    return dependencyFunctionCount.takeError();
+  llvm::Expected<std::string> dependencyFunctionNames =
+      requireString(obj, "dependency_function_names");
+  if (!dependencyFunctionNames)
+    return dependencyFunctionNames.takeError();
+  llvm::Expected<int64_t> sourceImageDwordCount =
+      requireInt(obj, "source_image_dword_count");
+  if (!sourceImageDwordCount)
+    return sourceImageDwordCount.takeError();
+  llvm::Expected<int64_t> objectRelocationCount =
+      requireInt(obj, "object_relocation_count");
+  if (!objectRelocationCount)
+    return objectRelocationCount.takeError();
+  llvm::Expected<int64_t> dependencyRelocationCount =
+      requireInt(obj, "dependency_relocation_count");
+  if (!dependencyRelocationCount)
+    return dependencyRelocationCount.takeError();
   llvm::Expected<int64_t> c5Count = requireInt(obj, "c5_suppressed_count");
   if (!c5Count)
     return c5Count.takeError();
@@ -569,6 +615,34 @@ llvm::Error validateMetadata(const TranslationCacheRequest &request,
   if (!targetEnable)
     return targetEnable.takeError();
 
+  if (*lifted < 0 || *lifted > std::numeric_limits<int>::max() || *total < 0 ||
+      *total > std::numeric_limits<int>::max())
+    return llvm::createStringError(
+        "instruction counts are negative or out of range");
+  if (*scaledDispatchFactor <= 0 ||
+      static_cast<uint64_t>(*scaledDispatchFactor) >
+          std::numeric_limits<unsigned>::max())
+    return llvm::createStringError(
+        "scaled dispatch factor is not a positive unsigned integer");
+  if (llvm::Error E = validateDependencyFunctionNames(*dependencyFunctionNames,
+                                                      *dependencyFunctionCount))
+    return E;
+  if (*sourceImageDwordCount < 0 || *objectRelocationCount < 0 ||
+      *dependencyRelocationCount < 0)
+    return llvm::createStringError(
+        "dependency proof counts must be non-negative");
+  if (*c5Count < 0 || *c5Count > std::numeric_limits<int>::max())
+    return llvm::createStringError(
+        "C5 suppression count is negative or out of range");
+  if (*sourceScratch < 0 ||
+      static_cast<uint64_t>(*sourceScratch) >
+          std::numeric_limits<uint32_t>::max() ||
+      *targetScratch < 0 ||
+      static_cast<uint64_t>(*targetScratch) >
+          std::numeric_limits<uint32_t>::max())
+    return llvm::createStringError(
+        "private segment size is negative or out of range");
+
   Result.Success = true;
   Result.LiftedCount = static_cast<int>(*lifted);
   Result.TotalCount = static_cast<int>(*total);
@@ -578,11 +652,12 @@ llvm::Error validateMetadata(const TranslationCacheRequest &request,
   Result.SourcePrivateSegmentFixedSize = static_cast<uint32_t>(*sourceScratch);
   Result.TargetPrivateSegmentFixedSize = static_cast<uint32_t>(*targetScratch);
   Result.TargetEnablePrivateSegment = *targetEnable;
-  // Optional (default 1) so cache entries written before scaled-dispatch
-  // support still load. The cache key includes the scaled-modrep flags, so a
-  // scaled transpile never collides with a non-scaled entry.
-  Result.ScaledDispatchFactor = static_cast<unsigned>(
-      obj.getInteger("scaled_dispatch_factor").value_or(1));
+  Result.ScaledDispatchFactor = static_cast<unsigned>(*scaledDispatchFactor);
+  Result.DependencyFunctionCount = *dependencyFunctionCount;
+  Result.DependencyFunctionNames = std::move(*dependencyFunctionNames);
+  Result.SourceImageDwordCount = *sourceImageDwordCount;
+  Result.ObjectRelocationCount = *objectRelocationCount;
+  Result.DependencyRelocationCount = *dependencyRelocationCount;
   return llvm::Error::success();
 }
 

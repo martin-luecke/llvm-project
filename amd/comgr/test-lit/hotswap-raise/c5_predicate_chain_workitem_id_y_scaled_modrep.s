@@ -24,10 +24,22 @@ c5_predicate_chain_workitem_id_y_scaled_modrep_kernel:
 	v_cmp_lt_u32_e64 s4, v2, 16
 	v_cndmask_b32_e64 v0, -1, v0, s4
 	v_mov_b32_e32 v1, v2
-; hardware lane W_s+i is remapped to the logical thread of lane i:
-; CHECK-DAG: %dd_wave_base{{.*}} = lshr i32 {{.+}}, 1
-; CHECK-DAG: %dd_src_lane{{.*}} = and i32 {{.+}}, 31
-; CHECK-DAG: %dd_logical_x{{.*}} = or i32 {{.+}}
+; The physical x/y coordinates are flattened using the scaled x extent before
+; hardware lane W_s+i is remapped to the logical source thread of lane i.
+; This matters for launch shapes whose x extent is narrower than a source wave.
+; CHECK-DAG: %dd_group_xy{{.*}} = load i32, ptr addrspace(4) {{.+}}, align 4
+; CHECK-DAG: %dd_physical_group_size_x{{.*}} = and i32 {{.+}}, 65535
+; CHECK-DAG: %dd_source_group_size_x{{.*}} = udiv i32 {{.+}}, 2
+; CHECK-DAG: %dd_physical_flat_tid{{.*}} = add i32 {{.+}}
+; The final source wave may be partial. Its target lanes are reduced modulo the
+; actual remaining population instead of being allowed to address nonexistent
+; source workitems.
+; CHECK-DAG: %dd_source_flat_size{{.*}} = mul i32 {{.+}}
+; CHECK-DAG: %dd_source_wave_remaining{{.*}} = sub i32 {{.+}}
+; CHECK-DAG: %dd_source_wave_population{{.*}} = select i1 {{.+}}
+; CHECK-DAG: %dd_source_lane{{.*}} = urem i32 {{.+}}, %dd_source_wave_population
+; CHECK-DAG: %dd_logical_flat_tid{{.*}} = add i32 {{.+}}
+; CHECK-DAG: %dd_logical_y{{.*}} = urem i32 {{.+}}
 ; the x extent is advertised scaled, with a breadcrumb:
 ; CHECK-DAG: "amdgpu-flat-work-group-size"="1024,1024"
 ; CHECK-DAG: "hotswap-scaled-dispatch"="x2"

@@ -3066,6 +3066,16 @@ typedef enum amd_comgr_hotswap_transpile_result_info_s {
      scaling, rather than returning an artifact whose precondition the caller
      cannot see. */
   AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_SCALED_DISPATCH_FACTOR = 0x6, /* int64_t */
+  /** Number of source function symbols in the selected kernel's statically
+      resolved dependency closure, including the requested kernel. */
+  AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_DEPENDENCY_FUNCTION_COUNT = 0x7, /* int64_t */
+  /** Number of source-image dwords materialized into the translated IR. */
+  AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_SOURCE_IMAGE_DWORD_COUNT = 0x8, /* int64_t */
+  /** Number of ELF relocations in the complete source object. */
+  AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_OBJECT_RELOCATION_COUNT = 0x9, /* int64_t */
+  /** Number of unresolved relocations in the selected dependency closure.
+      Successful translation requires this value to be zero. */
+  AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_DEPENDENCY_RELOCATION_COUNT = 0xa, /* int64_t */
 } amd_comgr_hotswap_transpile_result_info_t;
 
 /**
@@ -3088,6 +3098,9 @@ typedef enum amd_comgr_hotswap_transpile_result_string_s {
    */
   AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_TIMING_JSON = 0x9,
   AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_KERNEL_NAME = 0xa,
+  /** Newline-separated source function names in the selected dependency
+      closure. The requested kernel is the first entry. */
+  AMD_COMGR_HOTSWAP_TRANSPILE_RESULT_DEPENDENCY_FUNCTION_NAMES = 0xb,
 } amd_comgr_hotswap_transpile_result_string_t;
 
 /**

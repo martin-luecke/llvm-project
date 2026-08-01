@@ -3,11 +3,14 @@
 ; RUN:     --emit-ir=hidden_arg_scaled_dispatch_kernel 2>&1 \
 ; RUN:   | %FileCheck %s
 
-; Under a scaled dispatch the group-size read stays un-scaled: it comes
-; from the kernarg buffer, which holds the source geometry.
+; The source kernel's own group-size read stays un-scaled because its kernarg
+; buffer still holds source geometry. The projection separately reads the
+; scaled physical x extent from dispatch_ptr and divides it by the factor while
+; reconstructing the source-visible flattened local id.
 ; CHECK-LABEL: define amdgpu_kernel void @hidden_arg_scaled_dispatch_kernel(
 ; CHECK-NOT: _dd_virt
-; CHECK-NOT: call ptr addrspace(4) @llvm.amdgcn.dispatch.ptr()
+; CHECK: %dd_dispatch{{.*}} = call ptr addrspace(4) @llvm.amdgcn.dispatch.ptr()
+; CHECK: %dd_source_group_size_x{{.*}} = udiv i32 {{.+}}, 2
 ; CHECK-NOT: call ptr addrspace(4) @llvm.amdgcn.implicitarg.ptr()
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"

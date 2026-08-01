@@ -14,8 +14,9 @@
 vcmp_scratch_dst_kernel:
 	s_load_b128 s[4:7], s[0:1], 0x0
 	s_wait_kmcnt 0x0
-; CHECK: %vcmp = icmp
-; CHECK: call i64 @llvm.amdgcn.ballot.i64(i1 %vcmp)
+; CHECK: [[CMP:%vcmp[0-9]*]] = icmp
+; CHECK: [[ACTIVE:%vcmp_active[0-9]*]] = and i1 [[CMP]], %{{[^ ]+}}
+; CHECK: call i64 @llvm.amdgcn.ballot.i64(i1 [[ACTIVE]])
 	v_cmp_gt_i64_e64 vcc_hi, s[4:5], s[6:7]
 ; CHECK: %cndmask = select i1 %wn_mask_lane_i1{{[0-9]*}}, i32 {{.*}}, i32
 	v_cndmask_b32 v5, v0, v1, vcc_hi

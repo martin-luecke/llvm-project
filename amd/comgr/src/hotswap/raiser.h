@@ -31,6 +31,9 @@ namespace COMGR::hotswap {
 struct RaiseStats {
   int LiftedCount = 0;
   int TotalCount = 0;
+  llvm::SmallVector<std::string> DependencyFunctionNames;
+  llvm::SmallVector<KernelSymbolExtent> DependencyFunctionExtents;
+  llvm::SmallVector<uint64_t> SourceImageDwordAddresses;
 };
 
 struct RaiseResult {

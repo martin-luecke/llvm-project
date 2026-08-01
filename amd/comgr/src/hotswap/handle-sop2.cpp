@@ -595,16 +595,19 @@ Expected<HandlerResult> handleSOP2(RaiseContext &Ctx, const DecodedInst &Di,
         return std::nullopt;
       return evalOperandAsConst(Di.Inst, Op.srcIdx(I));
     };
+    // Capture source-image provenance before writing the destination. An
+    // in-place PC-relative add writes the same SGPR pair as its source, and
+    // writeReg64 correctly invalidates every overlapping provenance fact.
+    std::optional<uint64_t> Src0SourceAddr = SrcSourceImageAddr(0);
+    std::optional<uint64_t> Src1SourceAddr = SrcSourceImageAddr(1);
+    std::optional<int64_t> Src0Imm = SrcSignedImm(0);
+    std::optional<int64_t> Src1Imm = SrcSignedImm(1);
     Value *Result = Sop == CanonicalOp::S_ADD_NC_U64
                         ? Ctx.B.CreateAdd(Op.src64(0), Op.src64(1), "sadd64")
                         : Ctx.B.CreateSub(Op.src64(0), Op.src64(1), "ssub64");
     ParsedReg Dst = Op.dst();
     Ctx.Regs.writeReg64(Ctx.B, Dst, Result);
     std::optional<uint64_t> SourceImageResult;
-    std::optional<uint64_t> Src0SourceAddr = SrcSourceImageAddr(0);
-    std::optional<uint64_t> Src1SourceAddr = SrcSourceImageAddr(1);
-    std::optional<int64_t> Src0Imm = SrcSignedImm(0);
-    std::optional<int64_t> Src1Imm = SrcSignedImm(1);
     if (Src0SourceAddr && Src1Imm) {
       Expected<uint64_t> NewSourceAddr =
           Sop == CanonicalOp::S_ADD_NC_U64
