@@ -29,14 +29,14 @@
 
 #include "hotswap/fp8-convert.h"
 
+#include "llvm/ADT/STLFunctionalExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
-#include "llvm/ADT/STLFunctionalExtras.h"
-#include "llvm/ADT/SmallVector.h"
 
 #include "gtest/gtest.h"
 
@@ -53,13 +53,12 @@ namespace {
 // results.  Builds a `<256 x i32>` constant [0, 1, ..., 255], calls the real
 // emitter (which the ConstantFolder collapses to a constant), and extracts each
 // lane.  Fails the test if any lane did not fold to a constant.
-std::array<uint8_t, 256> runConverter(
-    llvm::function_ref<Value *(HotswapIRBuilder &, Value *)> Conv) {
+std::array<uint8_t, 256>
+runConverter(llvm::function_ref<Value *(HotswapIRBuilder &, Value *)> Conv) {
   LLVMContext Ctx;
   Module M("fp8convtest", Ctx);
-  Function *F = Function::Create(
-      FunctionType::get(Type::getVoidTy(Ctx), false),
-      GlobalValue::ExternalLinkage, "f", &M);
+  Function *F = Function::Create(FunctionType::get(Type::getVoidTy(Ctx), false),
+                                 GlobalValue::ExternalLinkage, "f", &M);
   BasicBlock *BB = BasicBlock::Create(Ctx, "entry", F);
   HotswapIRBuilder B(BB);
 
@@ -118,18 +117,35 @@ Decoded decode(uint8_t Byte, const Fp8Field &F, bool Fnuz) {
   D.sign = sign;
 
   if (Fnuz) {
-    if (Byte == 0x80) { D.isNaN = true; return D; }
-    if (Byte == 0x00) { D.num = 0; D.den = 1; return D; }
+    if (Byte == 0x80) {
+      D.isNaN = true;
+      return D;
+    }
+    if (Byte == 0x00) {
+      D.num = 0;
+      D.den = 1;
+      return D;
+    }
   } else {
     if (F.expBits == 4) { // E4M3FN: no Inf
-      if (exp == expMask && mant == mantMask) { D.isNaN = true; return D; }
+      if (exp == expMask && mant == mantMask) {
+        D.isNaN = true;
+        return D;
+      }
     } else { // E5M2: Inf/NaN
       if (exp == expMask) {
-        if (mant == 0) D.isInf = true; else D.isNaN = true;
+        if (mant == 0)
+          D.isInf = true;
+        else
+          D.isNaN = true;
         return D;
       }
     }
-    if (Byte == 0x00 || Byte == 0x80) { D.num = 0; D.den = 1; return D; }
+    if (Byte == 0x00 || Byte == 0x80) {
+      D.num = 0;
+      D.den = 1;
+      return D;
+    }
   }
 
   // value = 2^(e - bias) * (1 + mant/2^m)  [normal, exp!=0]
@@ -139,8 +155,13 @@ Decoded decode(uint8_t Byte, const Fp8Field &F, bool Fnuz) {
   int e = (exp == 0) ? (1 - F.bias) : (exp - F.bias);
   // magnitude = mantNum / 2^m * 2^e
   int shift = e - m;
-  if (shift >= 0) { D.num = mantNum << shift; D.den = 1; }
-  else { D.num = mantNum; D.den = 1ull << (-shift); }
+  if (shift >= 0) {
+    D.num = mantNum << shift;
+    D.den = 1;
+  } else {
+    D.num = mantNum;
+    D.den = 1ull << (-shift);
+  }
   return D;
 }
 
@@ -148,8 +169,8 @@ Decoded decode(uint8_t Byte, const Fp8Field &F, bool Fnuz) {
 // format with round-half-to-even, returning the byte (sign applied by caller).
 // Saturates to max-finite on overflow.  This is the spec oracle; it is
 // intentionally structured differently from the converter's byte algebra.
-uint8_t encodeMagnitude(uint64_t num, uint64_t den, int sign,
-                        const Fp8Field &F, bool Fnuz) {
+uint8_t encodeMagnitude(uint64_t num, uint64_t den, int sign, const Fp8Field &F,
+                        bool Fnuz) {
   int expMask = (1 << F.expBits) - 1;
   int mantMask = (1 << F.mantBits) - 1;
   int m = F.mantBits;
@@ -165,33 +186,44 @@ uint8_t encodeMagnitude(uint64_t num, uint64_t den, int sign,
   int exp2 = 0;
   // Bring value into [1,2) by scaling num/den.
   long double v = static_cast<long double>(num) / static_cast<long double>(den);
-  while (v >= 2.0L) { v /= 2.0L; ++exp2; }
-  while (v < 1.0L)  { v *= 2.0L; --exp2; }
+  while (v >= 2.0L) {
+    v /= 2.0L;
+    ++exp2;
+  }
+  while (v < 1.0L) {
+    v *= 2.0L;
+    --exp2;
+  }
 
   int storedExp = exp2 + F.bias;
   int maxStoredExp = Fnuz ? expMask : (F.expBits == 4 ? expMask : expMask - 1);
   // For OCP E4M3FN max finite is exp==15,mant==6 (mant==7 is NaN); handled by
   // saturation below.  For E5M2 OCP max finite exp==30.
-  if (storedExp >= (Fnuz ? (expMask + 1) : (F.expBits == 4 ? expMask + 1
-                                                          : expMask))) {
+  if (storedExp >=
+      (Fnuz ? (expMask + 1) : (F.expBits == 4 ? expMask + 1 : expMask))) {
     // Overflow -> saturate to max finite of the target.
-    if (Fnuz) return static_cast<uint8_t>(signBit | 0x7F);
-    if (F.expBits == 4) return static_cast<uint8_t>(signBit | 0x7E); // 240 OCP
+    if (Fnuz)
+      return static_cast<uint8_t>(signBit | 0x7F);
+    if (F.expBits == 4)
+      return static_cast<uint8_t>(signBit | 0x7E); // 240 OCP
     return static_cast<uint8_t>(signBit | ((expMask - 1) << m) | mantMask);
   }
 
   if (storedExp <= 0) {
     // Subnormal: value = mant/2^m * 2^(1-bias).  mant = round(v * 2^exp2 /
     // 2^(1-bias) * 2^m) but simplest: scale original.
-    long double sub = (static_cast<long double>(num) /
-                       static_cast<long double>(den)) /
-                      std::pow(2.0L, 1 - F.bias) * std::pow(2.0L, m);
+    long double sub =
+        (static_cast<long double>(num) / static_cast<long double>(den)) /
+        std::pow(2.0L, 1 - F.bias) * std::pow(2.0L, m);
     long double flo = std::floor(sub);
     long double frac = sub - flo;
     uint64_t mant = static_cast<uint64_t>(flo);
-    if (frac > 0.5L) mant++;
-    else if (frac == 0.5L) mant += (mant & 1); // round-half-to-even
-    if (mant == 0) return Fnuz ? 0x00 : signBit;
+    if (frac > 0.5L)
+      mant++;
+    else if (frac == 0.5L)
+      mant += (mant & 1); // round-half-to-even
+    if (mant == 0)
+      return Fnuz ? 0x00 : signBit;
     if (mant > (uint64_t)mantMask) {
       // rounded up into the smallest normal
       return static_cast<uint8_t>(signBit | (1 << m));
@@ -204,12 +236,19 @@ uint8_t encodeMagnitude(uint64_t num, uint64_t den, int sign,
   long double flo = std::floor(frac);
   long double f = frac - flo;
   uint64_t mant = static_cast<uint64_t>(flo);
-  if (f > 0.5L) mant++;
-  else if (f == 0.5L) mant += (mant & 1);
-  if (mant > (uint64_t)mantMask) { mant = 0; storedExp++; }
+  if (f > 0.5L)
+    mant++;
+  else if (f == 0.5L)
+    mant += (mant & 1);
+  if (mant > (uint64_t)mantMask) {
+    mant = 0;
+    storedExp++;
+  }
   if (storedExp > maxStoredExp) {
-    if (Fnuz) return static_cast<uint8_t>(signBit | 0x7F);
-    if (F.expBits == 4) return static_cast<uint8_t>(signBit | 0x7E);
+    if (Fnuz)
+      return static_cast<uint8_t>(signBit | 0x7F);
+    if (F.expBits == 4)
+      return static_cast<uint8_t>(signBit | 0x7E);
     return static_cast<uint8_t>(signBit | ((expMask - 1) << m) | mantMask);
   }
   return static_cast<uint8_t>(signBit | (storedExp << m) | mant);
@@ -222,7 +261,8 @@ uint8_t oracleOcpToFnuz(uint8_t Byte, const Fp8Field &Ocp,
   if (D.isNaN || D.isInf) {
     // OCP NaN and E5M2 Inf both map to FNUZ; Inf saturates to max finite,
     // NaN -> 0x80.
-    if (D.isInf) return static_cast<uint8_t>((D.sign << 7) | 0x7F);
+    if (D.isInf)
+      return static_cast<uint8_t>((D.sign << 7) | 0x7F);
     return 0x80;
   }
   return encodeMagnitude(D.num, D.den, D.sign, Fnuz, /*Fnuz=*/true);
@@ -244,40 +284,44 @@ uint8_t oracleFnuzToOcp(uint8_t Byte, const Fp8Field &Fnuz,
 TEST(Fp8Convert, OcpE4M3ToFnuzExhaustive) {
   auto Got = runConverter(convertOcpE4M3ToFnuz);
   for (unsigned Byte = 0; Byte < 256; ++Byte) {
-    uint8_t Want = oracleOcpToFnuz(static_cast<uint8_t>(Byte), OcpE4M3, FnuzE4M3);
+    uint8_t Want =
+        oracleOcpToFnuz(static_cast<uint8_t>(Byte), OcpE4M3, FnuzE4M3);
     EXPECT_EQ(Got[Byte], Want)
-        << "OCP E4M3->FNUZ mismatch at byte 0x" << std::hex << Byte
-        << " got 0x" << (unsigned)Got[Byte] << " want 0x" << (unsigned)Want;
+        << "OCP E4M3->FNUZ mismatch at byte 0x" << std::hex << Byte << " got 0x"
+        << (unsigned)Got[Byte] << " want 0x" << (unsigned)Want;
   }
 }
 
 TEST(Fp8Convert, OcpE5M2ToFnuzExhaustive) {
   auto Got = runConverter(convertOcpE5M2ToFnuz);
   for (unsigned Byte = 0; Byte < 256; ++Byte) {
-    uint8_t Want = oracleOcpToFnuz(static_cast<uint8_t>(Byte), OcpE5M2, FnuzE5M2);
+    uint8_t Want =
+        oracleOcpToFnuz(static_cast<uint8_t>(Byte), OcpE5M2, FnuzE5M2);
     EXPECT_EQ(Got[Byte], Want)
-        << "OCP E5M2->FNUZ mismatch at byte 0x" << std::hex << Byte
-        << " got 0x" << (unsigned)Got[Byte] << " want 0x" << (unsigned)Want;
+        << "OCP E5M2->FNUZ mismatch at byte 0x" << std::hex << Byte << " got 0x"
+        << (unsigned)Got[Byte] << " want 0x" << (unsigned)Want;
   }
 }
 
 TEST(Fp8Convert, FnuzE4M3ToOcpExhaustive) {
   auto Got = runConverter(convertFnuzE4M3ToOcp);
   for (unsigned Byte = 0; Byte < 256; ++Byte) {
-    uint8_t Want = oracleFnuzToOcp(static_cast<uint8_t>(Byte), FnuzE4M3, OcpE4M3);
+    uint8_t Want =
+        oracleFnuzToOcp(static_cast<uint8_t>(Byte), FnuzE4M3, OcpE4M3);
     EXPECT_EQ(Got[Byte], Want)
-        << "FNUZ E4M3->OCP mismatch at byte 0x" << std::hex << Byte
-        << " got 0x" << (unsigned)Got[Byte] << " want 0x" << (unsigned)Want;
+        << "FNUZ E4M3->OCP mismatch at byte 0x" << std::hex << Byte << " got 0x"
+        << (unsigned)Got[Byte] << " want 0x" << (unsigned)Want;
   }
 }
 
 TEST(Fp8Convert, FnuzE5M2ToOcpExhaustive) {
   auto Got = runConverter(convertFnuzE5M2ToOcp);
   for (unsigned Byte = 0; Byte < 256; ++Byte) {
-    uint8_t Want = oracleFnuzToOcp(static_cast<uint8_t>(Byte), FnuzE5M2, OcpE5M2);
+    uint8_t Want =
+        oracleFnuzToOcp(static_cast<uint8_t>(Byte), FnuzE5M2, OcpE5M2);
     EXPECT_EQ(Got[Byte], Want)
-        << "FNUZ E5M2->OCP mismatch at byte 0x" << std::hex << Byte
-        << " got 0x" << (unsigned)Got[Byte] << " want 0x" << (unsigned)Want;
+        << "FNUZ E5M2->OCP mismatch at byte 0x" << std::hex << Byte << " got 0x"
+        << (unsigned)Got[Byte] << " want 0x" << (unsigned)Want;
   }
 }
 

@@ -239,10 +239,9 @@ Expected<HandlerResult> handleMFMA(RaiseContext &Ctx, const DecodedInst &Di,
           Ctx.B.CreateLShr(V, ConstantInt::get(SrcTy, 32)), Ctx.I32Ty);
       Lo = convertFp8Dword(Ctx.B, Lo, IsBf8, *ToFnuz);
       Hi = convertFp8Dword(Ctx.B, Hi, IsBf8, *ToFnuz);
-      return Ctx.B.CreateOr(
-          Ctx.B.CreateZExt(Lo, SrcTy),
-          Ctx.B.CreateShl(Ctx.B.CreateZExt(Hi, SrcTy),
-                          ConstantInt::get(SrcTy, 32)));
+      return Ctx.B.CreateOr(Ctx.B.CreateZExt(Lo, SrcTy),
+                            Ctx.B.CreateShl(Ctx.B.CreateZExt(Hi, SrcTy),
+                                            ConstantInt::get(SrcTy, 32)));
     };
     A = Conv(A, AIsBf8);
     B = Conv(B, BIsBf8);

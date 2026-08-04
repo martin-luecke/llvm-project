@@ -562,11 +562,16 @@ Expected<Value *> emitWMMAtoMFMA(RaiseContext &Ctx, Value *A, Value *Vb,
 
   auto fp8Sides = [&]() -> std::optional<std::pair<bool, bool>> {
     switch (InputType) {
-    case WMMAInputType::FP8_FP8: return std::pair{false, false};
-    case WMMAInputType::FP8_BF8: return std::pair{false, true};
-    case WMMAInputType::BF8_FP8: return std::pair{true, false};
-    case WMMAInputType::BF8_BF8: return std::pair{true, true};
-    default: return std::nullopt; // F16/BF16/IU8 carry no fp8 byte
+    case WMMAInputType::FP8_FP8:
+      return std::pair{false, false};
+    case WMMAInputType::FP8_BF8:
+      return std::pair{false, true};
+    case WMMAInputType::BF8_FP8:
+      return std::pair{true, false};
+    case WMMAInputType::BF8_BF8:
+      return std::pair{true, true};
+    default:
+      return std::nullopt; // F16/BF16/IU8 carry no fp8 byte
     }
   }();
   if (auto ToFnuz = fp8Reencode(Ctx.Isa, Ctx.TargetIsa, Fp8Dir::SrcToTgt)) {
@@ -1482,8 +1487,8 @@ Value *buildScaleFactor(IRBuilder<> &B, Module &M, Type *F32Ty,
 
 // `<4 x float>` of per-output-row scale factors.  The MFMA accumulator holds 4
 // elements per Wave64 lane mapping to output rows 4*(lane/16) + g (g=0..3), all
-// sharing column `lane%16`.  So the B (column) scale byte is shared across the 4
-// elements while the A (row) scale byte varies per element -- hence one
+// sharing column `lane%16`.  So the B (column) scale byte is shared across the
+// 4 elements while the A (row) scale byte varies per element -- hence one
 // ScaleAByte per `g` but a single ScaleBByte.
 Value *buildScaleFactorVec(IRBuilder<> &B, Module &M, Type *F32Ty,
                            Value *ScaleABytes[4], Value *ScaleBByte,
@@ -1588,8 +1593,10 @@ Expected<Value *> emitWMMAScaleF8F6F4toMFMA(
          "post-widen fragments must be 16 fp8 dwords / lane");
 
   if (auto ToFnuz = fp8Reencode(ctx.Isa, ctx.TargetIsa, Fp8Dir::SrcToTgt)) {
-    convertFp8DwordsInPlace(B, aDwordsArr, /*IsBf8=*/aFmtEff == FmtBF8, *ToFnuz);
-    convertFp8DwordsInPlace(B, bDwordsArr, /*IsBf8=*/bFmtEff == FmtBF8, *ToFnuz);
+    convertFp8DwordsInPlace(B, aDwordsArr, /*IsBf8=*/aFmtEff == FmtBF8,
+                            *ToFnuz);
+    convertFp8DwordsInPlace(B, bDwordsArr, /*IsBf8=*/bFmtEff == FmtBF8,
+                            *ToFnuz);
   }
 
   Value *LaneId = emitLaneId(B, M, ctx.I32Ty);
@@ -1643,7 +1650,8 @@ Expected<Value *> emitWMMAScaleF8F6F4toMFMA(
     // source wave (GroupBase 32) reads its own Asc rather than wave 0's.
     Value *ScaleSrc0Row[4];
     if (isa<Constant>(scaleSrc0)) {
-      // Constant A-scale is lane-uniform; every output row sees the same source.
+      // Constant A-scale is lane-uniform; every output row sees the same
+      // source.
       for (Value *&Row : ScaleSrc0Row)
         Row = scaleSrc0;
     } else {
@@ -1694,8 +1702,8 @@ Expected<Value *> emitWMMAScaleF8F6F4toMFMA(
       for (unsigned g = 0; g < 4; ++g)
         ScaleABytes[g] = extractScaleByte(B, ScaleSrc0Row[g], kBlock);
       Value *ScaleBByte = extractScaleByte(B, ScaleSrc1Pass, kBlock);
-      Value *FactorVec = buildScaleFactorVec(
-          B, M, ctx.F32Ty, ScaleABytes, ScaleBByte, aScaleFmt, bScaleFmt);
+      Value *FactorVec = buildScaleFactorVec(B, M, ctx.F32Ty, ScaleABytes,
+                                             ScaleBByte, aScaleFmt, bScaleFmt);
       // Only nullptr for a scale fmt decodeScaleByte can't handle (E5M3), which
       // SupportedScaleFmt rejects before we get here.
       assert(FactorVec && "unsupported scale fmt reached scaled WMMA lowering");

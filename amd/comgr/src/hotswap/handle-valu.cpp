@@ -6,10 +6,10 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "fp8-convert.h"
 #include "handle-valu-f16-utils.h"
 #include "handle-valu-internal.h"
 #include "handle-valu-output-mods.h"
-#include "fp8-convert.h"
 #include "handlers.h"
 #include "opcode-map.h"
 
@@ -3119,8 +3119,7 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
           PkFn,
           {ExtractF(6), ExtractF(7), Dw1Lo, ConstantInt::get(Ctx.I1Ty, 1)},
           "pk_fp8_67");
-      if (auto ToFnuz =
-              fp8Reencode(Ctx.Isa, Ctx.TargetIsa, Fp8Dir::TgtToSrc)) {
+      if (auto ToFnuz = fp8Reencode(Ctx.Isa, Ctx.TargetIsa, Fp8Dir::TgtToSrc)) {
         Dw0 = convertFp8Dword(Ctx.B, Dw0, /*IsBf8=*/false, *ToFnuz);
         Dw1 = convertFp8Dword(Ctx.B, Dw1, /*IsBf8=*/false, *ToFnuz);
       }
@@ -3157,8 +3156,9 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
                        : false;
     Function *CvtFn = Intrinsic::getOrInsertDeclaration(
         &Ctx.M, Intrinsic::amdgcn_cvt_pk_fp8_f32);
-    Ctx.writeReg32(Op.dst(), emitCvtPkFp8F32(Ctx, CvtFn, S0, S1, OldVal, WordSel,
-                                             /*IsBf8=*/false));
+    Ctx.writeReg32(Op.dst(),
+                   emitCvtPkFp8F32(Ctx, CvtFn, S0, S1, OldVal, WordSel,
+                                   /*IsBf8=*/false));
     Hr.Handled = true;
     return Hr;
   }
@@ -3175,8 +3175,9 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
                        : false;
     Function *CvtFn = Intrinsic::getOrInsertDeclaration(
         &Ctx.M, Intrinsic::amdgcn_cvt_pk_bf8_f32);
-    Ctx.writeReg32(Op.dst(), emitCvtPkFp8F32(Ctx, CvtFn, S0, S1, OldVal, WordSel,
-                                             /*IsBf8=*/true));
+    Ctx.writeReg32(Op.dst(),
+                   emitCvtPkFp8F32(Ctx, CvtFn, S0, S1, OldVal, WordSel,
+                                   /*IsBf8=*/true));
     Hr.Handled = true;
     return Hr;
   }

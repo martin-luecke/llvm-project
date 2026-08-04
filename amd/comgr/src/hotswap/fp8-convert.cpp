@@ -104,13 +104,14 @@ Value *convertFnuzE4M3ToOcp(HotswapIRBuilder &B, Value *Bytes) {
   Value *Sign = B.CreateShl(B.CreateAnd(B.CreateLShr(Bytes, S(7)), S(1)), S(7));
   Value *Exp = B.CreateAnd(B.CreateLShr(Bytes, S(3)), S(0xF));
   Value *Mant = B.CreateAnd(Bytes, S(0x7));
-  Value *Norm =
-      B.CreateOr(Sign, B.CreateOr(B.CreateShl(B.CreateSub(Exp, S(1)), S(3)), Mant));
+  Value *Norm = B.CreateOr(
+      Sign, B.CreateOr(B.CreateShl(B.CreateSub(Exp, S(1)), S(3)), Mant));
   Value *NVal =
       B.CreateAdd(B.CreateSelect(B.CreateICmpEQ(Exp, S(1)), S(8), S(0)), Mant);
-  Value *Rne = B.CreateAdd(
-      B.CreateLShr(NVal, S(1)),
-      B.CreateSelect(B.CreateICmpEQ(B.CreateAnd(NVal, S(3)), S(3)), S(1), S(0)));
+  Value *Rne =
+      B.CreateAdd(B.CreateLShr(NVal, S(1)),
+                  B.CreateSelect(B.CreateICmpEQ(B.CreateAnd(NVal, S(3)), S(3)),
+                                 S(1), S(0)));
   Value *Sub = B.CreateOr(Sign, Rne);
   Value *R = B.CreateSelect(B.CreateICmpUGE(Exp, S(2)), Norm, Sub);
   return B.CreateSelect(B.CreateICmpEQ(Bytes, S(0x80)), S(0x7F), R, "e4m3_ocp");
@@ -124,13 +125,14 @@ Value *convertFnuzE5M2ToOcp(HotswapIRBuilder &B, Value *Bytes) {
   Value *Sign = B.CreateShl(B.CreateAnd(B.CreateLShr(Bytes, S(7)), S(1)), S(7));
   Value *Exp = B.CreateAnd(B.CreateLShr(Bytes, S(2)), S(0x1F));
   Value *Mant = B.CreateAnd(Bytes, S(0x3));
-  Value *Norm =
-      B.CreateOr(Sign, B.CreateOr(B.CreateShl(B.CreateSub(Exp, S(1)), S(2)), Mant));
+  Value *Norm = B.CreateOr(
+      Sign, B.CreateOr(B.CreateShl(B.CreateSub(Exp, S(1)), S(2)), Mant));
   Value *NVal =
       B.CreateAdd(B.CreateSelect(B.CreateICmpEQ(Exp, S(1)), S(4), S(0)), Mant);
-  Value *Rne = B.CreateAdd(
-      B.CreateLShr(NVal, S(1)),
-      B.CreateSelect(B.CreateICmpEQ(B.CreateAnd(NVal, S(3)), S(3)), S(1), S(0)));
+  Value *Rne =
+      B.CreateAdd(B.CreateLShr(NVal, S(1)),
+                  B.CreateSelect(B.CreateICmpEQ(B.CreateAnd(NVal, S(3)), S(3)),
+                                 S(1), S(0)));
   Value *Sub = B.CreateOr(Sign, Rne);
   Value *R = B.CreateSelect(B.CreateICmpUGE(Exp, S(2)), Norm, Sub);
   return B.CreateSelect(B.CreateICmpEQ(Bytes, S(0x80)), S(0x7F), R, "e5m2_ocp");
@@ -143,10 +145,11 @@ Value *convertFp8Dword(HotswapIRBuilder &B, Value *Dword, bool IsBf8,
   Constant *Shifts = ConstantVector::get(
       {ConstantInt::get(I32Ty, 0), ConstantInt::get(I32Ty, 8),
        ConstantInt::get(I32Ty, 16), ConstantInt::get(I32Ty, 24)});
-  Constant *ByteMask = ConstantVector::getSplat(
-      ElementCount::getFixed(4), ConstantInt::get(I32Ty, 0xFF));
+  Constant *ByteMask = ConstantVector::getSplat(ElementCount::getFixed(4),
+                                                ConstantInt::get(I32Ty, 0xFF));
   Value *Splat = B.CreateVectorSplat(4, Dword, "fp8_splat");
-  Value *Bytes = B.CreateAnd(B.CreateLShr(Splat, Shifts), ByteMask, "fp8_bytes");
+  Value *Bytes =
+      B.CreateAnd(B.CreateLShr(Splat, Shifts), ByteMask, "fp8_bytes");
   Value *Conv = ToFnuz ? (IsBf8 ? convertOcpE5M2ToFnuz(B, Bytes)
                                 : convertOcpE4M3ToFnuz(B, Bytes))
                        : (IsBf8 ? convertFnuzE5M2ToOcp(B, Bytes)
