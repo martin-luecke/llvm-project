@@ -1621,20 +1621,18 @@ Expected<Value *> emitWMMAScaleF8F6F4toMFMA(
     Value *AddrLo = B.CreateShl(LoLane, B.getInt32(2), "addr_lo");
     Value *AddrHi = B.CreateShl(HiLane, B.getInt32(2), "addr_hi");
 
-    // All 4 K-block scale bytes ride in one i32, so one redistribution per src
-    // suffices. The scale must follow its A/B data: even lane groups (0,2) read
-    // the lower W32 half (AddrLo), odd groups (1,3) the upper (AddrHi).
-    // Constant sources are lane-uniform, so skip the bpermute.
-    Value *IsOddGroup = B.CreateTrunc(LaneGroup, B.getInt1Ty(), "lg_odd");
+    // The B (column) scale is indexed by column = lane%16, identical for all 4
+    // lane groups of a pass -- unlike the A/B operands, whose Lo/Hi split
+    // selects the K-block. The source packs Bsc[lane%16] in the lower W32 half,
+    // so every lane group reads AddrLo; AddrHi would pull the upper source
+    // wave's scale, a distinct value under WaveNative cross-widen. All 4
+    // K-block scale bytes ride in one i32, so one bpermute suffices; constant
+    // sources are lane-uniform, so skip it.
     auto RedistributeScale = [&](Value *ScaleSrc) -> Value * {
       if (isa<Constant>(ScaleSrc))
         return ScaleSrc;
-      Value *Lo = emitDSBpermute(B, M, AddrLo, ScaleSrc);
-      Value *Hi = emitDSBpermute(B, M, AddrHi, ScaleSrc);
-      return B.CreateSelect(IsOddGroup, Hi, Lo, "scale_redist");
+      return emitDSBpermute(B, M, AddrLo, ScaleSrc);
     };
-    // The B (column) scale rides with the lane's column = lane%16, so it follows
-    // the same A/B-data redistribution as the operands.
     Value *ScaleSrc1Pass = RedistributeScale(scaleSrc1);
 
     // The A (row) scale is indexed by the OUTPUT row, not by the lane's own
