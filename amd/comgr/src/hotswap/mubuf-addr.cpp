@@ -402,6 +402,12 @@ Expected<MubufAddr> decodeMubufAddr(RaiseContext &Ctx, const DecodedInst &Di,
                                  "voff_oob_clamped");
   }
   Out.Voffset = Voffset;
+  // Expose NumRecords so the store path can reconstruct the same
+  // `voffset >= NumRecords` out-of-bounds test the load clamp above uses (there
+  // it redirects the offset; for stores it suppresses the write -- see
+  // handle-mubuf.cpp). NumRecords is the runtime descriptor bound, not a source
+  // literal.
+  Out.NumRecords = NumRecords;
 
   Value *CleanDw1 =
       Ctx.B.CreateAnd(Dw.Dw1, ConstantInt::get(Ctx.I32Ty, 0xFFFF));
