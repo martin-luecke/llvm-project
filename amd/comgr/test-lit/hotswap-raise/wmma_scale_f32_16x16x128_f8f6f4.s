@@ -3,6 +3,7 @@
 
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --disable-wave-native --emit-ir=wmma_scale_f32_16x16x128_f8f6f4_kernel | %FileCheck %s --check-prefix=IR_GFX942_MODREP
+; RUN: raise_cli %t.hsaco --target-isa=gfx942 --disable-wave-native --emit-ir=wmma_scale_f32_16x16x128_f8f6f4_kernel | %FileCheck %s --check-prefix=A_SCALE_ROWS
 
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
 ; RUN:   && %not raise_cli %t.hsaco --target-isa=gfx90a --emit-ir=wmma_scale_f32_16x16x128_f8f6f4_kernel 2>&1 | %FileCheck %s --check-prefix=STDERR_GFX90A
@@ -75,6 +76,26 @@ wmma_scale_f32_16x16x128_f8f6f4_kernel:
 ; IR_GFX942_MODREP-NOT: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.bf8.fp8(
 ; IR_GFX942_MODREP-NOT: @llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4
 ; IR_GFX942_MODREP-NOT: @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4
+
+; Each lane's 4 MFMA accumulator elements cover output rows 4*(lane/16)+g
+; (g=0..3), so the A (row) scale is gathered per output row instead of from the
+; lane's own column-indexed operand. Pin the row address arithmetic and the four
+; distinct bpermutes of the SAME A-scale source.
+; A_SCALE_ROWS: %[[LG:[^ ]+]] = lshr i32 %{{[^,]+}}, 4
+; A_SCALE_ROWS: %[[ROW4:[^ ]+]] = shl i32 %[[LG]], 2
+; A_SCALE_ROWS: %[[R0:[^ ]+]] = add i32 %[[ROW4]], 0
+; A_SCALE_ROWS: %[[A0:[^ ]+]] = shl i32 %[[R0]], 2
+; A_SCALE_ROWS: call i32 @llvm.amdgcn.ds.bpermute(i32 %[[A0]], i32 %[[ASRC:[^)]+]])
+; A_SCALE_ROWS: %[[R1:[^ ]+]] = add i32 %[[ROW4]], 1
+; A_SCALE_ROWS: %[[A1:[^ ]+]] = shl i32 %[[R1]], 2
+; A_SCALE_ROWS: call i32 @llvm.amdgcn.ds.bpermute(i32 %[[A1]], i32 %[[ASRC]])
+; A_SCALE_ROWS: %[[R2:[^ ]+]] = add i32 %[[ROW4]], 2
+; A_SCALE_ROWS: %[[A2:[^ ]+]] = shl i32 %[[R2]], 2
+; A_SCALE_ROWS: call i32 @llvm.amdgcn.ds.bpermute(i32 %[[A2]], i32 %[[ASRC]])
+; A_SCALE_ROWS: %[[R3:[^ ]+]] = add i32 %[[ROW4]], 3
+; A_SCALE_ROWS: %[[A3:[^ ]+]] = shl i32 %[[R3]], 2
+; A_SCALE_ROWS: call i32 @llvm.amdgcn.ds.bpermute(i32 %[[A3]], i32 %[[ASRC]])
+
 ; STDERR_GFX90A: raise_cli: kernel 'wmma_scale_f32_16x16x128_f8f6f4_kernel' failed to raise:
 ; STDERR_GFX90A-SAME: v_wmma_scale_f32_16x16x128_f8f6f4
 ; STDERR_GFX90A-SAME: hasFP8Insts
