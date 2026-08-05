@@ -35,11 +35,11 @@ v_cvt_scalef32_pk8_fp8_f32_kernel:
 ; CROSS-DAG: insertelement <8 x float> poison, float %{{.+}}, i64 0
 ; CROSS-DAG: shufflevector <8 x float> %{{.+}}, <8 x float> poison, <8 x i32> zeroinitializer
 ; CROSS-DAG: %scaled = fmul <8 x float>
-; CROSS-DAG: %pk_fp8_01 = call i32 @llvm.amdgcn.cvt.pk.fp8.f32(float %{{.+}}, float %{{.+}}, i32 0, i1 false)
-; CROSS-DAG: %pk_fp8_23 = call i32 @llvm.amdgcn.cvt.pk.fp8.f32(float %{{.+}}, float %{{.+}}, i32 %pk_fp8_01, i1 true)
-; CROSS-DAG: %pk_fp8_45 = call i32 @llvm.amdgcn.cvt.pk.fp8.f32(float %{{.+}}, float %{{.+}}, i32 0, i1 false)
-; CROSS-DAG: %pk_fp8_67 = call i32 @llvm.amdgcn.cvt.pk.fp8.f32(float %{{.+}}, float %{{.+}}, i32 %pk_fp8_45, i1 true)
-; CROSS-DAG: trunc <4 x i32> %{{[^ ]+}} to <4 x i8>
+; Four hw encodes as before, but each now feeds an exact OCP pair-encode
+; (%pk_fp8_ocp) instead of a byte-level FNUZ->OCP re-encode.
+; CROSS-DAG: call i32 @llvm.amdgcn.cvt.pk.fp8.f32(float %{{.+}}, float %{{.+}}, i32 0, i1 false)
+; CROSS-DAG: %pk_fp8_ocp{{[0-9]*}} = or
+; CROSS-NOT: e4m3_ocp
 ; CROSS-NOT: @llvm.amdgcn.cvt.scalef32.pk8.fp8.f32
 	v_cvt_scalef32_pk8_fp8_f32 v[0:1], v[2:9], v10
 	global_store_b64 v11, v[0:1], s[0:1]

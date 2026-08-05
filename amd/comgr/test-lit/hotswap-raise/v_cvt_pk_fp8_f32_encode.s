@@ -16,15 +16,26 @@ cvt_enc_kernel:
 	s_load_b64 s[0:1], s[0:1], 0x0
 	v_mov_b32_e32 v1, 0x40400000
 	v_mov_b32_e32 v2, 0x40a00000
+; Cross-target encode goes straight to OCP bytes. OCP and FNUZ share a
+; mantissa width and differ by one in exponent bias, so the target's FNUZ
+; encoder applied to x/2 yields the OCP byte for x -- hardware still does the
+; rounding. Out-of-range magnitudes are split off first (E4M3 saturates at
+; 464 -> 448, E5M2 rounds to Inf at 61440), so the raw encoder never overflows
+; and MODE.FP16_OVFL never decides the result.
 ; CROSS-LABEL: define amdgpu_kernel void @cvt_enc_kernel(
+; CROSS-DAG: fcmp oge float %{{.+}}, 4.640000e+02
+; CROSS-DAG: fmul float %{{.+}}, 5.000000e-01
 ; CROSS-DAG: call i32 @llvm.amdgcn.cvt.pk.fp8.f32(float %{{.+}}, float %{{.+}}, i32 0, i1 false)
+; CROSS-DAG: fcmp oge float %{{.+}}, 6.144000e+04
 ; CROSS-DAG: call i32 @llvm.amdgcn.cvt.pk.bf8.f32(float %{{.+}}, float %{{.+}}, i32 0, i1 false)
-; CROSS-DAG: %e4m3_ocp{{[0-9]*}} = select
-; CROSS-DAG: %e5m2_ocp{{[0-9]*}} = select
-; CROSS-DAG: trunc <4 x i32> %{{[^ ]+}} to <4 x i8>
+; CROSS-DAG: %pk_fp8_ocp{{[0-9]*}} = or
+; No byte-level re-encode is involved on this path any more.
+; CROSS-NOT: e4m3_ocp
+; CROSS-NOT: e5m2_ocp
 ; SAME-LABEL: define amdgpu_kernel void @cvt_enc_kernel(
+; SAME-NOT: pk_fp8_ocp
 ; SAME: call i32 @llvm.amdgcn.cvt.pk.fp8.f32(
-; SAME-NOT: trunc <4 x i32> %{{[^ ]+}} to <4 x i8>
+; SAME-NOT: pk_fp8_ocp
 	v_cvt_pk_fp8_f32 v0, v1, v2
 	v_cvt_pk_bf8_f32 v3, v1, v2
 	v_mov_b32_e32 v5, 0

@@ -548,10 +548,13 @@ static llvm::Value *emitCvtScalePk8Bf16Fp4CrossTargetExpansion(
 }
 
 // Emit v_cvt_pk_{fp8,bf8}_f32: pack two f32 into two fp8 bytes at the WordSel
-// half of OldVal. When source/target fp8 formats differ, the hw encode (which
-// produces TARGET-format bytes) is run in isolation, re-encoded TGT->SRC, then
-// merged into OldVal's SRC-format bytes at the selected half (so the preserved
-// half stays in the source format).
+// half of OldVal, keeping the preserved half in the source format.
+//
+// When the source is OCP the pair is encoded straight to OCP bytes (the target
+// hardware still does the rounding -- see encodeF32PairToOcpFp8), so the
+// source's wider E4M3 range and its Inf survive. An FNUZ source has no such
+// shortcut, and falls back to encoding in the target's format and re-encoding
+// the bytes, which clips whatever FNUZ cannot hold.
 llvm::Value *emitCvtPkFp8F32(RaiseContext &Ctx, llvm::Function *CvtFn,
                              llvm::Value *S0, llvm::Value *S1,
                              llvm::Value *OldVal, bool WordSel, bool IsBf8) {
@@ -560,12 +563,18 @@ llvm::Value *emitCvtPkFp8F32(RaiseContext &Ctx, llvm::Function *CvtFn,
   if (!ToFnuz)
     return B.CreateCall(
         CvtFn, {S0, S1, OldVal, ConstantInt::get(Ctx.I1Ty, WordSel)}, "pk_fp8");
-  Value *Fresh = B.CreateCall(CvtFn,
-                              {S0, S1, ConstantInt::get(Ctx.I32Ty, 0),
-                               ConstantInt::get(Ctx.I1Ty, false)},
-                              "pk_fp8_raw");
-  Fresh = convertFp8Dword(B, Fresh, IsBf8, *ToFnuz);
-  Value *Lo = B.CreateAnd(Fresh, ConstantInt::get(Ctx.I32Ty, 0xFFFF));
+  Value *Lo;
+  if (!*ToFnuz) {
+    Lo = encodeF32PairToOcpFp8(B, CvtFn, S0, S1, IsBf8);
+  } else {
+    Value *Fresh = B.CreateCall(CvtFn,
+                                {S0, S1, ConstantInt::get(Ctx.I32Ty, 0),
+                                 ConstantInt::get(Ctx.I1Ty, false)},
+                                "pk_fp8_raw");
+    // The hw encode writes bytes 0-1 and leaves 2-3 at OldVal (0 here), so
+    // only the low half needs re-encoding.
+    Lo = convertFp8Dword(B, Fresh, IsBf8, *ToFnuz, /*NumBytes=*/2);
+  }
   if (WordSel)
     return B.CreateOr(B.CreateAnd(OldVal, ConstantInt::get(Ctx.I32Ty, 0xFFFF)),
                       B.CreateShl(Lo, ConstantInt::get(Ctx.I32Ty, 16)));
@@ -3103,25 +3112,43 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
       auto ExtractF = [&](unsigned i) {
         return Ctx.B.CreateExtractElement(Scaled, i);
       };
-      Value *Dw0Lo = Ctx.B.CreateCall(
-          PkFn,
-          {ExtractF(0), ExtractF(1), ZeroI32, ConstantInt::get(Ctx.I1Ty, 0)},
-          "pk_fp8_01");
-      Value *Dw0 = Ctx.B.CreateCall(
-          PkFn,
-          {ExtractF(2), ExtractF(3), Dw0Lo, ConstantInt::get(Ctx.I1Ty, 1)},
-          "pk_fp8_23");
-      Value *Dw1Lo = Ctx.B.CreateCall(
-          PkFn,
-          {ExtractF(4), ExtractF(5), ZeroI32, ConstantInt::get(Ctx.I1Ty, 0)},
-          "pk_fp8_45");
-      Value *Dw1 = Ctx.B.CreateCall(
-          PkFn,
-          {ExtractF(6), ExtractF(7), Dw1Lo, ConstantInt::get(Ctx.I1Ty, 1)},
-          "pk_fp8_67");
-      if (auto ToFnuz = fp8Reencode(Ctx.Isa, Ctx.TargetIsa, Fp8Dir::TgtToSrc)) {
-        Dw0 = convertFp8Dword(Ctx.B, Dw0, /*IsBf8=*/false, *ToFnuz);
-        Dw1 = convertFp8Dword(Ctx.B, Dw1, /*IsBf8=*/false, *ToFnuz);
+      auto ToFnuz = fp8Reencode(Ctx.Isa, Ctx.TargetIsa, Fp8Dir::TgtToSrc);
+      Value *Dw0, *Dw1;
+      if (ToFnuz && !*ToFnuz) {
+        // OCP source: encode each pair straight to source-format bytes so the
+        // gfx942 encoder's narrower E4M3 range never truncates the result.
+        auto Pair = [&](unsigned I, unsigned J) {
+          return encodeF32PairToOcpFp8(Ctx.B, PkFn, ExtractF(I), ExtractF(J),
+                                       /*IsBf8=*/false);
+        };
+        auto Dword = [&](unsigned I) {
+          return Ctx.B.CreateOr(
+              Pair(I, I + 1), Ctx.B.CreateShl(Pair(I + 2, I + 3),
+                                              ConstantInt::get(Ctx.I32Ty, 16)));
+        };
+        Dw0 = Dword(0);
+        Dw1 = Dword(4);
+      } else {
+        Value *Dw0Lo = Ctx.B.CreateCall(
+            PkFn,
+            {ExtractF(0), ExtractF(1), ZeroI32, ConstantInt::get(Ctx.I1Ty, 0)},
+            "pk_fp8_01");
+        Dw0 = Ctx.B.CreateCall(
+            PkFn,
+            {ExtractF(2), ExtractF(3), Dw0Lo, ConstantInt::get(Ctx.I1Ty, 1)},
+            "pk_fp8_23");
+        Value *Dw1Lo = Ctx.B.CreateCall(
+            PkFn,
+            {ExtractF(4), ExtractF(5), ZeroI32, ConstantInt::get(Ctx.I1Ty, 0)},
+            "pk_fp8_45");
+        Dw1 = Ctx.B.CreateCall(
+            PkFn,
+            {ExtractF(6), ExtractF(7), Dw1Lo, ConstantInt::get(Ctx.I1Ty, 1)},
+            "pk_fp8_67");
+        if (ToFnuz) {
+          Dw0 = convertFp8Dword(Ctx.B, Dw0, /*IsBf8=*/false, *ToFnuz);
+          Dw1 = convertFp8Dword(Ctx.B, Dw1, /*IsBf8=*/false, *ToFnuz);
+        }
       }
       auto *V2I32Ty = FixedVectorType::get(Ctx.I32Ty, 2);
       Value *Packed = PoisonValue::get(V2I32Ty);
@@ -3220,9 +3247,30 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Value *Src = Op.src(0);
     if (Src->getType() != Ctx.I32Ty)
       Src = Ctx.B.CreateBitOrPointerCast(Src, Ctx.I32Ty);
-    if (auto ToFnuz = fp8Reencode(Ctx.Isa, Ctx.TargetIsa, Fp8Dir::SrcToTgt))
-      Src = convertFp8Dword(Ctx.B, Src, Sop == CanonicalOp::V_CVT_PK_F32_BF8,
-                            *ToFnuz);
+    if (auto ToFnuz = fp8Reencode(Ctx.Isa, Ctx.TargetIsa, Fp8Dir::SrcToTgt)) {
+      // Formats differ. Decode against the SOURCE format in IR instead of
+      // re-encoding into the target's format and using its decoder: byte ->
+      // f32 is widening, so this is exact, where the round trip would clip
+      // whatever the target cannot hold (E5M2 Inf, E4M3's (240, 448], -0).
+      Value *Half = WordSelInt
+                        ? Ctx.B.CreateLShr(Src, ConstantInt::get(Ctx.I32Ty, 16))
+                        : Src;
+      Value *Vec = PoisonValue::get(FixedVectorType::get(Ctx.F32Ty, 2));
+      for (unsigned I = 0; I < 2; ++I) {
+        Value *Byte = Ctx.B.CreateAnd(
+            Ctx.B.CreateLShr(Half, ConstantInt::get(Ctx.I32Ty, 8 * I)),
+            ConstantInt::get(Ctx.I32Ty, 0xFF));
+        Vec = Ctx.B.CreateInsertElement(
+            Vec,
+            decodeFp8ByteToF32(Ctx.B, Byte,
+                               Sop == CanonicalOp::V_CVT_PK_F32_BF8,
+                               /*IsFnuz=*/!*ToFnuz),
+            I);
+      }
+      Ctx.writeReg64(Op.dst(), Ctx.B.CreateBitCast(Vec, Ctx.I64Ty));
+      Hr.Handled = true;
+      return Hr;
+    }
     Intrinsic::ID Iid = (Sop == CanonicalOp::V_CVT_PK_F32_FP8)
                             ? Intrinsic::amdgcn_cvt_pk_f32_fp8
                             : Intrinsic::amdgcn_cvt_pk_f32_bf8;
@@ -3253,9 +3301,18 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Value *Src = Op.src(0);
     if (Src->getType() != Ctx.I32Ty)
       Src = Ctx.B.CreateBitOrPointerCast(Src, Ctx.I32Ty);
-    if (auto ToFnuz = fp8Reencode(Ctx.Isa, Ctx.TargetIsa, Fp8Dir::SrcToTgt))
-      Src = convertFp8Dword(Ctx.B, Src, Sop == CanonicalOp::V_CVT_F32_BF8,
-                            *ToFnuz);
+    // Formats differ: decode byte 0 (byte_sel is pinned to 0 above, op_sel /
+    // sdwa forms being refused) against the SOURCE format in IR. See the
+    // packed sibling above for why the target's decoder is not used.
+    if (auto ToFnuz = fp8Reencode(Ctx.Isa, Ctx.TargetIsa, Fp8Dir::SrcToTgt)) {
+      Value *Byte = Ctx.B.CreateAnd(Src, ConstantInt::get(Ctx.I32Ty, 0xFF));
+      Value *Dec =
+          decodeFp8ByteToF32(Ctx.B, Byte, Sop == CanonicalOp::V_CVT_F32_BF8,
+                             /*IsFnuz=*/!*ToFnuz);
+      Ctx.writeReg32(Op.dst(), Ctx.B.CreateBitCast(Dec, Ctx.I32Ty));
+      Hr.Handled = true;
+      return Hr;
+    }
     Intrinsic::ID Iid = (Sop == CanonicalOp::V_CVT_F32_FP8)
                             ? Intrinsic::amdgcn_cvt_f32_fp8
                             : Intrinsic::amdgcn_cvt_f32_bf8;

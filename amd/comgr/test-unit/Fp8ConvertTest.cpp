@@ -20,17 +20,24 @@
 // reads each folded lane back -- this exercises the shipping IR, not a C++
 // mirror that could drift from it.
 //
-// Each converted byte is checked against an INDEPENDENT oracle derived from the
-// format spec (decode the source byte to an exact rational, then re-encode in
-// the target format with the documented rounding/saturation) -- deliberately
-// not the converter's own bit-algebra, so the two must agree by construction,
-// not by copy.  Edge classes are asserted explicitly: NaN, Inf (E5M2),
-// subnormals, E4M3 OCP (240,448] saturation, and FNUZ->OCP round-half-to-even.
+// Each converted byte is checked against an oracle built on llvm::APFloat,
+// which shares no code with the converters: APFloat does the format conversion
+// and its round-half-to-even, and the oracle layers on only the three policy
+// classes fp8-convert.h documents (NaN/Inf -> canonical target NaN, finite
+// overflow -> saturate, FNUZ has no -0).  A hand-written oracle would have to
+// restate the rounding rules the converters implement, and a subtle
+// misunderstanding would then be baked into both sides; APFloat cannot drift
+// with them.  Edge classes are additionally asserted explicitly: NaN, Inf
+// (E5M2), subnormals, E4M3 OCP (240,448] saturation, and FNUZ->OCP
+// round-half-to-even.
 
 #include "hotswap/fp8-convert.h"
 
+#include "llvm/ADT/APFloat.h"
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
@@ -41,7 +48,6 @@
 #include "gtest/gtest.h"
 
 #include <array>
-#include <cmath>
 #include <cstdint>
 
 using namespace llvm;
@@ -82,247 +88,130 @@ runConverter(llvm::function_ref<Value *(HotswapIRBuilder &, Value *)> Conv) {
   return Result;
 }
 
-// --- Independent format oracles (spec-derived, not the converter algebra) ---
+// --- APFloat-based oracle (shares no code with the converters) ---
 
-struct Fp8Field {
-  int expBits;
-  int mantBits;
-  int bias;
-};
-constexpr Fp8Field OcpE4M3{4, 3, 7};
-constexpr Fp8Field FnuzE4M3{4, 3, 8};
-constexpr Fp8Field OcpE5M2{5, 2, 15};
-constexpr Fp8Field FnuzE5M2{5, 2, 16};
+// Convert one byte from \p From to \p To the way fp8-convert.h specifies.
+// APFloat performs the format conversion and the round-half-to-even; only the
+// documented policy classes are applied on top of it.
+uint8_t oracleConvert(uint8_t Byte, const fltSemantics &From,
+                      const fltSemantics &To) {
+  const bool ToFnuz =
+      &To == &APFloat::Float8E4M3FNUZ() || &To == &APFloat::Float8E5M2FNUZ();
+  const uint8_t TargetNaN = ToFnuz ? 0x80 : 0x7F;
 
-// Decode a byte to (sign, numerator, denominator) rational, or flag
-// NaN/Inf.  Value = (-1)^sign * num / den.  OCP has E4M3FN (no Inf, S.1111.111
-// = NaN) and E5M2 (S.11111.00 = Inf, else NaN).  FNUZ: 0x80 is the sole NaN,
-// no Inf, and 0x00 is the only zero (negative-zero encoding is NaN).
-struct Decoded {
-  bool isNaN = false;
-  bool isInf = false;
-  int sign = 0;
-  // magnitude = num / den (den is a power of two)
-  uint64_t num = 0;
-  uint64_t den = 1;
-};
+  APFloat V(From, APInt(8, Byte));
+  // Neither target format has Inf, so Inf joins NaN in mapping to the target's
+  // canonical NaN rather than saturating.
+  if (V.isNaN() || V.isInfinity())
+    return TargetNaN;
 
-Decoded decode(uint8_t Byte, const Fp8Field &F, bool Fnuz) {
-  Decoded D;
-  int sign = (Byte >> 7) & 1;
-  int expMask = (1 << F.expBits) - 1;
-  int mantMask = (1 << F.mantBits) - 1;
-  int exp = (Byte >> F.mantBits) & expMask;
-  int mant = Byte & mantMask;
-  D.sign = sign;
-
-  if (Fnuz) {
-    if (Byte == 0x80) {
-      D.isNaN = true;
-      return D;
-    }
-    if (Byte == 0x00) {
-      D.num = 0;
-      D.den = 1;
-      return D;
-    }
-  } else {
-    if (F.expBits == 4) { // E4M3FN: no Inf
-      if (exp == expMask && mant == mantMask) {
-        D.isNaN = true;
-        return D;
-      }
-    } else { // E5M2: Inf/NaN
-      if (exp == expMask) {
-        if (mant == 0)
-          D.isInf = true;
-        else
-          D.isNaN = true;
-        return D;
-      }
-    }
-    if (Byte == 0x00 || Byte == 0x80) {
-      D.num = 0;
-      D.den = 1;
-      return D;
-    }
-  }
-
-  // value = 2^(e - bias) * (1 + mant/2^m)  [normal, exp!=0]
-  //       = 2^(1 - bias) * (mant/2^m)      [subnormal, exp==0]
-  int m = F.mantBits;
-  uint64_t mantNum = (exp == 0) ? mant : ((1u << m) + mant);
-  int e = (exp == 0) ? (1 - F.bias) : (exp - F.bias);
-  // magnitude = mantNum / 2^m * 2^e
-  int shift = e - m;
-  if (shift >= 0) {
-    D.num = mantNum << shift;
-    D.den = 1;
-  } else {
-    D.num = mantNum;
-    D.den = 1ull << (-shift);
-  }
-  return D;
+  const bool Neg = V.isNegative();
+  bool LosesInfo = false;
+  V.convert(To, APFloat::rmNearestTiesToEven, &LosesInfo);
+  // A finite input that overflows the target comes back as NaN (no Inf to
+  // round to); the converters saturate to the target max instead.
+  if (V.isNaN() || V.isInfinity())
+    V = APFloat::getLargest(To, Neg);
+  if (ToFnuz && V.isZero())
+    return 0x00; // FNUZ has no -0
+  return static_cast<uint8_t>(V.bitcastToAPInt().getZExtValue());
 }
 
-// Encode a rational magnitude (num/den, den a power of two) into the target
-// format with round-half-to-even, returning the byte (sign applied by caller).
-// Saturates to max-finite on overflow.  This is the spec oracle; it is
-// intentionally structured differently from the converter's byte algebra.
-uint8_t encodeMagnitude(uint64_t num, uint64_t den, int sign, const Fp8Field &F,
-                        bool Fnuz) {
-  int expMask = (1 << F.expBits) - 1;
-  int mantMask = (1 << F.mantBits) - 1;
-  int m = F.mantBits;
-  uint8_t signBit = static_cast<uint8_t>(sign << 7);
-
-  if (num == 0)
-    return Fnuz ? 0x00 : signBit; // FNUZ has only +0
-
-  // Normalize num/den to 1.xxx * 2^exp2 (or subnormal).  Find exp2 with
-  // 2^exp2 <= num/den < 2^(exp2+1).
-  // Work in a scaled integer domain: value = num/den.
-  // Compute floor(log2(num/den)).
-  int exp2 = 0;
-  // Bring value into [1,2) by scaling num/den.
-  long double v = static_cast<long double>(num) / static_cast<long double>(den);
-  while (v >= 2.0L) {
-    v /= 2.0L;
-    ++exp2;
+// Run every byte through `Conv` and compare against the APFloat oracle.
+// `std::hex` does not survive gtest's Message stream, so format explicitly --
+// a converter bug reports bit patterns, and decimal would be unreadable.
+void checkExhaustive(
+    const char *Label,
+    llvm::function_ref<Value *(HotswapIRBuilder &, Value *)> Conv,
+    const fltSemantics &From, const fltSemantics &To) {
+  auto Hex = [](unsigned V) {
+    return "0x" + utohexstr(V, /*LowerCase=*/false, /*Width=*/2);
+  };
+  auto Got = runConverter(Conv);
+  for (unsigned Byte = 0; Byte < 256; ++Byte) {
+    uint8_t Want = oracleConvert(static_cast<uint8_t>(Byte), From, To);
+    EXPECT_EQ(Got[Byte], Want)
+        << Label << " mismatch at byte " << Hex(Byte) << ": got "
+        << Hex(Got[Byte]) << " want " << Hex(Want);
   }
-  while (v < 1.0L) {
-    v *= 2.0L;
-    --exp2;
-  }
-
-  int storedExp = exp2 + F.bias;
-  int maxStoredExp = Fnuz ? expMask : (F.expBits == 4 ? expMask : expMask - 1);
-  // For OCP E4M3FN max finite is exp==15,mant==6 (mant==7 is NaN); handled by
-  // saturation below.  For E5M2 OCP max finite exp==30.
-  if (storedExp >=
-      (Fnuz ? (expMask + 1) : (F.expBits == 4 ? expMask + 1 : expMask))) {
-    // Overflow -> saturate to max finite of the target.
-    if (Fnuz)
-      return static_cast<uint8_t>(signBit | 0x7F);
-    if (F.expBits == 4)
-      return static_cast<uint8_t>(signBit | 0x7E); // 240 OCP
-    return static_cast<uint8_t>(signBit | ((expMask - 1) << m) | mantMask);
-  }
-
-  if (storedExp <= 0) {
-    // Subnormal: value = mant/2^m * 2^(1-bias).  mant = round(v * 2^exp2 /
-    // 2^(1-bias) * 2^m) but simplest: scale original.
-    long double sub =
-        (static_cast<long double>(num) / static_cast<long double>(den)) /
-        std::pow(2.0L, 1 - F.bias) * std::pow(2.0L, m);
-    long double flo = std::floor(sub);
-    long double frac = sub - flo;
-    uint64_t mant = static_cast<uint64_t>(flo);
-    if (frac > 0.5L)
-      mant++;
-    else if (frac == 0.5L)
-      mant += (mant & 1); // round-half-to-even
-    if (mant == 0)
-      return Fnuz ? 0x00 : signBit;
-    if (mant > (uint64_t)mantMask) {
-      // rounded up into the smallest normal
-      return static_cast<uint8_t>(signBit | (1 << m));
-    }
-    return static_cast<uint8_t>(signBit | mant);
-  }
-
-  // Normal: mantissa = round((v - 1) * 2^m), RNE.
-  long double frac = (v - 1.0L) * static_cast<long double>(1u << m);
-  long double flo = std::floor(frac);
-  long double f = frac - flo;
-  uint64_t mant = static_cast<uint64_t>(flo);
-  if (f > 0.5L)
-    mant++;
-  else if (f == 0.5L)
-    mant += (mant & 1);
-  if (mant > (uint64_t)mantMask) {
-    mant = 0;
-    storedExp++;
-  }
-  if (storedExp > maxStoredExp) {
-    if (Fnuz)
-      return static_cast<uint8_t>(signBit | 0x7F);
-    if (F.expBits == 4)
-      return static_cast<uint8_t>(signBit | 0x7E);
-    return static_cast<uint8_t>(signBit | ((expMask - 1) << m) | mantMask);
-  }
-  return static_cast<uint8_t>(signBit | (storedExp << m) | mant);
-}
-
-// OCP -> FNUZ oracle for one byte.
-uint8_t oracleOcpToFnuz(uint8_t Byte, const Fp8Field &Ocp,
-                        const Fp8Field &Fnuz) {
-  Decoded D = decode(Byte, Ocp, /*Fnuz=*/false);
-  if (D.isNaN || D.isInf) {
-    // OCP NaN and E5M2 Inf both map to FNUZ; Inf saturates to max finite,
-    // NaN -> 0x80.
-    if (D.isInf)
-      return static_cast<uint8_t>((D.sign << 7) | 0x7F);
-    return 0x80;
-  }
-  return encodeMagnitude(D.num, D.den, D.sign, Fnuz, /*Fnuz=*/true);
-}
-
-// FNUZ -> OCP oracle for one byte.
-uint8_t oracleFnuzToOcp(uint8_t Byte, const Fp8Field &Fnuz,
-                        const Fp8Field &Ocp) {
-  Decoded D = decode(Byte, Fnuz, /*Fnuz=*/true);
-  if (D.isNaN)
-    // FNUZ has a single NaN encoding (0x80); the converter maps it to the
-    // sign-less canonical OCP +NaN 0x7F, not a sign-preserving NaN.
-    return 0x7F;
-  return encodeMagnitude(D.num, D.den, D.sign, Ocp, /*Fnuz=*/false);
 }
 
 } // namespace
 
 TEST(Fp8Convert, OcpE4M3ToFnuzExhaustive) {
-  auto Got = runConverter(convertOcpE4M3ToFnuz);
-  for (unsigned Byte = 0; Byte < 256; ++Byte) {
-    uint8_t Want =
-        oracleOcpToFnuz(static_cast<uint8_t>(Byte), OcpE4M3, FnuzE4M3);
-    EXPECT_EQ(Got[Byte], Want)
-        << "OCP E4M3->FNUZ mismatch at byte 0x" << std::hex << Byte << " got 0x"
-        << (unsigned)Got[Byte] << " want 0x" << (unsigned)Want;
-  }
+  checkExhaustive("OCP E4M3->FNUZ", convertOcpE4M3ToFnuz,
+                  APFloat::Float8E4M3FN(), APFloat::Float8E4M3FNUZ());
 }
 
 TEST(Fp8Convert, OcpE5M2ToFnuzExhaustive) {
-  auto Got = runConverter(convertOcpE5M2ToFnuz);
-  for (unsigned Byte = 0; Byte < 256; ++Byte) {
-    uint8_t Want =
-        oracleOcpToFnuz(static_cast<uint8_t>(Byte), OcpE5M2, FnuzE5M2);
-    EXPECT_EQ(Got[Byte], Want)
-        << "OCP E5M2->FNUZ mismatch at byte 0x" << std::hex << Byte << " got 0x"
-        << (unsigned)Got[Byte] << " want 0x" << (unsigned)Want;
-  }
+  checkExhaustive("OCP E5M2->FNUZ", convertOcpE5M2ToFnuz, APFloat::Float8E5M2(),
+                  APFloat::Float8E5M2FNUZ());
 }
 
 TEST(Fp8Convert, FnuzE4M3ToOcpExhaustive) {
-  auto Got = runConverter(convertFnuzE4M3ToOcp);
-  for (unsigned Byte = 0; Byte < 256; ++Byte) {
-    uint8_t Want =
-        oracleFnuzToOcp(static_cast<uint8_t>(Byte), FnuzE4M3, OcpE4M3);
-    EXPECT_EQ(Got[Byte], Want)
-        << "FNUZ E4M3->OCP mismatch at byte 0x" << std::hex << Byte << " got 0x"
-        << (unsigned)Got[Byte] << " want 0x" << (unsigned)Want;
-  }
+  checkExhaustive("FNUZ E4M3->OCP", convertFnuzE4M3ToOcp,
+                  APFloat::Float8E4M3FNUZ(), APFloat::Float8E4M3FN());
 }
 
 TEST(Fp8Convert, FnuzE5M2ToOcpExhaustive) {
-  auto Got = runConverter(convertFnuzE5M2ToOcp);
+  checkExhaustive("FNUZ E5M2->OCP", convertFnuzE5M2ToOcp,
+                  APFloat::Float8E5M2FNUZ(), APFloat::Float8E5M2());
+}
+
+// Decode every byte through the real emitter and compare against APFloat's
+// own fp8 -> f32 conversion, which is exact (widening) and shares no code with
+// the decoder.  NaN is compared by class, since the payload is unspecified.
+void checkDecode(const char *Label, const fltSemantics &From, bool IsBf8,
+                 bool IsFnuz) {
+  LLVMContext Ctx;
+  Module M("fp8dectest", Ctx);
+  Function *F = Function::Create(FunctionType::get(Type::getVoidTy(Ctx), false),
+                                 GlobalValue::ExternalLinkage, "f", &M);
+  HotswapIRBuilder B(BasicBlock::Create(Ctx, "entry", F));
+
   for (unsigned Byte = 0; Byte < 256; ++Byte) {
-    uint8_t Want =
-        oracleFnuzToOcp(static_cast<uint8_t>(Byte), FnuzE5M2, OcpE5M2);
-    EXPECT_EQ(Got[Byte], Want)
-        << "FNUZ E5M2->OCP mismatch at byte 0x" << std::hex << Byte << " got 0x"
-        << (unsigned)Got[Byte] << " want 0x" << (unsigned)Want;
+    Value *Out = decodeFp8ByteToF32(B, B.getInt32(Byte), IsBf8, IsFnuz);
+    auto *CF = dyn_cast<ConstantFP>(Out);
+    ASSERT_TRUE(CF != nullptr)
+        << Label << " byte " << Byte << " did not constant-fold";
+    APFloat Got = CF->getValueAPF();
+
+    APFloat Want(From, APInt(8, Byte));
+    bool LosesInfo = false;
+    Want.convert(APFloat::IEEEsingle(), APFloat::rmNearestTiesToEven,
+                 &LosesInfo);
+    EXPECT_FALSE(LosesInfo) << Label << ": fp8 -> f32 must be exact";
+
+    if (Want.isNaN()) {
+      EXPECT_TRUE(Got.isNaN()) << Label << " byte 0x"
+                               << utohexstr(Byte, false, 2) << " should be NaN";
+      continue;
+    }
+    // bitwiseIsEqual distinguishes +0 from -0, which is the point for OCP.
+    EXPECT_TRUE(Got.bitwiseIsEqual(Want))
+        << Label << " byte 0x" << utohexstr(Byte, false, 2) << ": got "
+        << Got.convertToFloat() << " want " << Want.convertToFloat();
   }
+}
+
+TEST(Fp8Convert, DecodeOcpE4M3ToF32Exhaustive) {
+  checkDecode("OCP E4M3 decode", APFloat::Float8E4M3FN(), /*IsBf8=*/false,
+              /*IsFnuz=*/false);
+}
+
+TEST(Fp8Convert, DecodeOcpE5M2ToF32Exhaustive) {
+  checkDecode("OCP E5M2 decode", APFloat::Float8E5M2(), /*IsBf8=*/true,
+              /*IsFnuz=*/false);
+}
+
+TEST(Fp8Convert, DecodeFnuzE4M3ToF32Exhaustive) {
+  checkDecode("FNUZ E4M3 decode", APFloat::Float8E4M3FNUZ(), /*IsBf8=*/false,
+              /*IsFnuz=*/true);
+}
+
+TEST(Fp8Convert, DecodeFnuzE5M2ToF32Exhaustive) {
+  checkDecode("FNUZ E5M2 decode", APFloat::Float8E5M2FNUZ(), /*IsBf8=*/true,
+              /*IsFnuz=*/true);
 }
 
 // Explicit edge-class pins (independent of the oracle loop above) so a
@@ -342,9 +231,10 @@ TEST(Fp8Convert, EdgeClasses) {
   EXPECT_EQ(E4ToFnuz[0x00], 0x00u);
   EXPECT_EQ(E4ToFnuz[0x80], 0x00u);
 
-  // OCP E5M2 +Inf (0x7C) saturates to FNUZ max finite 0x7F; NaN -> 0x80.
-  EXPECT_EQ(E5ToFnuz[0x7C], 0x7Fu);
-  EXPECT_EQ(E5ToFnuz[0xFC], 0xFFu);
+  // FNUZ has no Inf, so OCP E5M2 +/-Inf joins NaN at 0x80 rather than
+  // saturating -- matching APFloat and the gfx942 f32->bf8 encode.
+  EXPECT_EQ(E5ToFnuz[0x7C], 0x80u); // +Inf
+  EXPECT_EQ(E5ToFnuz[0xFC], 0x80u); // -Inf
   EXPECT_EQ(E5ToFnuz[0x7D], 0x80u); // E5M2 NaN
 
   // FNUZ E4M3 NaN 0x80 -> OCP +0x7F.
