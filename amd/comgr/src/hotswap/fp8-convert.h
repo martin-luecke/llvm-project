@@ -84,31 +84,30 @@ llvm::Value *convertOcpE5M2ToFnuz(HotswapIRBuilder &B, llvm::Value *Bytes);
 llvm::Value *convertFnuzE4M3ToOcp(HotswapIRBuilder &B, llvm::Value *Bytes);
 llvm::Value *convertFnuzE5M2ToOcp(HotswapIRBuilder &B, llvm::Value *Bytes);
 
-/// Re-encode a packed fp8/bf8 dword through one of the byte-lane converters
-/// above.  \p IsBf8 selects E5M2 vs E4M3; \p ToFnuz selects the OCP->FNUZ vs
-/// FNUZ->OCP direction.  \p NumBytes (1..4) is how many low bytes the caller
-/// actually consumes -- each converted lane costs ~20 vector ops, so callers
-/// that read a single byte or a single 16-bit half should say so; the
-/// remaining high bytes of the result are zero.
+/// Re-encode a packed fp8/bf8 dword (4 bytes) through one of the byte-lane
+/// converters above.  \p IsBf8 selects E5M2 vs E4M3; \p ToFnuz selects the
+/// OCP->FNUZ vs FNUZ->OCP direction.
 llvm::Value *convertFp8Dword(HotswapIRBuilder &B, llvm::Value *Dword,
-                             bool IsBf8, bool ToFnuz, unsigned NumBytes = 4);
+                             bool IsBf8, bool ToFnuz);
 
 /// Re-encode an array of packed fp8/bf8 dwords in place (see convertFp8Dword).
 void convertFp8DwordsInPlace(HotswapIRBuilder &B,
                              llvm::SmallVectorImpl<llvm::Value *> &Dwords,
                              bool IsBf8, bool ToFnuz);
 
-/// Decode one fp8/bf8 byte (\p Byte is an i32 holding 0..255) to f32 in the
-/// format named by \p IsBf8 / \p IsFnuz.  Exact for all 256 inputs, including
-/// subnormals, Inf and NaN.
+/// Decode one fp8/bf8 byte (\p Byte is an i32 holding 0..255) to f32, reading
+/// it as \p Fmt.  Exact for all 256 inputs, including subnormals, Inf and NaN.
 ///
 /// Used instead of the target's fp8 decode hardware when the source and target
 /// formats differ.  byte -> f32 is a WIDENING conversion, so every source byte
 /// has an exact f32 image; routing it through a byte re-encode plus the
 /// target's decoder would clip the source's range for no reason (OCP E5M2 Inf,
 /// OCP E4M3's (240, 448], and -0 all survive here).
+///
+/// The result is named `{fp8,bf8}_dec_{ocp,fnuz}`; lit fixtures match on that
+/// to tell the conversion direction apart, so it is a test contract.
 llvm::Value *decodeFp8ByteToF32(HotswapIRBuilder &B, llvm::Value *Byte,
-                                bool IsBf8, bool IsFnuz);
+                                bool IsBf8, Fp8Format Fmt);
 
 /// Encode two f32 into two OCP fp8/bf8 bytes, packed into the low 16 bits.
 ///
@@ -122,6 +121,8 @@ llvm::Value *decodeFp8ByteToF32(HotswapIRBuilder &B, llvm::Value *Byte,
 ///
 /// Only valid when the SOURCE format is OCP; the mirrored trick does not work
 /// for an FNUZ source, whose top exponent has no OCP counterpart.
+///
+/// The result is named `pk_fp8_ocp`, which lit fixtures match on.
 llvm::Value *encodeF32PairToOcpFp8(HotswapIRBuilder &B, llvm::Function *CvtFn,
                                    llvm::Value *S0, llvm::Value *S1,
                                    bool IsBf8);

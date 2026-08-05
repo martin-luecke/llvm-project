@@ -59,14 +59,25 @@ namespace {
 // results.  Builds a `<256 x i32>` constant [0, 1, ..., 255], calls the real
 // emitter (which the ConstantFolder collapses to a constant), and extracts each
 // lane.  Fails the test if any lane did not fold to a constant.
+// A throwaway module to emit into. The converters are IR emitters, so a test
+// needs somewhere to put the instructions even though every one of them folds
+// away before it is inserted.
+struct FoldHarness {
+  LLVMContext Ctx;
+  Module M{"fp8convtest", Ctx};
+  HotswapIRBuilder B;
+
+  FoldHarness()
+      : B(BasicBlock::Create(
+            Ctx, "entry",
+            Function::Create(FunctionType::get(Type::getVoidTy(Ctx), false),
+                             GlobalValue::ExternalLinkage, "f", &M))) {}
+};
+
 std::array<uint8_t, 256>
 runConverter(llvm::function_ref<Value *(HotswapIRBuilder &, Value *)> Conv) {
-  LLVMContext Ctx;
-  Module M("fp8convtest", Ctx);
-  Function *F = Function::Create(FunctionType::get(Type::getVoidTy(Ctx), false),
-                                 GlobalValue::ExternalLinkage, "f", &M);
-  BasicBlock *BB = BasicBlock::Create(Ctx, "entry", F);
-  HotswapIRBuilder B(BB);
+  FoldHarness H;
+  HotswapIRBuilder &B = H.B;
 
   Type *I32Ty = B.getInt32Ty();
   SmallVector<Constant *, 256> Lanes;
@@ -162,15 +173,12 @@ TEST(Fp8Convert, FnuzE5M2ToOcpExhaustive) {
 // own fp8 -> f32 conversion, which is exact (widening) and shares no code with
 // the decoder.  NaN is compared by class, since the payload is unspecified.
 void checkDecode(const char *Label, const fltSemantics &From, bool IsBf8,
-                 bool IsFnuz) {
-  LLVMContext Ctx;
-  Module M("fp8dectest", Ctx);
-  Function *F = Function::Create(FunctionType::get(Type::getVoidTy(Ctx), false),
-                                 GlobalValue::ExternalLinkage, "f", &M);
-  HotswapIRBuilder B(BasicBlock::Create(Ctx, "entry", F));
+                 Fp8Format Fmt) {
+  FoldHarness H;
+  HotswapIRBuilder &B = H.B;
 
   for (unsigned Byte = 0; Byte < 256; ++Byte) {
-    Value *Out = decodeFp8ByteToF32(B, B.getInt32(Byte), IsBf8, IsFnuz);
+    Value *Out = decodeFp8ByteToF32(B, B.getInt32(Byte), IsBf8, Fmt);
     auto *CF = dyn_cast<ConstantFP>(Out);
     ASSERT_TRUE(CF != nullptr)
         << Label << " byte " << Byte << " did not constant-fold";
@@ -196,22 +204,22 @@ void checkDecode(const char *Label, const fltSemantics &From, bool IsBf8,
 
 TEST(Fp8Convert, DecodeOcpE4M3ToF32Exhaustive) {
   checkDecode("OCP E4M3 decode", APFloat::Float8E4M3FN(), /*IsBf8=*/false,
-              /*IsFnuz=*/false);
+              Fp8Format::OCP);
 }
 
 TEST(Fp8Convert, DecodeOcpE5M2ToF32Exhaustive) {
   checkDecode("OCP E5M2 decode", APFloat::Float8E5M2(), /*IsBf8=*/true,
-              /*IsFnuz=*/false);
+              Fp8Format::OCP);
 }
 
 TEST(Fp8Convert, DecodeFnuzE4M3ToF32Exhaustive) {
   checkDecode("FNUZ E4M3 decode", APFloat::Float8E4M3FNUZ(), /*IsBf8=*/false,
-              /*IsFnuz=*/true);
+              Fp8Format::FNUZ);
 }
 
 TEST(Fp8Convert, DecodeFnuzE5M2ToF32Exhaustive) {
   checkDecode("FNUZ E5M2 decode", APFloat::Float8E5M2FNUZ(), /*IsBf8=*/true,
-              /*IsFnuz=*/true);
+              Fp8Format::FNUZ);
 }
 
 // Explicit edge-class pins (independent of the oracle loop above) so a

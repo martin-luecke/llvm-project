@@ -146,27 +146,23 @@ Value *convertFnuzE5M2ToOcp(HotswapIRBuilder &B, Value *Bytes) {
 }
 
 Value *convertFp8Dword(HotswapIRBuilder &B, Value *Dword, bool IsBf8,
-                       bool ToFnuz, unsigned NumBytes) {
-  assert(NumBytes >= 1 && NumBytes <= 4 && "fp8 dword holds 1..4 bytes");
+                       bool ToFnuz) {
   auto *I32Ty = B.getInt32Ty();
-  auto *VecI8 = FixedVectorType::get(B.getInt8Ty(), NumBytes);
-  SmallVector<Constant *, 4> ShiftElts;
-  for (unsigned I = 0; I < NumBytes; ++I)
-    ShiftElts.push_back(ConstantInt::get(I32Ty, 8 * I));
-  Constant *Shifts = ConstantVector::get(ShiftElts);
-  Constant *ByteMask = ConstantVector::getSplat(
-      ElementCount::getFixed(NumBytes), ConstantInt::get(I32Ty, 0xFF));
-  Value *Splat = B.CreateVectorSplat(NumBytes, Dword, "fp8_splat");
+  auto *Vec4I8 = FixedVectorType::get(B.getInt8Ty(), 4);
+  Constant *Shifts = ConstantVector::get(
+      {ConstantInt::get(I32Ty, 0), ConstantInt::get(I32Ty, 8),
+       ConstantInt::get(I32Ty, 16), ConstantInt::get(I32Ty, 24)});
+  Constant *ByteMask = ConstantVector::getSplat(ElementCount::getFixed(4),
+                                                ConstantInt::get(I32Ty, 0xFF));
+  Value *Splat = B.CreateVectorSplat(4, Dword, "fp8_splat");
   Value *Bytes =
       B.CreateAnd(B.CreateLShr(Splat, Shifts), ByteMask, "fp8_bytes");
   Value *Conv = ToFnuz ? (IsBf8 ? convertOcpE5M2ToFnuz(B, Bytes)
                                 : convertOcpE4M3ToFnuz(B, Bytes))
                        : (IsBf8 ? convertFnuzE5M2ToOcp(B, Bytes)
                                 : convertFnuzE4M3ToOcp(B, Bytes));
-  Value *ConvBytes = B.CreateTrunc(Conv, VecI8, "fp8_conv_bytes");
-  Value *Packed =
-      B.CreateBitCast(ConvBytes, B.getIntNTy(8 * NumBytes), "fp8_conv_packed");
-  return NumBytes == 4 ? Packed : B.CreateZExt(Packed, I32Ty, "fp8_conv_dw");
+  Value *ConvBytes = B.CreateTrunc(Conv, Vec4I8, "fp8_conv_bytes");
+  return B.CreateBitCast(ConvBytes, I32Ty, "fp8_conv_dw");
 }
 
 void convertFp8DwordsInPlace(HotswapIRBuilder &B,
@@ -177,7 +173,9 @@ void convertFp8DwordsInPlace(HotswapIRBuilder &B,
 }
 
 Value *decodeFp8ByteToF32(HotswapIRBuilder &B, Value *Byte, bool IsBf8,
-                          bool IsFnuz) {
+                          Fp8Format Fmt) {
+  assert(Fmt != Fp8Format::None && "byte has no fp8 interpretation");
+  const bool IsFnuz = Fmt == Fp8Format::FNUZ;
   Type *F32Ty = B.getFloatTy();
   IntegerType *I32Ty = B.getInt32Ty();
   const unsigned M = IsBf8 ? 2 : 3;
@@ -196,31 +194,35 @@ Value *decodeFp8ByteToF32(HotswapIRBuilder &B, Value *Byte, bool IsBf8,
   Value *NormBits =
       B.CreateOr(B.CreateShl(B.CreateAdd(Exp, I32(127 - Bias)), I32(23)),
                  B.CreateShl(Mant, I32(23 - M)));
-  Value *Norm = B.CreateBitCast(NormBits, F32Ty);
-  // Subnormal: mant * 2^(1 - Bias - M), exact as a single f32 multiply.
+  // Subnormal: mant * 2^(1 - Bias - M), exact as a single f32 multiply.  Even
+  // the smallest fp8 subnormal is far above f32's subnormal range, so this
+  // never depends on the denormal mode.
   Value *Sub =
       B.CreateFMul(B.CreateUIToFP(Mant, F32Ty),
                    ConstantFP::get(F32Ty, std::ldexp(1.0, 1 - Bias - int(M))));
-  Value *Mag = B.CreateSelect(B.CreateICmpEQ(Exp, I32(0)), Sub, Norm);
-  Value *Val = B.CreateBitCast(B.CreateOr(B.CreateBitCast(Mag, I32Ty), Sign),
-                               F32Ty, "fp8_dec");
+  Value *Mag = B.CreateSelect(B.CreateICmpEQ(Exp, I32(0)), Sub,
+                              B.CreateBitCast(NormBits, F32Ty));
+  Value *Val =
+      B.CreateBitCast(B.CreateOr(B.CreateBitCast(Mag, I32Ty), Sign), F32Ty);
 
-  Constant *QNaN = ConstantFP::getQNaN(F32Ty);
-  if (IsFnuz)
-    // The lone FNUZ special: 0x80 is NaN, and the top exponent is finite.
-    return B.CreateSelect(B.CreateICmpEQ(Byte, I32(0x80)), QNaN, Val,
-                          "fp8_dec_fnuz");
+  // Which encodings are non-finite is the one thing the three formats do not
+  // agree on: FNUZ has the single NaN 0x80 and an ordinary top exponent; OCP
+  // E4M3FN reserves only S.1111.111, so exp==15 still reaches 448; OCP E5M2
+  // is IEEE-shaped, so its top exponent is Inf or NaN.
   Value *TopExp = B.CreateICmpEQ(Exp, I32(EMask));
-  if (!IsBf8)
-    // OCP E4M3FN has no Inf; only S.1111.111 is NaN, so exp==15 is otherwise
-    // finite and reaches 448.
-    return B.CreateSelect(B.CreateAnd(TopExp, B.CreateICmpEQ(Mant, I32(MMask))),
-                          QNaN, Val, "fp8_dec_ocp");
-  // OCP E5M2 is IEEE-shaped: exp==31 is Inf (mant==0) or NaN.
-  Value *Inf = B.CreateBitCast(B.CreateOr(I32(0x7F800000), Sign), F32Ty);
-  Value *InfOrVal = B.CreateSelect(TopExp, Inf, Val);
-  return B.CreateSelect(B.CreateAnd(TopExp, B.CreateICmpNE(Mant, I32(0))), QNaN,
-                        InfOrVal, "bf8_dec_ocp");
+  Value *IsNaN;
+  if (IsFnuz)
+    IsNaN = B.CreateICmpEQ(Byte, I32(0x80));
+  else if (IsBf8)
+    IsNaN = B.CreateAnd(TopExp, B.CreateICmpNE(Mant, I32(0)));
+  else
+    IsNaN = B.CreateAnd(TopExp, B.CreateICmpEQ(Mant, I32(MMask)));
+  if (!IsFnuz && IsBf8)
+    Val = B.CreateSelect(
+        TopExp, B.CreateBitCast(B.CreateOr(I32(0x7F800000), Sign), F32Ty), Val);
+  return B.CreateSelect(IsNaN, ConstantFP::getQNaN(F32Ty), Val,
+                        Twine(IsBf8 ? "bf8" : "fp8") + "_dec_" +
+                            (IsFnuz ? "fnuz" : "ocp"));
 }
 
 Value *encodeF32PairToOcpFp8(HotswapIRBuilder &B, Function *CvtFn, Value *S0,
@@ -251,9 +253,9 @@ Value *encodeF32PairToOcpFp8(HotswapIRBuilder &B, Function *CvtFn, Value *S0,
     P.IsNaN = B.CreateFCmpUNO(X, X);
     P.IsTop =
         B.CreateFCmpOGE(B.CreateUnaryIntrinsic(Intrinsic::fabs, X), Thresh);
-    Value *Safe = B.CreateSelect(B.CreateOr(P.IsNaN, P.IsTop),
-                                 ConstantFP::get(F32Ty, 0.0), X);
-    P.Scaled = B.CreateFMul(Safe, ConstantFP::get(F32Ty, 0.5));
+    // X needs no sanitising first: whenever IsNaN or IsTop holds, Fixup
+    // discards the encoder's byte outright, and the encode cannot trap.
+    P.Scaled = B.CreateFMul(X, ConstantFP::get(F32Ty, 0.5));
     return P;
   };
   Prepped P0 = Prep(S0), P1 = Prep(S1);
@@ -266,8 +268,9 @@ Value *encodeF32PairToOcpFp8(HotswapIRBuilder &B, Function *CvtFn, Value *S0,
   auto Fixup = [&](const Prepped &P, unsigned Shift) {
     Value *Byte = B.CreateAnd(B.CreateLShr(Raw, I32(Shift)), I32(0xFF));
     // FNUZ has no -0, so the raw encoder drops the sign of a zero or
-    // underflowed result; OCP keeps it.
-    Byte = B.CreateSelect(B.CreateICmpEQ(Byte, I32(0)), P.SignByte, Byte);
+    // underflowed result where OCP keeps it. For every other in-range byte
+    // the sign bit is already set, so re-applying it is idempotent.
+    Byte = B.CreateOr(Byte, P.SignByte);
     Byte = B.CreateSelect(P.IsTop, B.CreateOr(P.SignByte, I32(TopByte)), Byte);
     return B.CreateSelect(P.IsNaN, I32(NaNByte), Byte);
   };

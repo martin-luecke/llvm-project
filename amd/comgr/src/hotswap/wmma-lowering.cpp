@@ -1404,8 +1404,8 @@ Value *extractScaleByte(IRBuilder<> &B, Value *Scale32, unsigned k) {
 }
 
 // Decode one scale byte to f32. E8M0 via `ldexp(1.0, byte - 127)` with
-// 0xFF -> qNaN. E4M3 decoded as UE4M3 (OCP bias 7) by hand -- not the FNUZ
-// `cvt_f32_fp8`. E5M3 not yet implemented.
+// 0xFF -> qNaN. E4M3 is UE4M3, decoded by the shared fp8 decoder as OCP (bias
+// 7) -- not by the target's FNUZ `cvt_f32_fp8`. E5M3 not yet implemented.
 Value *decodeScaleByte(IRBuilder<> &B, Module &M, Type *F32Ty, Value *Byte,
                        int Fmt) {
   switch (Fmt) {
@@ -1419,26 +1419,12 @@ Value *decodeScaleByte(IRBuilder<> &B, Module &M, Type *F32Ty, Value *Byte,
     return B.CreateSelect(IsNaN, ConstantFP::getQNaN(F32Ty), Finite,
                           "e8m0_decoded");
   }
-  case ScaleFmtE4M3: {
-    Value *Exp = B.CreateAnd(B.CreateLShr(Byte, B.getInt32(3)), B.getInt32(0xF),
-                             "ue4m3_exp");
-    Value *Mant = B.CreateAnd(Byte, B.getInt32(0x7), "ue4m3_mant");
-    Value *IsSub = B.CreateICmpEQ(Exp, B.getInt32(0), "ue4m3_sub");
-    Value *MantNum = B.CreateSelect(
-        IsSub, Mant, B.CreateAdd(Mant, B.getInt32(8)), "ue4m3_signif");
-    Value *Sig = B.CreateFMul(B.CreateUIToFP(MantNum, F32Ty),
-                              ConstantFP::get(F32Ty, 0.125), "ue4m3_sig");
-    Value *Exp2 = B.CreateSelect(IsSub, B.getInt32(-6),
-                                 B.CreateSub(Exp, B.getInt32(7)), "ue4m3_e");
-    Function *LdexpFn = Intrinsic::getOrInsertDeclaration(
-        &M, Intrinsic::ldexp, {F32Ty, B.getInt32Ty()});
-    Value *Val = B.CreateCall(LdexpFn, {Sig, Exp2}, "ue4m3_val");
-    Value *IsNaN =
-        B.CreateAnd(B.CreateICmpEQ(Exp, B.getInt32(0xF)),
-                    B.CreateICmpEQ(Mant, B.getInt32(7)), "ue4m3_is_nan");
-    return B.CreateSelect(IsNaN, ConstantFP::getQNaN(F32Ty), Val,
-                          "ue4m3_decoded");
-  }
+  case ScaleFmtE4M3:
+    // Scale format 2 is UE4M3: the same field layout as an OCP E4M3 data byte
+    // with bit 7 unused, so masking the sign off makes the shared fp8 decoder
+    // read it exactly (including its exp==15 && mant==7 NaN).
+    return decodeFp8ByteToF32(B, B.CreateAnd(Byte, B.getInt32(0x7F)),
+                              /*IsBf8=*/false, Fp8Format::OCP);
   case ScaleFmtE5M3:
     return nullptr; // TODO
   }
@@ -1461,36 +1447,23 @@ bool isLegalScaleDataCombo(int aFmt, int aScaleFmt, int bFmt, int bScaleFmt) {
 // elements per Wave64 lane mapping to output rows 4*(lane/16) + g (g=0..3), all
 // sharing column `lane%16`.  So the B (column) scale byte is shared across the
 // 4 elements while the A (row) scale byte varies per element -- hence one
-// ScaleAByte per `g` but a single ScaleBByte.  Everything that depends on
-// ScaleBByte alone is therefore built once, outside the row loop.
-//
-// E8M0 x E8M0 uses the combined-exponent shortcut 2^(byteA + byteB - 254),
-// which has no separable B factor -- only its NaN test hoists.  Other
-// combinations decode each side and fmul.
+// ScaleAByte per `g` but a single ScaleBByte.
 Value *buildScaleFactorVec(IRBuilder<> &B, Module &M, Type *F32Ty,
                            Value *ScaleABytes[4], Value *ScaleBByte,
                            int AScaleFmt, int BScaleFmt) {
-  const bool BothE8M0 = AScaleFmt == ScaleFmtE8M0 && BScaleFmt == ScaleFmtE8M0;
+  Value *Vec = PoisonValue::get(FixedVectorType::get(F32Ty, 4));
+  auto Insert = [&](unsigned g, Value *Factor) {
+    Vec = B.CreateInsertElement(Vec, Factor, B.getInt32(g), "factor_g");
+  };
 
-  Function *LdexpFn = nullptr;
-  Value *FactorB = nullptr;
-  if (BothE8M0) {
-    LdexpFn = Intrinsic::getOrInsertDeclaration(&M, Intrinsic::ldexp,
-                                                {F32Ty, B.getInt32Ty()});
-  } else {
-    FactorB = decodeScaleByte(B, M, F32Ty, ScaleBByte, BScaleFmt);
-    if (!FactorB)
-      return nullptr;
-  }
-
-  auto *Vec4 = FixedVectorType::get(F32Ty, 4);
-  Value *Vec = PoisonValue::get(Vec4);
-  for (unsigned g = 0; g < 4; ++g) {
-    Value *Factor = nullptr;
-    if (BothE8M0) {
-      // The B NaN test is loop-invariant but deliberately left here: GVN
-      // folds the four copies anyway, and hoisting it stretches an i1 live
-      // range across the four ldexp calls, which costs VALU at -O2.
+  // E8M0 x E8M0 folds both exponents into one ldexp per row, so there is no
+  // separable B factor to hoist.  The B NaN test is loop-invariant but stays
+  // in the loop on purpose: hoisting it stretches an i1 live range across the
+  // four ldexps and costs VALU at -O2, and GVN folds the copies anyway.
+  if (AScaleFmt == ScaleFmtE8M0 && BScaleFmt == ScaleFmtE8M0) {
+    Function *LdexpFn = Intrinsic::getOrInsertDeclaration(
+        &M, Intrinsic::ldexp, {F32Ty, B.getInt32Ty()});
+    for (unsigned g = 0; g < 4; ++g) {
       Value *BIsNaN =
           B.CreateICmpEQ(ScaleBByte, B.getInt32(0xFF), "scale_b_is_nan");
       Value *AIsNaN =
@@ -1500,15 +1473,22 @@ Value *buildScaleFactorVec(IRBuilder<> &B, Module &M, Type *F32Ty,
       Value *Biased = B.CreateSub(Sum, B.getInt32(254), "scale_exp");
       Value *FiniteFactor = B.CreateCall(
           LdexpFn, {ConstantFP::get(F32Ty, 1.0), Biased}, "finite_factor");
-      Factor = B.CreateSelect(AnyIsNaN, ConstantFP::getQNaN(F32Ty),
-                              FiniteFactor, "scale_factor");
-    } else {
-      Value *FactorA = decodeScaleByte(B, M, F32Ty, ScaleABytes[g], AScaleFmt);
-      if (!FactorA)
-        return nullptr;
-      Factor = B.CreateFMul(FactorA, FactorB, "scale_factor");
+      Insert(g, B.CreateSelect(AnyIsNaN, ConstantFP::getQNaN(F32Ty),
+                               FiniteFactor, "scale_factor"));
     }
-    Vec = B.CreateInsertElement(Vec, Factor, B.getInt32(g), "factor_g");
+    return Vec;
+  }
+
+  // Every other combination decodes each side and multiplies, so the shared B
+  // decode is built once.
+  Value *FactorB = decodeScaleByte(B, M, F32Ty, ScaleBByte, BScaleFmt);
+  if (!FactorB)
+    return nullptr;
+  for (unsigned g = 0; g < 4; ++g) {
+    Value *FactorA = decodeScaleByte(B, M, F32Ty, ScaleABytes[g], AScaleFmt);
+    if (!FactorA)
+      return nullptr;
+    Insert(g, B.CreateFMul(FactorA, FactorB, "scale_factor"));
   }
   return Vec;
 }

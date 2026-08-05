@@ -547,6 +547,68 @@ static llvm::Value *emitCvtScalePk8Bf16Fp4CrossTargetExpansion(
   return Vec;
 }
 
+// Build the two result dwords of v_cvt_scalef32_pk8_fp8_f32 from the eight
+// already-scaled f32 lanes. The OCP form encodes each pair straight to
+// source-format bytes so the target encoder's narrower FNUZ range never
+// truncates; the chained form is the plain same-format lowering, which walks
+// the hardware encoder's own word_sel.
+std::pair<llvm::Value *, llvm::Value *>
+emitPk8OcpDwords(RaiseContext &Ctx, llvm::Function *PkFn, llvm::Value *Scaled) {
+  auto Pair = [&](unsigned I) {
+    return encodeF32PairToOcpFp8(Ctx.B, PkFn,
+                                 Ctx.B.CreateExtractElement(Scaled, I),
+                                 Ctx.B.CreateExtractElement(Scaled, I + 1),
+                                 /*IsBf8=*/false);
+  };
+  auto Dword = [&](unsigned I) {
+    return Ctx.B.CreateOr(
+        Pair(I), Ctx.B.CreateShl(Pair(I + 2), ConstantInt::get(Ctx.I32Ty, 16)));
+  };
+  return {Dword(0), Dword(4)};
+}
+
+std::pair<llvm::Value *, llvm::Value *>
+emitPk8ChainedDwords(RaiseContext &Ctx, llvm::Function *PkFn,
+                     llvm::Value *Scaled) {
+  Value *Zero = ConstantInt::get(Ctx.I32Ty, 0);
+  auto E = [&](unsigned I) { return Ctx.B.CreateExtractElement(Scaled, I); };
+  auto Dword = [&](unsigned I) {
+    Value *Lo = Ctx.B.CreateCall(
+        PkFn, {E(I), E(I + 1), Zero, ConstantInt::get(Ctx.I1Ty, 0)},
+        "pk_fp8_lo");
+    return Ctx.B.CreateCall(
+        PkFn, {E(I + 2), E(I + 3), Lo, ConstantInt::get(Ctx.I1Ty, 1)},
+        "pk_fp8");
+  };
+  return {Dword(0), Dword(4)};
+}
+
+// Decode \p N fp8/bf8 bytes of \p Src starting at bit \p FirstBit, reading
+// them as \p SrcFmt. Returns an f32 for N == 1, else a `<N x float>`.
+//
+// The cvt handlers use this instead of the target's own decode hardware
+// whenever the formats differ: byte -> f32 is widening, so decoding the
+// source format directly is exact, where re-encoding into the target's format
+// first would clip anything the target cannot hold.
+llvm::Value *decodeFp8BytesInIR(RaiseContext &Ctx, llvm::Value *Src,
+                                unsigned FirstBit, unsigned N, bool IsBf8,
+                                Fp8Format SrcFmt) {
+  auto &B = Ctx.B;
+  auto Lane = [&](unsigned I) {
+    unsigned Shift = FirstBit + 8 * I;
+    Value *Bits =
+        Shift ? B.CreateLShr(Src, ConstantInt::get(Ctx.I32Ty, Shift)) : Src;
+    return decodeFp8ByteToF32(
+        B, B.CreateAnd(Bits, ConstantInt::get(Ctx.I32Ty, 0xFF)), IsBf8, SrcFmt);
+  };
+  if (N == 1)
+    return Lane(0);
+  Value *Vec = PoisonValue::get(FixedVectorType::get(Ctx.F32Ty, N));
+  for (unsigned I = 0; I < N; ++I)
+    Vec = B.CreateInsertElement(Vec, Lane(I), I);
+  return Vec;
+}
+
 // Emit v_cvt_pk_{fp8,bf8}_f32: pack two f32 into two fp8 bytes at the WordSel
 // half of OldVal, keeping the preserved half in the source format.
 //
@@ -567,13 +629,16 @@ llvm::Value *emitCvtPkFp8F32(RaiseContext &Ctx, llvm::Function *CvtFn,
   if (!*ToFnuz) {
     Lo = encodeF32PairToOcpFp8(B, CvtFn, S0, S1, IsBf8);
   } else {
+    // FNUZ source: no exact shortcut, so encode in the target's format and
+    // re-encode the bytes. This is the lossy path -- it clips whatever the
+    // target cannot hold -- and is unreachable for the ISA pairs in use
+    // today, every supported source being OCP.
     Value *Fresh = B.CreateCall(CvtFn,
                                 {S0, S1, ConstantInt::get(Ctx.I32Ty, 0),
                                  ConstantInt::get(Ctx.I1Ty, false)},
                                 "pk_fp8_raw");
-    // The hw encode writes bytes 0-1 and leaves 2-3 at OldVal (0 here), so
-    // only the low half needs re-encoding.
-    Lo = convertFp8Dword(B, Fresh, IsBf8, *ToFnuz, /*NumBytes=*/2);
+    Lo = B.CreateAnd(convertFp8Dword(B, Fresh, IsBf8, *ToFnuz),
+                     ConstantInt::get(Ctx.I32Ty, 0xFFFF));
   }
   if (WordSel)
     return B.CreateOr(B.CreateAnd(OldVal, ConstantInt::get(Ctx.I32Ty, 0xFFFF)),
@@ -3106,49 +3171,15 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
       // FP8 conversion emulation for targets such as gfx942/gfx950.
       Value *ScaleSplat = Ctx.B.CreateVectorSplat(8, Scale, "scale_splat");
       Value *Scaled = Ctx.B.CreateFMul(Src8, ScaleSplat, "scaled");
-      Value *ZeroI32 = ConstantInt::get(Ctx.I32Ty, 0);
       Function *PkFn = Intrinsic::getOrInsertDeclaration(
           &Ctx.M, Intrinsic::amdgcn_cvt_pk_fp8_f32);
-      auto ExtractF = [&](unsigned i) {
-        return Ctx.B.CreateExtractElement(Scaled, i);
-      };
       auto ToFnuz = fp8Reencode(Ctx.Isa, Ctx.TargetIsa, Fp8Dir::TgtToSrc);
-      Value *Dw0, *Dw1;
-      if (ToFnuz && !*ToFnuz) {
-        // OCP source: encode each pair straight to source-format bytes so the
-        // gfx942 encoder's narrower E4M3 range never truncates the result.
-        auto Pair = [&](unsigned I, unsigned J) {
-          return encodeF32PairToOcpFp8(Ctx.B, PkFn, ExtractF(I), ExtractF(J),
-                                       /*IsBf8=*/false);
-        };
-        auto Dword = [&](unsigned I) {
-          return Ctx.B.CreateOr(
-              Pair(I, I + 1), Ctx.B.CreateShl(Pair(I + 2, I + 3),
-                                              ConstantInt::get(Ctx.I32Ty, 16)));
-        };
-        Dw0 = Dword(0);
-        Dw1 = Dword(4);
-      } else {
-        Value *Dw0Lo = Ctx.B.CreateCall(
-            PkFn,
-            {ExtractF(0), ExtractF(1), ZeroI32, ConstantInt::get(Ctx.I1Ty, 0)},
-            "pk_fp8_01");
-        Dw0 = Ctx.B.CreateCall(
-            PkFn,
-            {ExtractF(2), ExtractF(3), Dw0Lo, ConstantInt::get(Ctx.I1Ty, 1)},
-            "pk_fp8_23");
-        Value *Dw1Lo = Ctx.B.CreateCall(
-            PkFn,
-            {ExtractF(4), ExtractF(5), ZeroI32, ConstantInt::get(Ctx.I1Ty, 0)},
-            "pk_fp8_45");
-        Dw1 = Ctx.B.CreateCall(
-            PkFn,
-            {ExtractF(6), ExtractF(7), Dw1Lo, ConstantInt::get(Ctx.I1Ty, 1)},
-            "pk_fp8_67");
-        if (ToFnuz) {
-          Dw0 = convertFp8Dword(Ctx.B, Dw0, /*IsBf8=*/false, *ToFnuz);
-          Dw1 = convertFp8Dword(Ctx.B, Dw1, /*IsBf8=*/false, *ToFnuz);
-        }
+      const bool OcpSource = ToFnuz && !*ToFnuz;
+      auto [Dw0, Dw1] = OcpSource ? emitPk8OcpDwords(Ctx, PkFn, Scaled)
+                                  : emitPk8ChainedDwords(Ctx, PkFn, Scaled);
+      if (ToFnuz && !OcpSource) {
+        Dw0 = convertFp8Dword(Ctx.B, Dw0, /*IsBf8=*/false, *ToFnuz);
+        Dw1 = convertFp8Dword(Ctx.B, Dw1, /*IsBf8=*/false, *ToFnuz);
       }
       auto *V2I32Ty = FixedVectorType::get(Ctx.I32Ty, 2);
       Value *Packed = PoisonValue::get(V2I32Ty);
@@ -3247,26 +3278,10 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Value *Src = Op.src(0);
     if (Src->getType() != Ctx.I32Ty)
       Src = Ctx.B.CreateBitOrPointerCast(Src, Ctx.I32Ty);
-    if (auto ToFnuz = fp8Reencode(Ctx.Isa, Ctx.TargetIsa, Fp8Dir::SrcToTgt)) {
-      // Formats differ. Decode against the SOURCE format in IR instead of
-      // re-encoding into the target's format and using its decoder: byte ->
-      // f32 is widening, so this is exact, where the round trip would clip
-      // whatever the target cannot hold (E5M2 Inf, E4M3's (240, 448], -0).
-      Value *Half = WordSelInt
-                        ? Ctx.B.CreateLShr(Src, ConstantInt::get(Ctx.I32Ty, 16))
-                        : Src;
-      Value *Vec = PoisonValue::get(FixedVectorType::get(Ctx.F32Ty, 2));
-      for (unsigned I = 0; I < 2; ++I) {
-        Value *Byte = Ctx.B.CreateAnd(
-            Ctx.B.CreateLShr(Half, ConstantInt::get(Ctx.I32Ty, 8 * I)),
-            ConstantInt::get(Ctx.I32Ty, 0xFF));
-        Vec = Ctx.B.CreateInsertElement(
-            Vec,
-            decodeFp8ByteToF32(Ctx.B, Byte,
-                               Sop == CanonicalOp::V_CVT_PK_F32_BF8,
-                               /*IsFnuz=*/!*ToFnuz),
-            I);
-      }
+    if (fp8Reencode(Ctx.Isa, Ctx.TargetIsa, Fp8Dir::SrcToTgt)) {
+      Value *Vec = decodeFp8BytesInIR(
+          Ctx, Src, /*FirstBit=*/WordSelInt ? 16 : 0, /*N=*/2,
+          Sop == CanonicalOp::V_CVT_PK_F32_BF8, fp8FormatOf(Ctx.Isa));
       Ctx.writeReg64(Op.dst(), Ctx.B.CreateBitCast(Vec, Ctx.I64Ty));
       Hr.Handled = true;
       return Hr;
@@ -3301,14 +3316,11 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Value *Src = Op.src(0);
     if (Src->getType() != Ctx.I32Ty)
       Src = Ctx.B.CreateBitOrPointerCast(Src, Ctx.I32Ty);
-    // Formats differ: decode byte 0 (byte_sel is pinned to 0 above, op_sel /
-    // sdwa forms being refused) against the SOURCE format in IR. See the
-    // packed sibling above for why the target's decoder is not used.
-    if (auto ToFnuz = fp8Reencode(Ctx.Isa, Ctx.TargetIsa, Fp8Dir::SrcToTgt)) {
-      Value *Byte = Ctx.B.CreateAnd(Src, ConstantInt::get(Ctx.I32Ty, 0xFF));
-      Value *Dec =
-          decodeFp8ByteToF32(Ctx.B, Byte, Sop == CanonicalOp::V_CVT_F32_BF8,
-                             /*IsFnuz=*/!*ToFnuz);
+    // byte_sel is pinned to 0 above, op_sel / sdwa forms being refused.
+    if (fp8Reencode(Ctx.Isa, Ctx.TargetIsa, Fp8Dir::SrcToTgt)) {
+      Value *Dec = decodeFp8BytesInIR(Ctx, Src, /*FirstBit=*/0, /*N=*/1,
+                                      Sop == CanonicalOp::V_CVT_F32_BF8,
+                                      fp8FormatOf(Ctx.Isa));
       Ctx.writeReg32(Op.dst(), Ctx.B.CreateBitCast(Dec, Ctx.I32Ty));
       Hr.Handled = true;
       return Hr;
