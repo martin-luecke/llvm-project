@@ -236,6 +236,17 @@ Expected<HandlerResult> handleMFMA(RaiseContext &Ctx, const DecodedInst &Di,
     }
   }();
   auto ToFnuz = fp8Reencode(Ctx.Isa, Ctx.TargetIsa, Fp8Dir::SrcToTgt);
+  // The scaled F8F6F4 family selects each operand's element format at run
+  // time via cbsz / blgp, so the table above cannot tell which of its bytes
+  // are fp8/bf8 (re-encode needed) and which are fp6/fp4 (not). Refuse
+  // instead of falling through the `default:` arm, which would hand
+  // source-format bytes to hardware that reads them differently.
+  if (IsScaled && ToFnuz)
+    return RaiseFailure::unsupportedInstructionForm(
+        Di, "MFMA",
+        "scaled F8F6F4 MFMA crosses an fp8/bf8 OCP<->FNUZ boundary; the "
+        "cbsz/blgp-selected per-operand element formats are not statically "
+        "known here, so the operands cannot be re-encoded");
   if (fp8Sides && ToFnuz) {
     auto [AIsBf8, BIsBf8] = *fp8Sides;
     assert(SrcTy->isIntegerTy(64) && "fp8 MFMA operand expected i64");

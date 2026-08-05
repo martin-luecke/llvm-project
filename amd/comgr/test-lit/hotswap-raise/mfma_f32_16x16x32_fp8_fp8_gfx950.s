@@ -2,6 +2,12 @@
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=mfma_fp8_kernel \
 ; RUN:   | %FileCheck %s --check-prefix=CROSS
 
+; The scaled F8F6F4 family picks each operand's element format from cbsz /
+; blgp at run time, so its fp8/bf8 bytes cannot be re-encoded for gfx942's
+; FNUZ hardware. Refuse instead of passing OCP bytes through unconverted.
+; RUN: %not raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=mfma_scale_kernel \
+; RUN:   2>&1 | %FileCheck %s --check-prefix=SCALED_CROSS
+
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx950"
 	.amdhsa_code_object_version 6
 	.text
@@ -26,7 +32,32 @@ mfma_fp8_kernel:
 	v_mov_b32_e32 v8, 0
 	global_store_dwordx4 v8, v[4:7], s[0:1]
 	s_endpgm
+	.globl	mfma_scale_kernel
+	.p2align	8
+	.type	mfma_scale_kernel,@function
+mfma_scale_kernel:
+	s_load_dwordx2 s[0:1], s[0:1], 0x0
+	v_mov_b32_e32 v20, 0
+	v_mov_b32_e32 v21, 0
+; SCALED_CROSS: kernel 'mfma_scale_kernel' failed to raise:
+; SCALED_CROSS-SAME: scaled F8F6F4 MFMA crosses an fp8/bf8 OCP<->FNUZ boundary
+	v_mfma_scale_f32_16x16x128_f8f6f4 v[0:3], v[4:11], v[12:19], v[0:3] v20, v21
+	s_nop 8
+	v_mov_b32_e32 v22, 0
+	global_store_dwordx4 v22, v[0:3], s[0:1]
+	s_endpgm
 	.section	.rodata,"a",@progbits
+	.p2align	6, 0x0
+	.amdhsa_kernel mfma_scale_kernel
+		.amdhsa_kernarg_size 8
+		.amdhsa_user_sgpr_count 2
+		.amdhsa_user_sgpr_kernarg_segment_ptr 1
+		.amdhsa_next_free_vgpr 23
+		.amdhsa_next_free_sgpr 2
+		.amdhsa_accum_offset 24
+		.amdhsa_reserve_vcc 1
+		.amdhsa_float_denorm_mode_32 3
+	.end_amdhsa_kernel
 	.p2align	6, 0x0
 	.amdhsa_kernel mfma_fp8_kernel
 		.amdhsa_kernarg_size 8
@@ -53,6 +84,18 @@ amdhsa.kernels:
     .sgpr_count:     2
     .symbol:         mfma_fp8_kernel.kd
     .vgpr_count:     9
+    .wavefront_size: 64
+  - .args:
+      - { .address_space:  global, .offset:         0, .size:           8, .value_kind:     global_buffer }
+    .group_segment_fixed_size: 0
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 8
+    .max_flat_workgroup_size: 1024
+    .name:           mfma_scale_kernel
+    .private_segment_fixed_size: 0
+    .sgpr_count:     2
+    .symbol:         mfma_scale_kernel.kd
+    .vgpr_count:     23
     .wavefront_size: 64
 amdhsa.version: [1, 2]
 ...
