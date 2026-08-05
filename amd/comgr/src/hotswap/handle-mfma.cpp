@@ -211,6 +211,12 @@ Expected<HandlerResult> handleMFMA(RaiseContext &Ctx, const DecodedInst &Di,
   Value *B = Ctx.Regs.readRegVec(Ctx.B, SrcB, SrcTy);
   Value *C = Ctx.Regs.readRegVec(Ctx.B, SrcC, AccumTy);
 
+  // Classify the fp8 element format the opcode gives each of its two operands.
+  // Returns nullopt for any non-fp8 MFMA, i.e. nothing here to re-encode;
+  // otherwise {AIsBf8, BIsBf8}, where true means that operand is bf8 (E5M2) and
+  // false means fp8 (E4M3).  A and B carry independent formats (the _FP8_BF8
+  // and _BF8_FP8 mixed opcodes), so each side needs its own flag to pick the
+  // right converter below.
   auto fp8Sides = [&]() -> std::optional<std::pair<bool, bool>> {
     switch (Sop) {
     case CanonicalOp::V_MFMA_F32_16x16x32_FP8_FP8:
