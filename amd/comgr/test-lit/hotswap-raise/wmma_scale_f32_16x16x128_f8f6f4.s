@@ -53,6 +53,14 @@ wmma_scale_f32_16x16x128_f8f6f4_kernel:
 	s_delay_alu instid0(VALU_DEP_1)
 
 ; IR_GFX942-LABEL: define amdgpu_kernel void @wmma_scale_f32_16x16x128_f8f6f4_kernel(
+; Both scale operands are SGPRs (s42, s43), which supply bits[7:0] to every
+; K-block -- unlike a VGPR source, whose four bytes are K-blocks 0..3. Byte 0
+; must be broadcast before extractScaleByte indexes it per K-block, or three
+; quarters of the accumulation gets scaled by the wrong exponent.
+; IR_GFX942: %[[ASB:scale_byte0[0-9]*]] = and i32 %{{[^,]+}}, 255
+; IR_GFX942: %{{scale_bcast[0-9]*}} = mul i32 %[[ASB]], 16843009
+; IR_GFX942: %[[BSB:scale_byte0[0-9]*]] = and i32 %{{[^,]+}}, 255
+; IR_GFX942: %{{scale_bcast[0-9]*}} = mul i32 %[[BSB]], 16843009
 ; IR_GFX942-DAG: trunc <4 x i32> %{{[^ ]+}} to <4 x i8>
 ; IR_GFX942: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.bf8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
 ; IR_GFX942: sub i32 %{{[^,]+}}, 254

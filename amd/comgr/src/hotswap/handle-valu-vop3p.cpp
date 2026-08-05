@@ -294,15 +294,35 @@ struct WmmaScaleInputs {
       return ConstantInt::get(Ctx.I32Ty, Byte * 0x01010101U);
     };
 
+    // A scalar scale source supplies bits[7:0] to every K-block, where a
+    // vector source maps its four bytes to K-blocks 0..3. Replicate byte 0
+    // here so the value is K-block-indexable regardless of provenance and
+    // every consumer -- the native gfx1250 intrinsic, the gfx950 scaled
+    // MFMA, and the gfx942 per-K-block software scale -- reads what the
+    // source hardware read. Matches unitScalePacked, which already
+    // replicates the inline-constant byte across the full width.
+    auto broadcastByte0 = [&](Value *Scale) -> Value * {
+      auto *Ty = cast<IntegerType>(Scale->getType());
+      uint64_t Mul =
+          Ty->getBitWidth() == 64 ? 0x0101010101010101ULL : 0x01010101ULL;
+      Value *Byte0 =
+          Ctx.B.CreateAnd(Scale, ConstantInt::get(Ty, 0xFF), "scale_byte0");
+      return Ctx.B.CreateMul(Byte0, ConstantInt::get(Ty, Mul), "scale_bcast");
+    };
+
     auto readScaleSrc = [&](AMDGPU::OpName Name, int64_t ScaleFmt) -> Value * {
       int Idx = AMDGPU::getNamedOperandIdx(Di.Inst.getOpcode(), Name);
       if (Idx < 0)
         return unitScalePacked(ScaleFmt);
       if (Di.isReg(Idx)) {
         ParsedReg Pr = Ctx.parseReg(Di.getReg(Idx), Idx);
-        if (Pr.RegKind != ParsedReg::OTHER && Pr.RegKind != ParsedReg::NOREG)
-          return ScaleSrcIsI64 ? Ctx.Regs.readReg64(Ctx.B, Pr)
-                               : Ctx.Regs.readReg32(Ctx.B, Pr);
+        if (Pr.RegKind != ParsedReg::OTHER && Pr.RegKind != ParsedReg::NOREG) {
+          Value *Scale = ScaleSrcIsI64 ? Ctx.Regs.readReg64(Ctx.B, Pr)
+                                       : Ctx.Regs.readReg32(Ctx.B, Pr);
+          const bool IsVector =
+              Pr.RegKind == ParsedReg::VGPR || Pr.RegKind == ParsedReg::AGPR;
+          return IsVector ? Scale : broadcastByte0(Scale);
+        }
       }
       if (Di.isImm(Idx) && Di.getImm(Idx) == 0)
         return unitScalePacked(ScaleFmt);
