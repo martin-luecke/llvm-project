@@ -1457,49 +1457,57 @@ bool isLegalScaleDataCombo(int aFmt, int aScaleFmt, int bFmt, int bScaleFmt) {
   return true;
 }
 
-// Scalar factor_A * factor_B. E8M0 x E8M0 uses the combined-exponent shortcut
-// 2^(byteA + byteB - 254); other combinations decode each side and fmul.
-Value *buildScaleFactor(IRBuilder<> &B, Module &M, Type *F32Ty,
-                        Value *ScaleAByte, Value *ScaleBByte, int AScaleFmt,
-                        int BScaleFmt) {
-  if (AScaleFmt == ScaleFmtE8M0 && BScaleFmt == ScaleFmtE8M0) {
-    Value *AIsNaN =
-        B.CreateICmpEQ(ScaleAByte, B.getInt32(0xFF), "scale_a_is_nan");
-    Value *BIsNaN =
-        B.CreateICmpEQ(ScaleBByte, B.getInt32(0xFF), "scale_b_is_nan");
-    Value *AnyIsNaN = B.CreateOr(AIsNaN, BIsNaN, "scale_is_nan");
-
-    Value *Sum = B.CreateAdd(ScaleAByte, ScaleBByte, "scale_sum");
-    Value *Biased = B.CreateSub(Sum, B.getInt32(254), "scale_exp");
-    Function *LdexpFn = Intrinsic::getOrInsertDeclaration(
-        &M, Intrinsic::ldexp, {F32Ty, B.getInt32Ty()});
-    Value *FiniteFactor = B.CreateCall(
-        LdexpFn, {ConstantFP::get(F32Ty, 1.0), Biased}, "finite_factor");
-    return B.CreateSelect(AnyIsNaN, ConstantFP::getQNaN(F32Ty), FiniteFactor,
-                          "scale_factor");
-  }
-  Value *FactorA = decodeScaleByte(B, M, F32Ty, ScaleAByte, AScaleFmt);
-  Value *FactorB = decodeScaleByte(B, M, F32Ty, ScaleBByte, BScaleFmt);
-  if (!FactorA || !FactorB)
-    return nullptr;
-  return B.CreateFMul(FactorA, FactorB, "scale_factor");
-}
-
 // `<4 x float>` of per-output-row scale factors.  The MFMA accumulator holds 4
 // elements per Wave64 lane mapping to output rows 4*(lane/16) + g (g=0..3), all
 // sharing column `lane%16`.  So the B (column) scale byte is shared across the
 // 4 elements while the A (row) scale byte varies per element -- hence one
-// ScaleAByte per `g` but a single ScaleBByte.
+// ScaleAByte per `g` but a single ScaleBByte.  Everything that depends on
+// ScaleBByte alone is therefore built once, outside the row loop.
+//
+// E8M0 x E8M0 uses the combined-exponent shortcut 2^(byteA + byteB - 254),
+// which has no separable B factor -- only its NaN test hoists.  Other
+// combinations decode each side and fmul.
 Value *buildScaleFactorVec(IRBuilder<> &B, Module &M, Type *F32Ty,
                            Value *ScaleABytes[4], Value *ScaleBByte,
                            int AScaleFmt, int BScaleFmt) {
+  const bool BothE8M0 = AScaleFmt == ScaleFmtE8M0 && BScaleFmt == ScaleFmtE8M0;
+
+  Function *LdexpFn = nullptr;
+  Value *FactorB = nullptr;
+  if (BothE8M0) {
+    LdexpFn = Intrinsic::getOrInsertDeclaration(&M, Intrinsic::ldexp,
+                                                {F32Ty, B.getInt32Ty()});
+  } else {
+    FactorB = decodeScaleByte(B, M, F32Ty, ScaleBByte, BScaleFmt);
+    if (!FactorB)
+      return nullptr;
+  }
+
   auto *Vec4 = FixedVectorType::get(F32Ty, 4);
   Value *Vec = PoisonValue::get(Vec4);
   for (unsigned g = 0; g < 4; ++g) {
-    Value *Factor = buildScaleFactor(B, M, F32Ty, ScaleABytes[g], ScaleBByte,
-                                     AScaleFmt, BScaleFmt);
-    if (!Factor)
-      return nullptr;
+    Value *Factor = nullptr;
+    if (BothE8M0) {
+      // The B NaN test is loop-invariant but deliberately left here: GVN
+      // folds the four copies anyway, and hoisting it stretches an i1 live
+      // range across the four ldexp calls, which costs VALU at -O2.
+      Value *BIsNaN =
+          B.CreateICmpEQ(ScaleBByte, B.getInt32(0xFF), "scale_b_is_nan");
+      Value *AIsNaN =
+          B.CreateICmpEQ(ScaleABytes[g], B.getInt32(0xFF), "scale_a_is_nan");
+      Value *AnyIsNaN = B.CreateOr(AIsNaN, BIsNaN, "scale_is_nan");
+      Value *Sum = B.CreateAdd(ScaleABytes[g], ScaleBByte, "scale_sum");
+      Value *Biased = B.CreateSub(Sum, B.getInt32(254), "scale_exp");
+      Value *FiniteFactor = B.CreateCall(
+          LdexpFn, {ConstantFP::get(F32Ty, 1.0), Biased}, "finite_factor");
+      Factor = B.CreateSelect(AnyIsNaN, ConstantFP::getQNaN(F32Ty),
+                              FiniteFactor, "scale_factor");
+    } else {
+      Value *FactorA = decodeScaleByte(B, M, F32Ty, ScaleABytes[g], AScaleFmt);
+      if (!FactorA)
+        return nullptr;
+      Factor = B.CreateFMul(FactorA, FactorB, "scale_factor");
+    }
     Vec = B.CreateInsertElement(Vec, Factor, B.getInt32(g), "factor_g");
   }
   return Vec;
@@ -1630,11 +1638,13 @@ Expected<Value *> emitWMMAScaleF8F6F4toMFMA(
 
     // The B (column) scale is indexed by column = lane%16, identical for all 4
     // lane groups of a pass -- unlike the A/B operands, whose Lo/Hi split
-    // selects the K-block. The source packs Bsc[lane%16] in the lower W32 half,
-    // so every lane group reads AddrLo; AddrHi would pull the upper source
-    // wave's scale, a distinct value under WaveNative cross-widen. All 4
-    // K-block scale bytes ride in one i32, so one bpermute suffices; constant
-    // sources are lane-uniform, so skip it.
+    // selects the K-block. The source packs Bsc[lane%16] in lanes 0..15 of its
+    // W32 and leaves lanes 16..31 unused (that is the SCL_OPSEL[0] == 0 / ROW0
+    // layout; the ROW1 form is refused before we get here), so every lane group
+    // reads AddrLo. AddrHi addresses those unused lanes -- still inside this
+    // pass's source wave, just holding nothing. All 4 K-block scale bytes ride
+    // in one i32, so one bpermute suffices; constant sources are lane-uniform,
+    // so skip it.
     auto RedistributeScale = [&](Value *ScaleSrc) -> Value * {
       if (isa<Constant>(ScaleSrc))
         return ScaleSrc;
