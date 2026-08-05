@@ -583,6 +583,56 @@ emitPk8ChainedDwords(RaiseContext &Ctx, llvm::Function *PkFn,
   return {Dword(0), Dword(4)};
 }
 
+// gfx1250 reuses the CLAMP bit on the fp8 (E4M3) converts as a FORMAT select:
+// CLAMP=0 keeps OCP E4M3, CLAMP=1 reinterprets the byte as E5M3. That is a
+// third fp8 format with no gfx942 counterpart and no re-encode path, so refuse
+// rather than silently treating an E5M3 byte as E4M3. The bf8 (E5M2) opcodes
+// carry no such bit.
+llvm::Error refuseE5M3FormatSelect(const DecodedInst &Di,
+                                   llvm::StringRef Name) {
+  int Idx =
+      AMDGPU::getNamedOperandIdx(Di.Inst.getOpcode(), AMDGPU::OpName::clamp);
+  if (Idx < 0 || !Di.isImm(Idx) || Di.getImm(Idx) == 0)
+    return llvm::Error::success();
+  return RaiseFailure::unsupportedInstructionForm(
+      Di, "VOP3",
+      Name + " with clamp=1 selects the E5M3 fp8 format (gfx1250 "
+             "OPF_CLAMP_IS_CVT_FORMAT), which has no target-side equivalent "
+             "and is not lifted");
+}
+
+// Read a named immediate operand, or \p Fallback when the opcode does not
+// expose it.
+int64_t namedImmOr(const DecodedInst &Di, AMDGPU::OpName Name,
+                   int64_t Fallback) {
+  int Idx = AMDGPU::getNamedOperandIdx(Di.Inst.getOpcode(), Name);
+  return (Idx >= 0 && Di.isImm(Idx)) ? Di.getImm(Idx) : Fallback;
+}
+
+// Which 16-bit half of the destination v_cvt_pk_{fp8,bf8}_f32 writes.
+//
+// Two encodings say this and only one is present at a time: the assembler's
+// e64 form carries a trailing `op_sel` immediate whose bit 2 is the dst
+// selector, while the DISASSEMBLER emits the t16 form, which drops that
+// operand and names the destination half directly (`v5.h`, a _HI16 subreg).
+// The raiser sees the latter, so checking op_sel alone silently writes the
+// low half for every `op_sel:[0,0,1]`.
+//
+// The other half is preserved from the destination's prior value, which the
+// tied `vdst_in` operand carries. buildSrcMap deliberately drops vdst_in, so
+// it is NOT Op.src(2) -- that lands on clamp or op_sel depending on the
+// subtarget's operand list -- and reading the dst register is equivalent.
+bool cvtPkFp8DstIsHi(RaiseContext &Ctx, const DecodedInst &Di) {
+  // In the standalone `op_sel` immediate the entries are [src0, src1, dst],
+  // so the destination selector is bit 2 -- not SISrcMods::DST_OP_SEL, which
+  // is a bit in the separate src-modifier operand.
+  constexpr int64_t OpSelDstBit = 1 << 2;
+  if ((namedImmOr(Di, AMDGPU::OpName::op_sel, 0) & OpSelDstBit) != 0)
+    return true;
+  const MCRegisterInfo &MRI = *Ctx.Mc.RegInfo;
+  return Di.isReg(0) && AMDGPU::isHi16Reg(Di.getReg(0), MRI);
+}
+
 // Decode \p N fp8/bf8 bytes of \p Src starting at bit \p FirstBit, reading
 // them as \p SrcFmt. Returns an f32 for N == 1, else a `<N x float>`.
 //
@@ -3203,15 +3253,10 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
       S0 = Ctx.B.CreateBitCast(S0, Ctx.F32Ty);
     if (S1->getType() != Ctx.F32Ty)
       S1 = Ctx.B.CreateBitCast(S1, Ctx.F32Ty);
-    // v_cvt_pk_fp8_f32 packs two f32 into two fp8 values in the low 16 bits.
-    // The "old" value and word_sel determine where in the dest the result goes.
-    // src2 = old value, src3 (imm) = word_sel.
-    // Use the LLVM intrinsic which handles this correctly.
-    Value *OldVal =
-        (Op.nSrcs() >= 3) ? Op.src(2) : ConstantInt::get(Ctx.I32Ty, 0);
-    bool WordSel = (Op.nSrcs() >= 4 && Di.isImm(Op.srcIdx(3)))
-                       ? (Op.srcImm(3) != 0)
-                       : false;
+    if (Error Err = refuseE5M3FormatSelect(Di, canonicalOpName(Sop)))
+      return std::move(Err);
+    Value *OldVal = Ctx.Regs.readReg32(Ctx.B, Op.dst());
+    const bool WordSel = cvtPkFp8DstIsHi(Ctx, Di);
     Function *CvtFn = Intrinsic::getOrInsertDeclaration(
         &Ctx.M, Intrinsic::amdgcn_cvt_pk_fp8_f32);
     Ctx.writeReg32(Op.dst(),
@@ -3226,11 +3271,10 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
       S0 = Ctx.B.CreateBitCast(S0, Ctx.F32Ty);
     if (S1->getType() != Ctx.F32Ty)
       S1 = Ctx.B.CreateBitCast(S1, Ctx.F32Ty);
-    Value *OldVal =
-        (Op.nSrcs() >= 3) ? Op.src(2) : ConstantInt::get(Ctx.I32Ty, 0);
-    bool WordSel = (Op.nSrcs() >= 4 && Di.isImm(Op.srcIdx(3)))
-                       ? (Op.srcImm(3) != 0)
-                       : false;
+    if (Error Err = refuseE5M3FormatSelect(Di, canonicalOpName(Sop)))
+      return std::move(Err);
+    Value *OldVal = Ctx.Regs.readReg32(Ctx.B, Op.dst());
+    const bool WordSel = cvtPkFp8DstIsHi(Ctx, Di);
     Function *CvtFn = Intrinsic::getOrInsertDeclaration(
         &Ctx.M, Intrinsic::amdgcn_cvt_pk_bf8_f32);
     Ctx.writeReg32(Op.dst(),
@@ -3298,29 +3342,31 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     Hr.Handled = true;
     return Hr;
   }
-  // VOP1 single-lane v_cvt_f32_{fp8,bf8}: decode one 8-bit lane of
-  // src into f32. The corpus only ever emits the e64 form with no
-  // op_sel (byte_sel=0) -- the SDWA / op_sel-bearing encodings, which
-  // would let LLVM's isel pick byte 1/2/3, are not present in any
-  // gfx1250 kernel today. We refuse loudly if disassembly carries an
-  // op_sel: marker so corpus drift surfaces instead of a silent
-  // byte-0 collapse.
+  // VOP1 single-lane v_cvt_f32_{fp8,bf8}: decode one 8-bit lane of src into
+  // f32. The lane is the `byte_sel` operand -- gfx1250 prints it as
+  // `byte_sel:N`, NOT `op_sel:`, so a textual op_sel guard never sees it.
+  // SDWA still has no first-class channel here, so that form stays refused.
   if (Sop == CanonicalOp::V_CVT_F32_FP8 || Sop == CanonicalOp::V_CVT_F32_BF8) {
-    StringRef Text(Di.FullText);
-    if (Text.contains("op_sel:") || Text.contains("_sdwa")) {
+    if (StringRef(Di.FullText).contains("_sdwa")) {
       return RaiseFailure::unsupportedInstructionForm(
           Di, "VOP1",
-          "non-default op_sel/sdwa byte_sel on v_cvt_f32_{fp8,bf8} "
-          "(only the byte_sel=0 e64 form is wired today)");
+          "sdwa v_cvt_f32_{fp8,bf8} is not lifted; its byte selector has no "
+          "modelled operand channel");
+    }
+    if (Error Err = refuseE5M3FormatSelect(Di, canonicalOpName(Sop)))
+      return std::move(Err);
+    const int64_t ByteSel = namedImmOr(Di, AMDGPU::OpName::byte_sel, 0);
+    if (ByteSel < 0 || ByteSel > 3) {
+      return RaiseFailure::unsupportedInstructionForm(
+          Di, "VOP1", "byte_sel out of range on v_cvt_f32_{fp8,bf8}");
     }
     Value *Src = Op.src(0);
     if (Src->getType() != Ctx.I32Ty)
       Src = Ctx.B.CreateBitOrPointerCast(Src, Ctx.I32Ty);
-    // byte_sel is pinned to 0 above, op_sel / sdwa forms being refused.
     if (fp8Reencode(Ctx.Isa, Ctx.TargetIsa, Fp8Dir::SrcToTgt)) {
-      Value *Dec = decodeFp8BytesInIR(Ctx, Src, /*FirstBit=*/0, /*N=*/1,
-                                      Sop == CanonicalOp::V_CVT_F32_BF8,
-                                      fp8FormatOf(Ctx.Isa));
+      Value *Dec = decodeFp8BytesInIR(
+          Ctx, Src, /*FirstBit=*/8 * unsigned(ByteSel), /*N=*/1,
+          Sop == CanonicalOp::V_CVT_F32_BF8, fp8FormatOf(Ctx.Isa));
       Ctx.writeReg32(Op.dst(), Ctx.B.CreateBitCast(Dec, Ctx.I32Ty));
       Hr.Handled = true;
       return Hr;
@@ -3330,7 +3376,7 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
                             : Intrinsic::amdgcn_cvt_f32_bf8;
     Function *CvtFn = Intrinsic::getOrInsertDeclaration(&Ctx.M, Iid);
     Value *F = Ctx.B.CreateCall(
-        CvtFn, {Src, ConstantInt::get(Ctx.I32Ty, 0)},
+        CvtFn, {Src, ConstantInt::get(Ctx.I32Ty, ByteSel)},
         Sop == CanonicalOp::V_CVT_F32_FP8 ? "cvt_f32_fp8" : "cvt_f32_bf8");
     Ctx.writeReg32(Op.dst(), Ctx.B.CreateBitCast(F, Ctx.I32Ty));
     Hr.Handled = true;

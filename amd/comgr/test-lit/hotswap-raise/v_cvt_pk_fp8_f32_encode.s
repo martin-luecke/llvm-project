@@ -6,6 +6,11 @@
 ; RUN:   && raise_cli %t.hsaco --target-isa=gfx1250 --emit-ir=cvt_enc_kernel \
 ; RUN:   | %FileCheck %s --check-prefix=SAME
 
+; gfx1250 reuses CLAMP on the fp8 converts as a FORMAT select (E4M3 vs E5M3),
+; not an output clamp. E5M3 has no target-side equivalent, so refuse.
+; RUN: %not raise_cli %t.hsaco --target-isa=gfx942 --emit-ir=cvt_e5m3_kernel \
+; RUN:   2>&1 | %FileCheck %s --check-prefix=E5M3
+
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
 	.text
@@ -29,6 +34,11 @@ cvt_enc_kernel:
 ; CROSS-DAG: fcmp oge float %{{.+}}, 6.144000e+04
 ; CROSS-DAG: call i32 @llvm.amdgcn.cvt.pk.bf8.f32(float %{{.+}}, float %{{.+}}, i32 0, i1 false)
 ; CROSS-DAG: %pk_fp8_ocp{{[0-9]*}} = or
+; op_sel:[0,0,1] writes the HIGH half and preserves the low one. The
+; disassembler drops the op_sel operand and names the dst half instead
+; (`v3.h`), so this only works if the dst _HI16 subreg is honoured.
+; CROSS-DAG: and i32 %{{[^,]+}}, 65535
+; CROSS-DAG: shl i32 %pk_fp8_ocp{{[0-9]*}}, 16
 ; No byte-level re-encode is involved on this path any more.
 ; CROSS-NOT: e4m3_ocp
 ; CROSS-NOT: e5m2_ocp
@@ -37,12 +47,30 @@ cvt_enc_kernel:
 ; SAME: call i32 @llvm.amdgcn.cvt.pk.fp8.f32(
 ; SAME-NOT: pk_fp8_ocp
 	v_cvt_pk_fp8_f32 v0, v1, v2
-	v_cvt_pk_bf8_f32 v3, v1, v2
+	v_cvt_pk_bf8_f32 v3, v1, v2 op_sel:[0,0,1]
 	v_mov_b32_e32 v5, 0
 	s_wait_kmcnt 0x0
 	global_store_b64 v5, v[0:1], s[0:1]
 	s_endpgm
+	.globl	cvt_e5m3_kernel
+	.p2align	8
+	.type	cvt_e5m3_kernel,@function
+cvt_e5m3_kernel:
+	v_mov_b32_e32 v1, 0x40400000
+	v_mov_b32_e32 v2, 0x40a00000
+; E5M3: kernel 'cvt_e5m3_kernel' failed to raise:
+; E5M3-SAME: selects the E5M3 fp8 format
+	v_cvt_pk_fp8_f32 v0, v1, v2 clamp
+	s_endpgm
 	.section	.rodata,"a",@progbits
+	.p2align	6, 0x0
+	.amdhsa_kernel cvt_e5m3_kernel
+		.amdhsa_kernarg_size 0
+		.amdhsa_wavefront_size32 1
+		.amdhsa_next_free_vgpr 3
+		.amdhsa_next_free_sgpr 0
+		.amdhsa_float_denorm_mode_32 3
+	.end_amdhsa_kernel
 	.p2align	6, 0x0
 	.amdhsa_kernel cvt_enc_kernel
 		.amdhsa_kernarg_size 8
@@ -68,6 +96,17 @@ amdhsa.kernels:
     .sgpr_count:     2
     .symbol:         cvt_enc_kernel.kd
     .vgpr_count:     6
+    .wavefront_size: 32
+  - .args:           []
+    .group_segment_fixed_size: 0
+    .kernarg_segment_align: 4
+    .kernarg_segment_size: 0
+    .max_flat_workgroup_size: 1024
+    .name:           cvt_e5m3_kernel
+    .private_segment_fixed_size: 0
+    .sgpr_count:     0
+    .symbol:         cvt_e5m3_kernel.kd
+    .vgpr_count:     3
     .wavefront_size: 32
 amdhsa.version: [1, 2]
 ...
