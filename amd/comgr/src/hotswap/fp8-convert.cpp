@@ -15,29 +15,34 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Intrinsics.h"
 
-#include <cassert>
 #include <cmath>
 
 using namespace llvm;
 
 namespace COMGR::hotswap {
 
-Fp8Format fp8FormatOf(const ISAProfile &P) {
-  if (!(P.HasFP8Insts || P.HasFP8ConversionInsts))
-    return Fp8Format::None;
-  if (P.HasGfx950Insts)
-    return Fp8Format::OCP;
-  if (P.HasMfma)
-    return Fp8Format::FNUZ;
-  return Fp8Format::OCP;
-}
+Fp8Format fp8FormatOf(const ISAProfile &P) { return P.Fp8Fmt; }
 
-std::optional<bool> fp8Reencode(const ISAProfile &Src, const ISAProfile &Tgt,
-                                Fp8Dir Dir) {
+Expected<Fp8Reencode> fp8Reencode(const ISAProfile &Src, const ISAProfile &Tgt,
+                                  Fp8Dir Dir) {
   Fp8Format S = fp8FormatOf(Src), T = fp8FormatOf(Tgt);
-  if (S == Fp8Format::None || T == Fp8Format::None || S == T)
-    return std::nullopt;
-  return (Dir == Fp8Dir::SrcToTgt ? T : S) == Fp8Format::FNUZ;
+  auto Refuse = [](const char *Side, Fp8Format F) {
+    return createStringError(
+        Twine(Side) + " ISA " +
+        (F == Fp8Format::None ? "has no fp8/bf8 hardware"
+                              : "has fp8/bf8 hardware of an unclassified "
+                                "format") +
+        ", so an fp8/bf8 value cannot cross this boundary");
+  };
+  if (S != Fp8Format::OCP && S != Fp8Format::FNUZ)
+    return Refuse("source", S);
+  if (T != Fp8Format::OCP && T != Fp8Format::FNUZ)
+    return Refuse("target", T);
+  if (S == T)
+    return Fp8Reencode::None;
+  return (Dir == Fp8Dir::SrcToTgt ? T : S) == Fp8Format::FNUZ
+             ? Fp8Reencode::ToFnuz
+             : Fp8Reencode::ToOcp;
 }
 
 namespace {
@@ -58,91 +63,81 @@ struct ByteVecHelper {
   }
 };
 
+// OCP -> FNUZ, mantissa width \p M (3 = E4M3, 2 = E5M2).
+//   normals: stored exponent +1 (mantissa identical, no rounding);
+//   subnormals: byte = sign | (mant << 1) (exact); +/-0 -> +0.
+// The top exponent is the one class the two widths do not share: OCP E4M3FN's
+// is finite above FNUZ's 240 max (saturate) apart from its lone NaN, while OCP
+// E5M2's is Inf or NaN and FNUZ has neither, so all of it becomes 0x80. That
+// is what APFloat's Float8E5M2 -> Float8E5M2FNUZ yields, and what gfx942's own
+// f32->bf8 encode yields for Inf under the default MODE.FP16_OVFL=0. No finite
+// OCP E5M2 value overflows FNUZ E5M2 (both max at 57344).
+Value *ocpToFnuz(HotswapIRBuilder &B, Value *Bytes, unsigned M,
+                 const Twine &Name) {
+  ByteVecHelper H(B, Bytes);
+  auto S = [&](uint64_t V) { return H.splat(V); };
+  const uint64_t EMask = (1u << (7 - M)) - 1, MMask = (1u << M) - 1;
+  Value *Sign = B.CreateShl(B.CreateAnd(B.CreateLShr(Bytes, S(7)), S(1)), S(7));
+  Value *Exp = B.CreateAnd(B.CreateLShr(Bytes, S(M)), S(EMask));
+  Value *Mant = B.CreateAnd(Bytes, S(MMask));
+  Value *Norm = B.CreateOr(
+      Sign, B.CreateOr(B.CreateShl(B.CreateAdd(Exp, S(1)), S(M)), Mant));
+  Value *Sub = B.CreateSelect(B.CreateICmpEQ(Mant, S(0)), S(0),
+                              B.CreateOr(Sign, B.CreateShl(Mant, S(1))));
+  Value *Top = S(0x80);
+  if (M == 3)
+    Top = B.CreateSelect(B.CreateICmpEQ(Mant, S(MMask)), S(0x80),
+                         B.CreateOr(Sign, S(0x7F)));
+  Value *R = B.CreateSelect(B.CreateICmpEQ(Exp, S(EMask)), Top, Norm);
+  return B.CreateSelect(B.CreateICmpEQ(Exp, S(0)), Sub, R, Name);
+}
+
+// FNUZ -> OCP, mantissa width \p M.
+//   normals (exp>=2): stored exponent -1 (exact);
+//   exp<=1: OCP subnormal, mant' = round-half-to-even(N/2) with
+//           N = (exp==1 ? 1<<M : 0) + mant; 0x80 (NaN) -> 0x7F.
+// FNUZ range is a subset of OCP except its finer subnormals, which round.
+Value *fnuzToOcp(HotswapIRBuilder &B, Value *Bytes, unsigned M,
+                 const Twine &Name) {
+  ByteVecHelper H(B, Bytes);
+  auto S = [&](uint64_t V) { return H.splat(V); };
+  const uint64_t EMask = (1u << (7 - M)) - 1, MMask = (1u << M) - 1;
+  Value *Sign = B.CreateShl(B.CreateAnd(B.CreateLShr(Bytes, S(7)), S(1)), S(7));
+  Value *Exp = B.CreateAnd(B.CreateLShr(Bytes, S(M)), S(EMask));
+  Value *Mant = B.CreateAnd(Bytes, S(MMask));
+  Value *Norm = B.CreateOr(
+      Sign, B.CreateOr(B.CreateShl(B.CreateSub(Exp, S(1)), S(M)), Mant));
+  Value *NVal = B.CreateAdd(
+      B.CreateSelect(B.CreateICmpEQ(Exp, S(1)), S(1u << M), S(0)), Mant);
+  Value *Rne =
+      B.CreateAdd(B.CreateLShr(NVal, S(1)),
+                  B.CreateSelect(B.CreateICmpEQ(B.CreateAnd(NVal, S(3)), S(3)),
+                                 S(1), S(0)));
+  Value *Sub = B.CreateOr(Sign, Rne);
+  Value *R = B.CreateSelect(B.CreateICmpUGE(Exp, S(2)), Norm, Sub);
+  return B.CreateSelect(B.CreateICmpEQ(Bytes, S(0x80)), S(0x7F), R, Name);
+}
+
 } // namespace
 
 // OCP E4M3FN (bias 7) -> FNUZ E4M3 (bias 8).
-//   normals: stored exponent +1 (mantissa identical, no rounding);
-//   subnormals: byte = sign | (mant << 1) (exact); +/-0 -> +0;
-//   exp==15: mant==7 -> 0x80 (NaN); else saturate to sign|0x7F (+/-240).
 Value *convertOcpE4M3ToFnuz(HotswapIRBuilder &B, Value *Bytes) {
-  ByteVecHelper H(B, Bytes);
-  auto S = [&](uint64_t V) { return H.splat(V); };
-  Value *Sign = B.CreateShl(B.CreateAnd(B.CreateLShr(Bytes, S(7)), S(1)), S(7));
-  Value *Exp = B.CreateAnd(B.CreateLShr(Bytes, S(3)), S(0xF));
-  Value *Mant = B.CreateAnd(Bytes, S(0x7));
-  Value *Norm = B.CreateOr(
-      Sign, B.CreateOr(B.CreateShl(B.CreateAdd(Exp, S(1)), S(3)), Mant));
-  Value *Sub = B.CreateSelect(B.CreateICmpEQ(Mant, S(0)), S(0),
-                              B.CreateOr(Sign, B.CreateShl(Mant, S(1))));
-  Value *Top = B.CreateSelect(B.CreateICmpEQ(Mant, S(7)), S(0x80),
-                              B.CreateOr(Sign, S(0x7F)));
-  Value *R = B.CreateSelect(B.CreateICmpEQ(Exp, S(0xF)), Top, Norm);
-  return B.CreateSelect(B.CreateICmpEQ(Exp, S(0)), Sub, R, "e4m3_fnuz");
+  return ocpToFnuz(B, Bytes, /*M=*/3, "e4m3_fnuz");
 }
 
-// OCP E5M2 (bias 15) -> FNUZ E5M2 (bias 16). Same shape as E4M3 but 5-bit exp,
-// 2-bit mantissa. exp==31 is Inf or NaN and FNUZ has neither, so the whole
-// class becomes 0x80: that is what APFloat's Float8E5M2 -> Float8E5M2FNUZ
-// conversion yields, and what gfx942's own f32->bf8 encode yields for Inf
-// under the default MODE.FP16_OVFL=0. No finite OCP E5M2 value overflows
-// FNUZ E5M2 (both max at 57344), so there is no saturation case here.
+// OCP E5M2 (bias 15) -> FNUZ E5M2 (bias 16).
 Value *convertOcpE5M2ToFnuz(HotswapIRBuilder &B, Value *Bytes) {
-  ByteVecHelper H(B, Bytes);
-  auto S = [&](uint64_t V) { return H.splat(V); };
-  Value *Sign = B.CreateShl(B.CreateAnd(B.CreateLShr(Bytes, S(7)), S(1)), S(7));
-  Value *Exp = B.CreateAnd(B.CreateLShr(Bytes, S(2)), S(0x1F));
-  Value *Mant = B.CreateAnd(Bytes, S(0x3));
-  Value *Norm = B.CreateOr(
-      Sign, B.CreateOr(B.CreateShl(B.CreateAdd(Exp, S(1)), S(2)), Mant));
-  Value *Sub = B.CreateSelect(B.CreateICmpEQ(Mant, S(0)), S(0),
-                              B.CreateOr(Sign, B.CreateShl(Mant, S(1))));
-  Value *R = B.CreateSelect(B.CreateICmpEQ(Exp, S(0x1F)), S(0x80), Norm);
-  return B.CreateSelect(B.CreateICmpEQ(Exp, S(0)), Sub, R, "e5m2_fnuz");
+  return ocpToFnuz(B, Bytes, /*M=*/2, "e5m2_fnuz");
 }
 
 // FNUZ E4M3 (bias 8) -> OCP E4M3FN (bias 7).
-//   normals (exp>=2): stored exponent -1 (exact);
-//   exp<=1: OCP subnormal, mant' = round-half-to-even(N/2) with
-//           N = (exp==1 ? 8 : 0) + mant; 0x80 (NaN) -> 0x7F.
-// FNUZ range is a subset of OCP except its finer subnormals, which round.
 Value *convertFnuzE4M3ToOcp(HotswapIRBuilder &B, Value *Bytes) {
-  ByteVecHelper H(B, Bytes);
-  auto S = [&](uint64_t V) { return H.splat(V); };
-  Value *Sign = B.CreateShl(B.CreateAnd(B.CreateLShr(Bytes, S(7)), S(1)), S(7));
-  Value *Exp = B.CreateAnd(B.CreateLShr(Bytes, S(3)), S(0xF));
-  Value *Mant = B.CreateAnd(Bytes, S(0x7));
-  Value *Norm = B.CreateOr(
-      Sign, B.CreateOr(B.CreateShl(B.CreateSub(Exp, S(1)), S(3)), Mant));
-  Value *NVal =
-      B.CreateAdd(B.CreateSelect(B.CreateICmpEQ(Exp, S(1)), S(8), S(0)), Mant);
-  Value *Rne =
-      B.CreateAdd(B.CreateLShr(NVal, S(1)),
-                  B.CreateSelect(B.CreateICmpEQ(B.CreateAnd(NVal, S(3)), S(3)),
-                                 S(1), S(0)));
-  Value *Sub = B.CreateOr(Sign, Rne);
-  Value *R = B.CreateSelect(B.CreateICmpUGE(Exp, S(2)), Norm, Sub);
-  return B.CreateSelect(B.CreateICmpEQ(Bytes, S(0x80)), S(0x7F), R, "e4m3_ocp");
+  return fnuzToOcp(B, Bytes, /*M=*/3, "e4m3_ocp");
 }
 
-// FNUZ E5M2 (bias 16) -> OCP E5M2 (bias 15). Same structure as E4M3 with 5-bit
-// exp / 2-bit mantissa.
+// FNUZ E5M2 (bias 16) -> OCP E5M2 (bias 15).
 Value *convertFnuzE5M2ToOcp(HotswapIRBuilder &B, Value *Bytes) {
-  ByteVecHelper H(B, Bytes);
-  auto S = [&](uint64_t V) { return H.splat(V); };
-  Value *Sign = B.CreateShl(B.CreateAnd(B.CreateLShr(Bytes, S(7)), S(1)), S(7));
-  Value *Exp = B.CreateAnd(B.CreateLShr(Bytes, S(2)), S(0x1F));
-  Value *Mant = B.CreateAnd(Bytes, S(0x3));
-  Value *Norm = B.CreateOr(
-      Sign, B.CreateOr(B.CreateShl(B.CreateSub(Exp, S(1)), S(2)), Mant));
-  Value *NVal =
-      B.CreateAdd(B.CreateSelect(B.CreateICmpEQ(Exp, S(1)), S(4), S(0)), Mant);
-  Value *Rne =
-      B.CreateAdd(B.CreateLShr(NVal, S(1)),
-                  B.CreateSelect(B.CreateICmpEQ(B.CreateAnd(NVal, S(3)), S(3)),
-                                 S(1), S(0)));
-  Value *Sub = B.CreateOr(Sign, Rne);
-  Value *R = B.CreateSelect(B.CreateICmpUGE(Exp, S(2)), Norm, Sub);
-  return B.CreateSelect(B.CreateICmpEQ(Bytes, S(0x80)), S(0x7F), R, "e5m2_ocp");
+  return fnuzToOcp(B, Bytes, /*M=*/2, "e5m2_ocp");
 }
 
 Value *convertFp8Dword(HotswapIRBuilder &B, Value *Dword, bool IsBf8,
@@ -174,7 +169,8 @@ void convertFp8DwordsInPlace(HotswapIRBuilder &B,
 
 Value *decodeFp8ByteToF32(HotswapIRBuilder &B, Value *Byte, bool IsBf8,
                           Fp8Format Fmt) {
-  assert(Fmt != Fp8Format::None && "byte has no fp8 interpretation");
+  if (Fmt != Fp8Format::OCP && Fmt != Fp8Format::FNUZ)
+    return nullptr;
   const bool IsFnuz = Fmt == Fp8Format::FNUZ;
   Type *F32Ty = B.getFloatTy();
   IntegerType *I32Ty = B.getInt32Ty();
@@ -231,12 +227,14 @@ Value *encodeF32PairToOcpFp8(HotswapIRBuilder &B, Function *CvtFn, Value *S0,
   IntegerType *I32Ty = B.getInt32Ty();
   auto I32 = [&](uint64_t V) { return ConstantInt::get(I32Ty, V); };
 
-  // Magnitudes at or above Thresh leave the OCP grid: E5M2 rounds to Inf
-  // (0x7C), E4M3FN has no Inf and saturates to its max finite 448 (0x7E) --
-  // 0x7F being E4M3FN's NaN.  Below Thresh the halved value is always inside
-  // the target's FNUZ range, so the raw encoder never overflows and never
-  // consults MODE.FP16_OVFL.
-  const uint32_t TopByte = IsBf8 ? 0x7Cu : 0x7Eu;
+  // Past Thresh the value leaves the OCP grid.  E5M2 ties to Inf (0x7C) at
+  // 61440, sign preserved.  E4M3FN's 464 is the round-half-to-even tie and
+  // still lands on 448, but anything strictly above it -- Inf included -- is
+  // NaN (0x7F) under the default MODE.FP16_OVFL=0; the docs write that NaN
+  // unsigned, unlike the signed FP16_OVFL=1 clamp.  Inside Thresh the halved
+  // value is always within the target's FNUZ range, so the raw encoder never
+  // overflows and never consults MODE.FP16_OVFL itself.
+  const uint32_t TopByte = IsBf8 ? 0x7Cu : 0x7Fu;
   const uint32_t NaNByte = IsBf8 ? 0x7Eu : 0x7Fu;
   Constant *Thresh = ConstantFP::get(F32Ty, IsBf8 ? 61440.0 : 464.0);
 
@@ -251,8 +249,9 @@ Value *encodeF32PairToOcpFp8(HotswapIRBuilder &B, Function *CvtFn, Value *S0,
     P.SignByte = B.CreateAnd(B.CreateLShr(B.CreateBitCast(X, I32Ty), I32(24)),
                              I32(0x80));
     P.IsNaN = B.CreateFCmpUNO(X, X);
+    Value *Abs = B.CreateUnaryIntrinsic(Intrinsic::fabs, X);
     P.IsTop =
-        B.CreateFCmpOGE(B.CreateUnaryIntrinsic(Intrinsic::fabs, X), Thresh);
+        IsBf8 ? B.CreateFCmpOGE(Abs, Thresh) : B.CreateFCmpOGT(Abs, Thresh);
     // X needs no sanitising first: whenever IsNaN or IsTop holds, Fixup
     // discards the encoder's byte outright, and the encode cannot trap.
     P.Scaled = B.CreateFMul(X, ConstantFP::get(F32Ty, 0.5));
@@ -271,7 +270,9 @@ Value *encodeF32PairToOcpFp8(HotswapIRBuilder &B, Function *CvtFn, Value *S0,
     // underflowed result where OCP keeps it. For every other in-range byte
     // the sign bit is already set, so re-applying it is idempotent.
     Byte = B.CreateOr(Byte, P.SignByte);
-    Byte = B.CreateSelect(P.IsTop, B.CreateOr(P.SignByte, I32(TopByte)), Byte);
+    Value *Top = IsBf8 ? B.CreateOr(P.SignByte, I32(TopByte))
+                       : static_cast<Value *>(I32(TopByte));
+    Byte = B.CreateSelect(P.IsTop, Top, Byte);
     return B.CreateSelect(P.IsNaN, I32(NaNByte), Byte);
   };
   return B.CreateOr(Fixup(P0, 0), B.CreateShl(Fixup(P1, 8), I32(8)),

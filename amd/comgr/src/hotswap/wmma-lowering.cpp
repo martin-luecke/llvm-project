@@ -560,26 +560,31 @@ Expected<Value *> emitWMMAtoMFMA(RaiseContext &Ctx, Value *A, Value *Vb,
   unpackDwords(B, Vb, 8, Ctx.I32Ty, BDwords);
   unpackDwords(B, C, 8, Ctx.I32Ty, CDwords);
 
-  auto fp8Sides = [&]() -> std::optional<std::pair<bool, bool>> {
+  std::optional<Fp8AbFormat> AbFmt = [&]() -> std::optional<Fp8AbFormat> {
     switch (InputType) {
     case WMMAInputType::FP8_FP8:
-      return std::pair{false, false};
+      return Fp8AbFormat::Fp8Fp8;
     case WMMAInputType::FP8_BF8:
-      return std::pair{false, true};
+      return Fp8AbFormat::Fp8Bf8;
     case WMMAInputType::BF8_FP8:
-      return std::pair{true, false};
+      return Fp8AbFormat::Bf8Fp8;
     case WMMAInputType::BF8_BF8:
-      return std::pair{true, true};
+      return Fp8AbFormat::Bf8Bf8;
     default:
       return std::nullopt; // F16/BF16/IU8 carry no fp8 byte
     }
   }();
-  if (auto ToFnuz = fp8Reencode(Ctx.Isa, Ctx.TargetIsa, Fp8Dir::SrcToTgt)) {
-    if (fp8Sides) {
-      auto [AIsBf8, BIsBf8] = *fp8Sides;
+  if (AbFmt) {
+    Expected<Fp8Reencode> Reenc =
+        fp8Reencode(Ctx.Isa, Ctx.TargetIsa, Fp8Dir::SrcToTgt);
+    if (!Reenc)
+      return Reenc.takeError();
+    if (*Reenc != Fp8Reencode::None) {
+      const Fp8Sides Sides = fp8SidesOf(*AbFmt);
+      const bool ToFnuz = *Reenc == Fp8Reencode::ToFnuz;
       for (unsigned I = 0; I < 8; ++I) {
-        ADwords[I] = convertFp8Dword(B, ADwords[I], AIsBf8, *ToFnuz);
-        BDwords[I] = convertFp8Dword(B, BDwords[I], BIsBf8, *ToFnuz);
+        ADwords[I] = convertFp8Dword(B, ADwords[I], Sides.AIsBf8, ToFnuz);
+        BDwords[I] = convertFp8Dword(B, BDwords[I], Sides.BIsBf8, ToFnuz);
       }
     }
   }
@@ -1580,11 +1585,14 @@ Expected<Value *> emitWMMAScaleF8F6F4toMFMA(
   assert(aDwordsArr.size() == 16 && bDwordsArr.size() == 16 &&
          "post-widen fragments must be 16 fp8 dwords / lane");
 
-  if (auto ToFnuz = fp8Reencode(ctx.Isa, ctx.TargetIsa, Fp8Dir::SrcToTgt)) {
-    convertFp8DwordsInPlace(B, aDwordsArr, /*IsBf8=*/aFmtEff == FmtBF8,
-                            *ToFnuz);
-    convertFp8DwordsInPlace(B, bDwordsArr, /*IsBf8=*/bFmtEff == FmtBF8,
-                            *ToFnuz);
+  Expected<Fp8Reencode> Reenc =
+      fp8Reencode(ctx.Isa, ctx.TargetIsa, Fp8Dir::SrcToTgt);
+  if (!Reenc)
+    return Reenc.takeError();
+  if (*Reenc != Fp8Reencode::None) {
+    const bool ToFnuz = *Reenc == Fp8Reencode::ToFnuz;
+    convertFp8DwordsInPlace(B, aDwordsArr, /*IsBf8=*/aFmtEff == FmtBF8, ToFnuz);
+    convertFp8DwordsInPlace(B, bDwordsArr, /*IsBf8=*/bFmtEff == FmtBF8, ToFnuz);
   }
 
   Value *LaneId = emitLaneId(B, M, ctx.I32Ty);
@@ -1609,7 +1617,7 @@ Expected<Value *> emitWMMAScaleF8F6F4toMFMA(
   Value *W32Lane = B.CreateAnd(LaneId, B.getInt32(31), "w32_lane");
 
   // One pass per virtual W32 group (GroupBase 0 / 32).
-  auto runPass = [&](unsigned GroupBase, Value *Result[8]) {
+  auto runPass = [&](unsigned GroupBase, Value *Result[8]) -> Error {
     Value *LoLane = B.CreateAdd(LaneMod16, B.getInt32(GroupBase), "lo_lane");
     Value *HiLane =
         B.CreateAdd(LaneMod16, B.getInt32(GroupBase + 16), "hi_lane");
@@ -1618,13 +1626,10 @@ Expected<Value *> emitWMMAScaleF8F6F4toMFMA(
 
     // The B (column) scale is indexed by column = lane%16, identical for all 4
     // lane groups of a pass -- unlike the A/B operands, whose Lo/Hi split
-    // selects the K-block. The source packs Bsc[lane%16] in lanes 0..15 of its
-    // W32 and leaves lanes 16..31 unused (that is the SCL_OPSEL[0] == 0 / ROW0
-    // layout; the ROW1 form is refused before we get here), so every lane group
-    // reads AddrLo. AddrHi addresses those unused lanes -- still inside this
-    // pass's source wave, just holding nothing. All 4 K-block scale bytes ride
-    // in one i32, so one bpermute suffices; constant sources are lane-uniform,
-    // so skip it.
+    // selects the K-block. The source packs Bsc[lane%16] into lanes 0..15 of
+    // its W32 (the SCL_OPSEL[0] == 0 / ROW0 layout; ROW1 is refused earlier),
+    // so every lane group reads AddrLo. All 4 K-block scale bytes ride in one
+    // i32, so one bpermute suffices; constant sources are lane-uniform.
     auto RedistributeScale = [&](Value *ScaleSrc) -> Value * {
       if (isa<Constant>(ScaleSrc))
         return ScaleSrc;
@@ -1694,9 +1699,9 @@ Expected<Value *> emitWMMAScaleF8F6F4toMFMA(
       Value *ScaleBByte = extractScaleByte(B, ScaleSrc1Pass, kBlock);
       Value *FactorVec = buildScaleFactorVec(B, M, ctx.F32Ty, ScaleABytes,
                                              ScaleBByte, aScaleFmt, bScaleFmt);
-      // Only nullptr for a scale fmt decodeScaleByte can't handle (E5M3), which
-      // SupportedScaleFmt rejects before we get here.
-      assert(FactorVec && "unsupported scale fmt reached scaled WMMA lowering");
+      if (!FactorVec)
+        return createStringError(
+            "unsupported matrix_*_scale_fmt in scaled WMMA lowering");
 
       Acc = B.CreateIntrinsic(Intrinsic::fmuladd, {AccTy},
                               {Partial, FactorVec, Acc}, nullptr,
@@ -1711,10 +1716,12 @@ Expected<Value *> emitWMMAScaleF8F6F4toMFMA(
     for (unsigned i = 0; i < 8; ++i)
       Result[i] =
           ctx.Projection.wrapAsWWMValue(B, Result[i], "wmma_scale_collect_wwm");
+    return Error::success();
   };
 
   Value *Result0[8];
-  runPass(0, Result0);
+  if (Error E = runPass(0, Result0))
+    return std::move(E);
 
   Value *FinalDwords[8];
   if (numSrcWaves == 1) {
@@ -1722,7 +1729,8 @@ Expected<Value *> emitWMMAScaleF8F6F4toMFMA(
       FinalDwords[i] = Result0[i];
   } else {
     Value *Result1[8];
-    runPass(32, Result1);
+    if (Error E = runPass(32, Result1))
+      return std::move(E);
     Value *IsGroup1 = B.CreateICmpUGE(LaneId, B.getInt32(32), "is_group1");
     for (unsigned i = 0; i < 8; ++i)
       FinalDwords[i] = B.CreateSelect(IsGroup1, Result1[i], Result0[i], "sel");

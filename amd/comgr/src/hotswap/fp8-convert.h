@@ -16,22 +16,16 @@
 //            no Inf, a single NaN encoding 0x80, no -0.  Used by gfx940 /
 //            gfx941 / gfx942 (CDNA3).
 //
-// The raiser keeps in-register fp8 bytes in the SOURCE representation; at
-// every gfx942 (FNUZ) fp8 hardware boundary the bytes are re-encoded.
+// In-register fp8 bytes stay in the SOURCE representation and are re-encoded
+// at every gfx942 (FNUZ) fp8 hardware boundary.  The re-encoders round
+// half-to-even, map NaN and E5M2 Inf to the target's canonical NaN (FNUZ 0x80,
+// OCP 0x7F) as APFloat does, saturate finite overflow with the sign preserved
+// (only OCP E4M3's (240, 448] -> 240), and flush OCP -0 to +0.
 //
-// The byte re-encoders below define three policy classes on top of a plain
-// round-half-to-even format conversion:
-//   * NaN, and Inf (E5M2 only), map to the target's canonical NaN -- FNUZ
-//     0x80, OCP 0x7F.  This is what APFloat does converting between the
-//     matching semantics, neither target format having Inf.
-//   * A finite magnitude above the target's max saturates, sign preserved.
-//     This only arises for OCP E4M3 -> FNUZ E4M3, where OCP's (240, 448]
-//     collapses onto 240; every other direction's range is a superset.
-//   * FNUZ has no -0, so OCP -0 becomes +0.
-//
-// Saturation is a property of THESE converters, not of gfx942 fp8 generally:
-// the f32 -> fp8 hardware encode (`v_cvt_pk_fp8_f32` et al.) yields NaN rather
-// than a clamp for out-of-range inputs under the default MODE.FP16_OVFL=0.
+// That saturation is a property of THESE converters, not of gfx942 fp8
+// generally: under the default MODE.FP16_OVFL=0 the f32 -> fp8 hardware encode
+// (`v_cvt_pk_fp8_f32` et al.) yields NaN rather than a clamp for out-of-range
+// inputs, and `v_cvt_pk_bf8_f32` yields +/-Inf.
 //
 //===----------------------------------------------------------------------===//
 
@@ -39,8 +33,7 @@
 #define HOTSWAP_TRANSPILER_FP8_CONVERT_H
 
 #include "llvm/ADT/SmallVector.h"
-
-#include <optional>
+#include "llvm/Support/Error.h"
 
 namespace llvm {
 class Value;
@@ -54,12 +47,13 @@ namespace COMGR::hotswap {
 
 struct ISAProfile;
 
-/// Numeric interpretation of an fp8/bf8 byte on a given ISA.
-enum class Fp8Format { None, OCP, FNUZ };
+/// Numeric interpretation of an fp8/bf8 byte on a given ISA. `None` means the
+/// ISA has no fp8/bf8 hardware; `Unknown` means it has some but its ISA
+/// version did not classify -- both are refusals, never a pass-through.
+enum class Fp8Format { None, Unknown, OCP, FNUZ };
 
-/// Classify how an ISA's fp8/bf8 hardware (MFMA operands, v_cvt_*_fp8/bf8)
-/// interprets fp8 bytes.  FNUZ is CDNA3 (gfx940/941/942); every other
-/// fp8-capable target (gfx950 CDNA4, gfx12 / gfx1250 RDNA) is OCP.
+/// How an ISA's fp8/bf8 hardware (MFMA operands, v_cvt_*_fp8/bf8) interprets
+/// fp8 bytes; see `ISAProfile::Fp8Fmt`.
 Fp8Format fp8FormatOf(const ISAProfile &P);
 
 /// Data flow across an fp8/bf8 hardware boundary: SrcToTgt for hardware inputs
@@ -67,11 +61,31 @@ Fp8Format fp8FormatOf(const ISAProfile &P);
 /// results).
 enum class Fp8Dir { SrcToTgt, TgtToSrc };
 
-/// If \p Src and \p Tgt interpret fp8/bf8 bytes differently, return the
-/// `ToFnuz` argument to pass to convertFp8Dword to re-encode in direction
-/// \p Dir; otherwise nullopt (formats match, no re-encode needed).
-std::optional<bool> fp8Reencode(const ISAProfile &Src, const ISAProfile &Tgt,
-                                Fp8Dir Dir);
+/// What an fp8/bf8 byte crossing a source/target boundary needs; ToOcp/ToFnuz
+/// name the destination format of the re-encode.
+enum class Fp8Reencode { None, ToOcp, ToFnuz };
+
+/// Classify an fp8/bf8 data flow in direction \p Dir between \p Src and \p Tgt.
+/// Call only for instructions that really do carry fp8/bf8 bytes: an
+/// unclassifiable side is an error, since there is then no correct lowering.
+llvm::Expected<Fp8Reencode> fp8Reencode(const ISAProfile &Src,
+                                        const ISAProfile &Tgt, Fp8Dir Dir);
+
+/// Element format the opcode gives each operand of an fp8/bf8 matmul.
+enum class Fp8AbFormat { Fp8Fp8, Fp8Bf8, Bf8Fp8, Bf8Bf8 };
+
+/// Per-operand element format: true means bf8 (E5M2), false fp8 (E4M3). A and
+/// B are independent (the mixed _fp8_bf8 / _bf8_fp8 opcodes), so each side
+/// picks its own converter. Sole owner of this mapping -- the MFMA and WMMA
+/// lowerings both derive from it.
+struct Fp8Sides {
+  bool AIsBf8;
+  bool BIsBf8;
+};
+constexpr Fp8Sides fp8SidesOf(Fp8AbFormat F) {
+  return {F == Fp8AbFormat::Bf8Fp8 || F == Fp8AbFormat::Bf8Bf8,
+          F == Fp8AbFormat::Fp8Bf8 || F == Fp8AbFormat::Bf8Bf8};
+}
 
 using HotswapIRBuilder =
     llvm::IRBuilder<llvm::ConstantFolder, llvm::IRBuilderDefaultInserter>;
@@ -96,16 +110,16 @@ void convertFp8DwordsInPlace(HotswapIRBuilder &B,
                              bool IsBf8, bool ToFnuz);
 
 /// Decode one fp8/bf8 byte (\p Byte is an i32 holding 0..255) to f32, reading
-/// it as \p Fmt.  Exact for all 256 inputs, including subnormals, Inf and NaN.
+/// it as \p Fmt; null if \p Fmt is neither OCP nor FNUZ.  Exact for all 256
+/// inputs, including subnormals, Inf and NaN.
 ///
 /// Used instead of the target's fp8 decode hardware when the source and target
-/// formats differ.  byte -> f32 is a WIDENING conversion, so every source byte
-/// has an exact f32 image; routing it through a byte re-encode plus the
-/// target's decoder would clip the source's range for no reason (OCP E5M2 Inf,
-/// OCP E4M3's (240, 448], and -0 all survive here).
+/// formats differ: byte -> f32 is WIDENING, so every source byte has an exact
+/// f32 image, where a byte re-encode plus the target's decoder would clip
+/// (OCP E5M2 Inf, OCP E4M3's (240, 448], and -0 all survive here).
 ///
-/// The result is named `{fp8,bf8}_dec_{ocp,fnuz}`; lit fixtures match on that
-/// to tell the conversion direction apart, so it is a test contract.
+/// Test contract: the result is named `{fp8,bf8}_dec_{ocp,fnuz}`, which lit
+/// fixtures match on to tell the conversion direction apart.
 llvm::Value *decodeFp8ByteToF32(HotswapIRBuilder &B, llvm::Value *Byte,
                                 bool IsBf8, Fp8Format Fmt);
 
@@ -113,16 +127,15 @@ llvm::Value *decodeFp8ByteToF32(HotswapIRBuilder &B, llvm::Value *Byte,
 ///
 /// \p CvtFn is the target's `cvt_pk_{fp8,bf8}_f32` (an FNUZ encoder).  OCP and
 /// FNUZ share a mantissa width and differ by exactly one in exponent bias, so
-/// the FNUZ encoding of x/2 IS the OCP encoding of x -- the target hardware
-/// therefore does the round-half-to-even, and this only has to keep it inside
-/// its own range.  Out-of-range magnitudes, NaN and signed zero are handled
-/// explicitly, so MODE.FP16_OVFL (which makes the raw encoder return NaN
-/// rather than clamp) never comes into play.
+/// the FNUZ encoding of x/2 IS the OCP encoding of x: the hardware does the
+/// round-half-to-even and this only keeps it inside range.  Out-of-range
+/// magnitudes, NaN and signed zero are handled explicitly, so MODE.FP16_OVFL
+/// never comes into play.
 ///
 /// Only valid when the SOURCE format is OCP; the mirrored trick does not work
 /// for an FNUZ source, whose top exponent has no OCP counterpart.
 ///
-/// The result is named `pk_fp8_ocp`, which lit fixtures match on.
+/// Test contract: the result is named `pk_fp8_ocp`.
 llvm::Value *encodeF32PairToOcpFp8(HotswapIRBuilder &B, llvm::Function *CvtFn,
                                    llvm::Value *S0, llvm::Value *S1,
                                    bool IsBf8);

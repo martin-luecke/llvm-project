@@ -30,25 +30,41 @@
 // with them.  Edge classes are additionally asserted explicitly: NaN, Inf
 // (E5M2), subnormals, E4M3 OCP (240,448] saturation, and FNUZ->OCP
 // round-half-to-even.
+//
+// Two callers of those byte converters are covered here too, because lit
+// cannot reach either:
+//   * `convertFp8Dword` -- lit fixtures only count its truncs, so byte ORDER
+//     (the shift vector) is pinned here instead.
+//   * `encodeF32PairToOcpFp8` -- it calls the target's `cvt.pk.{fp8,bf8}.f32`,
+//     which does not constant-fold, so its thresholds, sign re-application and
+//     Top/NaN bytes are only textually echoed by lit CHECKs.  The E4M3 464 tie
+//     (rounds DOWN to 448) versus E5M2's inclusive 61440 tie (rounds to Inf)
+//     is the asymmetry that makes `ogt` vs `oge` deliberate rather than a typo.
 
 #include "hotswap/fp8-convert.h"
 
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/IntrinsicsAMDGPU.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/ValueHandle.h"
 
 #include "gtest/gtest.h"
 
 #include <array>
 #include <cstdint>
+#include <limits>
 
 using namespace llvm;
 using namespace COMGR::hotswap;
@@ -71,8 +87,35 @@ struct FoldHarness {
       : B(BasicBlock::Create(
             Ctx, "entry",
             Function::Create(FunctionType::get(Type::getVoidTy(Ctx), false),
-                             GlobalValue::ExternalLinkage, "f", &M))) {}
+                             GlobalValue::ExternalLinkage, "f", &M))) {
+    // Little-endian, as AMDGPU is: the dword path's `<4 x i8>` <-> i32
+    // bitcasts only have a defined byte order under one.
+    M.setDataLayout("e");
+  }
 };
+
+// Reduce \p V to a plain constant. Two things the IRBuilder's ConstantFolder
+// leaves behind need a DataLayout it does not carry: instructions whose
+// operands only became constant later, and the `<4 x i8>` -> i32 bitcast at
+// the end of the dword path, which it folds to a ConstantExpr rather than a
+// ConstantInt.
+Value *foldBlockTo(FoldHarness &H, Value *V) {
+  const DataLayout &DL = H.M.getDataLayout();
+  WeakTrackingVH Out(V);
+  BasicBlock *BB = H.B.GetInsertBlock();
+  for (bool Changed = true; Changed;) {
+    Changed = false;
+    for (Instruction &I : make_early_inc_range(*BB))
+      if (Constant *C = ConstantFoldInstruction(&I, DL)) {
+        I.replaceAllUsesWith(C);
+        I.eraseFromParent();
+        Changed = true;
+      }
+  }
+  if (auto *C = dyn_cast_or_null<Constant>(static_cast<Value *>(Out)))
+    return ConstantFoldConstant(C, DL);
+  return Out;
+}
 
 std::array<uint8_t, 256>
 runConverter(llvm::function_ref<Value *(HotswapIRBuilder &, Value *)> Conv) {
@@ -146,6 +189,85 @@ void checkExhaustive(
         << Hex(Got[Byte]) << " want " << Hex(Want);
   }
 }
+
+// --- convertFp8Dword: the splat / shift / repack around the byte lanes ---
+
+uint32_t runDwordConverter(uint32_t Dword, bool IsBf8, bool ToFnuz) {
+  FoldHarness H;
+  Value *Out = foldBlockTo(
+      H, convertFp8Dword(H.B, H.B.getInt32(Dword), IsBf8, ToFnuz));
+  auto *CI = dyn_cast_or_null<ConstantInt>(Out);
+  EXPECT_TRUE(CI != nullptr) << "convertFp8Dword did not constant-fold";
+  return CI ? static_cast<uint32_t>(CI->getZExtValue()) : 0;
+}
+
+// Byte i of the result must be byte i of the input, converted. Byte ORDER is
+// the only thing the dword path adds over the byte converters, and the chosen
+// inputs convert to four distinct bytes in every direction, so any lane
+// permutation (e.g. a reversed shift vector) shows up here.
+void checkDwordRepack(const char *Label, bool IsBf8, bool ToFnuz,
+                      const fltSemantics &From, const fltSemantics &To) {
+  for (uint32_t In : {0x01407FC8u, 0x7C03F080u}) {
+    uint32_t Got = runDwordConverter(In, IsBf8, ToFnuz);
+    for (unsigned I = 0; I < 4; ++I) {
+      uint32_t Want = oracleConvert((In >> (8 * I)) & 0xFF, From, To);
+      EXPECT_EQ((Got >> (8 * I)) & 0xFFu, Want)
+          << Label << " dword 0x" << utohexstr(In, false, 8) << " byte " << I
+          << ": whole result 0x" << utohexstr(Got, false, 8);
+    }
+  }
+}
+
+// --- encodeF32PairToOcpFp8 ---
+
+// Fold the encoder down to its packed byte pair.  It calls the target's
+// `llvm.amdgcn.cvt.pk.{fp8,bf8}.f32`, which has no constant folding -- the
+// reason these numeric edges cannot be pinned in lit.  Its operands are
+// constants by construction, so the call is replaced by an APFloat model of
+// the FNUZ encode the hardware performs, and the surrounding IR (the
+// thresholds, the sign re-application, the Top/NaN bytes -- everything under
+// test) is then folded away for real.
+uint32_t foldEncodePair(double S0, double S1, bool IsBf8) {
+  FoldHarness H;
+  HotswapIRBuilder &B = H.B;
+  Type *F32Ty = B.getFloatTy();
+  Function *CvtFn = Intrinsic::getOrInsertDeclaration(
+      &H.M, IsBf8 ? Intrinsic::amdgcn_cvt_pk_bf8_f32
+                  : Intrinsic::amdgcn_cvt_pk_fp8_f32);
+  WeakTrackingVH Out(encodeF32PairToOcpFp8(
+      B, CvtFn, ConstantFP::get(F32Ty, S0), ConstantFP::get(F32Ty, S1), IsBf8));
+
+  BasicBlock *BB = B.GetInsertBlock();
+  CallInst *Raw = nullptr;
+  for (Instruction &I : *BB)
+    if (auto *CI = dyn_cast<CallInst>(&I))
+      if (CI->getCalledFunction() == CvtFn)
+        Raw = CI;
+  EXPECT_TRUE(Raw != nullptr) << "no hardware encode call was emitted";
+  if (!Raw)
+    return 0;
+
+  auto Fnuz = [&](Value *V) -> uint32_t {
+    APFloat X = cast<ConstantFP>(V)->getValueAPF();
+    bool Lost = false;
+    X.convert(IsBf8 ? APFloat::Float8E5M2FNUZ() : APFloat::Float8E4M3FNUZ(),
+              APFloat::rmNearestTiesToEven, &Lost);
+    return X.bitcastToAPInt().getZExtValue() & 0xFF;
+  };
+  Raw->replaceAllUsesWith(ConstantInt::get(
+      B.getInt32Ty(),
+      Fnuz(Raw->getArgOperand(0)) | (Fnuz(Raw->getArgOperand(1)) << 8)));
+
+  auto *CI = dyn_cast_or_null<ConstantInt>(foldBlockTo(H, Out));
+  EXPECT_TRUE(CI != nullptr) << "encoder did not fold to a constant";
+  return CI ? static_cast<uint32_t>(CI->getZExtValue()) : 0;
+}
+
+uint32_t loByte(uint32_t Pk) { return Pk & 0xFF; }
+uint32_t hiByte(uint32_t Pk) { return (Pk >> 8) & 0xFF; }
+
+const double PosInf = std::numeric_limits<double>::infinity();
+const double QNaN = std::numeric_limits<double>::quiet_NaN();
 
 } // namespace
 
@@ -249,4 +371,74 @@ TEST(Fp8Convert, EdgeClasses) {
   EXPECT_EQ(E4ToOcp[0x80], 0x7Fu);
   // FNUZ +0 -> OCP +0.
   EXPECT_EQ(E4ToOcp[0x00], 0x00u);
+
+  auto E5ToOcp = runConverter(convertFnuzE5M2ToOcp);
+  EXPECT_EQ(E5ToOcp[0x80], 0x7Fu); // FNUZ NaN -> OCP NaN
+  EXPECT_EQ(E5ToOcp[0x00], 0x00u);
+  EXPECT_EQ(E5ToOcp[0x7F], 0x7Bu); // FNUZ max finite -> OCP 57344
+  EXPECT_EQ(E5ToOcp[0xFF], 0xFBu);
+  EXPECT_EQ(E5ToOcp[0x52], 0x4Eu); // ordinary normal: stored exponent -1
+
+  // FNUZ -> OCP subnormals round half to even. FNUZ's grid below OCP's
+  // smallest normal is twice as fine, so every odd step is an exact tie.
+  EXPECT_EQ(E4ToOcp[0x01], 0x00u); // 0.5 -> 0
+  EXPECT_EQ(E4ToOcp[0x03], 0x02u); // 1.5 -> 2
+  EXPECT_EQ(E4ToOcp[0x05], 0x02u); // 2.5 -> 2
+  EXPECT_EQ(E4ToOcp[0x07], 0x04u); // 3.5 -> 4
+  EXPECT_EQ(E5ToOcp[0x01], 0x00u);
+  EXPECT_EQ(E5ToOcp[0x03], 0x02u);
+  EXPECT_EQ(E5ToOcp[0x07], 0x04u);
+}
+
+// The dword path only splats, shifts, converts and repacks; byte order is the
+// one thing it can get wrong that the byte converters cannot.
+TEST(Fp8Convert, ConvertFp8DwordRepack) {
+  checkDwordRepack("OCP E4M3->FNUZ dword", /*IsBf8=*/false, /*ToFnuz=*/true,
+                   APFloat::Float8E4M3FN(), APFloat::Float8E4M3FNUZ());
+  checkDwordRepack("OCP E5M2->FNUZ dword", /*IsBf8=*/true, /*ToFnuz=*/true,
+                   APFloat::Float8E5M2(), APFloat::Float8E5M2FNUZ());
+  checkDwordRepack("FNUZ E4M3->OCP dword", /*IsBf8=*/false, /*ToFnuz=*/false,
+                   APFloat::Float8E4M3FNUZ(), APFloat::Float8E4M3FN());
+  checkDwordRepack("FNUZ E5M2->OCP dword", /*IsBf8=*/true, /*ToFnuz=*/false,
+                   APFloat::Float8E5M2FNUZ(), APFloat::Float8E5M2());
+}
+
+// E4M3FN: 464 is the exact round-half-to-even tie and still reaches 448
+// (0x7E), so the overflow test is strictly-above (`ogt`); past it -- +/-Inf
+// included -- the result is the NaN 0x7F, which E4M3FN writes unsigned.
+TEST(Fp8Convert, EncodeF32PairToOcpFp8E4M3Edges) {
+  EXPECT_EQ(loByte(foldEncodePair(464.0, 0.0, /*IsBf8=*/false)), 0x7Eu);
+  EXPECT_EQ(hiByte(foldEncodePair(0.0, 464.0, false)), 0x7Eu);
+  EXPECT_EQ(loByte(foldEncodePair(-464.0, 0.0, false)), 0xFEu);
+  EXPECT_EQ(loByte(foldEncodePair(448.0, 0.0, false)), 0x7Eu);
+
+  EXPECT_EQ(loByte(foldEncodePair(480.0, 0.0, false)), 0x7Fu);
+  EXPECT_EQ(loByte(foldEncodePair(-480.0, 0.0, false)), 0x7Fu);
+  EXPECT_EQ(loByte(foldEncodePair(PosInf, 0.0, false)), 0x7Fu);
+  EXPECT_EQ(loByte(foldEncodePair(-PosInf, 0.0, false)), 0x7Fu);
+  EXPECT_EQ(loByte(foldEncodePair(QNaN, 0.0, false)), 0x7Fu);
+  EXPECT_EQ(hiByte(foldEncodePair(0.0, QNaN, false)), 0x7Fu);
+
+  // FNUZ has no -0, so the sign is re-applied after the hardware encode.
+  EXPECT_EQ(loByte(foldEncodePair(-0.0, 0.0, false)), 0x80u);
+  EXPECT_EQ(loByte(foldEncodePair(1.0, 0.0, false)), 0x38u);
+}
+
+// E5M2 is IEEE-shaped: 61440 is its round-half-to-even tie between 57344 and
+// Inf and rounds TO Inf (0x7C), so unlike fp8 the threshold is inclusive
+// (`oge`). The asymmetry between the two sides is deliberate, not a typo.
+TEST(Fp8Convert, EncodeF32PairToOcpFp8E5M2Edges) {
+  EXPECT_EQ(loByte(foldEncodePair(61440.0, 0.0, /*IsBf8=*/true)), 0x7Cu);
+  EXPECT_EQ(loByte(foldEncodePair(-61440.0, 0.0, true)), 0xFCu);
+  EXPECT_EQ(loByte(foldEncodePair(PosInf, 0.0, true)), 0x7Cu);
+  EXPECT_EQ(loByte(foldEncodePair(-PosInf, 0.0, true)), 0xFCu);
+  EXPECT_EQ(hiByte(foldEncodePair(0.0, PosInf, true)), 0x7Cu);
+  // Unlike E4M3FN's, E5M2's NaN is a distinct encoding from its Top byte.
+  EXPECT_EQ(loByte(foldEncodePair(QNaN, 0.0, true)), 0x7Eu);
+
+  // Below the tie the hardware encode still decides: 57344 is E5M2's max
+  // finite (0x7B).
+  EXPECT_EQ(loByte(foldEncodePair(57344.0, 0.0, true)), 0x7Bu);
+  EXPECT_EQ(loByte(foldEncodePair(-0.0, 0.0, true)), 0x80u);
+  EXPECT_EQ(loByte(foldEncodePair(1.0, 0.0, true)), 0x3Cu);
 }

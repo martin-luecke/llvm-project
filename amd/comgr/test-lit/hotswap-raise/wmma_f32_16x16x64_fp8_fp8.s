@@ -1,5 +1,6 @@
 ; RUN: %llvm_mc -mcpu=gfx1250 %s -o %t.o && %ld_lld -shared %t.o -o %t.hsaco \
-; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --enable-wave-native --emit-ir=wmma_f32_16x16x64_fp8_fp8_kernel | %FileCheck %s
+; RUN:   && raise_cli %t.hsaco --target-isa=gfx942 --enable-wave-native --emit-ir=wmma_f32_16x16x64_fp8_fp8_kernel \
+; RUN:   | %FileCheck %s --implicit-check-not=e5m2_fnuz
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
@@ -33,7 +34,14 @@ wmma_f32_16x16x64_fp8_fp8_kernel:
 	s_delay_alu instid0(VALU_DEP_1)
 ; CHECK-LABEL: define amdgpu_kernel void @wmma_f32_16x16x64_fp8_fp8_kernel(
 ; CHECK: call i1 @llvm.amdgcn.init.whole.wave()
-; CHECK: trunc <4 x i32> %{{[^ ]+}} to <4 x i8>
+; Both operands are fp8 (E4M3), one conversion per A and B dword.
+; CHECK-COUNT-16: trunc <4 x i32> %e4m3_fnuz{{[0-9]*}} to <4 x i8>
+; Every A/B dword the redistribution reads must be a CONVERTED one. The raiser
+; runs no DCE, so a conversion CHECK not tied to a consumer still matches when
+; the def-use edge is dropped and OCP bytes reach the FNUZ MFMA.
+; CHECK-COUNT-32: call i32 @llvm.amdgcn.ds.bpermute(i32 %addr_{{lo|hi}}, i32 %fp8_conv_dw{{[0-9]*}})
+; The remaining redistribution in this pass is the accumulator, which is f32.
+; CHECK-NOT: ds.bpermute(i32 %addr_{{lo|hi}}, i32 %fp8_conv_dw
 ; CHECK: %{{.*}} = bitcast <2 x i32> %{{.*}} to i64
 ; CHECK: %mfma1 = call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.fp8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> %{{[^,]+}}, i32 0, i32 0, i32 0)
 ; CHECK: %mfma2 = call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.fp8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> %mfma1, i32 0, i32 0, i32 0)
