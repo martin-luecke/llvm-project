@@ -75,21 +75,22 @@ struct ByteVecHelper {
 Value *ocpToFnuz(HotswapIRBuilder &B, Value *Bytes, unsigned M,
                  const Twine &Name) {
   ByteVecHelper H(B, Bytes);
-  auto S = [&](uint64_t V) { return H.splat(V); };
   const uint64_t EMask = (1u << (7 - M)) - 1, MMask = (1u << M) - 1;
-  Value *Sign = B.CreateShl(B.CreateAnd(B.CreateLShr(Bytes, S(7)), S(1)), S(7));
-  Value *Exp = B.CreateAnd(B.CreateLShr(Bytes, S(M)), S(EMask));
-  Value *Mant = B.CreateAnd(Bytes, S(MMask));
+  Value *Sign = B.CreateShl(
+      B.CreateAnd(B.CreateLShr(Bytes, H.splat(7)), H.splat(1)), H.splat(7));
+  Value *Exp = B.CreateAnd(B.CreateLShr(Bytes, H.splat(M)), H.splat(EMask));
+  Value *Mant = B.CreateAnd(Bytes, H.splat(MMask));
   Value *Norm = B.CreateOr(
-      Sign, B.CreateOr(B.CreateShl(B.CreateAdd(Exp, S(1)), S(M)), Mant));
-  Value *Sub = B.CreateSelect(B.CreateICmpEQ(Mant, S(0)), S(0),
-                              B.CreateOr(Sign, B.CreateShl(Mant, S(1))));
-  Value *Top = S(0x80);
+      Sign,
+      B.CreateOr(B.CreateShl(B.CreateAdd(Exp, H.splat(1)), H.splat(M)), Mant));
+  Value *Sub = B.CreateSelect(B.CreateICmpEQ(Mant, H.splat(0)), H.splat(0),
+                              B.CreateOr(Sign, B.CreateShl(Mant, H.splat(1))));
+  Value *Top = H.splat(0x80);
   if (M == 3)
-    Top = B.CreateSelect(B.CreateICmpEQ(Mant, S(MMask)), S(0x80),
-                         B.CreateOr(Sign, S(0x7F)));
-  Value *R = B.CreateSelect(B.CreateICmpEQ(Exp, S(EMask)), Top, Norm);
-  return B.CreateSelect(B.CreateICmpEQ(Exp, S(0)), Sub, R, Name);
+    Top = B.CreateSelect(B.CreateICmpEQ(Mant, H.splat(MMask)), H.splat(0x80),
+                         B.CreateOr(Sign, H.splat(0x7F)));
+  Value *R = B.CreateSelect(B.CreateICmpEQ(Exp, H.splat(EMask)), Top, Norm);
+  return B.CreateSelect(B.CreateICmpEQ(Exp, H.splat(0)), Sub, R, Name);
 }
 
 // FNUZ -> OCP, mantissa width \p M.
@@ -100,22 +101,25 @@ Value *ocpToFnuz(HotswapIRBuilder &B, Value *Bytes, unsigned M,
 Value *fnuzToOcp(HotswapIRBuilder &B, Value *Bytes, unsigned M,
                  const Twine &Name) {
   ByteVecHelper H(B, Bytes);
-  auto S = [&](uint64_t V) { return H.splat(V); };
   const uint64_t EMask = (1u << (7 - M)) - 1, MMask = (1u << M) - 1;
-  Value *Sign = B.CreateShl(B.CreateAnd(B.CreateLShr(Bytes, S(7)), S(1)), S(7));
-  Value *Exp = B.CreateAnd(B.CreateLShr(Bytes, S(M)), S(EMask));
-  Value *Mant = B.CreateAnd(Bytes, S(MMask));
+  Value *Sign = B.CreateShl(
+      B.CreateAnd(B.CreateLShr(Bytes, H.splat(7)), H.splat(1)), H.splat(7));
+  Value *Exp = B.CreateAnd(B.CreateLShr(Bytes, H.splat(M)), H.splat(EMask));
+  Value *Mant = B.CreateAnd(Bytes, H.splat(MMask));
   Value *Norm = B.CreateOr(
-      Sign, B.CreateOr(B.CreateShl(B.CreateSub(Exp, S(1)), S(M)), Mant));
-  Value *NVal = B.CreateAdd(
-      B.CreateSelect(B.CreateICmpEQ(Exp, S(1)), S(1u << M), S(0)), Mant);
-  Value *Rne =
-      B.CreateAdd(B.CreateLShr(NVal, S(1)),
-                  B.CreateSelect(B.CreateICmpEQ(B.CreateAnd(NVal, S(3)), S(3)),
-                                 S(1), S(0)));
+      Sign,
+      B.CreateOr(B.CreateShl(B.CreateSub(Exp, H.splat(1)), H.splat(M)), Mant));
+  Value *NVal = B.CreateAdd(B.CreateSelect(B.CreateICmpEQ(Exp, H.splat(1)),
+                                           H.splat(1u << M), H.splat(0)),
+                            Mant);
+  Value *Rne = B.CreateAdd(
+      B.CreateLShr(NVal, H.splat(1)),
+      B.CreateSelect(B.CreateICmpEQ(B.CreateAnd(NVal, H.splat(3)), H.splat(3)),
+                     H.splat(1), H.splat(0)));
   Value *Sub = B.CreateOr(Sign, Rne);
-  Value *R = B.CreateSelect(B.CreateICmpUGE(Exp, S(2)), Norm, Sub);
-  return B.CreateSelect(B.CreateICmpEQ(Bytes, S(0x80)), S(0x7F), R, Name);
+  Value *R = B.CreateSelect(B.CreateICmpUGE(Exp, H.splat(2)), Norm, Sub);
+  return B.CreateSelect(B.CreateICmpEQ(Bytes, H.splat(0x80)), H.splat(0x7F), R,
+                        Name);
 }
 
 } // namespace
