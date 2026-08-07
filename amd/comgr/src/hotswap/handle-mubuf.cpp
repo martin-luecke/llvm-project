@@ -318,8 +318,8 @@ Expected<HandlerResult> handleMUBUF(RaiseContext &Ctx, const DecodedInst &Di,
       // Suppression is the only correct restoration of the source no-op.
       auto EmitStoreSuppressed = [&] {
         Value *VoffWide = Ctx.B.CreateZExt(Voffset, Ctx.I64Ty, "st_voff_wide");
-        Value *InBounds = Ctx.B.CreateICmpULT(VoffWide, Mbuf.NumRecords,
-                                              "st_voff_in_bounds");
+        Value *InBounds =
+            Ctx.B.CreateICmpULT(VoffWide, Mbuf.NumRecords, "st_voff_in_bounds");
         Function *F = Ctx.B.GetInsertBlock()->getParent();
         BasicBlock *DoBb = BasicBlock::Create(Ctx.C, "st_oob_do", F);
         BasicBlock *SkipBb = BasicBlock::Create(Ctx.C, "st_oob_skip", F);
