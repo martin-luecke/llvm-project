@@ -9,6 +9,7 @@
 #include "fp8-convert.h"
 #include "isa-profile.h"
 
+#include "llvm/ADT/StringRef.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
@@ -26,7 +27,7 @@ Fp8Format fp8FormatOf(const ISAProfile &P) { return P.Fp8Fmt; }
 Expected<Fp8Reencode> fp8Reencode(const ISAProfile &Src, const ISAProfile &Tgt,
                                   Fp8Dir Dir) {
   Fp8Format S = fp8FormatOf(Src), T = fp8FormatOf(Tgt);
-  auto Refuse = [](const char *Side, Fp8Format F) {
+  auto Refuse = [](StringRef Side, Fp8Format F) {
     return createStringError(
         Twine(Side) + " ISA " +
         (F == Fp8Format::None ? "has no fp8/bf8 hardware"
