@@ -8,7 +8,7 @@
 
 #include "handlers.h"
 
-#include "SIDefines.h"            // SIInstrFlags::IsMAI
+#include "SIDefines.h"
 #include "Utils/AMDGPUBaseInfo.h" // AMDGPU::getNamedOperandIdx, AMDGPU::OpName
 #include "canonical-op.h"
 #include "fp8-convert.h"
