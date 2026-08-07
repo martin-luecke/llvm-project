@@ -1408,21 +1408,21 @@ Value *extractScaleByte(IRBuilder<> &B, Value *Scale32, unsigned k) {
   return B.CreateAnd(Shifted, B.getInt32(0xFF), "scale_byte");
 }
 
-// Decode one scale byte to f32. E8M0 via `ldexp(1.0, byte - 127)` with
-// 0xFF -> qNaN. E4M3 is UE4M3, decoded by the shared fp8 decoder as OCP (bias
-// 7) -- not by the target's FNUZ `cvt_f32_fp8`. E5M3 not yet implemented.
+// Decode one scale byte to f32. E8M0 via `ldexp(1.0, byte - 127)` -- real
+// hardware has no reserved-NaN encoding for E8M0; byte 0xFF (exponent 128)
+// simply overflows the ldexp to +Inf, which this reproduces by construction
+// rather than special-casing 0xFF to a NaN. E4M3 is UE4M3, decoded by the
+// shared fp8 decoder as OCP (bias 7) -- not by the target's FNUZ
+// `cvt_f32_fp8`. E5M3 not yet implemented.
 Value *decodeScaleByte(IRBuilder<> &B, Module &M, Type *F32Ty, Value *Byte,
                        int Fmt) {
   switch (Fmt) {
   case ScaleFmtE8M0: {
-    Value *IsNaN = B.CreateICmpEQ(Byte, B.getInt32(0xFF), "e8m0_is_nan");
     Value *Biased = B.CreateSub(Byte, B.getInt32(127), "e8m0_exp");
     Function *LdexpFn = Intrinsic::getOrInsertDeclaration(
         &M, Intrinsic::ldexp, {F32Ty, B.getInt32Ty()});
-    Value *Finite = B.CreateCall(LdexpFn, {ConstantFP::get(F32Ty, 1.0), Biased},
-                                 "e8m0_finite");
-    return B.CreateSelect(IsNaN, ConstantFP::getQNaN(F32Ty), Finite,
-                          "e8m0_decoded");
+    return B.CreateCall(LdexpFn, {ConstantFP::get(F32Ty, 1.0), Biased},
+                        "e8m0_decoded");
   }
   case ScaleFmtE4M3:
     // Scale format 2 is UE4M3: the same field layout as an OCP E4M3 data byte
@@ -1462,24 +1462,18 @@ Value *buildScaleFactorVec(IRBuilder<> &B, Module &M, Type *F32Ty,
   };
 
   // E8M0 x E8M0 folds both exponents into one ldexp per row, so there is no
-  // separable B factor to hoist.  The B NaN test is loop-invariant but stays
-  // in the loop on purpose: hoisting it stretches an i1 live range across the
-  // four ldexps and costs VALU at -O2, and GVN folds the copies anyway.
+  // separable B factor to hoist. Neither byte is special-cased for 0xFF:
+  // real hardware has no reserved E8M0 NaN encoding, so a 0xFF operand just
+  // pushes the summed exponent high enough that the ldexp itself overflows
+  // to +-Inf, matching hardware.
   if (AScaleFmt == ScaleFmtE8M0 && BScaleFmt == ScaleFmtE8M0) {
     Function *LdexpFn = Intrinsic::getOrInsertDeclaration(
         &M, Intrinsic::ldexp, {F32Ty, B.getInt32Ty()});
     for (unsigned g = 0; g < 4; ++g) {
-      Value *BIsNaN =
-          B.CreateICmpEQ(ScaleBByte, B.getInt32(0xFF), "scale_b_is_nan");
-      Value *AIsNaN =
-          B.CreateICmpEQ(ScaleABytes[g], B.getInt32(0xFF), "scale_a_is_nan");
-      Value *AnyIsNaN = B.CreateOr(AIsNaN, BIsNaN, "scale_is_nan");
       Value *Sum = B.CreateAdd(ScaleABytes[g], ScaleBByte, "scale_sum");
       Value *Biased = B.CreateSub(Sum, B.getInt32(254), "scale_exp");
-      Value *FiniteFactor = B.CreateCall(
-          LdexpFn, {ConstantFP::get(F32Ty, 1.0), Biased}, "finite_factor");
-      Insert(g, B.CreateSelect(AnyIsNaN, ConstantFP::getQNaN(F32Ty),
-                               FiniteFactor, "scale_factor"));
+      Insert(g, B.CreateCall(LdexpFn, {ConstantFP::get(F32Ty, 1.0), Biased},
+                             "scale_factor"));
     }
     return Vec;
   }
