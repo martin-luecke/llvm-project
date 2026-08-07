@@ -67,8 +67,11 @@ wmma_scale_f32_16x16x128_f8f6f4_kernel:
 ; IR_GFX942: call float @llvm.ldexp.f32.i32(float 1.000000e+00, i32 %{{[^)]+}})
 ; IR_GFX942: call <4 x float> @llvm.fmuladd.v4f32(
 ; IR_GFX942-COUNT-7: call <4 x float> @llvm.amdgcn.mfma.f32.16x16x32.bf8.fp8(i64 %{{[^,]+}}, i64 %{{[^,]+}}, <4 x float> zeroinitializer, i32 0, i32 0, i32 0)
-; IR_GFX942-DAG: icmp eq i32 %{{[^,]+}}, 255
-; IR_GFX942-DAG: select i1 %{{[^,]+}}, float +qnan, float %{{[^,]+}}
+; E8M0 has no reserved NaN encoding on real hardware: byte 0xFF is exponent
+; 128, which the `sub 254` + ldexp above overflows to +-Inf by construction.
+; Special-casing 0xFF to a qNaN would produce NaN where hardware produces Inf.
+; IR_GFX942-NOT: icmp eq i32 %{{[^,]+}}, 255
+; IR_GFX942-NOT: float +qnan
 ; IR_GFX942-NOT: fmul <4 x float>
 ; IR_GFX942-NOT: fadd <4 x float>
 ; IR_GFX942-DAG: icmp uge i32 %{{[^,]+}}, 32
