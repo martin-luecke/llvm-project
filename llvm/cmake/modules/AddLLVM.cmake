@@ -594,6 +594,8 @@ endfunction(set_windows_version_resource_properties)
 #      LLVM which means that the source resides in llvm/lib/ and it is a
 #      candidate for inclusion into libLLVM.so.
 #   )
+# A final consumer can set the LLVM_LINK_STATIC_COMPONENTS target property to
+# make transitive static libraries use their LLVM components instead of LLVM.
 function(llvm_add_library name)
   cmake_parse_arguments(ARG
     "MODULE;SHARED;STATIC;OBJECT;DISABLE_LLVM_LINK_LLVM_DYLIB;SONAME;NO_INSTALL_RPATH;COMPONENT_LIB;DISABLE_PCH_REUSE"
@@ -863,7 +865,13 @@ function(llvm_add_library name)
     set(llvm_libs ${ARG_PLUGIN_TOOL})
   elseif (NOT ARG_COMPONENT_LIB)
     if (LLVM_LINK_LLVM_DYLIB AND NOT ARG_DISABLE_LLVM_LINK_LLVM_DYLIB)
-      set(llvm_libs LLVM)
+      llvm_map_components_to_libnames(llvm_component_libs
+        ${LLVM_LINK_COMPONENTS}
+      )
+      set(llvm_libs
+        "$<$<BOOL:$<TARGET_PROPERTY:LLVM_LINK_STATIC_COMPONENTS>>:${llvm_component_libs}>"
+        "$<$<NOT:$<BOOL:$<TARGET_PROPERTY:LLVM_LINK_STATIC_COMPONENTS>>>:LLVM>"
+      )
     else()
       if(ARG_DISABLE_LLVM_LINK_LLVM_DYLIB)
         target_compile_definitions(${name} PRIVATE LLVM_BUILD_STATIC)
