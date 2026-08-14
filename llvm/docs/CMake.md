@@ -851,6 +851,15 @@ sub-projects. Nearly all of these variable names begin with `LLVM_`.
 :   If enabled, tools will be linked with the libLLVM shared library. Defaults
     to OFF. Setting `LLVM_LINK_LLVM_DYLIB` to ON also sets
     `LLVM_BUILD_LLVM_DYLIB` to ON. This option is not available on Windows.
+    Non-component static libraries created through LLVM's CMake helpers use the
+    shared library in their link interfaces by default. A final consumer can
+    instead set the `LLVM_LINK_STATIC_COMPONENTS` target property to ON to use
+    their declared LLVM component dependencies when those targets are
+    available:
+
+    ``` cmake
+    set_property(TARGET my-tool PROPERTY LLVM_LINK_STATIC_COMPONENTS ON)
+    ```
 
 **LLVM\_\<target\>\_LINKER_FLAGS**:STRING
 
