@@ -10,6 +10,7 @@
 #include "AMDGPUGenSubtargetInfo.inc"
 #include "AMDGPUTargetMachine.h"
 #include "GCNSubtarget.h"
+#include "Utils/AMDGPUBaseInfo.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/TargetParser/AMDGPUTargetParser.h"
@@ -374,4 +375,68 @@ TEST_F(AMDGPUTestBase, TestGetNamedOperandIdx) {
           << "Opcode " << Opcode << " (" << MCII->getName(Opcode) << ')';
     }
   }
+}
+
+TEST_F(AMDGPUTestBase, TestGetVGPRMSBOperandIndices) {
+  std::unique_ptr<const GCNTargetMachine> TM =
+      createAMDGPUTargetMachine(Triple("amdgpu9.00-amd-"), "", "");
+  ASSERT_NE(TM, nullptr);
+  const MCInstrInfo *MCII = TM->getMCInstrInfo();
+
+  const MCInstrDesc &Move = MCII->get(AMDGPU::V_MOV_B32_e32);
+  const AMDGPU::VGPRMSBOperandIndices MoveIndices =
+      AMDGPU::getVGPRMSBOperandIndices(Move);
+  auto [XSource, YSource] = MoveIndices[0];
+  EXPECT_EQ(XSource, static_cast<unsigned>(AMDGPU::getNamedOperandIdx(
+                         Move.getOpcode(), AMDGPU::OpName::src0)));
+  EXPECT_FALSE(YSource);
+
+  auto [XUnused, YUnused] = MoveIndices[1];
+  EXPECT_FALSE(XUnused);
+  EXPECT_FALSE(YUnused);
+
+  auto [XDestination, YDestination] = MoveIndices[3];
+  EXPECT_EQ(XDestination, static_cast<unsigned>(AMDGPU::getNamedOperandIdx(
+                              Move.getOpcode(), AMDGPU::OpName::vdst)));
+  EXPECT_FALSE(YDestination);
+
+  const MCInstrDesc &FMAMK = MCII->get(AMDGPU::V_FMAMK_F32);
+  const AMDGPU::VGPRMSBOperandIndices FMAMKIndices =
+      AMDGPU::getVGPRMSBOperandIndices(FMAMK);
+  EXPECT_FALSE(FMAMKIndices[1].first);
+  EXPECT_EQ(FMAMKIndices[2].first,
+            static_cast<unsigned>(AMDGPU::getNamedOperandIdx(
+                FMAMK.getOpcode(), AMDGPU::OpName::src1)));
+
+  bool FoundVOPD = false;
+  for (unsigned Opcode = 0, E = MCII->getNumOpcodes(); Opcode != E; ++Opcode) {
+    if (!AMDGPU::isVOPD(Opcode))
+      continue;
+    auto [XOpcode, YOpcode] = AMDGPU::getVOPDComponents(Opcode);
+    EXPECT_LT(XOpcode, E);
+    EXPECT_LT(YOpcode, E);
+    EXPECT_FALSE(AMDGPU::isVOPD(XOpcode));
+    EXPECT_FALSE(AMDGPU::isVOPD(YOpcode));
+    const MCInstrDesc &VOPD = MCII->get(Opcode);
+    const AMDGPU::VGPRMSBOperandIndices OperandIndices =
+        AMDGPU::getVGPRMSBOperandIndices(VOPD);
+    auto [XOperand, YOperand] = OperandIndices[0];
+    EXPECT_EQ(XOperand, static_cast<unsigned>(AMDGPU::getNamedOperandIdx(
+                            VOPD.getOpcode(), AMDGPU::OpName::src0X)));
+    EXPECT_EQ(YOperand, static_cast<unsigned>(AMDGPU::getNamedOperandIdx(
+                            VOPD.getOpcode(), AMDGPU::OpName::src0Y)));
+    FoundVOPD = true;
+    break;
+  }
+  EXPECT_TRUE(FoundVOPD);
+}
+
+TEST_F(AMDGPUTestBase, TestIsHi16Reg) {
+  std::unique_ptr<const GCNTargetMachine> TM =
+      createAMDGPUTargetMachine(Triple("amdgpu9.00-amd-"), "", "");
+  ASSERT_NE(TM, nullptr);
+  const MCRegisterInfo &MRI = TM->getMCRegisterInfo();
+
+  EXPECT_TRUE(AMDGPU::isHi16Reg(AMDGPU::VGPR0_HI16, MRI));
+  EXPECT_FALSE(AMDGPU::isHi16Reg(AMDGPU::VGPR0_LO16, MRI));
 }
