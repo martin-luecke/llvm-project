@@ -95,12 +95,10 @@ struct RaiseContext {
                llvm::ArrayRef<TextSection::ImageSection> SourceImageSections,
                uint64_t KernelStartOffset, uint64_t KernelEndOffset);
 
-  // Source KD private/scratch allocation. `handle-flat.cpp` sets
+  // Source scratch allocation state. `handle-flat.cpp` sets
   // `usesScratchPrivateSegment` when it lowers a `scratch_*` instruction; the
   // on-demand private alloca is deliberately managed by LLVM's frame layout so
   // target spills cannot overlap translated source scratch slots.
-  uint32_t SourcePrivateSegmentFixedSize = 0;
-  uint16_t SourceKernelCodeProperties = 0;
   bool UsesScratchPrivateSegment = false;
   llvm::AllocaInst *ScratchPrivateSegmentAlloca = nullptr;
 
