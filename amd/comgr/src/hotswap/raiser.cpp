@@ -1286,8 +1286,8 @@ static Expected<RaiseResult> raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
                    Options.KernelOffset,
                    KernelEndOffset};
   Ctx.SetpcAnalysis = &SetpcAnalysis;
+  Ctx.Meta = &Meta;
   Ctx.SourcePrivateSegmentFixedSize = Meta.PrivateSegmentFixedSize;
-  Ctx.SourceComputePgmRsrc2 = Meta.ComputePgmRsrc2;
   Ctx.SourceKernelCodeProperties = Meta.KernelCodeProperties;
 
   // Dominance-safe SGPR wave-mask shadow storage.

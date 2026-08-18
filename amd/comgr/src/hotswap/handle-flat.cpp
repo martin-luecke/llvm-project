@@ -182,7 +182,7 @@ std::string formatScratchAbiDetail(RaiseContext &Ctx, const Twine &Why) {
   std::string Detail;
   raw_string_ostream Os(Detail);
   const bool SourceEnablePrivate =
-      (Ctx.SourceComputePgmRsrc2 &
+      (Ctx.Meta->ComputePgmRsrc2 &
        (1u << COMPUTE_PGM_RSRC2_ENABLE_PRIVATE_SEGMENT_SHIFT)) != 0;
   const bool SourceFlatScratchInit =
       (Ctx.SourceKernelCodeProperties &
@@ -193,7 +193,7 @@ std::string formatScratchAbiDetail(RaiseContext &Ctx, const Twine &Why) {
   Why.print(Os);
   Os << " source_scratch_kd={private_segment_fixed_size="
      << Ctx.SourcePrivateSegmentFixedSize << ", compute_pgm_rsrc2=0x"
-     << utohexstr(Ctx.SourceComputePgmRsrc2)
+     << utohexstr(Ctx.Meta->ComputePgmRsrc2)
      << ", enable_private_segment=" << (SourceEnablePrivate ? 1 : 0)
      << ", kernel_code_properties=0x"
      << utohexstr(static_cast<unsigned>(Ctx.SourceKernelCodeProperties))
@@ -231,7 +231,7 @@ Expected<AllocaInst *> getOrCreateSourcePrivateSegment(RaiseContext &Ctx,
       dbgs() << "transpiler: FLAT scratch ABI: allocated source "
              << "private segment model for '" << Ctx.Kernel->getName()
              << "' size=" << Ctx.SourcePrivateSegmentFixedSize
-             << " compute_pgm_rsrc2=0x" << utohexstr(Ctx.SourceComputePgmRsrc2)
+             << " compute_pgm_rsrc2=0x" << utohexstr(Ctx.Meta->ComputePgmRsrc2)
              << " kernel_code_properties=0x"
              << utohexstr(static_cast<unsigned>(Ctx.SourceKernelCodeProperties))
              << "\n");
