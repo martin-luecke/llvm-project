@@ -126,7 +126,6 @@ bool isIntrinsicVGPRSafePropagator(Intrinsic::ID Id) {
   case Intrinsic::amdgcn_cvt_pk_f32_bf8:
   case Intrinsic::amdgcn_cvt_pk_f32_fp8:
   case Intrinsic::amdgcn_cvt_pk_fp8_f32:
-  case Intrinsic::amdgcn_cvt_pkrtz:
   case Intrinsic::amdgcn_cvt_scalef32_pk_fp4_f32:
   case Intrinsic::amdgcn_cvt_scale_pk8_bf16_fp4:
   case Intrinsic::amdgcn_class:
@@ -228,6 +227,10 @@ bool isIntrinsicVGPRSafePropagator(Intrinsic::ID Id) {
   //     VALU instructions.  All-VGPR.
   //   * `@llvm.fshl.i32` / `@llvm.fshr.i32` -> `v_alignbit_b32`
   //     (funnel shift).  Per-lane, all-VGPR.
+  //   * `@llvm.fptrunc.round.f16.f32` -> `v_cvt_pkrtz_f16_f32` when paired
+  //     and packed, or an equivalent per-lane conversion sequence.
+  //   * `@llvm.is.fpclass` -> `v_cmp_class_f*` for an immediate class mask.
+  //     Both operands are lane-local values and neither path requires an SGPR.
   //
   // All carry per-source-wave state through unchanged (SIMT per-lane
   // math), so the forward walk must continue past them -- hence
@@ -295,6 +298,8 @@ bool isIntrinsicVGPRSafePropagator(Intrinsic::ID Id) {
   case Intrinsic::bitreverse:
   case Intrinsic::fshl:
   case Intrinsic::fshr:
+  case Intrinsic::fptrunc_round:
+  case Intrinsic::is_fpclass:
     return true;
   default:
     return false;
