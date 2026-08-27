@@ -216,6 +216,9 @@ Intrinsic::ID true16AddSubSatIntrinsic(bool IsSub, bool IsSigned) {
 //   * `vcc_lo` / `vcc` -> `loadVCC` (the same path e32 would take).
 //   * `sN` -> prefer `lookupSgprWaveMaskI1(N)`'s fresh per-BB V_CMP
 //     shadow `i1` (populated by V_CMP_*_e64 writers in the same BB);
+//     then prefer the memory-backed cross-BB shadow (populated by any
+//     V_CMP_*_e64 writer to this SGPR anywhere in the function, valid
+//     as long as no scalar write has clobbered it since);
 //     fall back to `projection.extractLaneBitFromWaveMask` on the
 //     raw SGPR alloca (lossy under wave32 -> wave64 cross-widening
 //     if the producer truncated to source width -- same residual as
@@ -244,7 +247,18 @@ Value *readCarryInI1(RaiseContext &Ctx, const DecodedInst &Di, OpResolver &Op,
         Value *CondVal = Ctx.Isa.isWave32()
                              ? Ctx.Regs.loadSGPR32(Ctx.B, CarryReg.BaseIdx)
                              : Ctx.Regs.loadSGPR64(Ctx.B, CarryReg.BaseIdx);
-        return Ctx.Projection.extractLaneBitFromWaveMask(Ctx.B, CondVal);
+        Value *Fallback =
+            Ctx.Projection.extractLaneBitFromWaveMask(Ctx.B, CondVal);
+        // Cross-BB path: prefer the memory-backed shadow if valid.
+        // Mirrors raiseCndmaskWaveCondition / handleVopdCndmaskCondition.
+        if (Value *ShadowValid = Ctx.loadSgprWaveMaskValid(CarryReg.BaseIdx)) {
+          Value *ShadowExec = Ctx.loadSgprWaveMaskExec(CarryReg.BaseIdx);
+          Value *ShadowI1 =
+              Ctx.Projection.extractLaneBitFromWaveMask(Ctx.B, ShadowExec);
+          return Ctx.B.CreateSelect(ShadowValid, ShadowI1, Fallback,
+                                    "carry_sgpr_mask_shadow_sel");
+        }
+        return Fallback;
       }
       break;
     case ParsedReg::VCC_HI_SCRATCH:
