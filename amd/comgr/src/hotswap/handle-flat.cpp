@@ -182,21 +182,21 @@ std::string formatScratchAbiDetail(RaiseContext &Ctx, const Twine &Why) {
   std::string Detail;
   raw_string_ostream Os(Detail);
   const bool SourceEnablePrivate =
-      (Ctx.SourceComputePgmRsrc2 &
+      (Ctx.Meta->ComputePgmRsrc2 &
        (1u << COMPUTE_PGM_RSRC2_ENABLE_PRIVATE_SEGMENT_SHIFT)) != 0;
   const bool SourceFlatScratchInit =
-      (Ctx.SourceKernelCodeProperties &
+      (Ctx.Meta->KernelCodeProperties &
        KERNEL_CODE_PROPERTY_ENABLE_SGPR_FLAT_SCRATCH_INIT) != 0;
   const bool SourcePrivateSegmentSize =
-      (Ctx.SourceKernelCodeProperties &
+      (Ctx.Meta->KernelCodeProperties &
        KERNEL_CODE_PROPERTY_ENABLE_SGPR_PRIVATE_SEGMENT_SIZE) != 0;
   Why.print(Os);
   Os << " source_scratch_kd={private_segment_fixed_size="
-     << Ctx.SourcePrivateSegmentFixedSize << ", compute_pgm_rsrc2=0x"
-     << utohexstr(Ctx.SourceComputePgmRsrc2)
+     << Ctx.Meta->PrivateSegmentFixedSize << ", compute_pgm_rsrc2=0x"
+     << utohexstr(Ctx.Meta->ComputePgmRsrc2)
      << ", enable_private_segment=" << (SourceEnablePrivate ? 1 : 0)
      << ", kernel_code_properties=0x"
-     << utohexstr(static_cast<unsigned>(Ctx.SourceKernelCodeProperties))
+     << utohexstr(static_cast<unsigned>(Ctx.Meta->KernelCodeProperties))
      << ", enable_sgpr_flat_scratch_init=" << (SourceFlatScratchInit ? 1 : 0)
      << ", enable_sgpr_private_segment_size="
      << (SourcePrivateSegmentSize ? 1 : 0) << "}.";
@@ -206,7 +206,7 @@ std::string formatScratchAbiDetail(RaiseContext &Ctx, const Twine &Why) {
 
 Expected<AllocaInst *> getOrCreateSourcePrivateSegment(RaiseContext &Ctx,
                                                        const DecodedInst &Di) {
-  if (Ctx.SourcePrivateSegmentFixedSize == 0) {
+  if (Ctx.Meta->PrivateSegmentFixedSize == 0) {
     std::string Detail = formatScratchAbiDetail(
         Ctx, "scratch_* requires source KD private-segment allocation, but "
              "the parsed source KD reports zero private_segment_fixed_size; "
@@ -221,7 +221,7 @@ Expected<AllocaInst *> getOrCreateSourcePrivateSegment(RaiseContext &Ctx,
 
   BasicBlock &Entry = Ctx.Kernel->getEntryBlock();
   IRBuilder<> EntryB(&*Entry.getFirstInsertionPt());
-  auto *Size = ConstantInt::get(Ctx.I32Ty, Ctx.SourcePrivateSegmentFixedSize);
+  auto *Size = ConstantInt::get(Ctx.I32Ty, Ctx.Meta->PrivateSegmentFixedSize);
   auto *Alloca = EntryB.CreateAlloca(Ctx.I8Ty, /*AddrSpace=*/5, Size,
                                      "source_private_segment");
   Alloca->setAlignment(Align(4));
@@ -230,10 +230,10 @@ Expected<AllocaInst *> getOrCreateSourcePrivateSegment(RaiseContext &Ctx,
   LLVM_DEBUG(
       dbgs() << "transpiler: FLAT scratch ABI: allocated source "
              << "private segment model for '" << Ctx.Kernel->getName()
-             << "' size=" << Ctx.SourcePrivateSegmentFixedSize
-             << " compute_pgm_rsrc2=0x" << utohexstr(Ctx.SourceComputePgmRsrc2)
+             << "' size=" << Ctx.Meta->PrivateSegmentFixedSize
+             << " compute_pgm_rsrc2=0x" << utohexstr(Ctx.Meta->ComputePgmRsrc2)
              << " kernel_code_properties=0x"
-             << utohexstr(static_cast<unsigned>(Ctx.SourceKernelCodeProperties))
+             << utohexstr(static_cast<unsigned>(Ctx.Meta->KernelCodeProperties))
              << "\n");
   return Alloca;
 }

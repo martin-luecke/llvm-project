@@ -1286,9 +1286,7 @@ static Expected<RaiseResult> raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
                    Options.KernelOffset,
                    KernelEndOffset};
   Ctx.SetpcAnalysis = &SetpcAnalysis;
-  Ctx.SourcePrivateSegmentFixedSize = Meta.PrivateSegmentFixedSize;
-  Ctx.SourceComputePgmRsrc2 = Meta.ComputePgmRsrc2;
-  Ctx.SourceKernelCodeProperties = Meta.KernelCodeProperties;
+  Ctx.Meta = &Meta;
 
   // Dominance-safe SGPR wave-mask shadow storage.
   // One EXEC-width mask + one scalar-valid bit per SGPR base index.
@@ -2074,7 +2072,7 @@ static Expected<RaiseResult> raiseToIRImpl(llvm::ArrayRef<uint8_t> TextBytes,
   }
 
   Result.UsesScratchPrivateSegment = Ctx.UsesScratchPrivateSegment;
-  Result.SourcePrivateSegmentFixedSize = Ctx.SourcePrivateSegmentFixedSize;
+  Result.SourcePrivateSegmentFixedSize = Meta.PrivateSegmentFixedSize;
   return Result;
 }
 

@@ -48,6 +48,11 @@ struct RaiseContext {
   const ISAProfile &Isa; // source ISA (for disassembly / instruction semantics)
   ISAProfile
       TargetIsa; // compilation target ISA (for code generation decisions)
+  // Source kernel metadata, including the raw kernel descriptor words. Owned
+  // by the raiser, which keeps it alive for as long as the context. Handlers
+  // that need a descriptor field read it from here; `Layout` below carries the
+  // SGPR ABI already decoded from it.
+  const KernelMeta *Meta = nullptr;
   // Source-ISA user-SGPR ABI derived from the kernel descriptor. Owned by
   // the raiser; threaded into every handler that needs to identify a
   // specific SGPR by its source-ABI role (e.g. handle-smem.cpp must know
@@ -90,13 +95,10 @@ struct RaiseContext {
                llvm::ArrayRef<TextSection::ImageSection> SourceImageSections,
                uint64_t KernelStartOffset, uint64_t KernelEndOffset);
 
-  // Source KD private/scratch allocation. `handle-flat.cpp` sets
+  // Source scratch allocation state. `handle-flat.cpp` sets
   // `usesScratchPrivateSegment` when it lowers a `scratch_*` instruction; the
   // on-demand private alloca is deliberately managed by LLVM's frame layout so
   // target spills cannot overlap translated source scratch slots.
-  uint32_t SourcePrivateSegmentFixedSize = 0;
-  uint32_t SourceComputePgmRsrc2 = 0;
-  uint16_t SourceKernelCodeProperties = 0;
   bool UsesScratchPrivateSegment = false;
   llvm::AllocaInst *ScratchPrivateSegmentAlloca = nullptr;
 
