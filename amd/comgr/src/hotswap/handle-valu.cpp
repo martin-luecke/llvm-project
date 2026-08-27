@@ -49,6 +49,15 @@ Expected<bool> readVOP3Clamp(const DecodedInst &Di, StringRef OpName) {
   return *Clamp != 0;
 }
 
+// Same, for opcodes whose e32 encoding has no clamp slot at all: an absent
+// slot means clamp=0, a present but undecodable one is operand-table drift.
+Expected<bool> readOptionalClamp(const DecodedInst &Di, StringRef OpName) {
+  if (AMDGPU::getNamedOperandIdx(Di.Inst.getOpcode(), AMDGPU::OpName::clamp) <
+      0)
+    return false;
+  return readVOP3Clamp(Di, OpName);
+}
+
 // These integer VOP3 profiles have no source-modifier semantics. Accept the
 // ordinary absent/zero encoding, and fail loudly if decoding ever exposes bits.
 Error requireNoVOP3IntMinMaxSrcMods(const DecodedInst &Di, StringRef OpName) {
@@ -792,8 +801,18 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
   }
 
   // ---- Simple 2-src integer ALU ----
+  // The e64 forms carry a `clamp` bit requesting unsigned saturating
+  // arithmetic: a carry-out clamps the result to 0xFFFFFFFF, a borrow clamps
+  // it to 0.
   if (Sop == CanonicalOp::V_ADD_NC_U32) {
-    Ctx.writeReg32(Op.dst(), Ctx.B.CreateAdd(Op.src(0), Op.src(1), "vadd"));
+    Expected<bool> Clamped = readOptionalClamp(Di, "v_add_nc_u32");
+    if (!Clamped)
+      return Clamped.takeError();
+    Value *S0 = Op.src(0), *S1 = Op.src(1);
+    Value *Res = *Clamped
+                     ? Ctx.B.CreateBinaryIntrinsic(Intrinsic::uadd_sat, S0, S1)
+                     : Ctx.B.CreateAdd(S0, S1, "vadd");
+    Ctx.writeReg32(Op.dst(), Res);
     Hr.Handled = true;
     return Hr;
   }
@@ -1013,12 +1032,28 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
   if (Sop == CanonicalOp::V_SUB_NC_U32) {
-    Ctx.writeReg32(Op.dst(), Ctx.B.CreateSub(Op.src(0), Op.src(1), "vsub"));
+    // `clamp` requests a saturating subtract: a borrow clamps the result to 0.
+    Expected<bool> Clamped = readOptionalClamp(Di, "v_sub_nc_u32");
+    if (!Clamped)
+      return Clamped.takeError();
+    Value *S0 = Op.src(0), *S1 = Op.src(1);
+    Value *Res = *Clamped
+                     ? Ctx.B.CreateBinaryIntrinsic(Intrinsic::usub_sat, S0, S1)
+                     : Ctx.B.CreateSub(S0, S1, "vsub");
+    Ctx.writeReg32(Op.dst(), Res);
     Hr.Handled = true;
     return Hr;
   }
   if (Sop == CanonicalOp::V_SUBREV_NC_U32) {
-    Ctx.writeReg32(Op.dst(), Ctx.B.CreateSub(Op.src(1), Op.src(0), "vsubrev"));
+    // Reversed operands: dst = src1 - src0, saturating under `clamp`.
+    Expected<bool> Clamped = readOptionalClamp(Di, "v_subrev_nc_u32");
+    if (!Clamped)
+      return Clamped.takeError();
+    Value *S0 = Op.src(0), *S1 = Op.src(1);
+    Value *Res = *Clamped
+                     ? Ctx.B.CreateBinaryIntrinsic(Intrinsic::usub_sat, S1, S0)
+                     : Ctx.B.CreateSub(S1, S0, "vsubrev");
+    Ctx.writeReg32(Op.dst(), Res);
     Hr.Handled = true;
     return Hr;
   }
