@@ -2056,7 +2056,8 @@ unsigned canonicalize(unsigned Mc, const MCInstrInfo &MCII,
 // matches any enabled bit in the mask. We collapse it onto the same
 // `V_CMP` / `V_CMPX` CanonicalOps and signal the special-case lift via
 // `VCmpMeta::isClass`; the dispatch in handle-valu-vcmp.cpp branches on
-// that flag and emits `llvm.amdgcn.class.f<bits>` instead of an FCmp.
+// that flag and emits `llvm.is.fpclass` for immediate masks or
+// `llvm.amdgcn.class.f<bits>` for dynamic masks instead of an FCmp.
 // This keeps the parser surface narrow (one extra grammar branch, no new
 // CanonicalOps) and matches the wave-mask write-back path used by the other
 // V_CMP forms.

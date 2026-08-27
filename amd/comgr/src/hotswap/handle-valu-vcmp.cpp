@@ -12,6 +12,7 @@
 #include "canonical-op.h"
 #include "opcode-map.h"
 
+#include "llvm/ADT/FloatingPointMode.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
@@ -67,9 +68,11 @@ Expected<HandlerResult> handleValuVcmp(RaiseContext &Ctx, const DecodedInst &Di,
   // ---- v_cmp_class_f<bits> / v_cmpx_class_f<bits> ----
   // Special-cased before the generic predicate-compare dispatch
   // because the second operand is an i32 mask of FP classes, NOT a
-  // value to compare against. Lifts to `llvm.amdgcn.class.f<bits>`,
-  // which yields one i1 per active lane (the wave-mask plumbing is
-  // shared with the predicate-compare path below).
+  // value to compare against. Constant masks lift to the target-independent
+  // `llvm.is.fpclass`; dynamic masks retain `llvm.amdgcn.class` because the
+  // generic intrinsic requires an immediate mask. Both yield one i1 per active
+  // lane (the wave-mask plumbing is shared with the predicate-compare path
+  // below).
   Value *Cmp = nullptr;
   if (M->IsClass) {
     Type *FTy = nullptr;
@@ -97,9 +100,16 @@ Expected<HandlerResult> handleValuVcmp(RaiseContext &Ctx, const DecodedInst &Di,
           Op.applyMods(0, Ctx.B.CreateBitCast(Op.src64(0), FTy, "vclassf64"));
     }
     Value *Mask = Op.src(1);
-    Function *ClassFn = Intrinsic::getOrInsertDeclaration(
-        &Ctx.M, Intrinsic::amdgcn_class, {FTy});
-    Cmp = Ctx.B.CreateCall(ClassFn, {Src0, Mask}, "vclass");
+    if (const ConstantInt *MaskImm = dyn_cast<ConstantInt>(Mask)) {
+      unsigned ClassMask = static_cast<unsigned>(MaskImm->getZExtValue()) &
+                           static_cast<unsigned>(fcAllFlags);
+      Cmp = Ctx.B.createIsFPClass(Src0, ClassMask);
+      Cmp->setName("vclass");
+    } else {
+      Function *ClassFn = Intrinsic::getOrInsertDeclaration(
+          &Ctx.M, Intrinsic::amdgcn_class, {FTy});
+      Cmp = Ctx.B.CreateCall(ClassFn, {Src0, Mask}, "vclass");
+    }
     // fall through to the wave-mask write-back / EXEC-AND logic
     // below by reusing the same `cmp`-driven tail.
   }
@@ -257,7 +267,8 @@ Expected<HandlerResult> handleValuVcmp(RaiseContext &Ctx, const DecodedInst &Di,
         // branch shape) AND class compares
         // (v_cmp_class_f{16,32,64}). The `cmp` value is the same
         // per-lane i1 shape in both arms of this handler -- `fcmp`
-        // for the predicate-compare path, `llvm.amdgcn.class.f*`
+        // for the predicate-compare path, `llvm.is.fpclass` or
+        // `llvm.amdgcn.class.f*`
         // for the class path -- so caching is sound either way.
         // Gating only the predicate arm would leave class compares
         // under cross-widening miscompiling through the lossy

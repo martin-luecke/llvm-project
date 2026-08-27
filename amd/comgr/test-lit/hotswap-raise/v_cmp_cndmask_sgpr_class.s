@@ -6,7 +6,8 @@
 
 ; fused v_cmp_class+v_cndmask SGPR-condition rewrite.
 ; CHECK-LABEL: define amdgpu_kernel void @v_cmp_cndmask_sgpr_class_kernel(
-; CHECK: [[CMP:%vclass[0-9]*]] = call i1 @llvm.amdgcn.class.f32(float %{{[^,]+}}, i32 512)
+; CHECK: [[CMP:%vclass[0-9]*]] = call i1 @llvm.is.fpclass.f32(float %{{[^,]+}}, i32 512)
+; CHECK-NOT: @llvm.amdgcn.class
 ; CHECK: %vcmp_ballot = call i64 @llvm.amdgcn.ballot.i64(i1 [[CMP]])
 ; CHECK-NEXT: %vcmp_ballot_trunc = trunc i64 %vcmp_ballot to i32
 ; CHECK: %cndmask = select i1 [[CMP]], i32 1065353216, i32 -1082130432

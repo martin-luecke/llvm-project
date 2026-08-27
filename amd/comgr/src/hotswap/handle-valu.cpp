@@ -24,6 +24,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
@@ -3073,17 +3074,25 @@ Expected<HandlerResult> handleVALU(RaiseContext &Ctx, const DecodedInst &Di,
     return Hr;
   }
   // v_cvt_pkrtz_f16_f32: pack two f32 into <2 x f16> with round-to-zero.
-  // Maps directly onto the dedicated hardware intrinsic so the backend
-  // keeps the RTZ rounding mode (a plain FPTrunc uses round-to-nearest).
+  // llvm.fptrunc.round expresses the rounding mode without tying the raised IR
+  // to AMDGPU. The AMDGPU backend combines the packed pair back into the native
+  // instruction where available.
   if (Sop == CanonicalOp::V_CVT_PKRTZ_F16_F32) {
     Value *S0 = Op.srcF(0), *S1 = Op.srcF(1);
     if (S0->getType() != Ctx.F32Ty)
       S0 = Ctx.B.CreateBitCast(S0, Ctx.F32Ty);
     if (S1->getType() != Ctx.F32Ty)
       S1 = Ctx.B.CreateBitCast(S1, Ctx.F32Ty);
-    Function *Fn =
-        Intrinsic::getOrInsertDeclaration(&Ctx.M, Intrinsic::amdgcn_cvt_pkrtz);
-    Value *V2h = Ctx.B.CreateCall(Fn, {S0, S1}, "pkrtz");
+    Type *HalfTy = Type::getHalfTy(Ctx.C);
+    Function *Fn = Intrinsic::getOrInsertDeclaration(
+        &Ctx.M, Intrinsic::fptrunc_round, {HalfTy, Ctx.F32Ty});
+    Value *RoundTowardZero =
+        MetadataAsValue::get(Ctx.C, MDString::get(Ctx.C, "round.towardzero"));
+    Value *H0 = Ctx.B.CreateCall(Fn, {S0, RoundTowardZero}, "pkrtz_lo");
+    Value *H1 = Ctx.B.CreateCall(Fn, {S1, RoundTowardZero}, "pkrtz_hi");
+    Value *V2h = PoisonValue::get(FixedVectorType::get(HalfTy, 2));
+    V2h = Ctx.B.CreateInsertElement(V2h, H0, Ctx.B.getInt32(0), "pkrtz_lo_vec");
+    V2h = Ctx.B.CreateInsertElement(V2h, H1, Ctx.B.getInt32(1), "pkrtz");
     Ctx.writeReg32(Op.dst(), Ctx.B.CreateBitCast(V2h, Ctx.I32Ty));
     Hr.Handled = true;
     return Hr;

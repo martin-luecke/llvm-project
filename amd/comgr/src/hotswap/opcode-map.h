@@ -40,7 +40,9 @@ struct VCmpMeta {
   // NOT predicate compares -- src0 is a float operand and src1 is an
   // i32 mask of FP classes; the result lane bit is set iff src0
   // matches any class enabled in the mask. Lifts to
-  // `llvm.amdgcn.class.f<bits>(src0, src1)` rather than CreateFCmp;
+  // `llvm.is.fpclass` for immediate masks or
+  // `llvm.amdgcn.class.f<bits>(src0, src1)` for dynamic masks rather than
+  // CreateFCmp;
   // `pred` is unused on class entries. See V_CMP_CLASS in the
   // gfx9+ AMDGPU ISA manual and the dispatch in handle-valu-vcmp.cpp.
   bool IsClass = false;
