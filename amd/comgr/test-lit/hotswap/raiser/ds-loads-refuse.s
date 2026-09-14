@@ -46,19 +46,16 @@ ds_wide:
 	.p2align 6
 	.amdhsa_kernel ds_gds
 		.amdhsa_group_segment_fixed_size 256
-		.amdhsa_kernarg_size 0
 		.amdhsa_next_free_vgpr 2
 		.amdhsa_next_free_sgpr 0
 	.end_amdhsa_kernel
 	.amdhsa_kernel ds_m0
 		.amdhsa_group_segment_fixed_size 256
-		.amdhsa_kernarg_size 0
 		.amdhsa_next_free_vgpr 2
 		.amdhsa_next_free_sgpr 0
 	.end_amdhsa_kernel
 	.amdhsa_kernel ds_wide
 		.amdhsa_group_segment_fixed_size 256
-		.amdhsa_kernarg_size 0
 		.amdhsa_next_free_vgpr 2
 		.amdhsa_next_free_sgpr 0
 	.end_amdhsa_kernel

@@ -53,7 +53,7 @@ llvm::Error handleSMEM(RaiseContext &Ctx, const DecodedInst &Di,
 // are recognized and the rest are refused.
 llvm::Error handleFLAT(RaiseContext &Ctx, const DecodedInst &Di,
                        OperandResolver &Op);
-/// Raise direct VGPR LDS loads under the AMDHSA unaligned-access contract.
+/// Raise direct VGPR LDS loads using AMDHSA's unaligned access mode.
 /// Active accesses must lie wholly within the workgroup's LDS allocation.
 llvm::Error handleDS(RaiseContext &Context, const DecodedInst &Instruction);
 /// Translate a supported plain VOP1 instruction, or return a structured

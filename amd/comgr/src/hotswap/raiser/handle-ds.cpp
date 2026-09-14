@@ -16,6 +16,7 @@
 #include "hotswap/raiser/reg-file.h"
 
 #include "MCTargetDesc/AMDGPUMCTargetDesc.h"
+#include "Utils/AMDGPUBaseInfo.h"
 
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Type.h"

@@ -230,18 +230,14 @@ ds_two_addresses:
 	.end_amdhsa_kernel
 	.amdhsa_kernel ds_transposed
 		.amdhsa_group_segment_fixed_size 256
-		.amdhsa_kernarg_size 8
-		.amdhsa_user_sgpr_kernarg_segment_ptr 1
-		.amdhsa_next_free_vgpr 24
-		.amdhsa_next_free_sgpr 4
+		.amdhsa_next_free_vgpr 4
+		.amdhsa_next_free_sgpr 0
 		.amdhsa_wavefront_size32 1
 	.end_amdhsa_kernel
 	.amdhsa_kernel ds_two_addresses
 		.amdhsa_group_segment_fixed_size 256
-		.amdhsa_kernarg_size 8
-		.amdhsa_user_sgpr_kernarg_segment_ptr 1
-		.amdhsa_next_free_vgpr 24
-		.amdhsa_next_free_sgpr 4
+		.amdhsa_next_free_vgpr 4
+		.amdhsa_next_free_sgpr 0
 		.amdhsa_wavefront_size32 1
 	.end_amdhsa_kernel
 	.amdgpu_metadata
@@ -280,22 +276,22 @@ amdhsa.kernels:
   - .name: ds_transposed
     .symbol: ds_transposed.kd
     .group_segment_fixed_size: 256
-    .kernarg_segment_size: 8
+    .kernarg_segment_size: 0
     .kernarg_segment_align: 8
     .private_segment_fixed_size: 0
     .max_flat_workgroup_size: 64
-    .sgpr_count: 4
-    .vgpr_count: 24
+    .sgpr_count: 0
+    .vgpr_count: 4
     .wavefront_size: 32
   - .name: ds_two_addresses
     .symbol: ds_two_addresses.kd
     .group_segment_fixed_size: 256
-    .kernarg_segment_size: 8
+    .kernarg_segment_size: 0
     .kernarg_segment_align: 8
     .private_segment_fixed_size: 0
     .max_flat_workgroup_size: 64
-    .sgpr_count: 4
-    .vgpr_count: 24
+    .sgpr_count: 0
+    .vgpr_count: 4
     .wavefront_size: 32
 amdhsa.version: [1, 2]
 ...
