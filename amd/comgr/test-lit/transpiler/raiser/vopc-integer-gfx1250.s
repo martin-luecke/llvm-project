@@ -3,7 +3,7 @@
 ; RUN: %llvm-mc -triple=amdgpu12.50-amd-amdhsa -filetype=obj %s -o %t.o
 ; RUN: %ld.lld -shared %t.o -o %t.hsaco
 
-; RUN: %transpile_cli %t.hsaco --target-isa=gfx942 \
+; RUN: %transpile_cli %t.hsaco --target-isa=gfx1250 \
 ; RUN:   --emit-ir=vopc_predicates,vopc_exec_write,vop3_mask_writes,vop3_cmpx_predicates \
 ; RUN:   | %FileCheck %s
 
@@ -71,14 +71,11 @@ vopc_predicates:
 	.type	vopc_exec_write,@function
 ; CHECK-LABEL: define amdgpu_kernel void @vopc_exec_write(
 vopc_exec_write:
-; The comparison reaches EXEC as a wave-level ballot, taken at the width of the
-; wave the gfx1250 source believes it runs on and so narrowed from the gfx942
-; target ballot, and ANDed into the EXEC the raiser is tracking.
+; CMPX intersects its source-width ballot with EXEC.
 ; CHECK: [[CMP:%.+]] = icmp sgt i32 {{.+}}, {{.+}}
 ; CHECK: [[PRED:%.+]] = select i1 {{.+}}, i1 [[CMP]], i1 false
-; CHECK: [[BALLOT:%.+]] = call i64 @llvm.amdgcn.ballot.i64(i1 [[PRED]])
-; CHECK: [[MASK:%.+]] = trunc i64 [[BALLOT]] to i32
-; CHECK: [[NARROWED:%.+]] = and i32 -1, [[MASK]]
+; CHECK: [[BALLOT:%.+]] = call i32 @llvm.amdgcn.ballot.i32(i1 [[PRED]])
+; CHECK: [[NARROWED:%.+]] = and i32 -1, [[BALLOT]]
 	v_cmpx_gt_i32_e32 v0, v1
 ; The vector write that follows is predicated on the narrowed EXEC, which is
 ; what makes the store observable: the lane-active bit is recomputed from it
@@ -106,31 +103,29 @@ vop3_mask_writes:
 ; CHECK: [[LOWBIT:%.+]] = and i32 [[LANE]], 1
 ; CHECK: [[ACTIVE:%.+]] = icmp ne i32 [[LOWBIT]], 0
 ; CHECK: [[PRED:%.+]] = select i1 [[ACTIVE]], i1 [[SIGNED]], i1 false
-; CHECK: [[BALLOT:%.+]] = call i64 @llvm.amdgcn.ballot.i64(i1 [[PRED]])
-; CHECK: [[MASK:%.+]] = trunc i64 [[BALLOT]] to i32
+; CHECK: [[BALLOT:%.+]] = call i32 @llvm.amdgcn.ballot.i32(i1 [[PRED]])
 	v_cmp_gt_i32_e64 s4, v0, s4
-; CHECK: call { i32, i1 } @llvm.uadd.with.overflow.i32(i32 [[MASK]], i32 42)
+; CHECK: call { i32, i1 } @llvm.uadd.with.overflow.i32(i32 [[BALLOT]], i32 42)
 	s_add_u32 s6, s4, s5
 ; CHECK: select i1 [[PRED]], i32 2, i32 1
 	v_cndmask_b32_e64 v2, 1, 2, s4
 ; CHECK: [[UNSIGNED:%.+]] = icmp ugt i32 {{.+}}, -1
 ; CHECK: [[VCC:%.+]] = select i1 {{.+}}, i1 [[UNSIGNED]], i1 false
 	v_cmp_gt_u32_e64 vcc_lo, v0, 0xffffffff
-; CHECK: call i64 @llvm.amdgcn.ballot.i64(i1 [[VCC]])
+; CHECK: call i32 @llvm.amdgcn.ballot.i32(i1 [[VCC]])
 	s_mov_b32 s7, vcc_lo
 ; CHECK: call { i32, i1 } @llvm.uadd.with.overflow.i32(i32 7, i32 9)
 	s_add_u32 s6, vcc_hi, exec_hi
 ; CHECK: icmp eq i32
 	v_cmp_eq_u32_e32 vcc_lo, s6, v0
-; CHECK: call i64 @llvm.amdgcn.ballot.i64(i1 [[SAVED:%.+]])
+; CHECK: call i32 @llvm.amdgcn.ballot.i32(i1 [[SAVED:%.+]])
 	s_mov_b32 s8, vcc_lo
 ; CHECK: [[CMPX:%.+]] = icmp slt i32 -1, {{.+}}
 ; CHECK: [[PREDX:%.+]] = select i1 {{.+}}, i1 [[CMPX]], i1 false
-; CHECK: [[BALLOTX:%.+]] = call i64 @llvm.amdgcn.ballot.i64(i1 [[PREDX]])
-; CHECK: [[MASKX:%.+]] = trunc i64 [[BALLOTX]] to i32
-; CHECK: [[EXEC:%.+]] = and i32 5, [[MASKX]]
+; CHECK: [[BALLOTX:%.+]] = call i32 @llvm.amdgcn.ballot.i32(i1 [[PREDX]])
+; CHECK: [[EXEC:%.+]] = and i32 5, [[BALLOTX]]
 	v_cmpx_lt_i32_e64 -1, v0
-; CHECK: call i64 @llvm.amdgcn.ballot.i64(i1 [[SAVED]])
+; CHECK: call i32 @llvm.amdgcn.ballot.i32(i1 [[SAVED]])
 	s_mov_b32 s9, vcc_lo
 ; CHECK: [[NEWLANE:%.+]] = lshr i32 [[EXEC]], {{.+}}
 ; CHECK: [[NEWBIT:%.+]] = and i32 [[NEWLANE]], 1
@@ -141,7 +136,7 @@ vop3_mask_writes:
 	v_cmp_eq_i32_e64 null, v0, v1
 ; CHECK: icmp ne i32 305419896, {{.+}}
 	v_cmp_ne_u32_e64 null, 0x12345678, v0
-; CHECK: call i64 @llvm.amdgcn.ballot.i64(i1 [[SAVED]])
+; CHECK: call i32 @llvm.amdgcn.ballot.i32(i1 [[SAVED]])
 	s_mov_b32 s9, vcc_lo
 ; CHECK: ret void
 	s_endpgm

@@ -9,12 +9,10 @@
 ; RUN:   --emit-ir=quad_kernel,saveexec_kernel,wrexec_kernel,exec_dst_kernel \
 ; RUN:   | %FileCheck %s
 
-; The mask an opcode here combines with EXEC is as wide as the source wave, so
-; raising the same kernels for a wave64 target has to lift them the same way.
-; The checks below holding unchanged is what pins that.
-; RUN: %transpile_cli %t.hsaco --target-isa=gfx942 \
-; RUN:   --emit-ir=quad_kernel,saveexec_kernel,wrexec_kernel,exec_dst_kernel \
-; RUN:   | %FileCheck %s
+; RUN: not %transpile_cli %t.hsaco --target-isa=gfx942 \
+; RUN:   --emit-ir=saveexec_kernel 2>&1 | %FileCheck %s --check-prefix=PROJECTION
+; PROJECTION: unsupported-wave-projection:
+; PROJECTION-SAME: WaveNative cannot prove that EXEC preserves the kernel entry mask
 
 ; A 64-bit mask names lanes a 32-lane wave does not have, so combining one with
 ; EXEC is not lifted.

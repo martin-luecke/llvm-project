@@ -1,7 +1,7 @@
 ; REQUIRES: comgr-has-transpiler
 ; RUN: %llvm-mc -triple=amdgpu12.50-amd-amdhsa -filetype=obj %s -o %t.o
 ; RUN: %ld.lld -shared %t.o -o %t.hsaco
-; RUN: %transpile_cli %t.hsaco --target-isa=gfx950 \
+; RUN: %transpile_cli %t.hsaco --target-isa=gfx1250 \
 ; RUN:   --emit-ir=ds_stores,ds_store_exec | %FileCheck %s --check-prefixes=CHECK,EXEC
 
 ; A DS store narrows the source register to the encoded width and widens to a
@@ -71,11 +71,11 @@ ds_store_exec:
 ; An inactive lane must not reach memory, so the store sits inside the diamond
 ; while the value it writes is read outside.
 	s_mov_b32 exec_lo, 1
-; EXEC: [[FROZEN:%.+]] = freeze i32 {{.+}}
+; EXEC: [[ADDRESS:%.+]] = add i32
 ; EXEC: [[ACTIVE:%.+]] = icmp ne i32 {{.+}}, 0
 ; EXEC-NEXT: br i1 [[ACTIVE]], label %[[DO:.+]], label %[[SKIP:.+]]
 ; EXEC: [[DO]]:
-; EXEC-NEXT: [[PTR:%.+]] = inttoptr i32 [[FROZEN]] to ptr addrspace(3)
+; EXEC-NEXT: [[PTR:%.+]] = inttoptr i32 [[ADDRESS]] to ptr addrspace(3)
 ; EXEC-NEXT: store i32 {{.+}}, ptr addrspace(3) [[PTR]], align 1
 ; EXEC-NEXT: br label %[[SKIP]]
 	ds_store_b32 v0, v1
