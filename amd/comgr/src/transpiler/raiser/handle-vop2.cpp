@@ -78,7 +78,8 @@ static void writeResultAndVCC(RaiseContext &Ctx, ParsedReg Dst, Value *Result,
   Value *LaneActive = Ctx.registers().emitLaneActiveBit();
   Ctx.registers().writeReg32(Dst, Result);
   Ctx.registers().regFile().storeVCC(
-      Ctx.B, Ctx.B.CreateAnd(LaneActive, VCC, "vcc_active"));
+      Ctx.B,
+      Ctx.B.CreateSelect(LaneActive, VCC, Ctx.B.getFalse(), "vcc_active"));
 }
 
 // Raise a binary operation that writes carry or borrow to VCC.

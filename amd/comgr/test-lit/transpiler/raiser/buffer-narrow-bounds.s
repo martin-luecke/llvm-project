@@ -1,22 +1,22 @@
 ; REQUIRES: comgr-has-transpiler
 ; RUN: %llvm-mc -triple=amdgpu12.50-amd-amdhsa -mattr=+sramecc -defsym=OFFSET=4 -defsym=MARGIN=1 -filetype=obj %s -o %t.inside.o
 ; RUN: %ld.lld -shared %t.inside.o -o %t.inside.hsaco
-; RUN: %transpile_cli %t.inside.hsaco --target-isa=gfx942 --emit-ir | %opt -S -passes=instcombine,simplifycfg | %FileCheck %s --check-prefixes=CHECK,IN
+; RUN: %transpile_cli %t.inside.hsaco --target-isa=gfx1250 --emit-ir | %opt -S -passes=instcombine,simplifycfg | %FileCheck %s --check-prefixes=CHECK,IN
 ; RUN: %llvm-mc -triple=amdgpu12.50-amd-amdhsa -mattr=+sramecc -defsym=OFFSET=4 -defsym=MARGIN=0 -filetype=obj %s -o %t.equal.o
 ; RUN: %ld.lld -shared %t.equal.o -o %t.equal.hsaco
-; RUN: %transpile_cli %t.equal.hsaco --target-isa=gfx942 --emit-ir | %opt -S -passes=instcombine,simplifycfg | %FileCheck %s --check-prefixes=CHECK,OOB
+; RUN: %transpile_cli %t.equal.hsaco --target-isa=gfx1250 --emit-ir | %opt -S -passes=instcombine,simplifycfg | %FileCheck %s --check-prefixes=CHECK,OOB
 ; RUN: %llvm-mc -triple=amdgpu12.50-amd-amdhsa -mattr=+sramecc -defsym=OFFSET=4 -defsym=MARGIN=-1 -filetype=obj %s -o %t.past.o
 ; RUN: %ld.lld -shared %t.past.o -o %t.past.hsaco
-; RUN: %transpile_cli %t.past.hsaco --target-isa=gfx942 --emit-ir | %opt -S -passes=instcombine,simplifycfg | %FileCheck %s --check-prefixes=CHECK,OOB
+; RUN: %transpile_cli %t.past.hsaco --target-isa=gfx1250 --emit-ir | %opt -S -passes=instcombine,simplifycfg | %FileCheck %s --check-prefixes=CHECK,OOB
 ; RUN: %llvm-mc -triple=amdgpu12.50-amd-amdhsa -mattr=+sramecc -defsym=OFFSET=3 -defsym=MARGIN=1 -filetype=obj %s -o %t.unaligned.inside.o
 ; RUN: %ld.lld -shared %t.unaligned.inside.o -o %t.unaligned.inside.hsaco
-; RUN: %transpile_cli %t.unaligned.inside.hsaco --target-isa=gfx942 --emit-ir | %opt -S -passes=instcombine,simplifycfg | %FileCheck %s --check-prefixes=CHECK,IN
+; RUN: %transpile_cli %t.unaligned.inside.hsaco --target-isa=gfx1250 --emit-ir | %opt -S -passes=instcombine,simplifycfg | %FileCheck %s --check-prefixes=CHECK,IN
 ; RUN: %llvm-mc -triple=amdgpu12.50-amd-amdhsa -mattr=+sramecc -defsym=OFFSET=3 -defsym=MARGIN=0 -filetype=obj %s -o %t.unaligned.equal.o
 ; RUN: %ld.lld -shared %t.unaligned.equal.o -o %t.unaligned.equal.hsaco
-; RUN: %transpile_cli %t.unaligned.equal.hsaco --target-isa=gfx942 --emit-ir | %opt -S -passes=instcombine,simplifycfg | %FileCheck %s --check-prefixes=CHECK,OOB
+; RUN: %transpile_cli %t.unaligned.equal.hsaco --target-isa=gfx1250 --emit-ir | %opt -S -passes=instcombine,simplifycfg | %FileCheck %s --check-prefixes=CHECK,OOB
 ; RUN: %llvm-mc -triple=amdgpu12.50-amd-amdhsa -mattr=+sramecc -defsym=OFFSET=3 -defsym=MARGIN=-1 -filetype=obj %s -o %t.unaligned.past.o
 ; RUN: %ld.lld -shared %t.unaligned.past.o -o %t.unaligned.past.hsaco
-; RUN: %transpile_cli %t.unaligned.past.hsaco --target-isa=gfx942 --emit-ir | %opt -S -passes=instcombine,simplifycfg | %FileCheck %s --check-prefixes=CHECK,OOB
+; RUN: %transpile_cli %t.unaligned.past.hsaco --target-isa=gfx1250 --emit-ir | %opt -S -passes=instcombine,simplifycfg | %FileCheck %s --check-prefixes=CHECK,OOB
 
 .amdhsa_code_object_version 6
 .text

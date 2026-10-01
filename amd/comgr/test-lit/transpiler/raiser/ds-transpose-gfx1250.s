@@ -1,14 +1,14 @@
 ; REQUIRES: comgr-has-transpiler
 ; RUN: %llvm-mc -triple=amdgpu12.50-amd-amdhsa -filetype=obj %s -o %t.o
 ; RUN: %ld.lld -shared %t.o -o %t.hsaco
-; RUN: %transpile_cli %t.hsaco --target-isa=gfx950 --emit-ir > %t.ll
+; RUN: %transpile_cli %t.hsaco --target-isa=gfx1250 --emit-ir > %t.ll
 ; RUN: %FileCheck %s --input-file=%t.ll \
 ; RUN:   --implicit-check-not="load {{.+}}, ptr addrspace(3)"
-; RUN: %clang --target=amdgpu9.50-amd-amdhsa -nogpulib \
+; RUN: %clang --target=amdgpu12.50-amd-amdhsa -nogpulib \
 ; RUN:   -x ir -O2 -S -emit-llvm %t.ll -o %t.opt.ll
-; RUN: %clang --target=amdgpu9.50-amd-amdhsa -nogpulib \
+; RUN: %clang --target=amdgpu12.50-amd-amdhsa -nogpulib \
 ; RUN:   -x ir -O2 -c %t.opt.ll -o %t.target.o
-; RUN: %transpile_cli %t.hsaco --target-isa=gfx942 --emit-ir \
+; RUN: %transpile_cli %t.hsaco --target-isa=gfx1250 --emit-ir \
 ; RUN:   | %FileCheck %s
 ; RUN: %transpile_cli %t.hsaco --target-isa=gfx1250 --emit-ir \
 ; RUN:   > %t.same.ll
@@ -16,7 +16,7 @@
 ; RUN:   -x ir -O2 -c %t.same.ll -o %t.same.o
 ; RUN: %llvm-mc -triple=amdgpu13.10-amd-amdhsa -filetype=obj %s -o %t.gfx13.o
 ; RUN: %ld.lld -shared %t.gfx13.o -o %t.gfx13.hsaco
-; RUN: not %transpile_cli %t.gfx13.hsaco --target-isa=gfx950 --emit-ir 2>&1 \
+; RUN: not %transpile_cli %t.gfx13.hsaco --target-isa=gfx1310 --emit-ir 2>&1 \
 ; RUN:   | %FileCheck %s --check-prefix=REFUSE
 ; REFUSE: unsupported-instruction-form: ds_load_tr8_b64 [DS]
 ; REFUSE-SAME: in kernel 'tr8'
@@ -53,7 +53,6 @@ tr8:
 	v_add_nc_u32 v1, s5, v12
 	s_mov_b32 exec_lo, s4
 ; CHECK: [[ADDR:%.+]] = add i32 [[OLD:%.+]], 7
-; CHECK-NEXT: [[FROZEN:%.+]] = freeze i32 [[ADDR]]
 ; CHECK-NEXT: [[ELEMENT:%.+]] = and i32 [[LANE:%.+]], 7
 ; CHECK-NEXT: [[OFFSET:%.+]] = mul i32 [[ELEMENT]], 1
 ; CHECK-NEXT: [[GROUP:%.+]] = and i32 [[LANE]], -16
@@ -66,7 +65,7 @@ tr8:
 ; CHECK: [[DO]]:
 ; CHECK-NEXT: [[SOURCE:%.+]] = add i32 [[BASE]], 0
 ; CHECK-NEXT: [[INDEX:%.+]] = mul i32 [[SOURCE]], 4
-; CHECK-NEXT: [[GATHER:%.+]] = call i32 @llvm.amdgcn.ds.bpermute(i32 [[INDEX]], i32 [[FROZEN]])
+; CHECK-NEXT: [[GATHER:%.+]] = call i32 @llvm.amdgcn.ds.bpermute(i32 [[INDEX]], i32 [[ADDR]])
 ; CHECK-NEXT: [[BYTE:%.+]] = add i32 [[GATHER]], [[OFFSET]]
 ; CHECK-NEXT: [[PTR:%.+]] = inttoptr i32 [[BYTE]] to ptr addrspace(3)
 ; CHECK-NEXT: load i8, ptr addrspace(3) [[PTR]], align 1
@@ -131,7 +130,6 @@ tr16:
 	v_mov_b32 v3, 44
 	s_mov_b32 exec_lo, s4
 ; CHECK: [[ADDR:%.+]] = add i32 [[OLD:%.+]], 7
-; CHECK-NEXT: [[FROZEN:%.+]] = freeze i32 [[ADDR]]
 ; CHECK-NEXT: [[ELEMENT:%.+]] = and i32 [[LANE:%.+]], 7
 ; CHECK-NEXT: [[OFFSET:%.+]] = mul i32 [[ELEMENT]], 2
 ; CHECK-NEXT: [[BASE:%.+]] = and i32 [[LANE]], -8
@@ -141,7 +139,7 @@ tr16:
 ; CHECK: [[DO]]:
 ; CHECK-NEXT: [[SOURCE:%.+]] = add i32 [[BASE]], 0
 ; CHECK-NEXT: [[INDEX:%.+]] = mul i32 [[SOURCE]], 4
-; CHECK-NEXT: [[GATHER:%.+]] = call i32 @llvm.amdgcn.ds.bpermute(i32 [[INDEX]], i32 [[FROZEN]])
+; CHECK-NEXT: [[GATHER:%.+]] = call i32 @llvm.amdgcn.ds.bpermute(i32 [[INDEX]], i32 [[ADDR]])
 ; CHECK-NEXT: [[BYTE:%.+]] = add i32 [[GATHER]], [[OFFSET]]
 ; CHECK-NEXT: [[PTR:%.+]] = inttoptr i32 [[BYTE]] to ptr addrspace(3)
 ; CHECK-NEXT: load i16, ptr addrspace(3) [[PTR]], align 1

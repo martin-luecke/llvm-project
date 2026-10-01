@@ -15,16 +15,23 @@
 
 #include "MCTargetDesc/AMDGPUMCTargetDesc.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/Analysis/CycleAnalysis.h"
+#include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/Analysis/UniformityAnalysis.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/PassInstrumentation.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/Support/AMDHSAKernelDescriptor.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownBits.h"
+#include "llvm/Target/TargetMachine.h"
 
 #include <cassert>
 #include <utility>
@@ -85,6 +92,56 @@ Error RaiseContext::validateRequiredBits() const {
       const DecodedInst &Di = *Requirement.Instruction;
       return RaiseFailure::atInstruction(
           RaiseFailureReason::UnsupportedInstructionForm,
+          strippedMnemonic(MC, Di.Inst), Di.Offset,
+          formatName(Di.TargetSpecificFlags), Requirement.Detail);
+    }
+  }
+  return Error::success();
+}
+
+void RaiseContext::requireWaveUniform(Value *Operand, const DecodedInst &Di,
+                                      StringRef Detail) {
+  if (Projection.providesFullWaveExecInvariant())
+    UniformityRequirements.push_back({Operand, &Di, Detail});
+}
+
+void RaiseContext::requireEntryExec(const DecodedInst &Di) {
+  if (Projection.providesFullWaveExecInvariant())
+    EntryExecRequirements.emplace_back(Registers.readExec(), &Di);
+}
+
+Error RaiseContext::validateWaveNativeRequirements(TargetMachine &TM,
+                                                   Value *EntryExec) const {
+  for (const auto &[Exec, Di] : EntryExecRequirements)
+    if (Exec != EntryExec)
+      return RaiseFailure::atInstruction(
+          RaiseFailureReason::UnsupportedWaveProjection,
+          strippedMnemonic(MC, Di->Inst), Di->Offset,
+          formatName(Di->TargetSpecificFlags),
+          "WaveNative requires the entry EXEC mask at WMMA instructions");
+
+  Function &F = *B.GetInsertBlock()->getParent();
+  FunctionAnalysisManager FAM;
+  FAM.registerPass([&] { return PassInstrumentationAnalysis(); });
+  FAM.registerPass([&] { return DominatorTreeAnalysis(); });
+  FAM.registerPass([&] { return CycleAnalysis(); });
+  FAM.registerPass([&] {
+    return TargetIRAnalysis(
+        [&](const Function &F) { return TM.getTargetTransformInfo(F); });
+  });
+  FAM.registerPass([&] { return UniformityInfoAnalysis(); });
+  // Register promotion exposes scalar data flow across source blocks.
+  const UniformityInfo &UI = FAM.getResult<UniformityInfoAnalysis>(F);
+  for (const RequiredUniformValue &Requirement : UniformityRequirements) {
+    assert(Requirement.Operand &&
+           "required value was deleted before validation");
+    Value *Operand = Requirement.Operand;
+    if (UI.isDivergentAtDef(Operand) ||
+        any_of(Operand->uses(),
+               [&](const Use &U) { return UI.isDivergentAtUse(U); })) {
+      const DecodedInst &Di = *Requirement.Instruction;
+      return RaiseFailure::atInstruction(
+          RaiseFailureReason::UnsupportedWaveProjection,
           strippedMnemonic(MC, Di.Inst), Di.Offset,
           formatName(Di.TargetSpecificFlags), Requirement.Detail);
     }

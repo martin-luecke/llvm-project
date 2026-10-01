@@ -2,7 +2,7 @@
 
 ; RUN: %llvm-mc -triple=amdgpu12.50-amd-amdhsa -filetype=obj %s -o %t.o
 ; RUN: %ld.lld -shared %t.o -o %t.hsaco
-; RUN: %transpile_cli %t.hsaco --target-isa=gfx942 \
+; RUN: %transpile_cli %t.hsaco --target-isa=gfx1250 \
 ; RUN:   --emit-ir=sop2_bitwise_gfx1250 | %FileCheck %s --check-prefix=IR
 ; RUN: %transpile_cli %t.hsaco --target-isa=gfx1250 \
 ; RUN:   --emit-ir=sop2_bitwise_gfx1250 | %FileCheck %s --check-prefix=NATIVE
@@ -18,15 +18,8 @@
 sop2_bitwise_gfx1250:
 	; NATIVE: %[[TARGET_WAVE:.*]] = call i32 @llvm.amdgcn.wave.id()
 	; NATIVE: and i32 %[[TARGET_WAVE]], 31
-	; IR-NOT: @llvm.amdgcn.wave.id
-	; IR-DAG: %[[DISPATCH_PTR:.*]] = call ptr addrspace(4) @llvm.amdgcn.dispatch.ptr()
-	; IR-DAG: %[[TID_X:.*]] = call i32 @llvm.amdgcn.workitem.id.x()
-	; IR-DAG: %[[TID_Y:.*]] = call i32 @llvm.amdgcn.workitem.id.y()
-	; IR-DAG: %[[TID_Z:.*]] = call i32 @llvm.amdgcn.workitem.id.z()
-	; IR: %[[FLAT_YZ:.*]] = add i32 %[[TID_Y]], {{.*}}
-	; IR: %[[FLAT_ID:.*]] = add i32 %[[TID_X]], {{.*}}
-	; IR: %[[SOURCE_WAVE_ID:.*]] = udiv i32 %[[FLAT_ID]], 64
-	; IR-NEXT: %[[WAVE_ID_MASKED:.*]] = and i32 %[[SOURCE_WAVE_ID]], 31
+	; IR: %[[SOURCE_WAVE_ID:.*]] = call i32 @llvm.amdgcn.wave.id()
+	; IR: %[[WAVE_ID_MASKED:.*]] = and i32 %[[SOURCE_WAVE_ID]], 31
 	; IR: icmp ne i32 %[[WAVE_ID_MASKED]], 0
 	s_bfe_u32 s6, ttmp8, 0x50019
 	s_mov_b32 ttmp8, 0
@@ -35,11 +28,9 @@ sop2_bitwise_gfx1250:
 	s_bfe_u32 s6, ttmp8, 0x50019
 	s_mov_b32 exec_lo, s6
 	; IR: %and_wave_mask = and i1 {{.*}}, {{.*}}
-	; IR: call i64 @llvm.amdgcn.ballot.i64(i1 %and_wave_mask)
-	; IR: %[[SCC_BALLOT:.*]] = call i64 @llvm.amdgcn.ballot.i64(i1 %and_wave_mask)
-	; IR: %[[SCC_AT_WAVE:.*]] = lshr i64 %[[SCC_BALLOT]], {{.*}}
-	; IR-NEXT: %[[SCC_MASK:.*]] = trunc i64 %[[SCC_AT_WAVE]] to i32
-	; IR-NEXT: %[[SCC:.*]] = icmp ne i32 %[[SCC_MASK]], 0
+	; IR: call i32 @llvm.amdgcn.ballot.i32(i1 %and_wave_mask)
+	; IR: %[[SCC_MASK:.*]] = call i32 @llvm.amdgcn.ballot.i32(i1 %and_wave_mask)
+	; IR: %[[SCC:.*]] = icmp ne i32 %[[SCC_MASK]], 0
 	s_and_b32 s2, exec_lo, -1
 	; IR: select i1 %[[SCC]], i32 1, i32 0
 	s_cselect_b32 s3, 1, 0

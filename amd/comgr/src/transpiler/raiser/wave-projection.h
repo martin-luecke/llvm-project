@@ -315,28 +315,11 @@ public:
                                     unsigned NumDims) const override;
 };
 
-// ============================================================================
-// WaveNativeProjection -- widening (wave32 -> wave64) projection
-// that preserves the full target-hardware EXEC mask.
-//
-// The EXEC alloca is sized to the target hardware wave-mask width, and each
-// target lane is treated as an independent source-thread equivalent, so a
-// data-dependent `v_cmpx` that differs on target lanes 0..31 vs 32..63 keeps
-// both halves distinct through the ballot/AND/store round trip.
-//
-// Source-width EXEC writes (`s_mov_b32 exec_lo, v`) are replicated into both
-// halves of the widened EXEC; narrowing reads take the low half. This is
-// lossless as long as the source never observes the upper half of EXEC
-// independently, which wave32 source ISAs cannot express.
-//
-// Correct only for wave32 -> wave64 widening; the constructor asserts on
-// other directions.
+/// Pack two wave32 source waves into one wave64 target wave. Each lane holds
+/// its source wave's i32 EXEC and scalar masks. Requires uniform scalar control
+/// flow and EXEC updates that do not activate lanes absent at kernel entry.
 class WaveNativeProjection final : public WaveProjection {
 public:
-  // The constructor sets the projection configuration: target-width EXEC
-  // storage, full-wave-EXEC invariant (its `emitInitialExec` forces HW
-  // EXEC=-1), broadcast-on-narrow-EXEC-write, preserved mbcnt-derived EXEC,
-  // and two source waves per target wave (lanes 0..31 and 32..63).
   WaveNativeProjection(const llvm::MCSubtargetInfo &Source,
                        const llvm::MCSubtargetInfo &Target, llvm::Type *I32Ty,
                        llvm::Type *I64Ty);
@@ -351,6 +334,9 @@ public:
                   const llvm::Twine &Name = "ballot") const override;
   llvm::Value *extractLaneBitFromWaveMask(llvm::IRBuilder<> &B,
                                           llvm::Value *V) const override;
+
+private:
+  mutable llvm::Value *EntryActive = nullptr;
 };
 
 // ============================================================================

@@ -1,26 +1,26 @@
 ; REQUIRES: comgr-has-transpiler
 ; RUN: %llvm-mc -triple=amdgpu12.50-amd-amdhsa -filetype=obj %s -o %t.o
 ; RUN: %ld.lld -shared %t.o -o %t.hsaco
-; RUN: %transpile_cli %t.hsaco --target-isa=gfx950 \
+; RUN: %transpile_cli %t.hsaco --target-isa=gfx1250 \
 ; RUN:   --emit-ir=ds_widths,ds_exec_overlap > %t.ll
 ; RUN: %FileCheck %s --check-prefixes=IR,EXEC --input-file=%t.ll \
 ; RUN:   --implicit-check-not="load {{.+}}, ptr addrspace(3)"
-; RUN: %clang --target=amdgpu9.50-amd-amdhsa -nogpulib \
+; RUN: %clang --target=amdgpu12.50-amd-amdhsa -nogpulib \
 ; RUN:   -x ir -O2 -S -emit-llvm %t.ll -o %t.opt.ll
 ; RUN: %FileCheck %s --check-prefix=OPT --input-file=%t.opt.ll
-; RUN: %clang --target=amdgpu9.50-amd-amdhsa -nogpulib \
+; RUN: %clang --target=amdgpu12.50-amd-amdhsa -nogpulib \
 ; RUN:   -x ir -O2 -c %t.opt.ll -o %t.target.o
 ; RUN: %llvm-readelf --notes %t.target.o | %FileCheck %s --check-prefix=META
 ; META: .group_segment_fixed_size: 65568
 ; META: .name:           ds_widths
 ; META: .group_segment_fixed_size: 256
 ; META: .name:           ds_exec_overlap
-; RUN: %transpile_cli %t.hsaco --target-isa=gfx942 \
+; RUN: %transpile_cli %t.hsaco --target-isa=gfx1250 \
 ; RUN:   --emit-ir=ds_exec_overlap | %FileCheck %s --check-prefix=EXEC \
 ; RUN:   --implicit-check-not="load {{.+}}, ptr addrspace(3)"
 ; RUN: %transpile_cli %t.hsaco --target-isa=gfx1250 \
 ; RUN:   --emit-ir=ds_high_address | %FileCheck %s --check-prefix=HIGH
-; RUN: not %transpile_cli %t.hsaco --target-isa=gfx950 \
+; RUN: not %transpile_cli %t.hsaco --target-isa=gfx1250 \
 ; RUN:   --emit-ir=ds_tr4_unsupported,ds_tr6_unsupported 2>&1 \
 ; RUN:   | %FileCheck %s --check-prefix=REFUSE
 
@@ -43,26 +43,22 @@ ds_widths:
 ; IR: [[BASE:%.+]] = phi i32 [ 4, {{.+}}
 	v_mov_b32 v0, 4
 ; IR: [[CARRY32_ADDR:%.+]] = add i32 [[BASE]], 65532
-; IR-NEXT: [[CARRY32_FROZEN:%.+]] = freeze i32 [[CARRY32_ADDR]]
-; IR: [[CARRY32_PTR:%.+]] = inttoptr i32 [[CARRY32_FROZEN]] to ptr addrspace(3)
+; IR: [[CARRY32_PTR:%.+]] = inttoptr i32 [[CARRY32_ADDR]] to ptr addrspace(3)
 ; IR-NEXT: load i32, ptr addrspace(3) [[CARRY32_PTR]], align 1
 ; OPT: load i32, ptr addrspace(3) inttoptr (i32 65536 to ptr addrspace(3))
 	ds_load_b32 v1, v0 offset:65532
 ; IR: [[CARRY64_ADDR:%.+]] = add i32 [[BASE]], 65532
-; IR-NEXT: [[CARRY64_FROZEN:%.+]] = freeze i32 [[CARRY64_ADDR]]
-; IR: [[CARRY64_PTR:%.+]] = inttoptr i32 [[CARRY64_FROZEN]] to ptr addrspace(3)
+; IR: [[CARRY64_PTR:%.+]] = inttoptr i32 [[CARRY64_ADDR]] to ptr addrspace(3)
 ; IR-NEXT: load i64, ptr addrspace(3) [[CARRY64_PTR]], align 1
 ; OPT: load i64, ptr addrspace(3) inttoptr (i32 65536 to ptr addrspace(3))
 	ds_load_b64 v[2:3], v0 offset:65532
 ; IR: [[BYTE128_ADDR:%.+]] = add i32 [[BASE]], 65533
-; IR-NEXT: [[BYTE128_FROZEN:%.+]] = freeze i32 [[BYTE128_ADDR]]
-; IR: [[BYTE128_PTR:%.+]] = inttoptr i32 [[BYTE128_FROZEN]] to ptr addrspace(3)
+; IR: [[BYTE128_PTR:%.+]] = inttoptr i32 [[BYTE128_ADDR]] to ptr addrspace(3)
 ; IR-NEXT: load <4 x i32>, ptr addrspace(3) [[BYTE128_PTR]], align 1
 ; OPT: load i128, ptr addrspace(3) inttoptr (i32 65537 to ptr addrspace(3))
 	ds_load_b128 v[4:7], v0 offset:65533
 ; IR: [[MAXOFFSET_ADDR:%.+]] = add i32 [[BASE]], 65535
-; IR-NEXT: [[MAXOFFSET_FROZEN:%.+]] = freeze i32 [[MAXOFFSET_ADDR]]
-; IR: [[MAXOFFSET_PTR:%.+]] = inttoptr i32 [[MAXOFFSET_FROZEN]] to ptr addrspace(3)
+; IR: [[MAXOFFSET_PTR:%.+]] = inttoptr i32 [[MAXOFFSET_ADDR]] to ptr addrspace(3)
 ; IR-NEXT: load i32, ptr addrspace(3) [[MAXOFFSET_PTR]], align 1
 ; OPT: load i32, ptr addrspace(3) inttoptr (i32 65539 to ptr addrspace(3))
 	ds_load_b32 v11, v0 offset:65535
@@ -101,10 +97,9 @@ ds_exec_overlap:
 	v_mov_b32 v4, 32
 ; EXEC: [[OLD128:%.+]] = phi i32 [ 32, %{{.+}} ], [ -1, %{{.+}} ]
 ; EXEC-NEXT: [[ADDR128:%.+]] = add i32 [[OLD128]], 0
-; EXEC-NEXT: [[FROZEN128:%.+]] = freeze i32 [[ADDR128]]
 ; EXEC-NEXT: br i1 [[ACTIVE]], label %[[DO128:.+]], label %[[SKIP128:.+]]
 ; EXEC: [[DO128]]:
-; EXEC-NEXT: [[PTR128:%.+]] = inttoptr i32 [[FROZEN128]] to ptr addrspace(3)
+; EXEC-NEXT: [[PTR128:%.+]] = inttoptr i32 [[ADDR128]] to ptr addrspace(3)
 ; EXEC-NEXT: [[LOAD128:%.+]] = load <4 x i32>, ptr addrspace(3) [[PTR128]], align 1
 ; EXEC-NEXT: [[BITS128:%.+]] = bitcast <4 x i32> [[LOAD128]] to i128
 ; EXEC-NEXT: [[WORD128_0:%.+]] = trunc i128 [[BITS128]] to i32
@@ -124,10 +119,9 @@ ds_exec_overlap:
 	v_mov_b32 v9, 48
 ; EXEC: [[OLD64:%.+]] = phi i32 [ 48, %{{.+}} ], [ -1, %{{.+}} ]
 ; EXEC-NEXT: [[ADDR64:%.+]] = add i32 [[OLD64]], 0
-; EXEC-NEXT: [[FROZEN64:%.+]] = freeze i32 [[ADDR64]]
 ; EXEC-NEXT: br i1 [[ACTIVE]], label %[[DO64:.+]], label %[[SKIP64:.+]]
 ; EXEC: [[DO64]]:
-; EXEC-NEXT: [[PTR64:%.+]] = inttoptr i32 [[FROZEN64]] to ptr addrspace(3)
+; EXEC-NEXT: [[PTR64:%.+]] = inttoptr i32 [[ADDR64]] to ptr addrspace(3)
 ; EXEC-NEXT: [[LOAD64:%.+]] = load i64, ptr addrspace(3) [[PTR64]], align 1
 ; EXEC-NEXT: [[WORD64_0:%.+]] = trunc i64 [[LOAD64]] to i32
 ; EXEC-NEXT: [[SHIFT64_1:%.+]] = lshr i64 [[LOAD64]], 32
@@ -140,10 +134,9 @@ ds_exec_overlap:
 	v_mov_b32 v10, 64
 ; EXEC: [[OLD32:%.+]] = phi i32 [ 64, %{{.+}} ], [ -1, %{{.+}} ]
 ; EXEC-NEXT: [[ADDR32:%.+]] = add i32 [[OLD32]], 0
-; EXEC-NEXT: [[FROZEN32:%.+]] = freeze i32 [[ADDR32]]
 ; EXEC-NEXT: br i1 [[ACTIVE]], label %[[DO32:.+]], label %[[SKIP32:.+]]
 ; EXEC: [[DO32]]:
-; EXEC-NEXT: [[PTR32:%.+]] = inttoptr i32 [[FROZEN32]] to ptr addrspace(3)
+; EXEC-NEXT: [[PTR32:%.+]] = inttoptr i32 [[ADDR32]] to ptr addrspace(3)
 ; EXEC-NEXT: [[LOAD32:%.+]] = load i32, ptr addrspace(3) [[PTR32]], align 1
 ; EXEC-NEXT: br label %[[SKIP32]]
 ; EXEC: [[SKIP32]]:

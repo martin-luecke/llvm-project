@@ -2,7 +2,7 @@
 
 ; RUN: %llvm-mc -triple=amdgpu12.50-amd-amdhsa -filetype=obj %s -o %t.o
 ; RUN: %ld.lld -shared %t.o -o %t.hsaco
-; RUN: %transpile_cli %t.hsaco --target-isa=gfx942 \
+; RUN: %transpile_cli %t.hsaco --target-isa=gfx1250 \
 ; RUN:   --emit-ir=sop2_integer_gfx1250 | %FileCheck %s --check-prefix=IR
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"

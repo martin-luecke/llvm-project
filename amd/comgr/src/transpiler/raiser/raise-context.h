@@ -24,6 +24,11 @@
 
 #include <cstdint>
 #include <optional>
+#include <utility>
+
+namespace llvm {
+class TargetMachine;
+} // namespace llvm
 
 namespace COMGR::transpiler {
 
@@ -79,6 +84,16 @@ public:
                        llvm::StringRef Detail);
   /// Refuse any bit requirement not established in the promoted register SSA.
   llvm::Error validateRequiredBits() const;
+
+  /// Require a target-wave-uniform value when packing source waves.
+  /// Di and Detail must outlive validateWaveNativeRequirements().
+  void requireWaveUniform(llvm::Value *Operand, const DecodedInst &Di,
+                          llvm::StringRef Detail);
+  /// Require the entry EXEC mask at a source-wave collective.
+  void requireEntryExec(const DecodedInst &Di);
+  /// Validate recorded requirements after register promotion.
+  llvm::Error validateWaveNativeRequirements(llvm::TargetMachine &TM,
+                                             llvm::Value *EntryExec) const;
 
   // Source text section, and the address the source code object loads it at.
   // PC-relative literals are materialized by reading out of these.
@@ -148,6 +163,14 @@ private:
     llvm::StringRef Detail;
   };
   llvm::SmallVector<RequiredBits> BitRequirements;
+  struct RequiredUniformValue {
+    llvm::WeakTrackingVH Operand;
+    const DecodedInst *Instruction;
+    llvm::StringRef Detail;
+  };
+  llvm::SmallVector<RequiredUniformValue> UniformityRequirements;
+  llvm::SmallVector<std::pair<llvm::WeakTrackingVH, const DecodedInst *>>
+      EntryExecRequirements;
   // Block raised from each source instruction offset that starts one.
   llvm::DenseMap<uint64_t, llvm::BasicBlock *> OffsetToBb;
 
