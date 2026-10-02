@@ -18,13 +18,14 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Support/Error.h"
 
 #include <cstdint>
 #include <optional>
-#include <utility>
+#include <string>
 
 namespace llvm {
 class TargetMachine;
@@ -35,6 +36,7 @@ namespace COMGR::transpiler {
 struct DecodedInst;
 
 // Shared state threaded through every format handler.
+// Instructions used by deferred checks must remain alive until validation.
 class RaiseContext {
 public:
   // Build the context for the source kernel described by Meta. B must be
@@ -79,21 +81,25 @@ public:
   std::optional<bool> sourceSramEcc() const { return SourceSramEcc; }
 
   /// Require masked bits to be provably zero after register promotion.
-  /// Di and Detail must outlive validateRequiredBits().
   void requireZeroBits(llvm::Value *Value, uint32_t Mask, const DecodedInst &Di,
-                       llvm::StringRef Detail);
+                       const llvm::Twine &Detail);
   /// Refuse any bit requirement not established in the promoted register SSA.
   llvm::Error validateRequiredBits() const;
 
-  /// Require a target-wave-uniform value when packing source waves.
-  /// Di and Detail must outlive validateWaveNativeRequirements().
+  /// Require a target-wave-uniform operand for WaveNative. Same-wave scalar
+  /// operands are already uniform.
   void requireWaveUniform(llvm::Value *Operand, const DecodedInst &Di,
-                          llvm::StringRef Detail);
-  /// Require the entry EXEC mask at a source-wave collective.
-  void requireEntryExec(const DecodedInst &Di);
-  /// Validate recorded requirements after register promotion.
-  llvm::Error validateWaveNativeRequirements(llvm::TargetMachine &TM,
-                                             llvm::Value *EntryExec) const;
+                          const llvm::Twine &Detail);
+  /// For WaveNative, require the source EXEC captured at kernel entry, which
+  /// may describe a partial wave.
+  void requireKernelEntryExec(const DecodedInst &Di);
+  /// Refuse a hardware effect executed once per wave when packing source waves.
+  llvm::Error requirePerWaveExecution(const DecodedInst &Di) const;
+  /// Validate requirements after register promotion. EXEC must be the same SSA
+  /// value as KernelEntryExec; uniformity must hold at definitions and uses.
+  llvm::Error
+  validateWaveNativeRequirements(llvm::TargetMachine &TM,
+                                 llvm::Value *KernelEntryExec) const;
 
   // Source text section, and the address the source code object loads it at.
   // PC-relative literals are materialized by reading out of these.
@@ -160,17 +166,20 @@ private:
     llvm::WeakTrackingVH Value;
     uint32_t Mask;
     const DecodedInst *Instruction;
-    llvm::StringRef Detail;
+    std::string Detail;
   };
   llvm::SmallVector<RequiredBits> BitRequirements;
-  struct RequiredUniformValue {
+  /// A deferred check with its source diagnostic. The operand follows SSA
+  /// replacements during register promotion.
+  struct RequiredValue {
     llvm::WeakTrackingVH Operand;
     const DecodedInst *Instruction;
-    llvm::StringRef Detail;
+    std::string Detail;
   };
-  llvm::SmallVector<RequiredUniformValue> UniformityRequirements;
-  llvm::SmallVector<std::pair<llvm::WeakTrackingVH, const DecodedInst *>>
-      EntryExecRequirements;
+  /// Values that must agree across the entire target wave.
+  llvm::SmallVector<RequiredValue> UniformityRequirements;
+  /// Source EXEC values that must equal the source mask at kernel entry.
+  llvm::SmallVector<RequiredValue> EntryExecRequirements;
   // Block raised from each source instruction offset that starts one.
   llvm::DenseMap<uint64_t, llvm::BasicBlock *> OffsetToBb;
 

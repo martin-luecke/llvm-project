@@ -1,22 +1,22 @@
 ; REQUIRES: comgr-has-transpiler
 ; RUN: %llvm-mc -triple=amdgpu12.50-amd-amdhsa -mattr=+sramecc -defsym=OFFSET=4 -defsym=MARGIN=1 -filetype=obj %s -o %t.inside.o
 ; RUN: %ld.lld -shared %t.inside.o -o %t.inside.hsaco
-; RUN: %transpile_cli %t.inside.hsaco --target-isa=gfx1250 --emit-ir | %opt -S -passes=instcombine,simplifycfg | %FileCheck %s --check-prefixes=CHECK,IN
+; RUN: %transpile_cli %t.inside.hsaco --target-isa=gfx942 --emit-ir | %opt -S -passes=instcombine,simplifycfg | %FileCheck %s --check-prefixes=CHECK,IN
 ; RUN: %llvm-mc -triple=amdgpu12.50-amd-amdhsa -mattr=+sramecc -defsym=OFFSET=4 -defsym=MARGIN=0 -filetype=obj %s -o %t.equal.o
 ; RUN: %ld.lld -shared %t.equal.o -o %t.equal.hsaco
-; RUN: %transpile_cli %t.equal.hsaco --target-isa=gfx1250 --emit-ir | %opt -S -passes=instcombine,simplifycfg | %FileCheck %s --check-prefixes=CHECK,OOB
+; RUN: %transpile_cli %t.equal.hsaco --target-isa=gfx942 --emit-ir | %opt -S -passes=instcombine,simplifycfg | %FileCheck %s --check-prefixes=CHECK,OOB
 ; RUN: %llvm-mc -triple=amdgpu12.50-amd-amdhsa -mattr=+sramecc -defsym=OFFSET=4 -defsym=MARGIN=-1 -filetype=obj %s -o %t.past.o
 ; RUN: %ld.lld -shared %t.past.o -o %t.past.hsaco
-; RUN: %transpile_cli %t.past.hsaco --target-isa=gfx1250 --emit-ir | %opt -S -passes=instcombine,simplifycfg | %FileCheck %s --check-prefixes=CHECK,OOB
+; RUN: %transpile_cli %t.past.hsaco --target-isa=gfx942 --emit-ir | %opt -S -passes=instcombine,simplifycfg | %FileCheck %s --check-prefixes=CHECK,OOB
 ; RUN: %llvm-mc -triple=amdgpu12.50-amd-amdhsa -mattr=+sramecc -defsym=OFFSET=3 -defsym=MARGIN=1 -filetype=obj %s -o %t.unaligned.inside.o
 ; RUN: %ld.lld -shared %t.unaligned.inside.o -o %t.unaligned.inside.hsaco
-; RUN: %transpile_cli %t.unaligned.inside.hsaco --target-isa=gfx1250 --emit-ir | %opt -S -passes=instcombine,simplifycfg | %FileCheck %s --check-prefixes=CHECK,IN
+; RUN: %transpile_cli %t.unaligned.inside.hsaco --target-isa=gfx942 --emit-ir | %opt -S -passes=instcombine,simplifycfg | %FileCheck %s --check-prefixes=CHECK,IN
 ; RUN: %llvm-mc -triple=amdgpu12.50-amd-amdhsa -mattr=+sramecc -defsym=OFFSET=3 -defsym=MARGIN=0 -filetype=obj %s -o %t.unaligned.equal.o
 ; RUN: %ld.lld -shared %t.unaligned.equal.o -o %t.unaligned.equal.hsaco
-; RUN: %transpile_cli %t.unaligned.equal.hsaco --target-isa=gfx1250 --emit-ir | %opt -S -passes=instcombine,simplifycfg | %FileCheck %s --check-prefixes=CHECK,OOB
+; RUN: %transpile_cli %t.unaligned.equal.hsaco --target-isa=gfx942 --emit-ir | %opt -S -passes=instcombine,simplifycfg | %FileCheck %s --check-prefixes=CHECK,OOB
 ; RUN: %llvm-mc -triple=amdgpu12.50-amd-amdhsa -mattr=+sramecc -defsym=OFFSET=3 -defsym=MARGIN=-1 -filetype=obj %s -o %t.unaligned.past.o
 ; RUN: %ld.lld -shared %t.unaligned.past.o -o %t.unaligned.past.hsaco
-; RUN: %transpile_cli %t.unaligned.past.hsaco --target-isa=gfx1250 --emit-ir | %opt -S -passes=instcombine,simplifycfg | %FileCheck %s --check-prefixes=CHECK,OOB
+; RUN: %transpile_cli %t.unaligned.past.hsaco --target-isa=gfx942 --emit-ir | %opt -S -passes=instcombine,simplifycfg | %FileCheck %s --check-prefixes=CHECK,OOB
 
 .amdhsa_code_object_version 6
 .text
@@ -52,7 +52,14 @@ buffer_narrow_bounds:
 ; IN: [[HIGH_U8:%.+]] = shl{{.+}}i32 [[EXT_BYTE]], 16
   buffer_load_d16_hi_u8 v6, v1, s[4:7], s12 offen offset:OFFSET-2
   s_wait_loadcnt 0
-; OOB-COUNT-3: store i32 0, ptr addrspace(1)
+; OOB: [[FIRST0:%.+]] = select i1 [[ACTIVE:%.+]], i32 0, i32 305419896
+; OOB: [[FIRST1:%.+]] = select i1 [[ACTIVE]], i32 0, i32 305419896
+; OOB: [[FIRST2:%.+]] = select i1 [[ACTIVE]], i32 0, i32 305419896
+; OOB: br i1 [[ACTIVE]], label %[[STORE:.+]], label %{{.+}}
+; OOB: [[STORE]]:
+; OOB: store i32 [[FIRST0]], ptr addrspace(1)
+; OOB: store i32 [[FIRST1]], ptr addrspace(1)
+; OOB: store i32 [[FIRST2]], ptr addrspace(1)
 ; IN: store i32 [[U8]], ptr addrspace(1)
   global_store_b32 v0, v4, s[10:11]
 ; IN: store i32 [[LOW_U8]], ptr addrspace(1)
@@ -79,7 +86,14 @@ buffer_narrow_bounds:
 ; IN: [[HIGH_U16:%.+]] = shl{{.+}}i32 [[EXT_HALF]], 16
   buffer_load_d16_hi_b16 v6, v1, s[4:7], s12 offen offset:OFFSET-2
   s_wait_loadcnt 0
-; OOB-COUNT-3: store i32 0, ptr addrspace(1)
+; OOB: [[SECOND0:%.+]] = phi i32 [ 0, %[[STORE]] ], [ [[FIRST0]], %{{.+}} ]
+; OOB: [[SECOND1:%.+]] = select i1 [[ACTIVE]], i32 0, i32 [[FIRST1]]
+; OOB: [[SECOND2:%.+]] = select i1 [[ACTIVE]], i32 0, i32 [[FIRST2]]
+; OOB: br i1 [[ACTIVE]], label %[[STORE2:.+]], label %{{.+}}
+; OOB: [[STORE2]]:
+; OOB: store i32 [[SECOND0]], ptr addrspace(1)
+; OOB: store i32 [[SECOND1]], ptr addrspace(1)
+; OOB: store i32 [[SECOND2]], ptr addrspace(1)
 ; IN: store i32 [[U16]], ptr addrspace(1)
   global_store_b32 v0, v4, s[10:11] offset:12
 ; IN: store i32 [[LOW_U16]], ptr addrspace(1)
@@ -91,7 +105,7 @@ buffer_narrow_bounds:
 ; IN: store i16 4660, ptr addrspace(1) {{.+}}, align 1
   buffer_store_d16_hi_b16 v7, v1, s[4:7], s12 offen offset:OFFSET-2
 ; OOB-NOT: store
-; CHECK: ret void
+; CHECK: }
   s_endpgm
 
 .section .rodata,"a",@progbits

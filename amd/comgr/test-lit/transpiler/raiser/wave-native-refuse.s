@@ -14,9 +14,53 @@
 ; RUN: not %transpile_cli %t.hsaco --target-isa=gfx942 --emit-ir=scalar_address 2>&1 | %FileCheck %s --check-prefix=SCALAR-ADDRESS
 ; SCALAR-ADDRESS: unsupported-wave-projection:
 ; SCALAR-ADDRESS-SAME: requires uniform scalar memory addresses
+; RUN: %transpile_cli %t.hsaco --target-isa=gfx1250 --emit-ir=mask_branch | %FileCheck %s --check-prefix=SAME-MASK
+; SAME-MASK-LABEL: define amdgpu_kernel void @mask_branch(
+; SAME-MASK: %[[BALLOT:.*]] = call i32 @llvm.amdgcn.ballot.i32(i1 %{{.*}})
+; SAME-MASK-NEXT: %[[ZERO:.*]] = icmp eq i32 %[[BALLOT]], 0
+; SAME-MASK-NEXT: br i1 %[[ZERO]], label %{{.*}}, label %{{.*}}
+; RUN: %transpile_cli %t.hsaco --target-isa=gfx1250 --emit-ir=yz_branch | %FileCheck %s --check-prefix=SAME-YZ
+; SAME-YZ-LABEL: define amdgpu_kernel void @yz_branch(
+; SAME-YZ: %[[SCALAR:.*]] = call i32 @llvm.amdgcn.readlane.i32(i32 %{{.*}}, i32 %{{.*}})
+; SAME-YZ: %[[ZERO:.*]] = icmp eq i32 %[[SCALAR]], 0
+; SAME-YZ-NEXT: br i1 %[[ZERO]], label %{{.*}}, label %{{.*}}
+; RUN: %transpile_cli %t.hsaco --target-isa=gfx1250 --emit-ir=scalar_address | %FileCheck %s --check-prefix=SAME-ADDRESS
+; SAME-ADDRESS-LABEL: define amdgpu_kernel void @scalar_address(
+; SAME-ADDRESS: %[[SCALAR:.*]] = call i32 @llvm.amdgcn.readlane.i32(i32 %{{.*}}, i32 %{{.*}})
+; SAME-ADDRESS: %[[LOW:.*]] = zext i32 %[[SCALAR]] to i64
+; SAME-ADDRESS-NEXT: %[[HIGH:.*]] = zext i32 0 to i64
+; SAME-ADDRESS-NEXT: %[[SHIFT:.*]] = shl i64 %[[HIGH]], 32
+; SAME-ADDRESS-NEXT: %[[BASE:.*]] = or i64 %[[LOW]], %[[SHIFT]]
+; SAME-ADDRESS-NEXT: %[[ALIGNED:.*]] = and i64 %[[BASE]], -4
+; SAME-ADDRESS-NEXT: %[[ADDR:.*]] = add i64 %[[ALIGNED]], 0
+; SAME-ADDRESS-NEXT: %[[PTR:.*]] = inttoptr i64 %[[ADDR]] to ptr addrspace(1)
+; SAME-ADDRESS-NEXT: %{{.*}} = load i32, ptr addrspace(1) %[[PTR]], align 4
 ; RUN: not %transpile_cli %t.hsaco --target-isa=gfx942 --emit-ir=wave_message 2>&1 | %FileCheck %s --check-prefix=WAVE-MESSAGE
-; WAVE-MESSAGE: unsupported-wave-projection
+; WAVE-MESSAGE: unsupported-wave-projection: s_sendmsg [SOPP] @offset={{0x[0-9a-f]+}}
 ; WAVE-MESSAGE-SAME: does not support per-wave hardware side effects
+; RUN: %transpile_cli %t.hsaco --target-isa=gfx1250 --emit-ir=wave_message | %FileCheck %s --check-prefix=SEND
+; SEND: call void @llvm.amdgcn.s.sendmsg(
+; RUN: %llvm-mc -triple=amdgpu12.50-amd-amdhsa -defsym=WAVE_EFFECT=1 -filetype=obj %s -o %t.halt.o
+; RUN: %ld.lld -shared %t.halt.o -o %t.halt.hsaco
+; RUN: not %transpile_cli %t.halt.hsaco --target-isa=gfx942 --emit-ir=wave_message 2>&1 | %FileCheck %s --check-prefix=HALT
+; HALT: unsupported-wave-projection: s_sendmsghalt [SOPP] @offset={{0x[0-9a-f]+}}
+; HALT-SAME: does not support per-wave hardware side effects
+; RUN: %transpile_cli %t.halt.hsaco --target-isa=gfx1250 --emit-ir=wave_message | %FileCheck %s --check-prefix=SEND-HALT
+; SEND-HALT: call void @llvm.amdgcn.s.sendmsghalt(
+; RUN: %llvm-mc -triple=amdgpu12.50-amd-amdhsa -defsym=WAVE_EFFECT=2 -filetype=obj %s -o %t.set.o
+; RUN: %ld.lld -shared %t.set.o -o %t.set.hsaco
+; RUN: not %transpile_cli %t.set.hsaco --target-isa=gfx942 --emit-ir=wave_message 2>&1 | %FileCheck %s --check-prefix=SET-HALT
+; SET-HALT: unsupported-wave-projection: s_sethalt [SOPP] @offset={{0x[0-9a-f]+}}
+; SET-HALT-SAME: does not support per-wave hardware side effects
+; RUN: %transpile_cli %t.set.hsaco --target-isa=gfx1250 --emit-ir=wave_message | %FileCheck %s --check-prefix=SET
+; SET: call void @llvm.amdgcn.s.sethalt(
+; RUN: %llvm-mc -triple=amdgpu12.50-amd-amdhsa -defsym=WAVE_EFFECT=3 -filetype=obj %s -o %t.dealloc.o
+; RUN: %ld.lld -shared %t.dealloc.o -o %t.dealloc.hsaco
+; RUN: %transpile_cli %t.dealloc.hsaco --target-isa=gfx942 --emit-ir=wave_message | %FileCheck %s --check-prefix=DEALLOC
+; DEALLOC-LABEL: define amdgpu_kernel void @wave_message(
+; DEALLOC-NOT: @llvm.amdgcn.s.sendmsg
+; DEALLOC: ret void
+
 ; RUN: not %transpile_cli %t.hsaco --target-isa=gfx942 --emit-ir=mask_loop 2>&1 | %FileCheck %s --check-prefix=MASK-LOOP
 ; MASK-LOOP: unsupported-wave-projection:
 ; MASK-LOOP-SAME: cannot prove that EXEC preserves the kernel entry mask
@@ -26,7 +70,7 @@
 
 ; RUN: not %transpile_cli %t.hsaco --target-isa=gfx942 --emit-ir=masked_matrix 2>&1 | %FileCheck %s --check-prefix=MATRIX
 ; MATRIX: unsupported-wave-projection: v_wmma_f32_16x16x32_f16
-; MATRIX-SAME: requires the entry EXEC mask at WMMA instructions
+; MATRIX-SAME: cannot prove that source EXEC at this instruction matches its value at kernel entry
 
 ; RUN: %llvm-mc -triple=amdgpu12.50-amd-amdhsa -defsym=WAVE32=0 -filetype=obj %s -o %t.wave64.o
 ; RUN: %ld.lld -shared %t.wave64.o -o %t.wave64.hsaco
@@ -37,6 +81,15 @@
 ; RUN: not %transpile_cli %t.hsaco --target-isa=gfx942 --emit-ir=hardware_register 2>&1 | %FileCheck %s --check-prefix=HWREG
 ; HWREG: unsupported-wave-projection: s_setreg_b32
 ; HWREG-SAME: requires uniform hardware register writes
+; RUN: %transpile_cli %t.hsaco --target-isa=gfx1250 --emit-ir=hardware_register | %FileCheck %s --check-prefix=SAME-HWREG
+; SAME-HWREG-LABEL: define amdgpu_kernel void @hardware_register(
+; SAME-HWREG: %[[WAVE:.*]] = call i32 @llvm.amdgcn.wave.id()
+; SAME-HWREG-NEXT: %[[MASKED:.*]] = and i32 %[[WAVE]], 31
+; SAME-HWREG: call void @llvm.amdgcn.s.setreg(i32 {{[0-9]+}}, i32 %[[MASKED]])
+
+.ifndef WAVE_EFFECT
+.set WAVE_EFFECT, 0
+.endif
 
 .ifndef WAVE32
 .set WAVE32, 1
@@ -96,7 +149,15 @@ hardware_register:
 .p2align 8
 .type wave_message,@function
 wave_message:
+.if WAVE_EFFECT == 1
+  s_sendmsghalt sendmsg(MSG_INTERRUPT)
+.elseif WAVE_EFFECT == 2
+  s_sethalt 1
+.elseif WAVE_EFFECT == 3
+  s_sendmsg sendmsg(MSG_DEALLOC_VGPRS)
+.else
   s_sendmsg sendmsg(MSG_INTERRUPT)
+.endif
   s_endpgm
 
 .globl mask_loop

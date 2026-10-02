@@ -77,6 +77,7 @@ static void writeResultAndVCC(RaiseContext &Ctx, ParsedReg Dst, Value *Result,
                               Value *VCC) {
   Value *LaneActive = Ctx.registers().emitLaneActiveBit();
   Ctx.registers().writeReg32(Dst, Result);
+  // Inactive lanes can have poison carry values; select keeps them out of VCC.
   Ctx.registers().regFile().storeVCC(
       Ctx.B,
       Ctx.B.CreateSelect(LaneActive, VCC, Ctx.B.getFalse(), "vcc_active"));

@@ -2,7 +2,7 @@
 
 ; RUN: %llvm-mc -triple=amdgpu12.50-amd-amdhsa -filetype=obj %s -o %t.o
 ; RUN: %ld.lld -shared %t.o -o %t.hsaco
-; RUN: %transpile_cli %t.hsaco --target-isa=gfx1250 \
+; RUN: %transpile_cli %t.hsaco --target-isa=gfx942 \
 ; RUN:   --emit-ir=sop2_integer_gfx1250 | %FileCheck %s --check-prefix=IR
 
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
@@ -13,6 +13,8 @@
 	.type	sop2_integer_gfx1250,@function
 ; IR-LABEL: define amdgpu_kernel void @sop2_integer_gfx1250(
 sop2_integer_gfx1250:
+	; IR: br label %[[BODY:.+]]
+	; IR: [[BODY]]:
 	; IR: [[MUL_LO0:%.*]] = zext i32 {{.*}} to i64
 	; IR-NEXT: [[MUL_HI0:%.*]] = zext i32 {{.*}} to i64
 	; IR-NEXT: [[MUL_SHL0:%.*]] = shl i64 [[MUL_HI0]], 32

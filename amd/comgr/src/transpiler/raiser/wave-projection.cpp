@@ -476,6 +476,9 @@ Value *ReplicationDoubledDispatchProjection::emitPackedWorkitemId(
   return packWorkitemId(B, emitWorkitemIdX(B), NumDims);
 }
 
+// The target ballot is i64; source EXEC and scalar masks use an independent
+// i32 value per source wave. Selecting the corresponding half before
+// narrowing preserves both masks through scalar operations and SGPR saves.
 WaveNativeProjection::WaveNativeProjection(const MCSubtargetInfo &Source,
                                            const MCSubtargetInfo &Target,
                                            Type *I32Ty, Type *I64Ty)
@@ -497,6 +500,9 @@ Value *WaveNativeProjection::emitSourceWaveId(IRBuilder<> &B) const {
 }
 
 Value *WaveNativeProjection::emitInitialExec(IRBuilder<> &B) const {
+  // Enable whole-wave execution for source scalar instructions and lane
+  // collectives. The intrinsic returns each lane's original activity; retain
+  // it so partial waves cannot acquire additional vector memory effects.
   EntryActive = B.CreateIntrinsic(Intrinsic::amdgcn_init_whole_wave, {}, {},
                                   nullptr, "orig_active");
   return ballotI1ToWidth(B, EntryActive, sourceWaveMaskTy(), "saved_exec");
