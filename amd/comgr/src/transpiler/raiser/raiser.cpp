@@ -54,7 +54,6 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
-#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
@@ -395,26 +394,29 @@ struct WaveNativeRequirements {
 
 // Prove containment in the entry EXEC mask. Unrecognized expressions remain
 // unproven, including cycles with no independently established mask.
-static bool preservesEntryExec(const Instruction &I,
-                               const SmallPtrSetImpl<const Value *> &Masks) {
-  auto IsMask = [&](const Value *V) {
+static bool
+preservesEntryExec(const Instruction &I,
+                   const SmallPtrSetImpl<const Value *> &EntrySubsets) {
+  auto IsEntrySubset = [&](const Value *V) {
+    // Only zero is a subset of every possible entry mask, including partial
+    // waves. Nonzero constants need an intersection with a proven subset.
     if (const auto *C = dyn_cast<ConstantInt>(V))
       return C->isZero();
-    return Masks.contains(V);
+    return EntrySubsets.contains(V);
   };
   switch (I.getOpcode()) {
   case Instruction::And:
-    return IsMask(I.getOperand(0)) || IsMask(I.getOperand(1));
+    return IsEntrySubset(I.getOperand(0)) || IsEntrySubset(I.getOperand(1));
   case Instruction::Or:
   case Instruction::Xor:
-    return IsMask(I.getOperand(0)) && IsMask(I.getOperand(1));
+    return IsEntrySubset(I.getOperand(0)) && IsEntrySubset(I.getOperand(1));
   case Instruction::Select:
-    return IsMask(I.getOperand(1)) && IsMask(I.getOperand(2));
+    return IsEntrySubset(I.getOperand(1)) && IsEntrySubset(I.getOperand(2));
   case Instruction::PHI:
-    return all_of(I.operands(), IsMask);
+    return all_of(I.operands(), IsEntrySubset);
   case Instruction::ZExt:
   case Instruction::Trunc:
-    return IsMask(I.getOperand(0));
+    return IsEntrySubset(I.getOperand(0));
   default:
     return false;
   }
@@ -429,39 +431,24 @@ Error WaveNativeRequirements::validate(Function &F, const MCState &MC) const {
   };
 
   assert(InitialExec && "entry EXEC was deleted before validation");
-  SmallPtrSet<const Value *, 32> Masks;
-  Masks.insert(InitialExec);
+  SmallPtrSet<const Value *, 32> EntrySubsets;
+  EntrySubsets.insert(InitialExec);
   bool Changed;
   do {
     Changed = false;
     for (const Instruction &I : instructions(F))
-      if (!Masks.contains(&I) && preservesEntryExec(I, Masks))
-        Changed |= Masks.insert(&I).second;
+      if (!EntrySubsets.contains(&I) && preservesEntryExec(I, EntrySubsets))
+        Changed |= EntrySubsets.insert(&I).second;
   } while (Changed);
   for (const auto &[Mask, Di] : ExecWrites) {
     assert(Mask && "EXEC write was deleted before validation");
     const Value *V = Mask;
     const auto *C = dyn_cast<ConstantInt>(V);
-    if (!Masks.contains(V) && (!C || !C->isZero()))
+    if (!EntrySubsets.contains(V) && (!C || !C->isZero()))
       return Refuse(*Di, "WaveNative cannot prove that EXEC preserves "
                          "the kernel entry mask");
   }
 
-  for (const Instruction &I : instructions(F)) {
-    const auto *Call = dyn_cast<IntrinsicInst>(&I);
-    if (!Call)
-      continue;
-    switch (Call->getIntrinsicID()) {
-    case Intrinsic::amdgcn_s_sendmsg:
-    case Intrinsic::amdgcn_s_sendmsghalt:
-    case Intrinsic::amdgcn_s_sethalt:
-      return RaiseFailure::general(
-          RaiseFailureReason::UnsupportedWaveProjection,
-          "WaveNative does not support per-wave hardware side effects");
-    default:
-      break;
-    }
-  }
   return Error::success();
 }
 

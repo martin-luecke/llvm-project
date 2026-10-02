@@ -43,6 +43,11 @@ namespace COMGR::transpiler {
 // constructs it.
 class WaveProjection {
 public:
+  /// Checks required by the projection, independent of hardware EXEC.
+  enum class ValidationKind { None, WaveNative };
+
+  virtual ValidationKind validationKind() const { return ValidationKind::None; }
+
   WaveProjection(const llvm::MCSubtargetInfo &Source,
                  const llvm::MCSubtargetInfo &Target, llvm::Type *I32Ty,
                  llvm::Type *I64Ty);
@@ -320,6 +325,10 @@ public:
 /// flow and EXEC updates that do not activate lanes absent at kernel entry.
 class WaveNativeProjection final : public WaveProjection {
 public:
+  ValidationKind validationKind() const override {
+    return ValidationKind::WaveNative;
+  }
+
   WaveNativeProjection(const llvm::MCSubtargetInfo &Source,
                        const llvm::MCSubtargetInfo &Target, llvm::Type *I32Ty,
                        llvm::Type *I64Ty);
@@ -336,6 +345,8 @@ public:
                                           llvm::Value *V) const override;
 
 private:
+  /// Per-lane i1 recording whether the lane was active at kernel entry, before
+  /// init_whole_wave enabled all target lanes. Guards per-lane source effects.
   mutable llvm::Value *EntryActive = nullptr;
 };
 

@@ -262,12 +262,14 @@ Value *emitBitOp(IRBuilder<> &B, BitOp Op, Value *A, Value *Bv,
 // Raise a bitwise instruction and preserve wave-mask and SCC state.
 Error handleBitOp(RaiseContext &Ctx, const DecodedInst &Di, OperandResolver &Op,
                   BitOp Kind, bool Is64, const Twine &Name) {
-  const bool ScalarMasks =
+  // With one complete source-width mask per packed wave, the scalar result
+  // determines both the mask and SCC; no per-lane shadow is needed.
+  const bool HasPerSourceWaveMasks =
       Ctx.Projection.numSourceWavesPerTarget() > 1 &&
       Ctx.Projection.execStorageTy() == Ctx.Projection.sourceWaveMaskTy();
   Value *SrcMask0 = nullptr;
   Value *SrcMask1 = nullptr;
-  if (!ScalarMasks) {
+  if (!HasPerSourceWaveMasks) {
     Expected<Value *> Mask0 = Op.srcWaveMaskI1(0);
     if (!Mask0)
       return Mask0.takeError();
