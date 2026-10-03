@@ -460,14 +460,26 @@ struct KernelLaunchArgsTy {
   uint32_t UserNumBlocks[3] = {0, 0, 0};
   /// User-requested number of threads (for x,y,z dimension).
   uint32_t UserThreadLimit[3] = {0, 0, 0};
+<<<<<<< HEAD
   struct {
     uint64_t Cooperative : 1; // Was this kernel spawned as cooperative.
     uint64_t StrictBlocks : 1; // The user-requested number of blocks is strict.
     uint64_t
         StrictThreads : 1; // The user-requested number of threads is strict.
+=======
+  struct {
+    /// Size in bytes of a single cross-team reduction buffer element for
+    /// this kernel, or 0 if the kernel does not need a reduction buffer.
+    uint32_t ReductionDataSize = 0;
+    /// Maximum number of threads per block that this kernel may use.
+    uint32_t MaxNumThreads = 0;
+  } KernelLaunchInfo;
+  struct {
+    uint64_t Cooperative : 1; // Was this kernel spawned as cooperative.
+>>>>>>> 56a012b96abb
     uint64_t DynCGroupMemFallback : 2; // The fallback for dynamic cgroup mem.
-    uint64_t Unused : 60;
-  } Flags = {0, 0, 0, 0, 0};
+    uint64_t Unused : 61;
+  } Flags = {0, 0, 0};
   /// Set by the caller when replaying a previously recorded kernel launch, so
   /// the plugin can report the outcome back; null for a normal launch.
   KernelReplayOutcomeTy *ReplayOutcome = nullptr;
@@ -653,6 +665,7 @@ private:
                      const KernelLaunchArgsTy &LaunchArgs,
                      uint32_t NumBlocks) const;
 
+<<<<<<< HEAD
   /// Lower number of threads if tripcount is low.
   virtual std::pair<bool, uint32_t>
   adjustNumThreadsForLowTripCount(GenericDeviceTy &GenericDevice,
@@ -678,6 +691,8 @@ private:
                                          bool IsNumThreadsStrict,
                                          bool IsNumThreadsFromUser) const;
 
+=======
+>>>>>>> 56a012b96abb
   /// The kernel name.
   std::string Name;
 
