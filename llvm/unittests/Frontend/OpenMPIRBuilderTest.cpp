@@ -2418,7 +2418,7 @@ TEST_P(OpenMPIRBuilderTestWithNeedsBarrier, StaticWorkshareLoopTarget) {
   BasicBlock *Exit = CLI->getExit();
   Value *TripCount = CLI->getTripCount();
 
-  Builder.SetInsertPoint(BB, BB->getFirstInsertionPt());
+  Builder.SetInsertPoint(BB->getFirstInsertionPt());
 
   ASSERT_EXPECTED_INIT(OpenMPIRBuilder::InsertPointTy, AfterIP,
                        OMPBuilder.applyWorkshareLoop(
@@ -2503,7 +2503,7 @@ TEST_F(OpenMPIRBuilderTest, StaticWorkShareLoop) {
   Value *IV = CLI->getIndVar();
   BasicBlock *ExitBlock = CLI->getExit();
 
-  Builder.SetInsertPoint(BB, BB->getFirstInsertionPt());
+  Builder.SetInsertPoint(BB->getFirstInsertionPt());
   InsertPointTy AllocaIP = Builder.saveIP();
 
   ASSERT_THAT_EXPECTED(OMPBuilder.applyWorkshareLoop(DL, CLI, AllocaIP,
@@ -2703,7 +2703,7 @@ TEST_P(OpenMPIRBuilderTestWithParams, DynamicWorkShareLoop) {
                            Loc, LoopBodyGen, StartVal, StopVal, StepVal,
                            /*IsSigned=*/false, /*InclusiveStop=*/false));
 
-  Builder.SetInsertPoint(BB, BB->getFirstInsertionPt());
+  Builder.SetInsertPoint(BB->getFirstInsertionPt());
   InsertPointTy AllocaIP = Builder.saveIP();
 
   // Collect all the info from CLI, as it isn't usable after the call to
@@ -2850,7 +2850,7 @@ TEST_F(OpenMPIRBuilderTest, DynamicWorkShareLoopOrdered) {
                            Loc, LoopBodyGen, StartVal, StopVal, StepVal,
                            /*IsSigned=*/false, /*InclusiveStop=*/false));
 
-  Builder.SetInsertPoint(BB, BB->getFirstInsertionPt());
+  Builder.SetInsertPoint(BB->getFirstInsertionPt());
   InsertPointTy AllocaIP = Builder.saveIP();
 
   // Collect all the info from CLI, as it isn't usable after the call to

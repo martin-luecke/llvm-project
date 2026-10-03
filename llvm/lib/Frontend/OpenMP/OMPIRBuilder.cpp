@@ -1695,7 +1695,7 @@ Error OpenMPIRBuilder::emitCancelationCheckImpl(
   Builder.CreateBr(*FiniBBOrErr);
 
   // The continuation block is where code generation continues.
-  Builder.SetInsertPoint(NonCancellationBlock, NonCancellationBlock->begin());
+  Builder.SetInsertPoint(NonCancellationBlock->begin());
   return Error::success();
 }
 
@@ -1809,9 +1809,15 @@ static void targetParallelCallback(
 
   // Add alloca for kernel args
   OpenMPIRBuilder ::InsertPointTy CurrentIP = Builder.saveIP();
+#if 0//<<<<<<< HEAD
   Builder.SetInsertPoint(OuterAllocaBB, OuterAllocaBB->getFirstInsertionPt());
   AllocaInst *ArgsAlloca = Builder.CreateAlloca(
       ArrayType::get(PtrTy, NumCapturedVars), nullptr, "kernel_arg");
+#else//=======
+  Builder.SetInsertPoint(OuterAllocaBB->getFirstInsertionPt());
+  AllocaInst *ArgsAlloca =
+      Builder.CreateAlloca(ArrayType::get(PtrTy, NumCapturedVars));
+#endif//>>>>>>> 7f211a4737b1
   Value *Args = ArgsAlloca;
   // Add address space cast if array for storing arguments is not allocated
   // in address space 0
@@ -2225,8 +2231,7 @@ OpenMPIRBuilder::InsertPointOrErrorTy OpenMPIRBuilder::createParallel(
 
       // Store to stack at end of the block that currently branches to the entry
       // block of the to-be-outlined region.
-      Builder.SetInsertPoint(InsertBB,
-                             InsertBB->getTerminator()->getIterator());
+      Builder.SetInsertPoint(InsertBB->getTerminator()->getIterator());
       Builder.CreateStore(&V, Ptr);
 
       // Load back next to allocations in the to-be-outlined region.
@@ -2480,7 +2485,7 @@ void OpenMPIRBuilder::createTaskwait(const LocationDescription &Loc,
       IRBuilderBase::InsertPointGuard IPGuard(Builder);
       BasicBlock &entryBB =
           Builder.GetInsertBlock()->getParent()->getEntryBlock();
-      Builder.SetInsertPoint(&entryBB, entryBB.getFirstInsertionPt());
+      Builder.SetInsertPoint(entryBB.getFirstInsertionPt());
       DepArray = Builder.CreateAlloca(DepArrayTy, nullptr, ".dep.arr.addr");
     }
 
@@ -2787,7 +2792,7 @@ OpenMPIRBuilder::InsertPointOrErrorTy OpenMPIRBuilder::createTaskloop(
 
     StaleCI->eraseFromParent();
 
-    Builder.SetInsertPoint(TaskloopAllocaBB, TaskloopAllocaBB->begin());
+    Builder.SetInsertPoint(TaskloopAllocaBB->begin());
 
     LoadInst *SharedsOutlined =
         Builder.CreateLoad(VoidPtr, OutlinedFn.getArg(1));
@@ -2852,8 +2857,7 @@ OpenMPIRBuilder::InsertPointOrErrorTy OpenMPIRBuilder::createTaskloop(
     // set the trip count in the CLI
     CLI->setTripCount(CastedTripCount);
 
-    Builder.SetInsertPoint(CLI->getBody(),
-                           CLI->getBody()->getFirstInsertionPt());
+    Builder.SetInsertPoint(CLI->getBody()->getFirstInsertionPt());
 
     if (NumOfCollapseLoops > 1) {
       llvm::SmallVector<User *> UsersToReplace;
@@ -2918,7 +2922,7 @@ OpenMPIRBuilder::InsertPointOrErrorTy OpenMPIRBuilder::createTaskloop(
   };
 
   addOutlineInfo(std::move(OI));
-  Builder.SetInsertPoint(TaskloopExitBB, TaskloopExitBB->begin());
+  Builder.SetInsertPoint(TaskloopExitBB->begin());
   return Builder.saveIP();
 }
 
@@ -3204,7 +3208,7 @@ OpenMPIRBuilder::InsertPointOrErrorTy OpenMPIRBuilder::createTask(
 
     StaleCI->eraseFromParent();
 
-    Builder.SetInsertPoint(TaskAllocaBB, TaskAllocaBB->begin());
+    Builder.SetInsertPoint(TaskAllocaBB->begin());
     if (HasShareds) {
       LoadInst *Shareds = Builder.CreateLoad(VoidPtr, OutlinedFn.getArg(1));
       OutlinedFn.getArg(1)->replaceUsesWithIf(
@@ -3220,7 +3224,7 @@ OpenMPIRBuilder::InsertPointOrErrorTy OpenMPIRBuilder::createTask(
   };
 
   addOutlineInfo(std::move(OI));
-  Builder.SetInsertPoint(TaskExitBB, TaskExitBB->begin());
+  Builder.SetInsertPoint(TaskExitBB->begin());
 
   return Builder.saveIP();
 }
@@ -4851,7 +4855,7 @@ OpenMPIRBuilder::InsertPointOrErrorTy OpenMPIRBuilder::createReductionsGPU(
     BasicBlock *InsertBlock = Loc.IP.getNodeParent();
     ContinuationBlock = InsertBlock->splitBasicBlock(Loc.IP, "reduce.finalize");
     InsertBlock->getTerminator()->eraseFromParent();
-    Builder.SetInsertPoint(InsertBlock, InsertBlock->end());
+    Builder.SetInsertPoint(InsertBlock->end());
   }
 
   Function *CurFunc = Builder.GetInsertBlock()->getParent();
@@ -5302,7 +5306,7 @@ OpenMPIRBuilder::InsertPointOrErrorTy OpenMPIRBuilder::createReductions(
   Builder.SetInsertPoint(AllocaIP.getNodeParent()->getTerminator());
   Value *RedArray = Builder.CreateAlloca(RedArrayTy, nullptr, "red.array");
 
-  Builder.SetInsertPoint(InsertBlock, InsertBlock->end());
+  Builder.SetInsertPoint(InsertBlock->end());
   // Emitting the alloca moved the insertion point into the alloca block and
   // can clear the debug loc. Restore back to Loc.DL.
   Builder.SetCurrentDebugLocation(Loc.DL);
@@ -6230,16 +6234,14 @@ OpenMPIRBuilder::InsertPointOrErrorTy OpenMPIRBuilder::applyStaticWorkshareLoop(
   // the latch block.
 
   CLI->mapIndVar([&](Instruction *OldIV) -> Value * {
-    Builder.SetInsertPoint(CLI->getBody(),
-                           CLI->getBody()->getFirstInsertionPt());
+    Builder.SetInsertPoint(CLI->getBody()->getFirstInsertionPt());
     Builder.SetCurrentDebugLocation(DL);
     return Builder.CreateAdd(OldIV, LowerBound, "", /*HasNUW=*/false,
                              /*HasNSW=*/Config.hasNoSignedWrap());
   });
 
   // In the "exit" block, call the "fini" function.
-  Builder.SetInsertPoint(CLI->getExit(),
-                         CLI->getExit()->getTerminator()->getIterator());
+  Builder.SetInsertPoint(CLI->getExit()->getTerminator()->getIterator());
   createRuntimeFunctionCall(StaticFini, {SrcLoc, ThreadNum});
 
   // Add the barrier if requested.
@@ -6472,7 +6474,7 @@ OpenMPIRBuilder::applyStaticChunkedWorkshareLoop(
   });
 
   // In the "exit" block, call the "fini" function.
-  Builder.SetInsertPoint(DispatchExit, DispatchExit->getFirstInsertionPt());
+  Builder.SetInsertPoint(DispatchExit->getFirstInsertionPt());
   createRuntimeFunctionCall(StaticFini, {SrcLoc, ThreadNum});
 
   // Add the barrier if requested.
@@ -6946,7 +6948,7 @@ OpenMPIRBuilder::applyDynamicWorkshareLoop(DebugLoc DL, CanonicalLoopInfo *CLI,
       PreHeader->getContext(), Twine(PreHeader->getName()) + ".outer.cond",
       PreHeader->getParent());
   // This needs to be 32-bit always, so can't use the IVTy Zero above.
-  Builder.SetInsertPoint(OuterCond, OuterCond->getFirstInsertionPt());
+  Builder.SetInsertPoint(OuterCond->getFirstInsertionPt());
   Value *Res = createRuntimeFunctionCall(
       DynamicNext,
       {SrcLoc, ThreadNum, PLastIter, PLowerBound, PUpperBound, PStride});
@@ -6971,7 +6973,7 @@ OpenMPIRBuilder::applyDynamicWorkshareLoop(DebugLoc DL, CanonicalLoopInfo *CLI,
   // Modify the inner condition:
   // * Use the UpperBound returned from the DynamicNext call.
   // * jump to the loop outer loop when done with one of the inner loops.
-  Builder.SetInsertPoint(Cond, Cond->getFirstInsertionPt());
+  Builder.SetInsertPoint(Cond->getFirstInsertionPt());
   UpperBound = Builder.CreateLoad(IVTy, PUpperBound, "ub");
   Instruction *Comp = &*Builder.GetInsertPoint();
   auto *CI = cast<CmpInst>(Comp);
@@ -11931,7 +11933,7 @@ OpenMPIRBuilder::InsertPointTy OpenMPIRBuilder::createAtomicCompare(
       Builder.CreateBr(ExitBB);
 
       // ExitBB: merge results from NaN, Zero, and Normal paths.
-      Builder.SetInsertPoint(ExitBB, ExitBB->begin());
+      Builder.SetInsertPoint(ExitBB->begin());
       PHINode *OldIntPHI =
           Builder.CreatePHI(IntCastTy, 3, X.Var->getName() + ".atomic.old");
       OldIntPHI->addIncoming(XCurr, NaNBB);
@@ -12175,7 +12177,7 @@ OpenMPIRBuilder::createTeams(const LocationDescription &Loc,
   BasicBlock &OuterAllocaBB = CurrentFunction->getEntryBlock();
   if (&OuterAllocaBB == Builder.GetInsertBlock()) {
     BasicBlock *BodyBB = splitBB(Builder, /*CreateBranch=*/true, "teams.entry");
-    Builder.SetInsertPoint(BodyBB, BodyBB->begin());
+    Builder.SetInsertPoint(BodyBB->begin());
   }
 
   // The current basic block is split into four basic blocks. After outlining,
@@ -12327,7 +12329,7 @@ OpenMPIRBuilder::InsertPointOrErrorTy OpenMPIRBuilder::createDistribute(
   if (OuterAllocaBB == Builder.GetInsertBlock()) {
     BasicBlock *BodyBB =
         splitBB(Builder, /*CreateBranch=*/true, "distribute.entry");
-    Builder.SetInsertPoint(BodyBB, BodyBB->begin());
+    Builder.SetInsertPoint(BodyBB->begin());
   }
   BasicBlock *ExitBB =
       splitBB(Builder, /*CreateBranch=*/true, "distribute.exit");
@@ -12986,7 +12988,7 @@ OpenMPIRBuilder::InsertPointOrErrorTy OpenMPIRBuilder::createIteratorLoop(
   }
 
   // Link After -> ContBB
-  Builder.SetInsertPoint(CLI->getAfter(), CLI->getAfter()->begin());
+  Builder.SetInsertPoint(CLI->getAfter()->begin());
   if (!CLI->getAfter()->hasTerminator())
     Builder.CreateBr(ContBB);
 
