@@ -461,6 +461,19 @@ struct KernelLaunchArgsTy {
   /// User-requested number of threads (for x,y,z dimension).
   uint32_t UserThreadLimit[3] = {0, 0, 0};
   struct {
+<<<<<<< HEAD
+=======
+    /// Size in bytes of a single cross-team reduction buffer element for
+    /// this kernel, or 0 if the kernel does not need a reduction buffer.
+    uint32_t ReductionDataSize = 0;
+    /// Maximum number of threads per block that this kernel may use.
+    uint32_t MaxNumThreads = 0;
+    /// Number of blocks originally requested by the program for the first
+    /// dimension (e.g., num_teams clause), or 0 if none was requested.
+    uint32_t RequestedNumBlocks = 0;
+  } KernelLaunchInfo;
+  struct {
+>>>>>>> 1e3586d70991
     uint64_t Cooperative : 1; // Was this kernel spawned as cooperative.
     uint64_t StrictBlocks : 1; // The user-requested number of blocks is strict.
     uint64_t
