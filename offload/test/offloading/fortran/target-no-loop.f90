@@ -81,17 +81,17 @@ program main
 
 end program main
 
-! CHECK:  omptarget device {{[0-9]+}} info: Launching kernel {{.*}} SPMD-No-Loop mode
+! CHECK:  PluginInterface device {{[0-9]+}} info: Launching kernel {{.*}} SPMD-No-Loop mode
 ! CHECK:  info: #Args: 3 Teams x Thrds:   64x  16
-! CHECK:  omptarget device {{[0-9]+}} info: Launching kernel {{.*}} SPMD mode
+! CHECK:  PluginInterface device {{[0-9]+}} info: Launching kernel {{.*}} SPMD mode
 ! CHECK:  info: #Args: 3 Teams x Thrds:   3x  16 {{.*}}
-! CHECK:  omptarget device {{[0-9]+}} info: Launching kernel {{.*}} SPMD-No-Loop mode
+! CHECK:  PluginInterface device {{[0-9]+}} info: Launching kernel {{.*}} SPMD-No-Loop mode
 ! CHECK:  info: #Args: 3 Teams x Thrds:   64x  16 {{.*}}
-! CHECK:  omptarget device {{[0-9]+}} info: Launching kernel {{.*}} SPMD mode
+! CHECK:  PluginInterface device {{[0-9]+}} info: Launching kernel {{.*}} SPMD mode
 ! CHECK:  info: #Args: 3 Teams x Thrds:   1x  16
-! CHECK:  omptarget device {{[0-9]+}} info: Launching kernel {{.*}} Generic mode
+! CHECK:  PluginInterface device {{[0-9]+}} info: Launching kernel {{.*}} Generic mode
 ! CHECK:  info: #Args: 3 Teams x Thrds:   16x  16 {{.*}}
-! CHECK:  omptarget device {{[0-9]+}} info: Launching kernel {{.*}} SPMD mode
+! CHECK:  PluginInterface device {{[0-9]+}} info: Launching kernel {{.*}} SPMD mode
 ! CHECK:  info: #Args: 4 Teams x Thrds:   16x  16 {{.*}}
 ! CHECK:  number of errors: 0
 

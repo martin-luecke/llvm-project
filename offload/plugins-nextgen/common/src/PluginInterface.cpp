@@ -26,11 +26,13 @@
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Frontend/OpenMP/OMPConstants.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstdint>
+#include <limits>
 
 using namespace llvm;
 using namespace omp;
@@ -270,14 +272,11 @@ Error GenericKernelTy::printLaunchInfo(GenericDeviceTy &GenericDevice,
                                        const KernelLaunchArgsTy &LaunchArgs,
                                        uint32_t NumThreads[3],
                                        uint32_t NumBlocks[3]) const {
-<<<<<<< HEAD
   INFO(OMP_INFOTYPE_PLUGIN_KERNEL, GenericDevice.getDeviceId(),
        "Launching kernel %s with [%u,%u,%u] blocks and [%u,%u,%u] threads in "
        "%s mode\n",
        getName(), NumBlocks[0], NumBlocks[1], NumBlocks[2], NumThreads[0],
        NumThreads[1], NumThreads[2], getExecutionModeName());
-=======
->>>>>>> 56a012b96abb
   return printLaunchInfoDetails(GenericDevice, LaunchArgs, NumThreads,
                                 NumBlocks);
 }
@@ -345,7 +344,6 @@ Error GenericKernelTy::launch(GenericDeviceTy &GenericDevice,
                                     LaunchArgs.UserNumBlocks[1],
                                     LaunchArgs.UserNumBlocks[2]};
 
-<<<<<<< HEAD
   // Multidimensional is only supported with bare mode for now.
   assert(isBareMode() ||
          EffectiveNumThreads[1] == 1 && EffectiveNumThreads[2] == 1 &&
@@ -362,8 +360,6 @@ Error GenericKernelTy::launch(GenericDeviceTy &GenericDevice,
              EffectiveNumThreads[2] > 0 &&
              "Strict requires number of threads greater than zero");
 
-=======
->>>>>>> 56a012b96abb
   auto DynBlockMemConfOrErr = prepareBlockMemory(
       GenericDevice, LaunchArgs,
       EffectiveNumBlocks[0] * EffectiveNumBlocks[1] * EffectiveNumBlocks[2]);
@@ -458,7 +454,6 @@ Error GenericKernelTy::launch(GenericDeviceTy &GenericDevice,
   return Plugin::success();
 }
 
-<<<<<<< HEAD
 uint32_t
 GenericKernelTy::getEffectiveNumThreads(GenericDeviceTy &GenericDevice,
                                         uint32_t UserThreadLimit) const {
@@ -568,8 +563,6 @@ uint32_t GenericKernelTy::getEffectiveNumBlocks(
                   GenericDevice.getBlockLimit(EffectiveNumThreads));
 }
 
-=======
->>>>>>> 56a012b96abb
 GenericDeviceTy::GenericDeviceTy(GenericPluginTy &Plugin, int32_t DeviceId,
                                  int32_t NumDevices,
                                  const llvm::omp::GV &OMPGridValues)
