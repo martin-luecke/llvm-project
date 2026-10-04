@@ -627,6 +627,9 @@ static int loadImagesOntoDevice(DeviceTy &Device) {
             KernelLaunchInfoTy LaunchInfo;
             LaunchInfo.Mode = ExecMode;
             LaunchInfo.ReductionDataSize = Cfg.ReductionDataSize;
+            // Downstream: needed by libomptarget to decide on the dynamic
+            // block memory fallback; upstream never sets it.
+            LaunchInfo.StaticBlockMemSize = Kernel->getStaticBlockMemSize();
             // Max = Config.Max > 0 ? min(Config.Max, Device.Max) : Device.Max,
             // further clamped to the kernel function's own driver-reported
             // maximum.
