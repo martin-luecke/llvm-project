@@ -34,52 +34,53 @@ There is no public C entry point for the transpiler yet; it is reachable from
 the `transpile_cli` test driver used by the `test-lit/transpiler/raiser`
 suite.
 
-## Wave projection selection
+## Wave projection
 
-The raiser selects one projection per kernel without changing the launch:
+When translating wave32 to wave64, WaveNative places two consecutive source
+waves in one target wave, one in each 32-lane half. Replication places two
+copies of a single source wave in those halves.
 
-- Equal source and target wave sizes use `ReplicationProjection`, which maps
-  one source wave to one target wave.
-- gfx1250 wave32 to gfx942 wave64 uses `WaveNativeProjection` as a candidate.
-  Consecutive source waves occupy target lanes 0-31 and 32-63. Each lane retains
-  its workitem ID and its source wave's 32-bit EXEC, VCC, and scalar masks.
-- Other wave-size changes receive an `unsupported-wave-projection` refusal.
+Source scalar instructions execute regardless of source EXEC, so WaveNative
+runs their generated code with all target lanes enabled. For source vector
+instructions that obey EXEC, register writes and memory accesses remain
+controlled by the source wave's EXEC mask.
 
-WaveNative enables full hardware EXEC between predicated operations so source
-scalar instructions and lane collectives can execute independently of source
-EXEC. Vector writes and ordinary memory operations remain predicated by modeled
-source EXEC and the lane's activity at kernel entry, including partial waves.
-Ballots and lane-indexed operations stay within each source wave.
+The hardware initializes EXEC to mark the lanes assigned to workitems by the
+launch. A workgroup with 48 workitems starts with 48 active lanes in a 64-lane
+target wave. The other 16 lanes can participate in internal calculations, but
+do not correspond to launched workitems. We record which lanes were active at
+kernel entry before enabling the whole wave and use that record to mask source
+vector memory instructions that obey EXEC.
 
-Packing is accepted only when its semantic requirements can be established:
+Source kernels may temporarily enable initially inactive lanes for wave-wide
+calculations, such as scans with zero-filled unused lanes. This lowering
+currently does not support such EXEC expansion. Every EXEC write must be
+proven to enable only lanes that were active at kernel entry.
 
-- Source scalar control flow, scalar memory addresses, and hardware register
-  writes must be uniform across the target wave. Two packed source waves cannot
-  independently execute target scalar control flow or hardware effects.
-- Every EXEC write must be a subset of the source EXEC at kernel entry.
-- WMMA requires that same kernel-entry EXEC value, so its lowering does not
-  depend on the behavior of matrix instructions under modified EXEC.
-- Per-wave hardware effects such as interrupt messages and halts are refused
-  at the source instruction; packing would change their execution count.
+A source vector comparison can test whether each workitem's index is less than
+a bound. We collect its per-lane results in a 64-bit target ballot, setting a
+bit only if the corresponding lane is enabled by source EXEC and its index is
+below the bound. Target lanes 0-31 use the lower 32 bits; lanes 32-63 use the
+upper 32 bits. Reading source lane 7 selects target lane 7 in the lower half
+and target lane 39 in the upper half.
 
-Handlers record operand requirements in `RaiseContext`. After register promotion
-exposes SSA data flow, the raiser checks uniformity at definitions and uses,
-EXEC containment, and SSA identity for kernel-entry EXEC requirements. An
-unproven requirement is a structured refusal, even if another analysis could
-prove it. These checks are selected explicitly by the projection's validation
-policy, independently of its hardware EXEC scaffolding.
+This lowering requires the two source waves to agree on scalar branch
+decisions so they follow the same control-flow path. Scalar loads execute
+regardless of source EXEC. We require the same address across the target wave
+because lanes without source workitems may not have a valid address of their
+own.
 
-In the selected same-wave path, scalar entry values are target-wave uniform.
-Scalar operations preserve uniformity, and native ballots and lane reads
-produce uniform values when vector data enters scalar state. This path needs
-no additional packing proof. WaveNative's ballot slices and source-wave lane
-reads can instead produce different scalar values in the two halves, so their
-uses require validation. This distinction does not depend on whether hardware
-EXEC is full. Instruction-specific requirements such as zero address bits apply
-to both paths.
+The two source waves share the target wave's hardware control registers, so
+writes to those registers must agree. Interrupt messages and halt instructions
+are refused. Two source waves can each send a message, but executing the
+instruction once in the target wave would send only one. Halting the target
+wave would stop both source waves.
 
-A failed requirement ends translation of the kernel. The raiser does not retry
-with another projection, replicate dispatch, or reshape the launch.
+With nonzero source EXEC, WMMA uses inputs from all 32 source lanes, including
+lanes whose EXEC bits are clear. This lowering requires EXEC at WMMA to match
+its value at kernel entry, so a source wave containing workitems cannot reach
+WMMA with EXEC zero. The entry mask may describe a partially filled wave; it
+does not have to be all ones.
 
 ## Standalone development build
 

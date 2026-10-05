@@ -395,8 +395,8 @@ struct WaveNativeRequirements {
 // Prove containment in the entry EXEC mask. Unrecognized expressions remain
 // unproven, including cycles with no independently established mask.
 static bool
-preservesEntryExec(const Instruction &I,
-                   const SmallPtrSetImpl<const Value *> &EntrySubsets) {
+isKnownSubsetOfEntryExec(const Instruction &I,
+                         const SmallPtrSetImpl<const Value *> &EntrySubsets) {
   auto IsEntrySubset = [&](const Value *V) {
     // Only zero is a subset of every possible entry mask, including partial
     // waves. Nonzero constants need an intersection with a proven subset.
@@ -437,7 +437,8 @@ Error WaveNativeRequirements::validate(Function &F, const MCState &MC) const {
   do {
     Changed = false;
     for (const Instruction &I : instructions(F))
-      if (!EntrySubsets.contains(&I) && preservesEntryExec(I, EntrySubsets))
+      if (!EntrySubsets.contains(&I) &&
+          isKnownSubsetOfEntryExec(I, EntrySubsets))
         Changed |= EntrySubsets.insert(&I).second;
   } while (Changed);
   for (const auto &[Mask, Di] : ExecWrites) {
@@ -445,8 +446,8 @@ Error WaveNativeRequirements::validate(Function &F, const MCState &MC) const {
     const Value *V = Mask;
     const auto *C = dyn_cast<ConstantInt>(V);
     if (!EntrySubsets.contains(V) && (!C || !C->isZero()))
-      return Refuse(*Di, "WaveNative cannot prove that EXEC preserves "
-                         "the kernel entry mask");
+      return Refuse(*Di, "WaveNative cannot prove that EXEC only enables lanes "
+                         "active at kernel entry");
   }
 
   return Error::success();

@@ -4,7 +4,7 @@
 ; RUN: %ld.lld -shared %t.o -o %t.hsaco
 ; RUN: not %transpile_cli %t.hsaco --target-isa=gfx942 --emit-ir=expand_exec 2>&1 | %FileCheck %s --check-prefix=EXPAND-EXEC
 ; EXPAND-EXEC: unsupported-wave-projection:
-; EXPAND-EXEC-SAME: cannot prove that EXEC preserves the kernel entry mask
+; EXPAND-EXEC-SAME: cannot prove that EXEC only enables lanes active at kernel entry
 ; RUN: not %transpile_cli %t.hsaco --target-isa=gfx942 --emit-ir=mask_branch 2>&1 | %FileCheck %s --check-prefix=MASK-BRANCH
 ; MASK-BRANCH: unsupported-wave-projection:
 ; MASK-BRANCH-SAME: requires scalar control flow uniform across the target wave
@@ -63,7 +63,7 @@
 
 ; RUN: not %transpile_cli %t.hsaco --target-isa=gfx942 --emit-ir=mask_loop 2>&1 | %FileCheck %s --check-prefix=MASK-LOOP
 ; MASK-LOOP: unsupported-wave-projection:
-; MASK-LOOP-SAME: cannot prove that EXEC preserves the kernel entry mask
+; MASK-LOOP-SAME: cannot prove that EXEC only enables lanes active at kernel entry
 ; RUN: not %transpile_cli %t.hsaco --target-isa=gfx90a --emit-ir=expand_exec 2>&1 | %FileCheck %s --check-prefix=DIRECTION
 ; DIRECTION: unsupported-wave-projection
 ; DIRECTION-SAME: wave-size changes are supported only from gfx1250 to gfx942
