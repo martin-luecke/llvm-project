@@ -14,6 +14,11 @@
 ; RUN: not %transpile_cli %t.hsaco --target-isa=gfx942 --emit-ir=scalar_address 2>&1 | %FileCheck %s --check-prefix=SCALAR-ADDRESS
 ; SCALAR-ADDRESS: unsupported-wave-projection:
 ; SCALAR-ADDRESS-SAME: requires uniform scalar memory addresses
+; RUN: %llvm-mc -triple=amdgpu12.50-amd-amdhsa -defsym=NARROW_SCALAR_LOAD=1 -filetype=obj %s -o %t.narrow.o
+; RUN: %ld.lld -shared %t.narrow.o -o %t.narrow.hsaco
+; RUN: not %transpile_cli %t.narrow.hsaco --target-isa=gfx942 --emit-ir=scalar_address 2>&1 | %FileCheck %s --check-prefix=SCALAR-ADDRESS
+; RUN: %transpile_cli %t.narrow.hsaco --target-isa=gfx1250 --emit-ir=scalar_address | %FileCheck %s --check-prefix=NARROW-ADDRESS
+; NARROW-ADDRESS-LABEL: define amdgpu_kernel void @scalar_address(
 ; RUN: %transpile_cli %t.hsaco --target-isa=gfx1250 --emit-ir=mask_branch | %FileCheck %s --check-prefix=SAME-MASK
 ; SAME-MASK-LABEL: define amdgpu_kernel void @mask_branch(
 ; SAME-MASK: %[[BALLOT:.*]] = call i32 @llvm.amdgcn.ballot.i32(i1 %{{.*}})
@@ -134,7 +139,13 @@ yz_branch:
 scalar_address:
   v_readfirstlane_b32 s4, v0
   s_mov_b32 s5, 0
+.ifdef NARROW_SCALAR_LOAD
+; NARROW-ADDRESS: [[LOADED:%.+]] = load i16, ptr addrspace(1) {{%.+}}, align 2
+; NARROW-ADDRESS-NEXT: sext i16 [[LOADED]] to i32
+  s_load_i16 s6, s[4:5], 0
+.else
   s_load_b32 s6, s[4:5], 0
+.endif
   s_endpgm
 
 .globl hardware_register
