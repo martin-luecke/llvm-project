@@ -58,11 +58,14 @@ currently does not support such EXEC expansion. Every EXEC write must be
 proven to enable only lanes that were active at kernel entry.
 
 A source vector comparison can test whether each workitem's index is less than
-a bound. We collect its per-lane results in a 64-bit target ballot, setting a
-bit only if the corresponding lane is enabled by source EXEC and its index is
-below the bound. Target lanes 0-31 use the lower 32 bits; lanes 32-63 use the
-upper 32 bits. Reading source lane 7 selects target lane 7 in the lower half
-and target lane 39 in the upper half.
+a bound. All 64 target lanes participate in the ballot. Each lane contributes
+a one only if its source EXEC bit is set and its index is below the bound;
+otherwise it contributes zero. Target lanes 0-31 use the lower 32 bits of the
+result, and lanes 32-63 use the upper 32 bits. This selects the result for each
+source wave without disabling either half of the target wave.
+
+Reading source lane 7 selects target lane 7 in the lower half and target lane
+39 in the upper half.
 
 This lowering requires the two source waves to agree on scalar branch
 decisions so they follow the same control-flow path. Scalar loads execute
