@@ -541,13 +541,6 @@ static Error raiseKernel(const RaiseEnvironment &Env, Module &M,
         RaiseFailureReason::UnsupportedWaveProjection,
         "wave-size changes are supported only from gfx1250 to gfx942");
 
-  if (UseWaveNative &&
-      !AMDHSA_BITS_GET(Meta.KernelCodeProperties,
-                       amdhsa::KERNEL_CODE_PROPERTY_ENABLE_WAVEFRONT_SIZE32))
-    return RaiseFailure::general(
-        RaiseFailureReason::UnsupportedWaveProjection,
-        "WaveNative requires a wave32 source kernel descriptor");
-
   std::unique_ptr<WaveProjection> Projection;
   if (UseWaveNative)
     Projection = std::make_unique<WaveNativeProjection>(

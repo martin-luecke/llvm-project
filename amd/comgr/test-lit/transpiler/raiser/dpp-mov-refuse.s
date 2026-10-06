@@ -89,7 +89,6 @@ unsupported:
 .amdhsa_kernel unsupported
   .amdhsa_next_free_vgpr 3
   .amdhsa_next_free_sgpr 0
-  .amdhsa_wavefront_size32 1
 .end_amdhsa_kernel
 .amdgpu_metadata
 ---
