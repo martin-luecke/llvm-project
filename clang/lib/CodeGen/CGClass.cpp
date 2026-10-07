@@ -26,7 +26,6 @@
 #include "clang/CodeGen/CGFunctionInfo.h"
 #include "clang/CodeGenUtils/ClassUtils.h"
 #include "clang/CodeGenUtils/CodeGenUtils.h"
-#include "clang/CodeGenUtils/RecordLayoutUtils.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/Support/SaveAndRestore.h"
@@ -882,11 +881,7 @@ public:
   }
 
   void addMemcpyableField(FieldDecl *F) {
-<<<<<<< HEAD
     if (F->isZeroSize(CGF.getContext()))
-=======
-    if (CodeGenUtils::isEmptyFieldForLayout(CGF.getContext(), F))
->>>>>>> 09bf31e01efb
       return;
     if (!FirstField)
       addInitialField(F);
@@ -1867,11 +1862,7 @@ public:
                              const CXXDestructorDecl *DD)
       : Context(Context), EHStack(EHStack), DD(DD), StartIndex(std::nullopt) {}
   void PushCleanupForField(const FieldDecl *Field) {
-<<<<<<< HEAD
     if (Field->isZeroSize(Context))
-=======
-    if (CodeGenUtils::isEmptyFieldForLayout(Context, Field))
->>>>>>> 09bf31e01efb
       return;
     unsigned FieldIndex = Field->getFieldIndex();
     if (CodeGenUtils::fieldHasTrivialDestructorBody(Context, Field)) {

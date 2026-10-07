@@ -24,7 +24,6 @@
 #include "clang/AST/RecordLayout.h"
 #include "clang/Basic/CodeGenOptions.h"
 #include "clang/Basic/TargetInfo.h"
-#include "clang/CodeGenUtils/RecordLayoutUtils.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
@@ -455,11 +454,7 @@ CodeGenTBAA::CollectFields(uint64_t BaseOffset,
     unsigned idx = 0;
     for (RecordDecl::field_iterator i = RD->field_begin(), e = RD->field_end();
          i != e; ++i, ++idx) {
-<<<<<<< HEAD
       if ((*i)->isZeroSize(Context))
-=======
-      if (CodeGenUtils::isEmptyFieldForLayout(Context, *i))
->>>>>>> 09bf31e01efb
         continue;
 
       uint64_t Offset =

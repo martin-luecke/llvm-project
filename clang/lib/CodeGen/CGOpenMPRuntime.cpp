@@ -27,7 +27,6 @@
 #include "clang/Basic/OpenMPKinds.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/CodeGen/ConstantInitBuilder.h"
-#include "clang/CodeGenUtils/RecordLayoutUtils.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -8955,18 +8954,10 @@ private:
         continue;
       const auto *Base = I.getType()->getAsCXXRecordDecl();
       // Ignore empty bases.
-<<<<<<< HEAD
       if (Base->isEmpty() || CGF.getContext()
                                  .getASTRecordLayout(Base)
                                  .getNonVirtualSize()
                                  .isZero())
-=======
-      if (CodeGenUtils::isEmptyRecordForLayout(CGF.getContext(), BaseTy) ||
-          CGF.getContext()
-              .getASTRecordLayout(Base)
-              .getNonVirtualSize()
-              .isZero())
->>>>>>> 09bf31e01efb
         continue;
 
       unsigned FieldIndex = RL.getNonVirtualBaseLLVMFieldNo(Base);
@@ -8976,11 +8967,7 @@ private:
     for (const auto &I : RD->vbases()) {
       const auto *Base = I.getType()->getAsCXXRecordDecl();
       // Ignore empty bases.
-<<<<<<< HEAD
       if (Base->isEmpty())
-=======
-      if (CodeGenUtils::isEmptyRecordForLayout(CGF.getContext(), BaseTy))
->>>>>>> 09bf31e01efb
         continue;
       unsigned FieldIndex = RL.getVirtualBaseIndex(Base);
       if (RecordLayout[FieldIndex])
@@ -8992,12 +8979,7 @@ private:
     for (const auto *Field : RD->fields()) {
       // Fill in non-bitfields. (Bitfields always use a zero pattern, which we
       // will fill in later.)
-<<<<<<< HEAD
       if (!Field->isBitField() && !Field->isZeroSize(CGF.getContext())) {
-=======
-      if (!Field->isBitField() &&
-          !CodeGenUtils::isEmptyFieldForLayout(CGF.getContext(), Field)) {
->>>>>>> 09bf31e01efb
         unsigned FieldIndex = RL.getLLVMFieldNo(Field);
         RecordLayout[FieldIndex] = Field;
       }

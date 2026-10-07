@@ -23,7 +23,6 @@
 #include "clang/CIR/Dialect/IR/CIRDataLayout.h"
 #include "clang/CIR/MissingFeatures.h"
 #include "clang/CodeGenUtils/CodeGenUtils.h"
-#include "clang/CodeGenUtils/RecordLayoutUtils.h"
 #include "llvm/Support/Casting.h"
 
 #include <memory>
@@ -633,7 +632,7 @@ CIRRecordLowering::accumulateBitFields(RecordDecl::field_iterator field,
           // non-reusable tail padding.
           CharUnits limitOffset;
           for (auto probe = field; probe != fieldEnd; ++probe)
-            if (!CodeGenUtils::isEmptyFieldForLayout(astContext, *probe)) {
+            if (!isEmptyFieldForLayout(astContext, *probe)) {
               // A member with storage sets the limit.
               assert((getFieldBitOffset(*probe) % charBits) == 0 &&
                      "Next storage is not byte-aligned");
@@ -731,7 +730,7 @@ void CIRRecordLowering::accumulateFields(bool nonVirtualBaseType) {
       field = accumulateBitFields(field, fieldEnd);
       assert((field == fieldEnd || !field->isBitField()) &&
              "Failed to accumulate all the bitfields");
-    } else if (CodeGenUtils::isEmptyFieldForLayout(astContext, *field) &&
+    } else if (isEmptyFieldForLayout(astContext, *field) &&
                field->isPotentiallyOverlapping()) {
       // We lay out normal empty fields, as they are required for GEPs/getting
       // function pointers. However 'no-unique-address' lends some additional
@@ -1288,7 +1287,7 @@ void CIRRecordLowering::accumulateBases() {
 void CIRRecordLowering::accumulateVBases() {
   for (const auto &base : cxxRecordDecl->vbases()) {
     const CXXRecordDecl *baseDecl = base.getType()->getAsCXXRecordDecl();
-    if (CodeGenUtils::isEmptyRecordForLayout(astContext, base.getType()))
+    if (isEmptyRecordForLayout(astContext, base.getType()))
       continue;
     CharUnits offset = astRecordLayout.getVBaseClassOffset(baseDecl);
     // If the vbase is a primary virtual base of some base, then it doesn't
