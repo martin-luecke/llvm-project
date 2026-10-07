@@ -133,6 +133,7 @@ struct CIRRecordLowering final {
   /// Helper function to check if the target machine is BigEndian.
   bool isBigEndian() const { return astContext.getTargetInfo().isBigEndian(); }
 
+<<<<<<< HEAD
   // The Itanium base layout rule allows virtual bases to overlap
   // other bases, which complicates layout in specific ways.
   //
@@ -154,6 +155,8 @@ struct CIRRecordLowering final {
            recordDecl->isMsStruct(astContext);
   }
 
+=======
+>>>>>>> 8908e9c8ba62
   CharUnits bitsToCharUnits(uint64_t bitOffset) {
     return astContext.toCharUnitsFromBits(bitOffset);
   }
@@ -1128,17 +1131,6 @@ void CIRRecordLowering::lowerUnion(bool nonVirtualBaseType) {
   packed = !layoutSize.isMultipleOf(getMemberAlignment(storageType));
 }
 
-bool CIRRecordLowering::hasOwnStorage(const CXXRecordDecl *decl,
-                                      const CXXRecordDecl *query) {
-  const ASTRecordLayout &declLayout = astContext.getASTRecordLayout(decl);
-  if (declLayout.isPrimaryBaseVirtual() && declLayout.getPrimaryBase() == query)
-    return false;
-  for (const auto &base : decl->bases())
-    if (!hasOwnStorage(base.getType()->getAsCXXRecordDecl(), query))
-      return false;
-  return true;
-}
-
 /// The AAPCS that defines that, when possible, bit-fields should
 /// be accessed using containers of the declared type width:
 /// When a volatile bit-field is read, and its container does not overlap with
@@ -1292,8 +1284,14 @@ void CIRRecordLowering::accumulateVBases() {
     CharUnits offset = astRecordLayout.getVBaseClassOffset(baseDecl);
     // If the vbase is a primary virtual base of some base, then it doesn't
     // get its own storage location but instead lives inside of that base.
+<<<<<<< HEAD
     if (isOverlappingVBaseABI() && astContext.isNearlyEmpty(baseDecl) &&
         !hasOwnStorage(cxxRecordDecl, baseDecl)) {
+=======
+    if (CodeGenUtils::isOverlappingVBaseABI(astContext) &&
+        astContext.isNearlyEmpty(baseDecl) &&
+        !CodeGenUtils::hasOwnStorage(astContext, cxxRecordDecl, baseDecl)) {
+>>>>>>> 8908e9c8ba62
       members.push_back(MemberInfo(offset, MemberInfo::InfoKind::VBase, nullptr,
                                    cir::RecordMemberKind::Data, baseDecl));
       continue;
