@@ -78,9 +78,14 @@ int HostDataToTargetTy::addEventIfNecessary(DeviceTy &Device,
   return OFFLOAD_SUCCESS;
 }
 
-DeviceTy::DeviceTy(GenericPluginTy *RTL, int32_t DeviceID, int32_t RTLDeviceID)
+DeviceTy::DeviceTy(GenericPluginTy *RTL, int32_t DeviceID, int32_t RTLDeviceID,
+                   ol_device_handle_t DeviceHandle)
     : DeviceID(DeviceID), RTL(RTL), RTLDeviceID(RTLDeviceID),
+<<<<<<< HEAD
       ForceSynchronousTargetRegions(false), MappingInfo(*this) {}
+=======
+      DeviceHandle(DeviceHandle), MappingInfo(*this) {}
+>>>>>>> d6cb583d9
 
 DeviceTy::~DeviceTy() {
   if (DeviceID == -1 || !(getInfoLevel() & OMP_INFOTYPE_DUMP_TABLE))
@@ -97,6 +102,7 @@ inline void setAsyncInfoSynchronous(__tgt_async_info *AI, bool SetSynchronous) {
 }
 
 llvm::Error DeviceTy::init() {
+<<<<<<< HEAD
   int32_t Ret = RTL->init_device(RTLDeviceID);
   if (Ret != OFFLOAD_SUCCESS)
     return error::createOffloadError(error::ErrorCode::BACKEND_FAILURE,
@@ -105,6 +111,9 @@ llvm::Error DeviceTy::init() {
   setTeamProcs(RTL->number_of_team_procs(RTLDeviceID));
 
   OMPT_IF_BUILT({
+=======
+  OMPT_IF_BUILT_AND_INITIALIZED({
+>>>>>>> d6cb583d9
     GenericDeviceTy &GenericDevice = RTL->getDevice(RTLDeviceID);
     auto *DevicePtr = reinterpret_cast<ompt_device_t *>(&GenericDevice);
     // Register the device->user-id mapping unconditionally: a device can be
@@ -140,7 +149,7 @@ llvm::Error DeviceTy::init() {
     bool EmitReport =
         OMPX_EmitRecordReport || !OMPX_RecordReportFilename.get().empty();
 
-    Ret = RTL->initialize_record_replay(
+    int32_t Ret = RTL->initialize_record_replay(
         RTLDeviceID, OMPX_RecordMemSize, nullptr,
         /*IsRecord=*/true, /*IsNative=*/true, OMPX_RecordOutput, EmitReport,
         OMPX_RecordReportFilename.get().c_str(),

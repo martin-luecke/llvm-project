@@ -1349,6 +1349,7 @@ int32_t GenericPluginTy::isDeviceCompatible(int32_t DeviceId, StringRef Image) {
   }
 }
 
+<<<<<<< HEAD
 int32_t GenericPluginTy::is_device_initialized(int32_t DeviceId) const {
   return isValidDeviceId(DeviceId) && Devices[DeviceId] != nullptr;
 }
@@ -1412,6 +1413,9 @@ bool GenericPluginTy::is_gfx90a_coarse_grain_usm_map_enabled(int32_t DeviceId) {
   T.res(R);
   return R;
 }
+=======
+int32_t GenericPluginTy::number_of_devices() { return getNumDevices(); }
+>>>>>>> d6cb583d9
 
 int32_t GenericPluginTy::is_data_exchangable(int32_t SrcDeviceId,
                                              int32_t DstDeviceId) {
