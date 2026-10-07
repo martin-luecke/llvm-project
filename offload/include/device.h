@@ -34,7 +34,6 @@
 #include "llvm/ADT/SmallVector.h"
 
 #include "GlobalHandler.h"
-#include "OffloadAPI.h"
 #include "PluginInterface.h"
 
 using GenericPluginTy = llvm::omp::target::plugin::GenericPluginTy;
@@ -53,7 +52,6 @@ struct DeviceTy {
   int32_t DeviceID;
   GenericPluginTy *RTL;
   int32_t RTLDeviceID;
-<<<<<<< HEAD
   /// The physical number of processors that may concurrently execute a team
   /// For cuda, this is number of SMs, for amdgcn, this is number of CUs.
   /// This field is used by ompx_get_team_procs(devid).
@@ -64,12 +62,8 @@ struct DeviceTy {
   /// Controlled via environment flag OMPX_FORCE_SYNC_REGIONS
   bool ForceSynchronousTargetRegions = false;
 
-=======
-  ol_device_handle_t DeviceHandle;
->>>>>>> d6cb583d9
 
-  DeviceTy(GenericPluginTy *RTL, int32_t DeviceID, int32_t RTLDeviceID,
-           ol_device_handle_t DeviceHandle);
+  DeviceTy(GenericPluginTy *RTL, int32_t DeviceID, int32_t RTLDeviceID);
   // DeviceTy is not copyable
   DeviceTy(const DeviceTy &D) = delete;
   DeviceTy &operator=(const DeviceTy &D) = delete;
