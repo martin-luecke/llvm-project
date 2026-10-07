@@ -187,6 +187,10 @@ struct CGRecordLowering {
   void accumulateBases();
   void accumulateVPtrs();
   void accumulateVBases();
+  /// Recursively searches all of the bases to find out if a vbase is
+  /// not the primary vbase of some base class.
+  bool hasOwnStorage(const CXXRecordDecl *Decl,
+                     const CXXRecordDecl *Query) const;
   void calculateZeroInit();
   CharUnits calculateTailClippingOffset(bool isNonVirtualBaseType) const;
   void checkBitfieldClipping(bool isNonVirtualBaseType) const;
@@ -876,8 +880,7 @@ CGRecordLowering::calculateTailClippingOffset(bool isNonVirtualBaseType) const {
         continue;
       // If the vbase is a primary virtual base of some base, then it doesn't
       // get its own storage location but instead lives inside of that base.
-      if (Context.isNearlyEmpty(BaseDecl) &&
-          !CodeGenUtils::hasOwnStorage(Context, RD, BaseDecl))
+      if (Context.isNearlyEmpty(BaseDecl) && !hasOwnStorage(RD, BaseDecl))
         continue;
       ScissorOffset = std::min(ScissorOffset,
                                Layout.getVBaseClassOffset(BaseDecl));
@@ -894,15 +897,9 @@ void CGRecordLowering::accumulateVBases() {
     CharUnits Offset = Layout.getVBaseClassOffset(BaseDecl);
     // If the vbase is a primary virtual base of some base, then it doesn't
     // get its own storage location but instead lives inside of that base.
-<<<<<<< HEAD
     if (isOverlappingVBaseABI() &&
         Context.isNearlyEmpty(BaseDecl) &&
         !hasOwnStorage(RD, BaseDecl)) {
-=======
-    if (CodeGenUtils::isOverlappingVBaseABI(Context) &&
-        Context.isNearlyEmpty(BaseDecl) &&
-        !CodeGenUtils::hasOwnStorage(Context, RD, BaseDecl)) {
->>>>>>> 8908e9c8ba62
       Members.push_back(MemberInfo(Offset, MemberInfo::VBase, nullptr,
                                    BaseDecl));
       continue;
@@ -914,6 +911,17 @@ void CGRecordLowering::accumulateVBases() {
     Members.push_back(MemberInfo(Offset, MemberInfo::VBase,
                                  getStorageType(BaseDecl), BaseDecl));
   }
+}
+
+bool CGRecordLowering::hasOwnStorage(const CXXRecordDecl *Decl,
+                                     const CXXRecordDecl *Query) const {
+  const ASTRecordLayout &DeclLayout = Context.getASTRecordLayout(Decl);
+  if (DeclLayout.isPrimaryBaseVirtual() && DeclLayout.getPrimaryBase() == Query)
+    return false;
+  for (const auto &Base : Decl->bases())
+    if (!hasOwnStorage(Base.getType()->getAsCXXRecordDecl(), Query))
+      return false;
+  return true;
 }
 
 void CGRecordLowering::calculateZeroInit() {
