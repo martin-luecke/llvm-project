@@ -1358,26 +1358,6 @@ int32_t GenericPluginTy::isDeviceCompatible(int32_t DeviceId, StringRef Image) {
   }
 }
 
-int32_t GenericPluginTy::is_device_initialized(int32_t DeviceId) const {
-  return isValidDeviceId(DeviceId) && Devices[DeviceId] != nullptr;
-}
-
-int32_t GenericPluginTy::init_device(int32_t DeviceId) {
-  auto T = logger::log<int32_t>(__func__, DeviceId);
-  auto R = [&]() {
-    auto Err = initDevice(DeviceId);
-    if (Err) {
-      REPORT() << "Failure to initialize device " << DeviceId << ": "
-               << toString(std::move(Err));
-      return OFFLOAD_FAIL;
-    }
-
-    return OFFLOAD_SUCCESS;
-  }();
-  T.res(R);
-  return R;
-}
-
 int32_t GenericPluginTy::number_of_devices() {
   auto T = logger::log<int32_t>(__func__);
   auto R = [&]() { return getNumDevices(); }();

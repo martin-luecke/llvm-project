@@ -1922,17 +1922,11 @@ public:
   /// Returns non-zero if the \p Image is compatible with the device.
   int32_t isDeviceCompatible(int32_t DeviceId, StringRef Image);
 
-  /// Returns non-zero if the plugin device has been initialized.
-  int32_t is_device_initialized(int32_t DeviceId) const;
-
   /// Checks if the image is not supported.
   void check_invalid_image(__tgt_device_image *InvalidImage);
 
   /// Unused in current implementation.
   int32_t supports_empty_images();
-
-  /// Initialize the device inside of the plugin.
-  int32_t init_device(int32_t DeviceId);
 
   /// Return the number of devices this plugin can support.
   int32_t number_of_devices();
