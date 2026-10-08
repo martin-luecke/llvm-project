@@ -148,6 +148,11 @@ features cannot lower the translation-unit ABI level;
   As a result, the `__str__` representation of its return values changed.
   Like other libclang enums, it now follows the `CompletionChunkKind.VARIANT_NAME` scheme instead of `VariantName`.
 
+- Change the behavior of the deprecated `CodeCompletionResults.results` property.
+  It is used as an implementation detail now and should not be accessed directly.
+  Existing uses of it should be changed to use `CodeCompletionResults` directly:
+  it nows supports `__len__` and `__getitem__`, so it can be used the same as `CodeCompletionResults.results` previously.
+
 - `Cursor` instance's `enum_value` method now returns 1 instead of -1 for `true` bool enumeration values
 
 ### OpenCL Potentially Breaking Changes
@@ -257,6 +262,8 @@ features cannot lower the translation-unit ABI level;
 - Added `__builtin_sort_pack` to sort a pack of types using the same
   order as `__builtin_type_order`.
 
+- Updates Unicode Names data to Unicode 18.0 (from Unicode 18.0 Beta).
+
 ### New Compiler Flags
 
 - New option `-fmodules-validate-directory-dependencies` makes an implicitly
@@ -292,6 +299,14 @@ features cannot lower the translation-unit ABI level;
   based on the source file path of declarations. The filter uses glob-style
   matching on the presumed source location (accounting for macro expansions
   and `#line` directives). (#GH194210)
+
+- Added the AArch64 option `-mharden-pac-ret=load-return-address` to harden
+  return address signing against PACMAN attacks. The option requires return
+  address signing to be enabled and emits a load from the return address before
+  returning, reducing the cache side channel used to guess pointer
+  authentication codes. See
+  {doc}`Return Address Authentication Hardening <ReturnAddressAuthenticationHardening>`
+  for more information.
 
 ### Deprecated Compiler Flags
 
@@ -598,6 +613,8 @@ features cannot lower the translation-unit ABI level;
   keyword, such as when deferring the last statement of a block; when
   used as the body of a conditional; or when it immediately precedes
   a `break`/`continue` statement or a `return` with no argument.
+ 
+- Clang now diagnoses arrays whose size is deduced from an initializer list when they exceed the maximum object size
 
 ### Improvements to Clang's time-trace
 
