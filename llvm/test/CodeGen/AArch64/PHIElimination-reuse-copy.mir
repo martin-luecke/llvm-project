@@ -13,19 +13,19 @@ body: |
   ; CHECK-NEXT:   successors: %bb.2(0x40000000), %bb.1(0x40000000)
   ; CHECK-NEXT:   liveins: $nzcv, $w0
   ; CHECK-NEXT: {{  $}}
-  ; CHECK-NEXT:   %a:gpr32 = COPY killed $w0
+  ; CHECK-NEXT:   %a:gpr32 = COPY $w0
   ; CHECK-NEXT:   [[DEF:%[0-9]+]]:gpr32 = IMPLICIT_DEF
-  ; CHECK-NEXT:   Bcc 8, %bb.2, implicit killed $nzcv
+  ; CHECK-NEXT:   Bcc 8, %bb.2, implicit $nzcv
   ; CHECK-NEXT: {{  $}}
   ; CHECK-NEXT: bb.1:
   ; CHECK-NEXT:   successors: %bb.2(0x80000000)
   ; CHECK-NEXT: {{  $}}
-  ; CHECK-NEXT:   %b:gpr32 = COPY killed %a
+  ; CHECK-NEXT:   %b:gpr32 = COPY %a
   ; CHECK-NEXT:   [[DEF:%[0-9]+]]:gpr32 = COPY %b
   ; CHECK-NEXT: {{  $}}
   ; CHECK-NEXT: bb.2:
   ; CHECK-NEXT:   %c:gpr32 = COPY [[DEF]]
-  ; CHECK-NEXT:   dead %d:gpr32 = COPY killed %c
+  ; CHECK-NEXT:   dead %d:gpr32 = COPY %c
   bb.0:
     liveins: $nzcv, $w0
     %a:gpr32 = COPY $w0
@@ -47,13 +47,13 @@ body: |
   ; CHECK-NEXT:   liveins: $nzcv, $w0
   ; CHECK-NEXT: {{  $}}
   ; CHECK-NEXT:   [[DEF:%[0-9]+]]:gpr32 = IMPLICIT_DEF
-  ; CHECK-NEXT:   Bcc 8, %bb.2, implicit killed $nzcv
+  ; CHECK-NEXT:   Bcc 8, %bb.2, implicit $nzcv
   ; CHECK-NEXT: {{  $}}
   ; CHECK-NEXT: bb.1:
   ; CHECK-NEXT:   successors: %bb.2(0x80000000)
   ; CHECK-NEXT: {{  $}}
   ; CHECK-NEXT:   dead $x0 = IMPLICIT_DEF implicit-def $w0
-  ; CHECK-NEXT:   %a:gpr32 = COPY killed $w0
+  ; CHECK-NEXT:   %a:gpr32 = COPY $w0
   ; CHECK-NEXT:   [[DEF:%[0-9]+]]:gpr32 = COPY %a
   ; CHECK-NEXT: {{  $}}
   ; CHECK-NEXT: bb.2:
@@ -184,7 +184,7 @@ body:             |
   ; CHECK-NEXT:   [[COPY1:%[0-9]+]]:gpr64 = COPY killed [[COPY]]
   ; CHECK-NEXT: {{  $}}
   ; CHECK-NEXT: bb.1:
-  ; CHECK-NEXT:   dead [[COPY2:%[0-9]+]]:gpr32 = COPY killed [[COPY1]].sub_32
+  ; CHECK-NEXT:   dead [[COPY2:%[0-9]+]]:gpr32 = COPY [[COPY1]].sub_32
   bb.0:
     successors: %bb.1
     liveins: $x0
