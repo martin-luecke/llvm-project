@@ -1937,8 +1937,6 @@ public:
   int32_t data_submit_async(int32_t DeviceId, void *TgtPtr, void *HstPtr,
                             int64_t Size, __tgt_async_info *AsyncInfoPtr);
 
-  int32_t data_retrieve(int32_t DeviceId, void *HstPtr, void *TgtPtr,
-                        int64_t Size);
   /// Copy data from the given device asynchronously.
   int32_t data_retrieve_async(int32_t DeviceId, void *HstPtr, void *TgtPtr,
                               int64_t Size, __tgt_async_info *AsyncInfoPtr);
@@ -2005,6 +2003,8 @@ public:
   /// Set coarse_grain memory for omp_register_coarse_grain_mem
   void set_coarse_grain_mem(int32_t DeviceId, const void *ptr, int64_t size,
                             bool set_attr);
+  /// Returns if the plugin can support automatic copy.
+  int32_t use_auto_zero_copy(int32_t DeviceId);
 
   /// Returns if the associated storage is accessible for a given device.
   int32_t is_accessible_ptr(int32_t DeviceId, const void *Ptr, size_t Size);
@@ -2016,9 +2016,6 @@ public:
   /// Look up a kernel function in the given binary.
   int32_t get_function(__tgt_device_binary Binary, const char *Name,
                        void **KernelPtr);
-
-  /// Returns if we can use automatic zero copy.
-  int32_t use_auto_zero_copy(int32_t DeviceId);
 
   /// Perform some checks when using automatic zero copy.
   int32_t zero_copy_sanity_checks_and_diag(int32_t DeviceId,

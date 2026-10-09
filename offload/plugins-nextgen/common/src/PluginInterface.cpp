@@ -1587,17 +1587,6 @@ int32_t GenericPluginTy::data_submit_async(int32_t DeviceId, void *TgtPtr,
   return R;
 }
 
-int32_t GenericPluginTy::data_retrieve(int32_t DeviceId, void *HstPtr,
-                                       void *TgtPtr, int64_t Size) {
-  auto T = logger::log<int32_t>(__func__, DeviceId, HstPtr, TgtPtr, Size);
-  auto R = [&]() {
-    return data_retrieve_async(DeviceId, HstPtr, TgtPtr, Size,
-                               /*AsyncInfoPtr=*/nullptr);
-  }();
-  T.res(R);
-  return R;
-}
-
 int32_t GenericPluginTy::data_retrieve_async(int32_t DeviceId, void *HstPtr,
                                              void *TgtPtr, int64_t Size,
                                              __tgt_async_info *AsyncInfoPtr) {
@@ -1785,7 +1774,7 @@ int32_t GenericPluginTy::sync_event(int32_t DeviceId, void *EventPtr) {
     return OFFLOAD_SUCCESS;
   }();
   T.res(R);
-  return R;
+  return OFFLOAD_SUCCESS;
 }
 
 int32_t GenericPluginTy::destroy_event(int32_t DeviceId, void *EventPtr) {
