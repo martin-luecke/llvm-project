@@ -1132,7 +1132,8 @@ static mlir::Attribute createNewGlobalView(CIRGenModule &cgm,
     newPtrTy = cast<cir::PointerType>(attr.getType());
 
   if (newPtrTy)
-    return bld.getGlobalViewAttr(newPtrTy, newGlob, newInds);
+    return bld.getGlobalViewAttr(newPtrTy, newGlob, newInds,
+                                 attr.getAddressPoint());
 
   // This may be unreachable in practice, but keep it as errorNYI while CIR
   // is still under development.
