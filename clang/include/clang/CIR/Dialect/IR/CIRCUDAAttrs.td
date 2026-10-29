@@ -18,18 +18,14 @@
 //===----------------------------------------------------------------------===//
 
 def CIR_CUDAKernelNameAttr : CIR_Attr<"CUDAKernelName", "cu.kernel_name"> {
-  let summary = "Device-side function name for this stub.";
+  let summary = "Device-side kernel name.";
   let description =
   [{
-    This attribute is attached to function definitions and records the
-    mangled name of the kernel function used on the device.
+    This attribute records the device-side kernel name on a stub definition
+    or, for HIP RDC, on the host kernel handle.
 
-    In CUDA, global functions (kernels) are processed differently for host
-    and device. On host, Clang generates device stubs; on device, they are
-    treated as normal functions. As they probably have different mangled
-    names, we must record the corresponding device-side name for a stub.
-    Preserving the device-side kernel name is crucial for performing its
-    respective function runtime registration on the host.
+    The host symbol can differ from this name, including when an internal
+    device kernel is externalized.
   }];
 
   let parameters = (ins "mlir::StringAttr":$kernel_name);

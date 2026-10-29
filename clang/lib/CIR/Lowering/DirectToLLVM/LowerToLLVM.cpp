@@ -3326,6 +3326,20 @@ CIRToLLVMGlobalOpLowering::lowerGlobalAttributes(
     attributes.push_back(rewriter.getNamedAttr("externally_initialized",
                                                rewriter.getUnitAttr()));
 
+  auto module = op->getParentOfType<mlir::ModuleOp>();
+  auto langOpts = module->getAttrOfType<LoweringLangOptionsAttr>(
+      CIRDialect::getLoweringLangOptionsAttrName());
+  if (langOpts && langOpts.getHip() && langOpts.getGpuRdc() &&
+      !langOpts.getCudaIsDevice()) {
+    if (auto kernelName = op->getAttr(CUDAKernelNameAttr::getMnemonic()))
+      attributes.push_back(rewriter.getNamedAttr(
+          CIRDialect::getCUDAKernelNameAttrName(), kernelName));
+    if (auto registration =
+            op->getAttr(CUDAVarRegistrationInfoAttr::getMnemonic()))
+      attributes.push_back(rewriter.getNamedAttr(
+          CIRDialect::getCUDAVarRegistrationAttrName(), registration));
+  }
+
   return attributes;
 }
 

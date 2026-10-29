@@ -2853,9 +2853,10 @@ void LoweringPreparePass::buildCUDAModuleCtor() {
   bool isHIP = getLangOpts().HIP;
 
   if (getLangOpts().GPURelocatableDeviceCode) {
-    mlirModule.emitError(isHIP ? "HIP RDC is not implemented"
-                               : "CUDA RDC is not implemented");
-    signalPassFailure();
+    if (!isHIP) {
+      mlirModule.emitError("CUDA RDC is not implemented");
+      signalPassFailure();
+    }
     return;
   }
 

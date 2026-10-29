@@ -12,10 +12,6 @@
 // FALLBACK: define {{.+}}amdgpu_kernel void @_ZN12_GLOBAL__N_18internalEPi.intern.[[SUFFIX:.+]](
 // FALLBACK: define {{.+}}amdgpu_kernel void @_ZN12_GLOBAL__N_18internalEPi.intern.[[SUFFIX]](
 
-// RUN: not %clang_cc1 -triple x86_64-unknown-linux-gnu -x hip -fgpu-rdc \
-// RUN:   -fclangir -emit-llvm /dev/null -o - 2>&1 | FileCheck %s --check-prefix=HOST
-// HOST: error: HIP RDC is not implemented
-
 // RUN: not %clang_cc1 -triple x86_64-unknown-linux-gnu -x cuda -fgpu-rdc \
 // RUN:   -fclangir -emit-llvm /dev/null -o - 2>&1 | FileCheck %s --check-prefix=CUDA
 // CUDA: error: CUDA RDC is not implemented

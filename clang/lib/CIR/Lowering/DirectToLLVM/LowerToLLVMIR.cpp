@@ -17,6 +17,7 @@
 #include "mlir/Target/LLVMIR/ModuleTranslation.h"
 #include "clang/CIR/Dialect/IR/CIRDialect.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/Frontend/Offloading/Utility.h"
 #include "llvm/IR/Constant.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/GlobalVariable.h"
@@ -60,6 +61,9 @@ public:
       if (mlir::failed(
               amendFunction(func, instructions, attribute, moduleTranslation)))
         return mlir::failure();
+    } else if (auto global = dyn_cast<mlir::LLVM::GlobalOp>(op)) {
+      if (mlir::failed(amendGlobal(global, attribute, moduleTranslation)))
+        return mlir::failure();
     } else if (auto mod = dyn_cast<mlir::ModuleOp>(op)) {
       if (mlir::failed(amendModule(mod, attribute, moduleTranslation)))
         return mlir::failure();
@@ -84,6 +88,84 @@ public:
   }
 
 private:
+  /// Emit a HIP offloading entry for a host kernel handle or device variable.
+  mlir::LogicalResult
+  amendGlobal(mlir::LLVM::GlobalOp global, mlir::NamedAttribute attribute,
+              mlir::LLVM::ModuleTranslation &moduleTranslation) const {
+    if (attribute.getName() != CIRDialect::getCUDAKernelNameAttrName() &&
+        attribute.getName() != CIRDialect::getCUDAVarRegistrationAttrName())
+      return mlir::success();
+
+    auto module = global->getParentOfType<mlir::ModuleOp>();
+    auto langOpts = module->getAttrOfType<LoweringLangOptionsAttr>(
+        CIRDialect::getLoweringLangOptionsAttrName());
+    if (!langOpts || !langOpts.getHip() || !langOpts.getGpuRdc() ||
+        langOpts.getCudaIsDevice())
+      return global.emitError("offloading entries require HIP RDC host code");
+
+    auto *var =
+        cast<llvm::GlobalVariable>(moduleTranslation.lookupGlobal(global));
+    llvm::Module &llvmModule = *moduleTranslation.getLLVMModule();
+    if (attribute.getName() == CIRDialect::getCUDAKernelNameAttrName()) {
+      auto kernelName = dyn_cast<CUDAKernelNameAttr>(attribute.getValue());
+      if (!kernelName)
+        return global.emitError("expected a CUDA kernel name attribute");
+      llvm::offloading::emitOffloadingEntry(
+          llvmModule, llvm::object::OffloadKind::OFK_HIP, var,
+          kernelName.getKernelName(), /*Size=*/0,
+          llvm::offloading::OffloadGlobalEntry, /*Data=*/0);
+      return mlir::success();
+    }
+
+    auto registration =
+        dyn_cast<CUDAVarRegistrationInfoAttr>(attribute.getValue());
+    if (!registration)
+      return global.emitError(
+          "expected a CUDA variable registration attribute");
+
+    uint32_t flags = 0;
+    if (registration.getIsExtern())
+      flags |= llvm::offloading::OffloadGlobalExtern;
+    if (registration.getIsConstant())
+      flags |= llvm::offloading::OffloadGlobalConstant;
+    if (registration.getIsNormalized())
+      flags |= llvm::offloading::OffloadGlobalNormalized;
+
+    uint64_t data = 0;
+    llvm::Constant *auxAddr = nullptr;
+    switch (registration.getKind()) {
+    case CUDADeviceVarKind::Variable:
+      if (registration.getIsManaged()) {
+        flags |= llvm::offloading::OffloadGlobalManagedEntry;
+        StringRef name = var->getName();
+        assert(name.ends_with(".managed") &&
+               "HIP managed variables not transformed");
+        auxAddr = moduleTranslation.lookupGlobal(
+            name.drop_back(StringRef(".managed").size()));
+        if (!auxAddr)
+          return global.emitError("could not find the HIP managed pointer");
+        data = var->getAlign().valueOrOne().value();
+      }
+      break;
+    case CUDADeviceVarKind::Surface:
+      flags |= llvm::offloading::OffloadGlobalSurfaceEntry;
+      data = registration.getSurfTexType();
+      break;
+    case CUDADeviceVarKind::Texture:
+      flags |= llvm::offloading::OffloadGlobalTextureEntry;
+      data = registration.getSurfTexType();
+      break;
+    }
+
+    uint64_t size = llvmModule.getDataLayout()
+                        .getTypeAllocSize(var->getValueType())
+                        .getFixedValue();
+    llvm::offloading::emitOffloadingEntry(
+        llvmModule, llvm::object::OffloadKind::OFK_HIP, var,
+        registration.getDeviceSideName(), size, flags, data, auxAddr);
+    return mlir::success();
+  }
+
   // Convert the raw-encoded clang::SourceLocation into !srcloc, so that
   // dontcall-error/warn works.
   mlir::LogicalResult

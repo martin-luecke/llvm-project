@@ -112,6 +112,8 @@ def CIR_Dialect : Dialect {
     // Raw bytes of the device-side fat binary, read by CIRGen so LoweringPrepare
     // can build the runtime-registration globals without doing file I/O.
     static llvm::StringRef getCUDADeviceBinaryAttrName() { return "cir.cu.device_binary"; }
+    static llvm::StringRef getCUDAKernelNameAttrName() { return "cir.cu.kernel_name"; }
+    static llvm::StringRef getCUDAVarRegistrationAttrName() { return "cir.cu.var_registration"; }
     // Mangled symbol name of the C++20 named-module initializer function,
     // precomputed by CIRGen so later passes don't need a live ASTContext.
     static llvm::StringRef getCXXModuleInitFnNameAttrName() { return "cir.cxx_module_init_fn_name"; }

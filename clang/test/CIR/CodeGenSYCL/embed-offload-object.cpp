@@ -33,8 +33,8 @@
 // RUN:   -fgpu-rdc -fclangir -fembed-offload-object=%t.does-not-exist \
 // RUN:   -emit-llvm %s -o - 2>&1 | FileCheck %s --check-prefix=ERROR
 
-// Embedding for CUDA, HIP and OpenMP offloading is not implemented on the
-// ClangIR path yet, including when OpenMP offloading is combined with SYCL.
+// CUDA, non-RDC HIP and OpenMP embedding is not implemented, including
+// OpenMP offloading combined with SYCL.
 // RUN: not %clang_cc1 -triple x86_64-unknown-linux-gnu -x cuda -fclangir \
 // RUN:   -fembed-offload-object=%t.out -emit-llvm /dev/null -o - 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=NYI

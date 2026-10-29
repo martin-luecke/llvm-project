@@ -201,12 +201,10 @@ static void emitCIRModuleOutput(
     if (LangOpts.SYCLIsHost && !CGO.OffloadBinaryToEmbedFile.empty())
       embedSYCLDeviceBinary(CI, *LLVMModule);
 
-    // CUDA, HIP and OpenMP offloading rely on host-side offload entries that
-    // are not emitted on the ClangIR path yet, so embedding their device
-    // objects would produce a host object that cannot be registered.
-    // LangOptions::CUDA is also set for HIP.
-    if (!CGO.OffloadObjects.empty() &&
-        (LangOpts.CUDA || !LangOpts.OMPTargetTriples.empty())) {
+    bool isHIPRDCHost = LangOpts.HIP && LangOpts.GPURelocatableDeviceCode &&
+                        !LangOpts.CUDAIsDevice;
+    if (!CGO.OffloadObjects.empty() && ((LangOpts.CUDA && !isHIPRDCHost) ||
+                                        !LangOpts.OMPTargetTriples.empty())) {
       DiagnosticsEngine &Diags = CI.getDiagnostics();
       Diags.Report(Diags.getCustomDiagID(
           DiagnosticsEngine::Error,
