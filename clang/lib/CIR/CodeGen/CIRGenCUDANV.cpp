@@ -101,6 +101,7 @@ public:
                      getDeviceSideName(cast<NamedDecl>(vd)),
                      cir::CUDADeviceVarKind::Variable, isExtern, isConstant,
                      vd->hasAttr<HIPManagedAttr>(),
+                     /*isNormalized=*/false,
                      /*surfTexType=*/0));
     deviceVars.push_back({
         var,
@@ -119,7 +120,7 @@ public:
                      getDeviceSideName(cast<NamedDecl>(vd)),
                      cir::CUDADeviceVarKind::Surface, isExtern,
                      /*isConstant=*/false,
-                     /*isManaged=*/false, surfaceType));
+                     /*isManaged=*/false, /*isNormalized=*/false, surfaceType));
 
     deviceVars.push_back({
         var,
@@ -128,7 +129,8 @@ public:
     });
   }
 
-  void registerDeviceTex(const VarDecl *vd, cir::GlobalOp &var, bool isExtern) {
+  void registerDeviceTex(const VarDecl *vd, cir::GlobalOp &var, bool isExtern,
+                         int32_t textureType, bool isNormalized) {
     auto &builder = cgm.getBuilder();
 
     var->setAttr(cir::CUDAVarRegistrationInfoAttr::getMnemonic(),
@@ -137,8 +139,7 @@ public:
                      getDeviceSideName(cast<NamedDecl>(vd)),
                      cir::CUDADeviceVarKind::Texture, isExtern,
                      /*isConstant=*/false,
-                     /*isManaged=*/false,
-                     /*surfTexType=*/0));
+                     /*isManaged=*/false, isNormalized, textureType));
 
     deviceVars.push_back({
         var,
@@ -541,10 +542,15 @@ void CIRGenNVCUDARuntime::handleVarRegistration(const VarDecl *vd,
                          surfaceType.getSExtValue());
 
   } else if (vd->getType()->isCUDADeviceBuiltinTextureType()) {
-    // Builtin textures and their template arguments are also registered
-    // with CUDA runtime.
+    const auto *td = cast<ClassTemplateSpecializationDecl>(
+        vd->getType()->castAsCXXRecordDecl());
+    const TemplateArgumentList &args = td->getTemplateArgs();
+    assert(args.size() == 3 &&
+           "unexpected number of CUDA texture template arguments");
     if (!vd->hasExternalStorage())
-      registerDeviceTex(vd, var, !vd->hasDefinition());
+      registerDeviceTex(vd, var, !vd->hasDefinition(),
+                        args[1].getAsIntegral().getSExtValue(),
+                        args[2].getAsIntegral().getZExtValue());
   }
 }
 

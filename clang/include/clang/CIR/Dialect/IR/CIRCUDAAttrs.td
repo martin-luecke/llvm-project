@@ -55,8 +55,8 @@ def CIR_CUDAExternallyInitializedAttr : CIR_Attr<"CUDAExternallyInitialized",
 def CIR_CUDADeviceVarKind : CIR_I32Enum<"CUDADeviceVarKind",
     "CUDA device variable kind", [
   I32EnumCase<"Variable", 0>,
-  I32EnumCase<"Surface", 1>,   // Future
-  I32EnumCase<"Texture", 2>,   // Future
+  I32EnumCase<"Surface", 1>,
+  I32EnumCase<"Texture", 2>,
 ]>;
 
 // Attribute carrying device variable registration flags
@@ -65,13 +65,10 @@ def CIR_CUDAVarRegistrationInfoAttr : CIR_Attr<"CUDAVarRegistrationInfo", "cu.va
   let parameters = (ins
     "std::string":$device_side_name,
     "CUDADeviceVarKind":$kind,
-    // Note: isExtern is only exercisable once HIP managed variable support
-    // lands. The only path to isExtern=true requires an extern __managed__
-    // variable, which bypasses the external storage filter in
-    // handleVarRegistration via hasAttr<HIPManagedAttr>().
     "bool":$isExtern,
     "bool":$isConstant,
     "bool":$isManaged,
+    "bool":$isNormalized,
     "int32_t":$surfTexType
   );
 
