@@ -85,10 +85,11 @@ static CIRGenCXXABI *createCXXABI(CIRGenModule &cgm) {
 CIRGenModule::CIRGenModule(mlir::MLIRContext &mlirContext,
                            clang::ASTContext &astContext,
                            const clang::CodeGenOptions &cgo,
+                           const clang::PreprocessorOptions &preprocessorOpts,
                            DiagnosticsEngine &diags)
     : builder(mlirContext, *this), astContext(astContext),
       langOpts(astContext.getLangOpts()), atomicOpts(astContext.getLangOpts()),
-      codeGenOpts(cgo),
+      codeGenOpts(cgo), preprocessorOpts(preprocessorOpts),
       theModule{mlir::ModuleOp::create(mlir::UnknownLoc::get(&mlirContext))},
       diags(diags), target(astContext.getTargetInfo()),
       abi(createCXXABI(*this)), genTypes(*this), vtables(*this) {
@@ -550,22 +551,9 @@ void CIRGenModule::emitDeferred() {
 
 void CIRGenModule::printPostfixForExternalizedDecl(llvm::raw_ostream &os,
                                                    const Decl *d) {
-  // ptxas does not allow '.' in symbol names. On the other hand, HIP prefers
-  // postfix beginning with '.' since the symbol name can be demangled.
-  if (langOpts.HIP)
-    os << (isa<VarDecl>(d) ? ".static." : ".intern.");
-  else
-    os << (isa<VarDecl>(d) ? "__static__" : "__intern__");
-
-  // If the CUID is not specified we try to generate a unique postfix.
-  if (getLangOpts().CUID.empty()) {
-    // TODO: Once we add 'PreprocessorOpts' into CIRGenModule this part can be
-    // brought in from OG.
-    errorNYI(d->getSourceRange(),
-             "printPostfixForExternalizedDecl: CUID is not specified");
-  } else {
-    os << getASTContext().getCUIDHash();
-  }
+  CodeGenUtils::printPostfixForExternalizedDecl(
+      os, astContext, *d, preprocessorOpts,
+      astContext.getSourceManager().getFileManager().getVirtualFileSystem());
 }
 
 static bool shouldSkipAliasEmission(const CIRGenModule &cgm,

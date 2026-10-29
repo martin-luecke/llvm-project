@@ -263,7 +263,8 @@ public:
       : Action(Action), CI(CI), OutputStream(std::move(OS)),
         FS(&CI.getVirtualFileSystem()),
         Gen(std::make_unique<CIRGenerator>(CI.getDiagnostics(), std::move(FS),
-                                           CI.getCodeGenOpts())),
+                                           CI.getCodeGenOpts(),
+                                           CI.getPreprocessorOpts())),
         FEOptions(CI.getFrontendOpts()), CGO(CGO), LLVMCtx(LLVMCtx),
         LinkModules(LinkModules),
         DiagConsumer(CI.getDiagnostics(), CI.getCodeGenOpts()) {}

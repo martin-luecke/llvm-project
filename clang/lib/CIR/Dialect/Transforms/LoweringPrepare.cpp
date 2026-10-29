@@ -2852,8 +2852,12 @@ static std::string addUnderscoredPrefix(llvm::StringRef prefix,
 void LoweringPreparePass::buildCUDAModuleCtor() {
   bool isHIP = getLangOpts().HIP;
 
-  if (getLangOpts().GPURelocatableDeviceCode)
-    llvm_unreachable("GPU RDC NYI");
+  if (getLangOpts().GPURelocatableDeviceCode) {
+    mlirModule.emitError(isHIP ? "HIP RDC is not implemented"
+                               : "CUDA RDC is not implemented");
+    signalPassFailure();
+    return;
+  }
 
   // For CUDA without -fgpu-rdc, it's safe to stop generating ctor
   // if there's nothing to register.

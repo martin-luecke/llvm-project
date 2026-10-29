@@ -26,6 +26,7 @@ namespace clang {
 class Decl;
 class DeclGroupRef;
 class DiagnosticsEngine;
+class PreprocessorOptions;
 namespace CIRGen {
 class CIRGenModule;
 } // namespace CIRGen
@@ -44,6 +45,7 @@ class CIRGenerator : public clang::ASTConsumer {
   llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> fs;
 
   const clang::CodeGenOptions &codeGenOpts;
+  const clang::PreprocessorOptions &preprocessorOpts;
 
   unsigned handlingTopLevelDecls;
 
@@ -74,7 +76,8 @@ private:
 public:
   CIRGenerator(clang::DiagnosticsEngine &diags,
                llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> fs,
-               const clang::CodeGenOptions &cgo);
+               const clang::CodeGenOptions &cgo,
+               const clang::PreprocessorOptions &preprocessorOpts);
   ~CIRGenerator() override;
   void Initialize(clang::ASTContext &astContext) override;
   bool HandleTopLevelDecl(clang::DeclGroupRef group) override;

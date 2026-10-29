@@ -35,9 +35,10 @@ void CIRGenerator::anchor() {}
 
 CIRGenerator::CIRGenerator(clang::DiagnosticsEngine &diags,
                            llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> vfs,
-                           const CodeGenOptions &cgo)
+                           const CodeGenOptions &cgo,
+                           const PreprocessorOptions &preprocessorOpts)
     : diags(diags), fs(std::move(vfs)), codeGenOpts{cgo},
-      handlingTopLevelDecls{0} {}
+      preprocessorOpts(preprocessorOpts), handlingTopLevelDecls{0} {}
 CIRGenerator::~CIRGenerator() {
   // There should normally not be any leftover inline method definitions.
   assert(deferredInlineMemberFuncDefs.empty() || diags.hasErrorOccurred());
@@ -63,7 +64,7 @@ void CIRGenerator::Initialize(ASTContext &astContext) {
     mlirContext->getOrLoadDialect<mlir::omp::OpenMPDialect>();
 
   cgm = std::make_unique<clang::CIRGen::CIRGenModule>(
-      *mlirContext.get(), astContext, codeGenOpts, diags);
+      *mlirContext.get(), astContext, codeGenOpts, preprocessorOpts, diags);
   mlir::ModuleOp mod = cgm->getModule();
   llvm::DataLayout layout =
       llvm::DataLayout(astContext.getTargetInfo().getDataLayoutString());
