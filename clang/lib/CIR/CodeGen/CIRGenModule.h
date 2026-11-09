@@ -51,6 +51,7 @@ class LangOptions;
 class OpenACCConstructDecl;
 class OpenACCDeclareDecl;
 class OpenACCRoutineDecl;
+class PreprocessorOptions;
 class TargetInfo;
 class VarDecl;
 
@@ -70,6 +71,7 @@ class CIRGenModule : public CIRGenTypeCache {
 public:
   CIRGenModule(mlir::MLIRContext &mlirContext, clang::ASTContext &astContext,
                const clang::CodeGenOptions &cgo,
+               const clang::PreprocessorOptions &preprocessorOpts,
                clang::DiagnosticsEngine &diags);
 
   ~CIRGenModule();
@@ -88,6 +90,7 @@ private:
   clang::AtomicOptions atomicOpts;
 
   const clang::CodeGenOptions &codeGenOpts;
+  const clang::PreprocessorOptions &preprocessorOpts;
 
   /// A "module" matches a c/cpp source file: containing a list of functions.
   mlir::OwningOpRef<mlir::ModuleOp> theModule;
