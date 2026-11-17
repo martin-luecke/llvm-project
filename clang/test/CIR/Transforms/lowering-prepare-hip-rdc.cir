@@ -1,0 +1,37 @@
+// RUN: cir-opt %s --cir-lowering-prepare -o %t.once.cir
+// RUN: cir-opt %t.once.cir --cir-lowering-prepare -o %t.twice.cir
+// RUN: diff %t.once.cir %t.twice.cir
+// RUN: FileCheck %s --input-file=%t.once.cir --check-prefix=CIR \
+// RUN:   --implicit-check-not=cu.kernel_name --implicit-check-not=cu.var_registration \
+// RUN:   --implicit-check-not=__hip_module_ctor
+// CIR: addr = @existing, name = "existing", size = 4, flags = 0, data = 0
+// CIR-SAME: addr = @handle, name = "kernel.intern.123", size = 0, flags = 0, data = 0
+// CIR-SAME: addr = @flag, name = "flag", size = 1, flags = 16, data = 0
+// CIR-SAME: addr = @managed.managed, name = "managed", size = 4, flags = 1, data = 16, aux_addr = @managed
+
+// RUN: cir-translate %t.twice.cir --cir-to-llvmir | FileCheck %s --check-prefix=LLVM
+// RUN: cir-opt %t.twice.cir --cir-to-llvm | cir-translate --mlir-to-llvmir \
+// RUN:   | FileCheck %s --check-prefix=LLVM
+// LLVM-DAG: @.offloading.entry.existing = weak constant %{{.+}} { i64 0, i16 1, i16 4, i32 0, ptr @existing, ptr @{{.+}}, i64 4, i64 0, ptr null }
+// LLVM-DAG: @.offloading.entry.kernel.intern.123 = weak constant %{{.+}} { i64 0, i16 1, i16 4, i32 0, ptr @handle, ptr @{{.+}}, i64 0, i64 0, ptr null }
+// LLVM-DAG: @.offloading.entry.flag = weak constant %{{.+}} { i64 0, i16 1, i16 4, i32 16, ptr @flag, ptr @{{.+}}, i64 1, i64 0, ptr null }
+// LLVM-DAG: @.offloading.entry.managed = weak constant %{{.+}} { i64 0, i16 1, i16 4, i32 1, ptr @managed.managed, ptr @{{.+}}, i64 4, i64 16, ptr @managed }
+
+// RUN: sed 's/@managed.managed/@untransformed/g' %s | not cir-opt --cir-lowering-prepare 2>&1 \
+// RUN:   | FileCheck %s --check-prefix=STORAGE
+// STORAGE: error: expected transformed HIP managed storage
+// RUN: sed '/cir.global external @managed =/d' %s | not cir-opt --cir-lowering-prepare 2>&1 \
+// RUN:   | FileCheck %s --check-prefix=POINTER
+// POINTER: error: could not find the HIP managed pointer
+
+!s32i = !cir.int<s, 32>
+module attributes {cir.lowering_options = #cir.lowering_options<exceptions = false, threadsafe_statics = true, cuda = true, cuda_is_device = false, hip = true, hlsl = false, sycl_is_device = false, gpu_rdc = true, openmp = false, openmp_is_target_device = false, clang_abi_compat = 16, long_double_size = 0, enable_noundef_attrs = true, no_trapping_math = true, ssp_buffer_size = 8>, cir.triple = "x86_64-unknown-linux-gnu", cir.cu.offload_entries = [#cir.cu.offload_entry<kind = 4, addr = @existing, name = "existing", size = 4, flags = 0, data = 0>]} {
+  cir.global external @existing = #cir.int<0> : !s32i align(4)
+  cir.global constant external @handle = #cir.global_view<@stub> : !cir.ptr<!cir.func<()>> align(8) {cu.kernel_name = #cir.cu.kernel_name<"kernel.intern.123">}
+  cir.func @stub() {
+    cir.return
+  }
+  cir.global constant external @flag = #cir.bool<false> : !cir.bool align(1) {cu.var_registration = #cir.cu.var_registration<flag, Variable, constant>}
+  cir.global external @managed.managed = #cir.int<0> : !s32i align(16) {cu.var_registration = #cir.cu.var_registration<managed, Variable, managed>}
+  cir.global external @managed = #cir.ptr<null> : !cir.ptr<!s32i> align(8)
+}

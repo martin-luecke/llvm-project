@@ -30,6 +30,7 @@
 #include "clang/CIR/MissingFeatures.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Frontend/Offloading/Utility.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Path.h"
@@ -200,6 +201,8 @@ struct LoweringPreparePass
   /// Build the CUDA module constructor that registers the fat binary
   /// with the CUDA runtime.
   void buildCUDAModuleCtor();
+  /// Build HIP RDC offloading entries for kernel handles and device variables.
+  mlir::LogicalResult buildHIPOffloadEntries();
   std::optional<FuncOp> buildCUDAModuleDtor();
   std::optional<FuncOp> buildHIPModuleDtor();
   std::optional<FuncOp> buildCUDARegisterGlobals();
@@ -2902,9 +2905,6 @@ static std::string addUnderscoredPrefix(llvm::StringRef prefix,
 void LoweringPreparePass::buildCUDAModuleCtor() {
   bool isHIP = getLangOpts().HIP;
 
-  if (getLangOpts().GPURelocatableDeviceCode)
-    llvm_unreachable("GPU RDC NYI");
-
   // For CUDA without -fgpu-rdc, it's safe to stop generating ctor
   // if there's nothing to register.
   if (cudaKernelMap.empty() && cudaDeviceVars.empty())
@@ -3529,6 +3529,78 @@ void LoweringPreparePass::buildCUDARegisterVars(cir::CIRBaseBuilderTy &builder,
   }
 }
 
+mlir::LogicalResult LoweringPreparePass::buildHIPOffloadEntries() {
+  llvm::SmallVector<mlir::Attribute> entries;
+  llvm::StringRef attrName = CIRDialect::getCUDAOffloadEntriesAttrName();
+  if (auto existing = mlirModule->getAttrOfType<mlir::ArrayAttr>(attrName))
+    entries.append(existing.begin(), existing.end());
+
+  cir::CIRDataLayout dataLayout(mlirModule);
+  auto *context = &getContext();
+  for (auto global : mlirModule.getOps<cir::GlobalOp>()) {
+    auto address = mlir::FlatSymbolRefAttr::get(global.getSymNameAttr());
+    if (auto kernel = global->getAttrOfType<CUDAKernelNameAttr>(
+            CUDAKernelNameAttr::getMnemonic()))
+      entries.push_back(CUDAOffloadEntryAttr::get(
+          context, llvm::object::OffloadKind::OFK_HIP, address,
+          kernel.getKernelName(), /*size=*/0,
+          llvm::offloading::OffloadGlobalEntry, /*data=*/0,
+          /*aux_addr=*/{}));
+
+    auto registration = global->getAttrOfType<CUDAVarRegistrationInfoAttr>(
+        CUDAVarRegistrationInfoAttr::getMnemonic());
+    if (!registration)
+      continue;
+
+    uint32_t flags = 0;
+    if (registration.getIsExtern())
+      flags |= llvm::offloading::OffloadGlobalExtern;
+    if (registration.getIsConstant())
+      flags |= llvm::offloading::OffloadGlobalConstant;
+    if (registration.getNormalized())
+      flags |= llvm::offloading::OffloadGlobalNormalized;
+
+    uint64_t data = 0;
+    mlir::FlatSymbolRefAttr auxiliaryAddress;
+    switch (registration.getKind()) {
+    case CUDADeviceVarKind::Variable:
+      if (registration.getIsManaged()) {
+        flags |= llvm::offloading::OffloadGlobalManagedEntry;
+        llvm::StringRef name = global.getSymName();
+        if (!name.consume_back(".managed"))
+          return global.emitError("expected transformed HIP managed storage");
+        auto pointer = mlirModule.lookupSymbol<cir::GlobalOp>(name);
+        if (!pointer)
+          return global.emitError("could not find the HIP managed pointer");
+        auxiliaryAddress =
+            mlir::FlatSymbolRefAttr::get(pointer.getSymNameAttr());
+        data = global.getAlignment().value_or(1);
+      }
+      break;
+    case CUDADeviceVarKind::Surface:
+      flags |= llvm::offloading::OffloadGlobalSurfaceEntry;
+      data = registration.getSurfTexType();
+      break;
+    case CUDADeviceVarKind::Texture:
+      flags |= llvm::offloading::OffloadGlobalTextureEntry;
+      data = registration.getSurfTexType();
+      break;
+    }
+
+    llvm::TypeSize size = dataLayout.getTypeAllocSize(global.getSymType());
+    if (size.isScalable())
+      return global.emitError("HIP offloading entry requires a fixed size");
+    entries.push_back(CUDAOffloadEntryAttr::get(
+        context, llvm::object::OffloadKind::OFK_HIP, address,
+        mlir::StringAttr::get(context, registration.getDeviceSideName()),
+        size.getFixedValue(), flags, data, auxiliaryAddress));
+  }
+
+  if (!entries.empty())
+    mlirModule->setAttr(attrName, mlir::ArrayAttr::get(context, entries));
+  return mlir::success();
+}
+
 void LoweringPreparePass::runOnOperation() {
   mlirModule = getOperation();
 
@@ -3570,19 +3642,29 @@ void LoweringPreparePass::runOnOperation() {
   mlirModule->removeAttr(CIRDialect::getCXXModuleImportedInitsAttrName());
   buildCXXGlobalTlsFunc();
   if (getLangOpts().CUDA && !getLangOpts().CUDAIsDevice) {
-    buildCUDAModuleCtor();
+    if (getLangOpts().GPURelocatableDeviceCode) {
+      if (!getLangOpts().HIP) {
+        mlirModule.emitError("CUDA RDC is not implemented");
+        return signalPassFailure();
+      }
+      if (mlir::failed(buildHIPOffloadEntries()))
+        return signalPassFailure();
+    } else {
+      buildCUDAModuleCtor();
+    }
     // The fatbin global now references the same attribute; drop the module's
     // reference so an emitted .cir doesn't print the bytes twice. This has to
     // happen out here because the ctor and the CUDA dtor builder test the
     // attribute to decide whether a device-side binary exists at all.
     mlirModule->removeAttr(CIRDialect::getCUDADeviceBinaryAttrName());
-    // The kernels and device variables have been registered from these.
-    // Nothing after this pass reads them, so drop them to keep a second run
-    // of this pass from registering them again.
+    // Drop consumed registration metadata so a rerun does not register
+    // kernels or variables again.
     for (auto &entry : cudaKernelMap)
       entry.getValue()->removeAttr(CUDAKernelNameAttr::getMnemonic());
-    for (auto &deviceVar : cudaDeviceVars)
-      deviceVar.first->removeAttr(CUDAVarRegistrationInfoAttr::getMnemonic());
+    for (auto global : mlirModule.getOps<cir::GlobalOp>()) {
+      global->removeAttr(CUDAKernelNameAttr::getMnemonic());
+      global->removeAttr(CUDAVarRegistrationInfoAttr::getMnemonic());
+    }
   }
 
   buildGlobalCtorDtorList();

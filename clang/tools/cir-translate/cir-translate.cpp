@@ -205,6 +205,7 @@ static void registerMLIRToLLVMIRTranslation() {
       [](mlir::DialectRegistry &registry) {
         registry.insert<mlir::DLTIDialect, mlir::func::FuncDialect>();
         registerLLVMIRTranslations(registry);
+        cir::direct::registerCIRDialectTranslation(registry);
       });
 }
 
